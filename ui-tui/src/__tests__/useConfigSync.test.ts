@@ -9,13 +9,11 @@ import { $uiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import {
   applyDisplay,
   hydrateFullConfig,
-  hydrateLocale,
   normalizeBusyInputMode,
   normalizeIndicatorStyle,
   normalizeMouseTracking,
   normalizeStatusBar
 } from '../app/useConfigSync.js'
-import { getLocale, setLocale, slashName } from '../i18n/index.js'
 
 describe('applyDisplay', () => {
   beforeEach(() => {
@@ -445,40 +443,5 @@ describe('hydrateFullConfig', () => {
     // display flags (round-2 / round-8 invariant).
     await expect(hydrateFullConfig(gw, setBell)).resolves.toBeTruthy()
     expect(setBell).toHaveBeenCalledWith(true)
-  })
-})
-
-// The language lands through the same poll as the display flags, so a switch
-// made in the GUI reaches an open TUI without a restart.
-describe('hydrateLocale', () => {
-  const makeFakeGw = (payload: unknown) =>
-    ({
-      request: vi.fn(() => Promise.resolve(payload)),
-      on: vi.fn(),
-      off: vi.fn()
-    }) as any
-
-  beforeEach(() => setLocale('en'))
-
-  it('adopts the language written in config', async () => {
-    await hydrateLocale(makeFakeGw({ config: { language: 'zh' } }))
-
-    expect(getLocale()).toBe('zh')
-    expect(slashName('model')).toBe('切换模型')
-  })
-
-  it('ignores a missing or unknown value', async () => {
-    await hydrateLocale(makeFakeGw({ config: { language: 'fr' } }))
-    expect(getLocale()).toBe('en')
-
-    await hydrateLocale(makeFakeGw({}))
-    expect(getLocale()).toBe('en')
-  })
-
-  it('survives an RPC failure', async () => {
-    const gw = { request: vi.fn(() => Promise.reject(new Error('boom'))), on: vi.fn(), off: vi.fn() } as any
-
-    await expect(hydrateLocale(gw)).resolves.toBeUndefined()
-    expect(getLocale()).toBe('en')
   })
 })

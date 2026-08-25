@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.tracing import semconv, trace
 from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
@@ -1711,10 +1712,9 @@ class MemoryConsolidator:
         enable_foresight: bool = False,
     ):
         self.store = MemoryStore(workspace, now_fn=now_fn)
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.sessions = sessions
-        self.context_window_tokens = context_window_tokens
+        self._fallback_window = int(context_window_tokens)
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         # When True, annotate() asks the LLM for foresight predictions
@@ -1723,10 +1723,33 @@ class MemoryConsolidator:
         self.enable_foresight = enable_foresight
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
+    @property
+    def context_window_tokens(self) -> int:
+        """The running turn's window; the one built with, outside a turn.
+
+        The consolidator archives down to half this number, so a session on a
+        1M model must not be measured against the window of whichever session
+        built the loop.
+        """
+        return active_window(self._fallback_window)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, tokens: int) -> None:
+        self._fallback_window = int(tokens)
+
+    @property
+    def provider(self) -> "LLMProvider":
+        """The provider of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        """The model of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).model
+
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built."""
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -1811,28 +1834,18 @@ class MemoryConsolidator:
             return ok
 
     @trace.instrument("memory.consolidate", extract=semconv.memory_consolidate)
-    async def maybe_consolidate_by_tokens(self, session: Session, *, force: bool = False) -> dict[str, int]:
-        """Loop: archive old messages until prompt fits within half the context window.
-
-        ``force`` skips the "prompt still fits" early return, which is what a
-        user-triggered compaction wants: archive down to the target now rather
-        than waiting to hit the window. Returns before/after token estimates
-        and how many messages moved behind the consolidation boundary — callers
-        that only want the side effect can ignore it.
-        """
-        stats = {"before_tokens": 0, "after_tokens": 0, "archived": 0}
+    async def maybe_consolidate_by_tokens(self, session: Session) -> None:
+        """Loop: archive old messages until prompt fits within half the context window."""
         if not session.messages or self.context_window_tokens <= 0:
-            return stats
+            return
 
         lock = self.get_lock(session.key)
         async with lock:
             target = self.context_window_tokens // 2
-            boundary_before = session.last_consolidated
             estimated, source = self.estimate_session_prompt_tokens(session)
-            stats["before_tokens"] = stats["after_tokens"] = estimated
             if estimated <= 0:
-                return stats
-            if not force and estimated < self.context_window_tokens:
+                return
+            if estimated < self.context_window_tokens:
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}",
                     session.key,
@@ -1840,7 +1853,7 @@ class MemoryConsolidator:
                     self.context_window_tokens,
                     source,
                 )
-                return stats
+                return
 
             chunks_annotated = 0
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
@@ -1886,7 +1899,3 @@ class MemoryConsolidator:
             # how many annotation rounds fired.
             if chunks_annotated:
                 await self.maybe_refresh_hot_tags()
-
-            stats["after_tokens"] = max(estimated, 0)
-            stats["archived"] = max(session.last_consolidated - boundary_before, 0)
-            return stats

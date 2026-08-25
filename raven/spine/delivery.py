@@ -40,7 +40,6 @@ class Capabilities:
 
     interactive_login: bool = False  # QR / scan login (weixin, whatsapp); read by CLI `channel login`
     streaming: bool = False  # SupportsStreaming slot; activated in B
-    file_attachments: bool = False  # Native outbound file upload; consumed by ChannelOutletAdapter
 
 
 @runtime_checkable

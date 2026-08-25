@@ -216,6 +216,7 @@ describe('slashCompletions supported filter', () => {
     'background',
     'image',
     'personality',
+    'compress',
     'voice',
     'skin',
     'indicator',
@@ -260,8 +261,7 @@ describe('slashCompletions supported filter', () => {
     'sessions',
     'branch',
     'export',
-    'model',
-    'compress'
+    'model'
   ]
 
   it('hides every drop command from the real registry (bare /)', () => {

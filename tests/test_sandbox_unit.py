@@ -6,7 +6,6 @@ All tests run without boxlite installed and without KVM/Hypervisor access.
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -222,146 +221,9 @@ class TestDirectExecutor:
 
     async def test_exec_timeout(self):
         e = DirectExecutor()
-        result = await e.exec("sleep 10", timeout=0.1)
+        result = await e.exec("sleep 10", timeout=1)
         assert result.exit_code == -1
         assert "Timed" in result.stderr
-
-    async def test_cancel_kills_the_whole_process_group(self, tmp_path):
-        """A cancelled exec must leave nothing of the command running.
-
-        The assertion is on a *grandchild*, which is the only thing that tells
-        the fix apart from what it replaced: ``sh -c "sleep 30 & wait"`` runs the
-        sleep as a child of the shell, so killing the shell alone leaves the
-        sleep running, holding the pipes and the workspace. Only ``killpg``
-        reaches it.
-        """
-        pid_file = tmp_path / "grandchild.pid"
-        e = DirectExecutor()
-        command = f"sleep 30 & echo $! > {pid_file}; wait"
-        task = asyncio.create_task(e.exec(command, timeout=60))
-
-        for _ in range(200):
-            await asyncio.sleep(0.02)
-            if pid_file.exists() and pid_file.read_text().strip():
-                break
-        else:
-            task.cancel()
-            pytest.fail("the command never reported its grandchild pid")
-
-        grandchild = int(pid_file.read_text().strip())
-        os.kill(grandchild, 0)
-
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        for _ in range(200):
-            await asyncio.sleep(0.02)
-            try:
-                os.kill(grandchild, 0)
-            except ProcessLookupError:
-                break
-        else:
-            os.kill(grandchild, 9)
-            pytest.fail(f"grandchild {grandchild} survived the cancel")
-
-    async def test_kill_falls_back_to_process_kill_without_killpg(self, monkeypatch):
-        """Windows has no killpg and no SIGKILL, and ignores start_new_session.
-
-        The fallback keeps the reach this had before the group kill was added,
-        rather than raising AttributeError on every timeout and cancellation.
-        """
-        monkeypatch.delattr(os, "killpg", raising=False)
-        process = MagicMock()
-
-        DirectExecutor._kill_process_group(process, 1234)
-
-        process.kill.assert_called_once_with()
-
-    async def test_the_windows_fallback_tolerates_a_process_already_reaped(self, monkeypatch):
-        """On win32 ``Process.kill()`` itself raises once the process is gone.
-
-        ``BaseSubprocessTransport._check_proc`` raises ``ProcessLookupError``
-        after ``_proc`` is cleared, and it is cleared by the same callback that
-        wakes ``wait()`` -- so a cancellation arriving one loop iteration after
-        the process finished hits exactly that. Unguarded, the error would leave
-        this frame in place of the ``CancelledError``, and the caller's
-        ``except Exception`` would report a failed tool call for a turn that was
-        cancelled.
-
-        The previous case uses a ``MagicMock``, whose ``kill()`` never raises,
-        so this shape was the one the fallback was not covered for.
-        """
-        monkeypatch.delattr(os, "killpg", raising=False)
-        process = MagicMock()
-        process.kill.side_effect = ProcessLookupError
-
-        DirectExecutor._kill_process_group(process, 1234)
-
-        process.kill.assert_called_once_with()
-
-    async def test_kill_tolerates_a_group_that_is_already_gone(self, monkeypatch):
-        """The group can exit between the cancellation and the signal.
-
-        That race is the normal ending of a short command, not a failure, so it
-        must not turn into an exception on the way out of a cancelled turn.
-        """
-
-        def _gone(pgid, sig):
-            raise ProcessLookupError
-
-        monkeypatch.setattr(os, "killpg", _gone)
-
-        DirectExecutor._kill_process_group(MagicMock(), 1234)
-
-    async def test_a_second_cancellation_does_not_mask_the_first(self, monkeypatch):
-        """A repeat cancel interrupts the reap; the kill has already landed.
-
-        Driven with a process whose ``wait()`` never returns, so the reap is
-        still in flight when the second cancellation arrives -- the same shape a
-        shutdown path that cancels twice produces, without waiting out the 5s
-        guard for real.
-        """
-        killed: list[int] = []
-        process = MagicMock()
-        process.pid = 4321
-        process.returncode = None
-
-        async def _never(*a, **kw):
-            await asyncio.Event().wait()
-
-        process.communicate = _never
-        process.wait = _never
-
-        async def _fake_spawn(*a, **kw):
-            return process
-
-        monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_spawn)
-        monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))
-
-        task = asyncio.create_task(DirectExecutor().exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        await asyncio.sleep(0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        assert killed == [4321], "the group must be signalled before the reap is abandoned"
-
-    async def test_cancel_propagates_rather_than_being_swallowed(self):
-        """The kill must not turn a cancellation into a normal return.
-
-        ``ToolRegistry.execute`` distinguishes "the turn was cancelled" from
-        "the tool answered" only by the exception, so swallowing it here would
-        report a fabricated result for work that never finished.
-        """
-        e = DirectExecutor()
-        task = asyncio.create_task(e.exec("sleep 30", timeout=60))
-        await asyncio.sleep(0.1)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
 
     async def test_exec_env(self):
         e = DirectExecutor()
@@ -554,42 +416,6 @@ class TestBoxliteTranslateCwd:
         result = e._translate_cwd("/completely/outside")
         assert result == "/workspace"
 
-    def test_extra_volume_root_translates_to_its_own_guest_path(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        home.mkdir()
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-        )
-        assert e._translate_cwd(str(home)) == "/agent-home"
-
-    def test_extra_volume_subdir_translates_correctly(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        (home / "skills").mkdir(parents=True)
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-        )
-        assert e._translate_cwd(str(home / "skills")) == "/agent-home/skills"
-
-    def test_path_outside_every_volume_falls_back_to_workspace(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        home.mkdir()
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-        )
-        assert e._translate_cwd("/completely/outside") == "/workspace"
-
 
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
@@ -651,7 +477,7 @@ def _make_mock_execution(stdout_lines=None, stderr_lines=None):
 class TestBoxliteExecTimeout:
     async def test_timeout_kills_and_returns_minus_one(self, tmp_path):
         """exec() times out: execution.kill() is called, exit_code=-1 returned."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
 
         mock_box = MagicMock()
         execution = _make_mock_execution()
@@ -663,13 +489,13 @@ class TestBoxliteExecTimeout:
         mock_box.exec = _slow_exec
         executor._box = mock_box
 
-        result = await executor.exec("sleep 10", timeout=0.05)
+        result = await executor.exec("sleep 10", timeout=1)
         assert result.exit_code == -1
         assert "timed out" in result.stderr.lower()
 
     async def test_exec_timeout_execution_kill_called(self, tmp_path):
         """When execution handle is obtained before timeout, kill() must be called."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
 
         execution = _make_mock_execution()
         execution.stdout.return_value = _infinite_stream()
@@ -685,68 +511,9 @@ class TestBoxliteExecTimeout:
         mock_box.exec = AsyncMock(return_value=execution)
         executor._box = mock_box
 
-        result = await executor.exec("cmd", timeout=0.05)
+        result = await executor.exec("cmd", timeout=1)
         assert result.exit_code == -1
         execution.kill.assert_awaited_once()
-
-
-class TestBoxliteExecCancel:
-    @staticmethod
-    def _wedged_executor(tmp_path):
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=60)
-        execution = _make_mock_execution()
-        execution.stdout.return_value = _infinite_stream()
-        execution.stderr.return_value = _infinite_stream()
-
-        async def _slow_wait():
-            await asyncio.sleep(30)
-            return MagicMock(exit_code=0)
-
-        execution.wait = AsyncMock(side_effect=_slow_wait)
-        mock_box = MagicMock()
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-        return executor, execution
-
-    async def test_cancel_kills_the_vm_side_execution(self, tmp_path):
-        """A cancelled turn must stop the command inside the VM, not just drop it."""
-        executor, execution = self._wedged_executor(tmp_path)
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        execution.kill.assert_awaited_once()
-
-    async def test_cancel_tolerates_a_failing_kill(self, tmp_path):
-        """A kill that fails must not replace the cancellation with its own error.
-
-        The VM can already be gone by the time the turn is cancelled; reporting
-        that as the reason the turn ended would be wrong twice over.
-        """
-        executor, execution = self._wedged_executor(tmp_path)
-        execution.kill = AsyncMock(side_effect=RuntimeError("box is gone"))
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        execution.kill.assert_awaited_once()
-
-    async def test_cancel_still_raises_after_the_kill(self, tmp_path):
-        """The cleanup must not convert a cancellation into a returned result."""
-        executor, _ = self._wedged_executor(tmp_path)
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert task.cancelled()
 
 
 async def _infinite_stream():
@@ -771,7 +538,7 @@ class TestBoxliteVerifyTimeout:
         mock_box = MagicMock()
         mock_box.exec = AsyncMock(return_value=execution)
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=1)
         with pytest.raises(SandboxInitError, match="timed out"):
             await executor._verify(mock_box)
         execution.kill.assert_awaited_once()
@@ -933,7 +700,7 @@ class TestBoxliteStartFailureCleanup:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            verify_timeout=0.05,
+            verify_timeout=1,
         )
 
         mock_box = MagicMock()
@@ -1185,7 +952,7 @@ class TestAgentLoopExecutorLifecycle:
         loop = AgentLoop(provider=mock_provider, workspace=tmp_path, mcp_servers={"svc": object()})
         loop._executor = TrackingExecutor()
 
-        async def _failing_connect_mcp(**_kw):
+        async def _failing_connect_mcp():
             raise RuntimeError("unexpected network error")
 
         loop._connect_mcp = _failing_connect_mcp
@@ -1223,7 +990,7 @@ class TestAgentLoopExecutorLifecycle:
         loop._executor = StartedThenFailsMCP()
 
         # Patch _connect_mcp to raise SandboxInitError after executor starts
-        async def _failing_connect_mcp(**_kw):
+        async def _failing_connect_mcp():
             raise SandboxInitError("test: MCP sandbox guard fired")
 
         loop._connect_mcp = _failing_connect_mcp
@@ -1246,8 +1013,8 @@ class TestConnectMcpSandboxGuard:
         """Sandboxed executor without process-spawning raises SandboxInitError for stdio."""
         from contextlib import AsyncExitStack
 
+        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
         cfg = MagicMock()
@@ -1263,8 +1030,8 @@ class TestConnectMcpSandboxGuard:
 
         import mcp.client.stdio
 
+        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
 
         reached = []
 
@@ -1289,8 +1056,8 @@ class TestConnectMcpSandboxGuard:
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
 
+        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
 
         class SpawningExecutor(MockExecutor):
             @property
@@ -1319,8 +1086,8 @@ class TestConnectMcpSandboxGuard:
         """
         from contextlib import AsyncExitStack
 
+        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
 
@@ -1395,7 +1162,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=()):
+        def _patched_build(cfg, workspace, owned_ids=None):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
@@ -1455,43 +1222,6 @@ class TestSubagentSandboxLifecycle:
         assert req.source.sender_id == "subagent"
         assert req.conversation == "weixin:u1"
         assert handle.result_awaited is False  # fire-and-forget
-        # The identity a reader needs after a reload. Without it the stored
-        # entry is an ordinary user message and a reloaded transcript draws the
-        # re-injection as a question the user asked, fence markers and all.
-        assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
-
-    async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
-        """A graph's announce is the other injection shape -- the whole content is
-        the fence, with none of a spawn's framing -- and it has to carry the same
-        identity on the request AND on the event. A client watching live reads it
-        from the event; a client replaying the session reads it off the stored
-        entry, and the two must agree."""
-        from raven.agent.subagent import SubagentManager
-
-        captured: dict = {}
-        events: list[tuple[str, dict]] = []
-        manager = SubagentManager(provider=mock_provider, workspace=tmp_path)
-        manager.set_submit(lambda req: captured.__setitem__("req", req))
-
-        async def _sink(conversation, event):
-            events.append((conversation, event))
-
-        manager.set_delivery_sink(_sink)
-
-        origin = {"channel": "tui", "chat_id": "direct", "session_key": "tui:default"}
-        await manager.announce_dag_result("run-7", "3 completed, 0 failed", origin)
-        await asyncio.sleep(0)  # the sink is a fire-and-forget task
-
-        mark = {"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"}
-        assert captured["req"].delegated == mark
-        assert events and events[0][0] == "tui:default"
-        payload = events[0][1]["payload"]
-        assert {k: payload[k] for k in mark} == mark
-        # The event carries the text that was injected, verbatim -- the same
-        # string the stored entry holds, so both readers strip one fence.
-        assert payload["content"] == captured["req"].text
-        assert payload["content"].startswith("[BEGIN UNTRUSTED subagent #")
-        assert "3 completed, 0 failed" in payload["content"]
 
 
 def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):

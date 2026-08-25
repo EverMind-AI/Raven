@@ -21,10 +21,9 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from raven.agent import workdir
 from raven.agent.tools.base import Tool
 from raven.config.schema import DeepResearchToolConfig
-from raven.rpc.question_broker import QuestionBroker
+from raven.tui_rpc.question_broker import QuestionBroker
 
 DEFAULT_BASE_URL = "https://api.miromind.ai/v1"
 DEFAULT_MODEL = "mirothinker-1-7-deepresearch-mini"
@@ -254,10 +253,7 @@ class DeepResearchTool(Tool):
         return "".join(parts), finish, usage
 
     def _write_report(self, content: str, query: str) -> str:
-        # A research report is a file the user asked for, so it belongs in the
-        # session's working directory; the SSE path runs inside the turn, so it
-        # reads the binding rather than capturing it.
-        return _write_report_file(workdir.current() or self._workspace, content, query)
+        return _write_report_file(self._workspace, content, query)
 
     @staticmethod
     def _result(
@@ -502,11 +498,7 @@ class DeepResearchManager:
                 ensure_ascii=False,
             )
 
-        # Capture the working directory here rather than reading it in _run:
-        # the poll task outlives the turn that started it, and the binding is
-        # released as soon as that turn returns.
-        out_dir = workdir.current() or self._workspace
-        task = asyncio.create_task(self._run(resp_id, query, routing, out_dir))
+        task = asyncio.create_task(self._run(resp_id, query, routing))
         self._active[routing.conversation] = task
         task.add_done_callback(lambda _: self._active.pop(routing.conversation, None))
         logger.info("deep_research async started [{}] for {}", resp_id, routing.conversation)
@@ -522,7 +514,7 @@ class DeepResearchManager:
             ensure_ascii=False,
         )
 
-    async def _run(self, resp_id: str, query: str, routing: _Routing, out_dir: Path) -> None:
+    async def _run(self, resp_id: str, query: str, routing: _Routing) -> None:
         """Poll to completion, then deliver the answer verbatim. Any failure
         becomes an error delivery; the guard is released by the done-callback
         regardless, and submit errors here are logged, never propagated."""
@@ -542,7 +534,7 @@ class DeepResearchManager:
                     logger.info(
                         "deep_research [{}] report saved: {}",
                         resp_id,
-                        _write_report_file(out_dir, answer, query),
+                        _write_report_file(self._workspace, answer, query),
                     )
                 except Exception as e:
                     logger.error("deep_research [{}] report save failed: {}", resp_id, e)

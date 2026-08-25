@@ -22,7 +22,6 @@ segment.
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -33,7 +32,6 @@ from raven.context_engine.base import (
     ContextEngine,
     SegmentBuilder,
 )
-from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import render
 from raven.memory_engine.base import AssembledContext, TokenBudget
 
@@ -50,17 +48,11 @@ class ContextAssembler(ContextEngine):
         builders: list[SegmentBuilder],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         now_fn: Callable[[], datetime] | None = None,
-        get_tool_notices: Callable[[], list[str]] | None = None,
-        scent: "ScentMenu | None" = None,
     ) -> None:
-        self._scent = scent
-        self.skills_router = None
-        """Set by the factory: the SkillForgeRouter behind find_skill."""
         self._builders = sorted(builders, key=lambda b: b.order)
         self._phase_a = [b for b in self._builders if not b.needs_prefix]
         self._phase_b = [b for b in self._builders if b.needs_prefix]
         self.get_tool_definitions = get_tool_definitions
-        self.get_tool_notices = get_tool_notices
         self._now_fn = now_fn or datetime.now
 
     @property
@@ -98,7 +90,6 @@ class ContextAssembler(ContextEngine):
             describe_tool=turn.describe_tool,
             channel=turn.channel,
             chat_id=turn.chat_id,
-            surface=turn.surface,
             session_messages=session_messages,
             budget=budget,
         )
@@ -116,14 +107,6 @@ class ContextAssembler(ContextEngine):
         prefix_parts.sort(key=lambda t: t[0])
         system_prefix = "\n\n---\n\n".join(text for _, text in prefix_parts)
 
-        if self._scent is not None:
-            scent = await self._scent.build(ctx.current_message, ctx.session_messages)
-            if scent:
-                ctx = replace(ctx, scent_text=scent.text)
-                # Under pull no SkillsSegmentBuilder runs, so the menu is the
-                # only writer of this key: the after-turn backend feedback
-                # (FB-1) keeps receiving the skills the model was offered.
-                meta |= {"injected_skill_ids": list(scent.skill_ids)}
         user_msg = self._build_user(ctx)
 
         # ── Phase B — prefix-dependent builders (Curator), serial ───
@@ -179,27 +162,8 @@ class ContextAssembler(ContextEngine):
                 setter(tokens)
 
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
-        """The single structural user message: runtime context + content.
-
-        The scent menu (pull-mode skill discovery) rides the same envelope
-        as the clock: per-turn material belongs at the sequence tail, where
-        appending never invalidates the cached prefix.
-
-        The menu must stay inside the envelope's *first* paragraph: the
-        session persist (``AgentLoop._save_turn``) strips the runtime-context
-        block from a stored user message by dropping everything before the
-        first blank line, and the menu is per-turn material that must go with
-        it — stored as the user's own text it would render as such on resume
-        and feed the next turn's novelty window its own output. Hence the
-        single-newline join and the collapse of any blank lines within.
-        """
-        notices = self.get_tool_notices() if self.get_tool_notices is not None else None
-        runtime_ctx = render.build_runtime_context(
-            self._now_fn, ctx.channel, ctx.chat_id, surface=ctx.surface, tool_notices=notices
-        )
-        if ctx.scent_text:
-            scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())
-            runtime_ctx = f"{runtime_ctx}\n{scent}"
+        """The single structural user message: runtime context + content."""
+        runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id)
         user_content = render.build_user_content(
             ctx.current_message,
             ctx.media,

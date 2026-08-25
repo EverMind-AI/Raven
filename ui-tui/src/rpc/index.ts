@@ -16,7 +16,6 @@ export {
   SkillNotFoundError,
   SkillPinConflictError,
   ModelNotAvailableError,
-  ModelSwitchInTurnError,
   ConfigFieldReadonlyError,
   ConfigValidationError,
   NotSupportedInV01Error,

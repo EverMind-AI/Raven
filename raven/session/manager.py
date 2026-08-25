@@ -3,7 +3,6 @@
 import copy
 import json
 import uuid
-from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -12,32 +11,7 @@ from typing import Any
 from loguru import logger
 
 from raven.utils.atomic_io import atomic_replace, locked_append
-from raven.utils.helpers import ensure_dir, safe_filename, safe_path_segment
-
-# Channel for subagent transcripts. Defined here, not in the subagent package,
-# because this module has to know which sessions to keep out of an unfiltered
-# list and must not import upward to learn it.
-#
-# Nothing in this tree writes the channel yet -- the subagent transcript writer
-# lands separately. The filter is here anyway because it costs two lines and
-# gets the ordering right: a session store that starts collecting `sub:` files
-# before anything knows to exclude them puts machine-generated transcripts in
-# front of every human-facing picker.
-SUBAGENT_CHANNEL = "sub"
-
-
-def _message_text(content: Any, cap: int = 120) -> str:
-    """Flatten a message's content to one line of plain text (capped).
-
-    Content is either a string or a list of blocks whose text blocks carry
-    a ``text`` field; anything else contributes nothing.
-    """
-    if isinstance(content, list):
-        content = " ".join(
-            str(b.get("text", "")) for b in content if isinstance(b, dict) and b.get("type") in (None, "text")
-        )
-    text = " ".join(str(content or "").split())
-    return text[:cap]
+from raven.utils.helpers import ensure_dir, safe_filename
 
 
 def new_chat_id(now: datetime | None = None) -> str:
@@ -200,94 +174,27 @@ class SessionManager:
     Sessions are stored as JSONL files in the sessions directory.
     """
 
-    def __init__(self, workspace: Path, project_slug: str | None = None, project_dir: Path | None = None):
-        """
-        Args:
-            workspace: Agent home; sessions live under ``<workspace>/sessions``.
-            project_slug: Groups this process's sessions under one directory
-                (``raven tui`` / ``raven agent`` pass the slugged launch
-                directory, so a project's conversations stay together). Leave
-                unset on the gateway, where the grouping directory is the
-                channel name instead -- one daemon serves every project, so a
-                launch directory would say nothing about a conversation.
-            project_dir: The unslugged directory behind ``project_slug``,
-                stamped into each new session's metadata. The slug is lossy, so
-                this is what identifies the project; the directory name is only
-                a bucket.
-        """
+    def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.project_slug = project_slug
-        self.project_dir = project_dir
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self._cache: dict[str, Session] = {}
 
-    def _group_dir(self, key: str) -> Path:
-        """The directory grouping this session: project slug, or channel.
-
-        An empty channel falls back to ``_`` rather than the empty string, which
-        would collapse to ``sessions_dir`` itself -- putting the transcript at
-        ``sessions/.jsonl``, where the ``*/*.jsonl`` scans cannot see it.
-        """
-        channel = key.partition(":")[0]
-        return self.sessions_dir / (self.project_slug or safe_path_segment(channel) or "_")
-
     def _get_session_path(self, key: str) -> Path:
-        """The file path for a session: ``sessions/<group>/<chat_id>.jsonl``.
-
-        A session opened before this process's grouping applied -- a transcript
-        still under its channel directory, from before project grouping, or
-        from a run started in a different directory -- keeps its existing file.
-        Without that, resuming by id would silently open an empty session next
-        to the real transcript rather than continuing it.
-        """
-        chat_id = safe_filename(key.partition(":")[2])
-        path = self._group_dir(key) / f"{chat_id}.jsonl"
-        if self.project_slug and not path.exists():
-            for existing in self.sessions_dir.glob(f"*/{chat_id}.jsonl"):
-                return existing
-        return path
-
-    def session_dir(self, key: str) -> Path:
-        """This session's metadata directory, beside its transcript.
-
-        ``sessions/<group>/<chat_id>/`` holds what belongs to the conversation
-        but not in its message log -- the sub-agent call history today. Named
-        the same as the transcript minus the suffix, so the pair sits together
-        and neither the ``*.jsonl`` globs nor this directory sees the other.
-
-        The group comes from :meth:`_get_session_path` so a pre-grouping
-        transcript's metadata lands beside the transcript rather than under the
-        slug this process would otherwise pick.
-
-        The name is re-derived with ``safe_path_segment`` rather than taken off
-        the transcript's stem: ``safe_filename`` leaves ``.`` and ``..`` intact
-        because a suffix always follows it, which is not true here.
-        ``with_suffix("")`` on ``<group>/...jsonl`` yields ``<group>/..`` --
-        pointing out of the group directory -- and on ``<group>/..jsonl`` it
-        raises ``ValueError``.
-        """
-        chat_id = safe_path_segment(key.partition(":")[2]) or "_"
-        return self._get_session_path(key).parent / chat_id
+        """Get the file path for a session: sessions/{channel}/{chat_id}.jsonl."""
+        channel, _, chat_id = key.partition(":")
+        return self.sessions_dir / safe_filename(channel) / f"{safe_filename(chat_id)}.jsonl"
 
     @staticmethod
     def key_from_path(path: Path) -> str:
-        """Best-effort reverse of the nested filename encoding for a session file.
+        """Best-effort reverse of the nested filename encoding for a session
+        file: channel is the parent directory, chat_id is the stem.
 
         The on-disk ``_type:metadata`` key is authoritative when present and
         wins over this; callers use it only as the fallback for metadata-less
         files. ``safe_filename`` is non-invertible, so any character it folds
         to ``_`` (``/``, ``:``, ...) is not recovered here.
-
-        The parent directory names the channel only under channel grouping. A
-        project slug always begins with ``-`` (the leading path separator) and
-        a channel name never does, so a slug parent is recognisable -- and
-        there the channel is simply not knowable from the path. Reporting
-        ``unknown`` rather than the slug matters because callers compare the
-        channel half against real channel names: a slug would look like a
-        channel that no session key can ever match.
         """
-        parent = path.parent.name
-        return f"{'unknown' if parent.startswith('-') else parent}:{path.stem}"
+        return f"{path.parent.name}:{path.stem}"
 
     def resolve_key(self, value: str) -> SessionResolution:
         """Resolve a session id to a full ``channel:chat_id`` key across channels.
@@ -315,13 +222,7 @@ class SessionManager:
             return SessionResolution("resolved", key=matches[0]["key"])
         return SessionResolution("not_found")
 
-    def find_most_recent_chat_id(
-        self,
-        channel: str,
-        *,
-        this_project_only: bool = False,
-        include_archived: bool = True,
-    ) -> str | None:
+    def find_most_recent_chat_id(self, channel: str) -> str | None:
         """Return the chat_id of the most-recently-updated session on this
         channel, or None if no such session exists.
 
@@ -338,42 +239,17 @@ class SessionManager:
         session (``sessions create``) must not hijack delivery away from the
         user's real last conversation. Empty sessions are only considered
         when the channel has no session with messages at all.
-
-        ``this_project_only`` narrows the scan, which is what resuming wants:
-        ``--continue`` in one checkout must not reopen a conversation started in
-        another, and the glob fallback would then append this project's turns to
-        a transcript filed under that one. Delivery callers want the opposite --
-        the gateway forwards to whichever session is live regardless of where it
-        was started -- so the wide scan stays the default. Without a
-        ``project_slug`` there is no narrower scan to make and the flag is a
-        no-op.
-
-        Narrowed still means two directories, not one: this project's group, and
-        the channel-named group holding sessions written before grouping
-        existed. Those carry no project attribution, and ``_get_session_path``
-        already lets any project adopt one, so excluding them here would strand
-        every pre-upgrade conversation with no way to reach it from ``-c``.
-
-        ``include_archived`` defaults to True because delivery callers still
-        need the latest live destination even when it is hidden from session
-        pickers. Resume callers set it to False so archiving remains a durable
-        opt-out from automatic reopening.
         """
+        channel_dir = self.sessions_dir / safe_filename(channel)
+        if not channel_dir.is_dir():
+            return None
+
         best_chat_id: str | None = None
         best_updated = ""
         best_empty_chat_id: str | None = None
         best_empty_updated = ""
-        # Either way the directory name is never trusted to name the channel:
-        # under project grouping a `cli` session lives under a slugged launch
-        # path, so the authoritative channel is the one in each file's metadata
-        # (re-checked below).
-        if this_project_only and self.project_slug:
-            groups = {self.project_slug, safe_path_segment(channel) or "_"}
-            candidates = (p for g in groups for p in (self.sessions_dir / g).glob("*.jsonl"))
-        else:
-            candidates = self.sessions_dir.glob("*/*.jsonl")
-        for p in candidates:
-            meta, count, _last, _first, _preview = self._scan_file(p)
+        for p in channel_dir.glob("*.jsonl"):
+            meta, count = self._scan_file(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -382,16 +258,6 @@ class SessionManager:
             ch, chat_id = key_val.split(":", 1)
             if ch != channel or not chat_id:
                 continue
-            if not include_archived and (meta.get("metadata") or {}).get("archived"):
-                continue
-            if this_project_only and self.project_dir is not None:
-                # The slug is lossy, so one group can hold two projects
-                # (`/srv/a_b` and `/srv/a/b`). Where the real launch directory
-                # was recorded, use it; sessions predating that field have no
-                # attribution to contradict and stay eligible.
-                origin = (meta.get("metadata") or {}).get("project_dir")
-                if origin is not None and origin != str(self.project_dir):
-                    continue
             updated = meta.get("updated_at")
             if not isinstance(updated, str) or not updated:
                 try:
@@ -408,34 +274,16 @@ class SessionManager:
         return best_chat_id if best_chat_id is not None else best_empty_chat_id
 
     @staticmethod
-    def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int, str, str, str]:
+    def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int]:
         """Single pass over a session file: return (last metadata record,
-        message line count, last user message timestamp, first user message
-        text, latest conversational preview).
+        message line count).
 
         One metadata record is appended per save, so the last reflects
         current state. Message lines are counted without keeping them in
         memory.
-
-        The timestamp tracked is the newest readable conversational message:
-        ``user`` or ``assistant``. Runtime-origin and delegated entries are
-        deliberately included because they add visible content to a Session
-        even when nobody typed at that moment. Tool and system records do not
-        move the picker on their own. The metadata record's ``updated_at``
-        cannot serve either -- it only moves when a save writes metadata and
-        can lag the transcript by a whole turn.
-
-        The first user message is what session pickers title an untitled
-        session with, so its text (flattened to one line, capped) rides along.
-        The latest non-empty user or assistant message is a separate display
-        preview: identity and recent content have different lifecycles and must
-        not be overloaded into one field.
         """
         meta: dict[str, Any] | None = None
         count = 0
-        last_ts = ""
-        first_user = ""
-        latest_preview = ""
         try:
             with path.open(encoding="utf-8") as f:
                 for line in f:
@@ -450,21 +298,9 @@ class SessionManager:
                         meta = data
                     else:
                         count += 1
-                        if isinstance(data, dict):
-                            role = data.get("role")
-                            if role in {"user", "assistant"}:
-                                text = _message_text(data.get("content"))
-                                if text:
-                                    latest_preview = text
-                                ts = data.get("timestamp")
-                                if isinstance(ts, str) and ts > last_ts:
-                                    last_ts = ts
-                            if role == "user":
-                                if not first_user:
-                                    first_user = _message_text(data.get("content"))
         except OSError:
-            return None, 0, "", "", ""
-        return meta, count, last_ts, first_user, latest_preview
+            return None, 0
+        return meta, count
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -482,13 +318,6 @@ class SessionManager:
         session = self._load(key)
         if session is None:
             session = Session(key=key)
-        # The group directory is a lossy label -- two projects whose paths
-        # differ only in punctuation slug the same way. Record the real
-        # directory so anything that needs the project's identity reads it from
-        # here rather than from the directory name. Set once, on the session
-        # that introduced it; a later run elsewhere must not rewrite history.
-        if self.project_dir is not None and not session.metadata.get("project_dir"):
-            session.metadata["project_dir"] = str(self.project_dir)
 
         self._cache[key] = session
         return session
@@ -674,6 +503,14 @@ class SessionManager:
             if parent_title and not (source.metadata or {}).get("title_auto"):
                 child.metadata["title"] = f"{parent_title} (fork)"
         child.metadata["parent_session_id"] = source_key
+        # A fork continues its parent's conversation, so it continues on its
+        # parent's model. The caller re-points the live binding, but that lives
+        # in memory only -- without carrying the record too, the fork drops to
+        # the default the first time it is resumed in a new process.
+        for slot in ("model", "provider"):
+            inherited = (source.metadata or {}).get(slot)
+            if inherited:
+                child.metadata[slot] = inherited
         self.save(child)
         return child
 
@@ -695,70 +532,30 @@ class SessionManager:
                 return False
         return True
 
-    def list_sessions(
-        self,
-        channel: str | None = None,
-        *,
-        channels: Collection[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """List sessions, optionally filtered by one or several channels.
+    def list_sessions(self, channel: str | None = None) -> list[dict[str, Any]]:
+        """List sessions, optionally filtered by channel.
 
-        Each entry carries: key, created_at, updated_at, last_message_at,
-        path, message_count, first_user_message, last_message_preview. Ordered
-        by the metadata ``updated_at`` stamp descending. Each file is read in a
-        single pass, including when several channels are requested.
-
-        Subagent transcripts are stored as sessions so they can be read with the
-        same machinery, but they are steps inside somebody else's turn rather
-        than conversations -- listing them would bury the real ones. Ask for the
-        channel by name to get them. ``channel`` preserves the original
-        single-channel API; ``channels`` is the multi-channel picker path and
-        cannot be combined with it.
+        Each entry carries: key, created_at, updated_at, path, message_count.
+        Sorted by updated_at descending. Each file is read in a single pass.
         """
-        if channel is not None and channels is not None:
-            raise ValueError("channel and channels are mutually exclusive")
-        selected_channels = set(channels) if channels is not None else None
         sessions = []
 
         for path in self.sessions_dir.glob("*/*.jsonl"):
-            data, message_count, last_ts, first_user, latest_preview = self._scan_file(path)
+            if channel is not None and path.parent.name != channel:
+                continue
+            data, message_count = self._scan_file(path)
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
-            key_channel = key.partition(":")[0]
-            # Filter on the key, not the parent directory: under project
-            # grouping the directory is a slugged launch path, so it no longer
-            # names the channel. That applies to the subagent exclusion too --
-            # keyed off the directory it would quietly stop excluding anything
-            # the moment a session landed under a slugged group instead.
-            if channel is None and selected_channels is None and key_channel == SUBAGENT_CHANNEL:
-                continue
-            if channel is not None and key_channel != channel:
-                continue
-            if selected_channels is not None and key_channel not in selected_channels:
-                continue
             sessions.append(
                 {
                     "key": key,
                     "created_at": data.get("created_at"),
                     "updated_at": data.get("updated_at"),
-                    # The newest visible conversation entry. Runtime-origin
-                    # and delegated rows count because they change the Session.
-                    "last_message_at": last_ts,
                     "path": str(path),
                     "message_count": message_count,
                     "metadata": data.get("metadata", {}),
-                    "first_user_message": first_user,
-                    "last_message_preview": latest_preview,
                 }
             )
 
-        # Ordered by ``updated_at``, unchanged. ``last_message_at`` is
-        # carried on each entry but deliberately not sorted on here: three
-        # callers take ``[0]`` off this list to decide *where a message gets
-        # delivered* -- the gateway's heartbeat target, the sentinel's nudge
-        # target, and `raven sessions list`, whose table renders ``updated_at``
-        # in its own Updated column. Re-ordering for a picker's benefit would
-        # silently re-route those. A surface that wants latest conversational
-        # activity sorts on the field itself; ``session.list`` does.
-        return sorted(sessions, key=lambda x: x.get("updated_at") or "", reverse=True)
+        return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)

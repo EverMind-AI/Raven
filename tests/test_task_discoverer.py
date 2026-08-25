@@ -97,7 +97,7 @@ def _option_dict(**overrides):
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "memory").mkdir()
     return ws

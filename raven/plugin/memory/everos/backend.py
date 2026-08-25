@@ -28,10 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import re
 import time
-from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
@@ -139,9 +137,10 @@ class ServiceState(Enum):
 
     Two axes are folded into one enum because callers only ever act on the
     combination: may I send a request, and is it worth probing again. The
-    states that answer "no" to both -- ``UNCONFIGURED`` and ``NO_BINARY`` --
-    describe the installation rather than the process, so no amount of probing
-    resolves them and a stray success must not clear them.
+    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY`` and
+    ``BAD_IDENTITY`` -- describe the installation and its config rather than
+    the process, so no amount of probing resolves them and a stray success must
+    not clear them.
     """
 
     UNKNOWN = "unknown"
@@ -151,13 +150,14 @@ class ServiceState(Enum):
     UNRESPONSIVE = "unresponsive"
     UNCONFIGURED = "unconfigured"
     NO_BINARY = "no_binary"
+    BAD_IDENTITY = "bad_identity"
     FOREIGN = "foreign"
 
 
 # Probing cannot change these: they are facts about the install, not the
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
-_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 # Only the opening state may spawn. Every other non-ready state has already
 # either spawned once (STARTING / FAILED), found the data occupied
@@ -171,7 +171,7 @@ _PROBE_MIN_INTERVAL_S: float = 2.0
 # States where no write was ever going to land, so nothing was lost. Reporting
 # a loss here would tell an install that never configured a memory LLM that it
 # dropped turns of memory it never had.
-_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 
 class _HttpEverosAdapter:
@@ -550,7 +550,29 @@ class EverosBackend:
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
-        self._validate_identity()
+        try:
+            self._validate_identity()
+        except ValueError as e:
+            # Caught here rather than left to the callers: all four of them fold
+            # it into ``logger.exception``, and a one-shot CLI run writes no log
+            # file, so the one message that names the key to edit reached nobody.
+            # Leaving ``_state`` unset was the other half -- ``store`` then filed
+            # a config error under the dropped-write counter and told the user
+            # the service was unavailable, which sent them to a server that was
+            # never broken.
+            from rich.console import Console
+            from rich.markup import escape
+
+            self._state = ServiceState.BAD_IDENTITY
+            # Escaped: the message quotes the accepted-character class, and rich
+            # reads "[a-zA-Z0-9_.@+-]" as a markup tag and eats it -- leaving the
+            # user the pattern "^+$" to match their id against.
+            Console(stderr=True).print(
+                f"[yellow]Long-term memory is off: {escape(str(e))}[/yellow]\n"
+                "[dim]Fix memory.userId / memory.agentId in your config.json, "
+                "then start a new session.[/dim]"
+            )
+            return
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
@@ -905,7 +927,7 @@ class EverosBackend:
 
         The host already collects ``skill_usage`` signals (which everos
         skills were injected / used in a turn) and dispatches them here.
-        everos 1.2.1's HTTP surface still exposes no endpoint to consume
+        everos 1.2.3's HTTP surface still exposes no endpoint to consume
         them — its routes are get / health / knowledge / memorize /
         metrics / ome / search, and ``agent_skill.confidence`` lives in
         the persistence internals with no service-level write path — so
@@ -1014,101 +1036,61 @@ class EverosBackend:
         agent_id: str,
         user_id: str = "default",
     ) -> list[dict[str, Any]]:
-        return convert_messages(messages, agent_id=agent_id, user_id=user_id)
+        """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
 
+        AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
+        "user", "assistant", "tool"} and ``content`` either ``str`` or
+        a list of multimodal parts.
 
-def as_ms_epoch(value: Any) -> int | None:
-    """A message's timestamp as everos's DTO wants it, or ``None`` if unreadable.
+        EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
+        epoch, required), "content"}`` with role ∈ {"user",
+        "assistant", "tool"} (no ``"system"``).
 
-    Public because ``subagent_memory`` needs it too, for the same reason
-    ``convert_messages`` is: reaching across a module boundary for a private
-    helper would work and would be the wrong shape.
+        Owner mapping (EverOS derives the memory owner from ``sender_id``):
+        - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
+          agent track (cases / skills) accrues under the configured,
+          stable agent identity — and ``recall(agent_id=…)`` finds it.
+        - ``user`` → keep the caller's ``sender_id`` (the user identity);
+          ``recall(user_id=<X>)`` must use that same ``<X>``.
 
-    Accepts the three spellings that reach here: a ms-epoch int, a seconds-epoch
-    int, and an ISO 8601 string (which is what ``instance_log.build_turn``
-    stamps rows with). The seconds/ms split is by magnitude -- a seconds value
-    stays below the threshold until the year 5138, and a ms value clears it
-    only once the date reaches 1973-03-03.
-    """
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        if not math.isfinite(number) or number <= 0:
-            return None
-        return int(number * 1000) if number < 100_000_000_000 else int(number)
-    if isinstance(value, str):
-        try:
-            ms = int(datetime.fromisoformat(value).timestamp() * 1000)
-        except ValueError:
-            return None
-        return ms if ms > 0 else None
-    return None
-
-
-def convert_messages(
-    messages: list[dict[str, Any]],
-    *,
-    agent_id: str,
-    user_id: str = "default",
-) -> list[dict[str, Any]]:
-    """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
-
-    AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
-    "user", "assistant", "tool"} and ``content`` either ``str`` or
-    a list of multimodal parts.
-
-    EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
-    epoch, required), "content"}`` with role ∈ {"user",
-    "assistant", "tool"} (no ``"system"``).
-
-    Owner mapping (EverOS derives the memory owner from ``sender_id``):
-    - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
-      agent track (cases / skills) accrues under the configured,
-      stable agent identity — and ``recall(agent_id=…)`` finds it.
-    - ``user`` → keep the caller's ``sender_id`` (the user identity);
-      ``recall(user_id=<X>)`` must use that same ``<X>``.
-
-    Other conversions: drop ``system``; missing ``sender_id`` on a
-    user message → ``user_id``; missing or unreadable ``timestamp`` ->
-    now (ms); an ISO 8601 string or a seconds-epoch number -> ms epoch
-    (everos's DTO takes only ms, and ``build_turn`` stamps ISO);
-    multimodal ``content`` → space-joined text; empty text → drop.
-    """
-    now_ms = int(time.time() * 1000)
-    out: list[dict[str, Any]] = []
-    for m in messages:
-        role = m.get("role")
-        if role not in ("user", "assistant", "tool"):
-            continue
-        content = m.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(
-                str(part.get("text", "")).strip()
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ).strip()
-        if not isinstance(content, str):
-            content = str(content)
-        # An assistant message may carry tool_calls with empty text —
-        # keep it (the tool result downstream references its id). The
-        # host's tool_calls are already in everos's ToolCallDTO shape
-        # (``to_openai_tool_call``); tool messages carry tool_call_id.
-        tool_calls = m.get("tool_calls") if role == "assistant" else None
-        if not content and not tool_calls:
-            continue
-        entry: dict[str, Any] = {
-            "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
-            "role": role,
-            "timestamp": as_ms_epoch(m.get("timestamp")) or now_ms,
-            "content": content,
-        }
-        if tool_calls:
-            entry["tool_calls"] = tool_calls
-        if role == "tool" and m.get("tool_call_id"):
-            entry["tool_call_id"] = m["tool_call_id"]
-        out.append(entry)
-    return out
+        Other conversions: drop ``system``; missing ``sender_id`` on a
+        user message → ``user_id``; missing ``timestamp`` → now (ms);
+        multimodal ``content`` → space-joined text; empty text → drop.
+        """
+        now_ms = int(time.time() * 1000)
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role")
+            if role not in ("user", "assistant", "tool"):
+                continue
+            content = m.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text", "")).strip()
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ).strip()
+            if not isinstance(content, str):
+                content = str(content)
+            # An assistant message may carry tool_calls with empty text —
+            # keep it (the tool result downstream references its id). The
+            # host's tool_calls are already in everos's ToolCallDTO shape
+            # (``to_openai_tool_call``); tool messages carry tool_call_id.
+            tool_calls = m.get("tool_calls") if role == "assistant" else None
+            if not content and not tool_calls:
+                continue
+            entry: dict[str, Any] = {
+                "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
+                "role": role,
+                "timestamp": m.get("timestamp") or now_ms,
+                "content": content,
+            }
+            if tool_calls:
+                entry["tool_calls"] = tool_calls
+            if role == "tool" and m.get("tool_call_id"):
+                entry["tool_call_id"] = m["tool_call_id"]
+            out.append(entry)
+        return out
 
 
 # EverOS accumulates the profile monotonically over an install's life with no
@@ -1205,4 +1187,4 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     return EverosBackend(ctx)
 
 
-__all__ = ["EverosBackend", "as_ms_epoch", "convert_messages", "make_backend"]
+__all__ = ["EverosBackend", "make_backend"]

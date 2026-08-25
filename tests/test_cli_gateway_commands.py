@@ -37,28 +37,6 @@ def test_gateway_help_works() -> None:
     assert "--config" in r.stdout
 
 
-def test_gateway_help_describes_the_channel_workspace_root():
-    """``-w`` names a root, and the root it names must exist.
-
-    This assertion previously pinned "per-session workspaces (default:
-    <agent home>/ws)", which is why that wording outlived the design it
-    described -- it was load-bearing for a test rather than for a reader. The
-    gateway isolates per channel now and `<agent home>/ws` was removed, so
-    `raven gateway --help` must not send anyone looking for it.
-
-    Pinned at 80 columns because Typer truncates help it cannot fit, and a
-    half-printed path is worse than none -- the first replacement wording was
-    long enough to be cut off exactly there.
-    """
-    r = runner.invoke(app, ["gateway", "--help"], env={"COLUMNS": "80"})
-    assert r.exit_code == 0
-    output = " ".join(r.output.split())
-    assert "per-session" not in output
-    assert "/ws" not in output
-    assert "per-channel working directories" in output
-    assert "~/.raven/tmp" in output
-
-
 def test_gateway_config_short_alias_removed() -> None:
     """``-c`` no longer binds ``--config`` (UN-41); only the long form remains."""
     bad = runner.invoke(app, ["gateway", "-c", "/tmp/whatever.json"])
@@ -157,18 +135,14 @@ def test_gateway_log_config_overrides_parse() -> None:
 
 
 def test_gateway_channels_excludes_tui_when_no_im_enabled() -> None:
-    # A page-less gateway does not claim ephemeral "tui" cron jobs — those fire
-    # in the TUI process, so a TUI-set reminder is never forwarded to an IM
-    # channel. With the page mounted the gateway IS a tui surface (see below).
+    # The gateway does not claim "tui" cron jobs — those fire in the TUI
+    # process, so a TUI-set reminder is never forwarded to an IM channel.
     from types import SimpleNamespace
 
     from raven.cli.gateway_commands import _build_gateway_channels
     from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(
-        channels=ChannelsConfig(),
-        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
-    )
+    cfg = SimpleNamespace(channels=ChannelsConfig())
     assert _build_gateway_channels(cfg) == set()  # no IM enabled, and no "tui"
 
 
@@ -178,10 +152,7 @@ def test_gateway_channels_excludes_tui_alongside_enabled_im() -> None:
     from raven.cli.gateway_commands import _build_gateway_channels
     from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(
-        channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
-        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
-    )
+    cfg = SimpleNamespace(channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}))
     result = _build_gateway_channels(cfg)
     assert result == {"telegram"}
     assert "tui" not in result
@@ -202,166 +173,9 @@ def test_gateway_channels_derived_from_config_model_fields() -> None:
                 "feishu": {"enabled": True},
                 "weixin": {"enabled": False},
             }
-        ),
-        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
-    )
-    assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
-
-
-def test_gateway_channels_exclude_tui_even_when_the_page_is_enabled() -> None:
-    """Wanting the page is not hosting it. ``mount_page`` yields to a resident
-    standalone `raven serve`, so ``page.enabled`` alone says nothing about
-    whether this process has a tui outlet -- the partition must be decided by
-    the mount's outcome, and this helper only ever answers for the IM side."""
-    from types import SimpleNamespace
-
-    from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
-
-    cfg = SimpleNamespace(
-        channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
-        gateway=SimpleNamespace(page=SimpleNamespace(enabled=True)),
-    )
-    result = _build_gateway_channels(cfg)
-    assert result == {"telegram"}
-    assert "tui" not in result
-    assert "cli" not in result
-
-
-def test_the_live_page_is_what_adds_tui_to_the_cron_partition() -> None:
-    """``tui`` must join the partition inside the ``page_mount is not None``
-    block and before ``cron.start()``, so the sweep that deletes past-due
-    one-shots sees the final partition. Like the /stop test above this lives in
-    the serve command with no import seam, so pin the command source."""
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    mounted = src.split("if page_mount is not None:", 1)[1].split("# Channel inbound runs through", 1)[0]
-    assert 'cron.allowed_channels.add("tui")' in mounted
-    before_start, _, after_start = src.partition("await cron.start()")
-    assert 'cron.allowed_channels.add("tui")' in before_start
-    assert 'cron.allowed_channels.add("tui")' not in after_start
-    # And nowhere else: the config helper must not put it back.
-    helper_body = inspect.getsource(gateway_commands._build_gateway_channels).split('"""')[-1]
-    assert "tui" not in helper_body
-    assert "page" not in helper_body
-
-
-def _gateway_partition_with_the_page_enabled() -> set[str]:
-    """The cron partition a page-wanting gateway is built with."""
-    from types import SimpleNamespace
-
-    from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
-
-    return _build_gateway_channels(
-        SimpleNamespace(
-            channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
-            gateway=SimpleNamespace(page=SimpleNamespace(enabled=True)),
         )
     )
-
-
-def _write_jobs(store_path: Path, jobs: list[dict]) -> None:
-    import json
-
-    store_path.parent.mkdir(parents=True, exist_ok=True)
-    store_path.write_text(json.dumps({"version": 1, "jobs": jobs}), encoding="utf-8")
-
-
-def _due_recurring_tui_job(now_ms: int) -> dict:
-    return {
-        "id": "recurring",
-        "name": "page reminder",
-        "enabled": True,
-        "schedule": {"kind": "every", "everyMs": 600_000},
-        "payload": {"message": "drink water", "channel": "tui", "to": "default"},
-        "state": {"nextRunAtMs": 1},
-        "createdAtMs": now_ms - 600_000,
-        "updatedAtMs": now_ms - 600_000,
-    }
-
-
-def _past_due_oneshot_tui_job(now_ms: int) -> dict:
-    return {
-        "id": "oneshot",
-        "name": "stretch",
-        "enabled": True,
-        "schedule": {"kind": "at", "atMs": now_ms - 60_000},
-        "payload": {"message": "stretch", "channel": "tui", "to": "default"},
-        "state": {"nextRunAtMs": now_ms - 60_000},
-        "createdAtMs": now_ms - 120_000,
-        "updatedAtMs": now_ms - 120_000,
-        "deleteAfterRun": True,
-    }
-
-
-async def _fired_ids(store_path: Path, allowed: set[str]) -> list[str]:
-    """Job ids a runner on ``allowed`` claims and runs on one due tick."""
-    from raven.proactive_engine.schedulers.cron.service import CronService
-
-    fired: list[str] = []
-
-    async def on_job(job) -> None:
-        fired.append(job.id)
-
-    svc = CronService(store_path, allowed_channels=allowed)
-    svc.on_job = on_job
-    await svc._process_due()
-    return fired
-
-
-async def _survivors_after_restart(store_path: Path, allowed: set[str]) -> list[str]:
-    """Job ids left in the shared store after a runner on ``allowed`` starts."""
-    import json
-
-    from raven.proactive_engine.schedulers.cron.service import CronService
-
-    svc = CronService(store_path, allowed_channels=allowed)
-    await svc.start()
-    svc.stop()
-    return [j["id"] for j in json.loads(store_path.read_text(encoding="utf-8"))["jobs"]]
-
-
-async def test_a_page_less_gateway_neither_runs_nor_drops_a_tui_reminder(tmp_path: Path) -> None:
-    """``page.enabled`` true, mount skipped -- a resident standalone `raven
-    serve` owns serve.json. This process has no tui outlet, so both tui jobs
-    must be left to the process that has one: the due job is not claimed (its
-    reply would be dropped by the hub after a full model turn had already run)
-    and the past-due one-shot is not deleted from the shared store."""
-    import time
-
-    partition = _gateway_partition_with_the_page_enabled()
-    now_ms = int(time.time() * 1000)
-
-    due = tmp_path / "due.json"
-    _write_jobs(due, [_due_recurring_tui_job(now_ms)])
-    assert await _fired_ids(due, partition) == []
-
-    missed = tmp_path / "missed.json"
-    _write_jobs(missed, [_past_due_oneshot_tui_job(now_ms)])
-    assert await _survivors_after_restart(missed, partition) == ["oneshot"]
-
-
-async def test_a_gateway_hosting_the_page_does_claim_tui_jobs(tmp_path: Path) -> None:
-    """Mount succeeded, so the wiring adds ``tui`` to the very set the service
-    was built with -- ``_owns_channel`` reads it live, so both halves flip: the
-    due job runs here, and the past-due one-shot is this runner's to retire."""
-    import time
-
-    partition = _gateway_partition_with_the_page_enabled()
-    partition.add("tui")  # what the page_mount block does
-    now_ms = int(time.time() * 1000)
-
-    due = tmp_path / "due.json"
-    _write_jobs(due, [_due_recurring_tui_job(now_ms)])
-    assert await _fired_ids(due, partition) == ["recurring"]
-
-    missed = tmp_path / "missed.json"
-    _write_jobs(missed, [_past_due_oneshot_tui_job(now_ms)])
-    assert await _survivors_after_restart(missed, partition) == []
+    assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
@@ -430,7 +244,7 @@ def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
 
 from types import SimpleNamespace
 
-from raven.cli._helpers import build_model_routing
+from raven.cli.gateway_commands import build_model_routing
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
 from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
@@ -491,67 +305,6 @@ def test_build_routing_ecoclaw_no_key_disabled():
     assert out is prov
 
 
-def _config(default_model: str = "deepseek/deepseek-v3"):
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.agents.defaults.model = default_model
-    cfg.providers.deepseek.api_key = "KD"
-    cfg.providers.anthropic.api_key = "KA"
-    return cfg
-
-
-def test_gateway_provider_resolves_vendors_per_call():
-    """The gateway serves many sessions at once, so the provider it ends up
-    holding must resolve a vendor per call rather than bake in the default
-    model's vendor. Asserted on the actual composed object, not on source text."""
-    from raven.cli._helpers import make_resolving_provider
-
-    cfg = _config()
-    router, provider = build_model_routing(cfg, make_resolving_provider(cfg))
-
-    assert router is None  # routing.enabled defaults False
-    anthropic = provider._pick("anthropic/claude-opus-4-5")
-    deepseek = provider._pick("deepseek/deepseek-v3")
-    assert anthropic is not deepseek
-    assert anthropic.get_default_model() == "anthropic/claude-opus-4-5"
-    assert deepseek.get_default_model() == "deepseek/deepseek-v3"
-
-
-# ---------------------------------------------------------------------------
-# _build_deliverable_store — every gateway channel can deliver files
-# ---------------------------------------------------------------------------
-#
-# The gateway's build path (agent + channel + cron + heartbeat stack) hangs
-# under unit-level mocking (see the note above test_gateway_refuses_second_instance),
-# so ``_build_deliverable_store`` is extracted as a small, directly-testable
-# helper rather than asserted on through the full ``gateway()`` command.
-
-
-def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = True
-
-    store = _build_deliverable_store(cfg)
-
-    assert isinstance(store, DeliverableStore)
-
-
-def test_gateway_builds_deliverables_store_when_web_disabled(tmp_config: Path) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = False
-
-    assert isinstance(_build_deliverable_store(cfg), DeliverableStore)
-
-
 # ---------------------------------------------------------------------------
 # _risk_banner: sandbox=none + open allow_from startup warning
 # ---------------------------------------------------------------------------
@@ -585,14 +338,30 @@ def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
     assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
 
 
-def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports() -> None:
-    """An ACP connection closed first fails every pending turn with a connection
-    error, which records as a failure rather than as the stop it is. And the
-    gateway never closed the ACP pool at all, so its servers outlived it."""
-    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
-    drain = src.index("begin_drain()")
-    cancel = src.index("await agent.subagents.cancel_all()")
-    web = src.index("await web_teardown()")
-    pool = src.index("await close_pool()")
+def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
+    """On a chat channel the batch has no dialog to show progress in, so the
+    position has to ride in the message text itself."""
+    from raven.cli.gateway_commands import _format_question_body
 
-    assert drain < cancel < web < pool
+    body = _format_question_body(
+        {"question": "Squash?", "choices": ["yes", "no"], "index": 1, "total": 3, "header": "Squash"}
+    )
+
+    assert body.splitlines() == ["(2/3) Squash?", "1. yes", "2. no"]
+
+
+def test_lone_question_carries_no_progress_prefix() -> None:
+    from raven.cli.gateway_commands import _format_question_body
+
+    assert _format_question_body({"question": "Which?", "choices": [], "index": 0, "total": 1}) == "Which?"
+
+
+@pytest.mark.asyncio
+async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> None:
+    """Swallowing the drop left the broker waiting out its whole budget on a
+    question nobody would ever see."""
+    from raven.cli.gateway_commands import _deliver_question_to_channel
+    from raven.tui_rpc.question_broker import QuestionUndeliverableError
+
+    with pytest.raises(QuestionUndeliverableError):
+        await _deliver_question_to_channel({"params": {"conversation_id": "gone"}}, sources={}, hub=None)

@@ -118,6 +118,7 @@ declare module '@hermes/ink' {
   export const NoSelect: React.ComponentType<any>
   export const ScrollBox: React.ComponentType<any>
   export const Text: React.ComponentType<any>
+  export const TextInput: React.ComponentType<any>
   export const stringWidth: (s: string) => number
   export function isXtermJs(): boolean
 
@@ -155,8 +156,8 @@ declare module '@hermes/ink' {
   export function withInkSuspended(run: RunExternalProcess): Promise<void>
   export function useInput(handler: InputHandler, options?: { readonly isActive?: boolean }): void
   export function useSelection(): {
-    readonly copySelection: () => Promise<string>
-    readonly copySelectionNoClear: () => Promise<string>
+    readonly copySelection: () => Promise<SelectionCopy>
+    readonly copySelectionNoClear: () => Promise<SelectionCopy>
     readonly clearSelection: () => void
     readonly hasSelection: () => boolean
     readonly getState: () => unknown
@@ -167,6 +168,11 @@ declare module '@hermes/ink' {
     readonly moveFocus: (move: unknown) => void
     readonly captureScrolledRows: (firstRow: number, lastRow: number, side: 'above' | 'below') => void
     readonly setSelectionBgColor: (color: string) => void
+  }
+  export type ClipboardPath = 'native' | 'osc52' | 'tmux-buffer'
+  export type SelectionCopy = {
+    readonly text: string
+    readonly path: ClipboardPath | null
   }
   export function useHasSelection(): boolean
   export function useStdout(): { readonly stdout?: NodeJS.WriteStream }

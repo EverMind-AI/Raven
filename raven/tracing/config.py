@@ -8,10 +8,30 @@ raven config file drives behavior, defaulting to on.
 
 from __future__ import annotations
 
+import contextlib
 import os
+from contextvars import ContextVar
 from pathlib import Path
+from typing import Iterator
 
 _OFF = {"0", "false", "off", "no"}
+
+# Task-local suppression, checked by ``enabled()`` before any global switch.
+# A context variable rather than an env var or module flag on purpose: a
+# suppressor (e.g. a trajectory replay) may run concurrently with real turns
+# in one process, and only its own task tree — including tasks spawned inside
+# it, which snapshot the context — must go quiet.
+_SUPPRESSED: ContextVar[bool] = ContextVar("raven_tracing_suppressed", default=False)
+
+
+@contextlib.contextmanager
+def suppress() -> Iterator[None]:
+    """Disable tracing for the current task tree until the block exits."""
+    token = _SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESSED.reset(token)
 
 
 def _config_section() -> dict:
@@ -36,7 +56,10 @@ def _config_section() -> dict:
 
 
 def enabled() -> bool:
-    """On by default. ``RAVEN_TRACING`` env wins; else ``[tracing].enabled``."""
+    """On by default. Task-local ``suppress()`` wins over everything; then the
+    ``RAVEN_TRACING`` env; else ``[tracing].enabled``."""
+    if _SUPPRESSED.get():
+        return False
     env = os.environ.get("RAVEN_TRACING")
     if env is not None:
         return env.strip().lower() not in _OFF

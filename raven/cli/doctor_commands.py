@@ -15,7 +15,7 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import typer
 from rich.console import Console
@@ -24,7 +24,10 @@ from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting, send_probe
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from raven.config.raven import RavenConfig
+    from raven.config.schema import Config
 
 console = Console()
 
@@ -104,21 +107,6 @@ class MemoryInfo:
 
 
 @dataclass
-class InstallInfo:
-    """Whether the environment Raven is running out of was fully written.
-
-    First section of the report, and the only one that can invalidate the rest:
-    an interrupted ``uv tool install`` leaves an installation that answers some
-    questions correctly and others not at all, and every later diagnosis of it
-    is a diagnosis of the wrong thing."""
-
-    complete: bool = True
-    upgrade_in_flight: bool = False
-    missing: list[str] = field(default_factory=list)
-    detail: Optional[str] = None
-
-
-@dataclass
 class ProbeResult:
     ok: bool
     text: Optional[str] = None
@@ -128,22 +116,83 @@ class ProbeResult:
 
 
 @dataclass
+class ConfigHealth:
+    """What the config says that the migrations deliberately did not change.
+
+    The migrations run at load, so by the time this command looks there is
+    nothing pending -- they already happened, silently, one launch ago. What is
+    left for a person to ask about is the set of things Raven will not decide
+    on their behalf: a window they pinned that is smaller than the model can
+    hold, and a provider nothing could resolve. Both are legitimate
+    configurations and both are common mistakes, which is exactly why they need
+    somewhere to be asked rather than a rule that guesses.
+    """
+
+    findings: list[str] = field(default_factory=list)
+    fixes: list[str] = field(default_factory=list)
+    applied: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ToolCapabilityInfo:
+    """One credential-bearing tool, as the deployer needs to see it.
+
+    Reported whether or not it is configured, which is the point: an
+    unconfigured tool is not registered, so nothing else in the running system
+    mentions that the capability exists at all.
+    """
+
+    tool: str
+    summary: str
+    #: ``nothing`` / ``own_credential`` / ``new_account`` -- how much the
+    #: deployer has to do, which is a different question from configured-ness.
+    need: str
+    configured: bool
+    #: Where a configured one got its credential; empty when unconfigured or
+    #: when none was needed.
+    source: str = ""
+    #: Whether a credential resolves at all, which for the media family is not
+    #: the same as ``configured``: a model with no key is registered and fails
+    #: on every call.
+    has_credential: bool = True
+    #: Switched off by name in ``tools.disabledTools``, which happens after
+    #: registration -- so this row is configured and still not offered.
+    disabled: bool = False
+    config_path: str = ""
+    #: Where this capability's own credential goes, which for the media family
+    #: is not ``config_path`` -- that one names the model.
+    key_path: str = ""
+    #: The credential an unconfigured one would pick up on being switched on;
+    #: empty when there is none to pick up, so the row can say so.
+    borrowable: str = ""
+    env_var: str = ""
+    obtain_from: str = ""
+    cost_note: str = ""
+
+
+@dataclass
+class ToolsInfo:
+    capabilities: list[ToolCapabilityInfo] = field(default_factory=list)
+
+    @property
+    def unconfigured(self) -> list[ToolCapabilityInfo]:
+        return [c for c in self.capabilities if not c.configured]
+
+
+@dataclass
 class DoctorReport:
     version: int = 1
     config_loaded: bool = False
-    install: Optional[InstallInfo] = None
     paths: Optional[PathsInfo] = None
     routing: Optional[RoutingInfo] = None
     features: Optional[FeaturesInfo] = None
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
+    tools: Optional[ToolsInfo] = None
     probe: Optional[ProbeResult] = None
+    config_health: Optional[ConfigHealth] = None
 
     def exit_code(self) -> int:
-        # Ahead of every config verdict: on a half-written installation those
-        # verdicts describe whichever half survived.
-        if self.install is not None and not self.install.complete:
-            return 1
         if self.paths is None or not self.paths.config_exists:
             return 1
         if not self.paths.config_valid:
@@ -161,15 +210,159 @@ class DoctorReport:
         return 0
 
 
-def _gather_install() -> InstallInfo:
-    from raven.cli._install_guard import inspect_install, missing_pieces
+def _routes_anywhere(provider: str) -> bool:
+    """Is this a provider name anything can route to?
 
-    fault = inspect_install()
-    if fault is None:
-        return InstallInfo()
-    if fault.reason == "upgrading":
-        return InstallInfo(upgrade_in_flight=True, detail=fault.detail)
-    return InstallInfo(complete=False, missing=missing_pieces(), detail=fault.detail)
+    Deliberately generous: it accepts a vendor Raven carries no spec for as long
+    as LiteLLM knows the name -- mistral and xai are supported exactly that way,
+    and reporting them as broken would be worse than saying nothing. What it
+    catches is a name nothing has ever heard of, which is a typo.
+    """
+    from raven.config.update_providers import ensure_routable_provider
+
+    try:
+        ensure_routable_provider(provider)
+    except KeyError:
+        # Only the answer this asks for. A broader catch would file a genuine
+        # fault in the lookup as an ordinary "unroutable" finding, which reads
+        # as the user's problem instead of ours -- and `provider use` catches
+        # exactly this one for the same reason.
+        return False
+    return True
+
+
+def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
+    """Ask the two questions the migrations refuse to answer for the user.
+
+    ``fix`` is the consent: without it this only reports, because the finding is
+    a value someone may have meant -- a window pinned below the model is a real
+    configuration for a self-hosted endpoint served smaller than the catalogue
+    thinks.
+
+    The provider checks are reported and never fixed, and that is not an
+    omission. Only the user knows which vendor they meant to pay: the load-time
+    migration already tried the derivation and wrote down its answer wherever it
+    had one, so a provider still blank here is one the derivation could not
+    resolve. Guessing again in a command called ``--fix`` would be the same
+    guess under a more confident name.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.providers.rates import resolve_context_window
+
+    health = ConfigHealth()
+    defaults = config.agents.defaults
+    pinned = defaults.context_window_tokens
+    model = defaults.model
+
+    if pinned and model:
+        real = resolve_context_window(model)
+        if real and pinned < real:
+            health.findings.append(
+                f"contextWindowTokens is pinned to {pinned:,}, but {model} holds {real:,}. "
+                f"Everything is sized against the pin: the history budget, when the Curator "
+                f"starts paying for a slow path, and when memory consolidation archives."
+            )
+            health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
+
+    provider = (getattr(defaults, "provider", "") or "").strip()
+    # ``auto`` counts as unset, the way ``Config._match_provider`` counts it. The
+    # migration leaves the literal in place when it cannot resolve a vendor, so
+    # this is a reachable state and precisely the legacy case this check is for.
+    # Read as a name instead, it is unroutable, and the user is told to fix a
+    # typo they did not make while the real advice goes unsaid.
+    if not provider or provider == "auto":
+        health.findings.append(
+            "agents.defaults.provider is not set, so the vendor serving "
+            f"{model or 'your model'} is derived from its id. A model id does not name whose "
+            "credential answers for it, and the derivation walks a list -- with two vendors "
+            "configured, which one pays can come down to their order in it."
+        )
+        if provider == "auto":
+            health.findings.append(
+                "  (your config says `auto`, which is the retired spelling of unset -- it never detected anything)"
+            )
+        health.findings.append(f"  raven provider use {model or '<model>'} --provider <name>")
+    elif not _routes_anywhere(provider):
+        health.findings.append(
+            f"agents.defaults.provider is {provider!r}, which nothing routes to. "
+            "Every call resolves against a vendor that does not exist, so the credential "
+            "it would use is never found."
+        )
+        health.findings.append("  raven provider list  # the names this accepts")
+
+    if fix and health.fixes:
+        path = get_config_path()
+        try:
+            raw = read_raw_or_raise(path)
+            raw.get("agents", {}).get("defaults", {}).pop("contextWindowTokens", None)
+            raw.get("agents", {}).get("defaults", {}).pop("context_window_tokens", None)
+            _write_config_preserving_mode(path, raw)
+        except Exception as exc:  # noqa: BLE001 -- reported, never fatal
+            health.findings.append(f"could not write the fix: {exc}")
+        else:
+            health.applied = list(health.fixes)
+            health.fixes = []
+
+    return health
+
+
+def _write_config_preserving_mode(path: "Path", raw: dict) -> None:
+    """Atomic replace that carries the original's mode across.
+
+    ``os.replace`` swaps the inode, so the mode of what lands is the temp
+    file's: a config the user tightened to owner-only (it holds
+    ``providers.*.apiKey``) would come back world-readable. Same rule the
+    loader's migration writer follows.
+    """
+    import json as _json
+    import os as _os
+
+    tmp = path.with_name(f"{path.name}.doctorfix.{_os.getpid()}")
+    tmp.write_text(_json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        _os.chmod(tmp, path.stat().st_mode & 0o7777)
+    except OSError:
+        pass
+    _os.replace(tmp, path)
+
+
+def _gather_tools(config: "Config") -> ToolsInfo:
+    """Every credential-bearing tool and whether this install can use it.
+
+    Reads the capability table rather than re-deriving the rules: three
+    families decide registration three different ways, and a fourth opinion
+    here is how the answers drift apart. See
+    ``raven/agent/tools/capabilities.py``.
+    """
+    from raven.agent.tools.capabilities import (
+        CAPABILITIES,
+        borrowable_credential,
+        configured_from,
+        has_credential,
+        is_configured,
+        is_disabled,
+    )
+
+    return ToolsInfo(
+        capabilities=[
+            ToolCapabilityInfo(
+                tool=cap.tool,
+                summary=cap.summary,
+                need=cap.need.value,
+                configured=is_configured(cap, config),
+                source=configured_from(cap, config),
+                has_credential=has_credential(cap, config),
+                disabled=is_disabled(cap, config),
+                config_path=cap.config_path,
+                key_path=cap.key_path,
+                borrowable=borrowable_credential(cap, config),
+                env_var=cap.env_var,
+                obtain_from=cap.obtain_from,
+                cost_note=cap.cost_note,
+            )
+            for cap in CAPABILITIES
+        ]
+    )
 
 
 def _gather_static_checks() -> DoctorReport:
@@ -181,7 +374,7 @@ def _gather_static_checks() -> DoctorReport:
         config_path=str(config_path),
         config_exists=config_path.exists(),
     )
-    report = DoctorReport(paths=paths, install=_gather_install())
+    report = DoctorReport(paths=paths)
 
     if not paths.config_exists:
         return report
@@ -243,6 +436,8 @@ def _gather_static_checks() -> DoctorReport:
         channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
+
+    report.tools = _gather_tools(config)
 
     from raven.cli._gateway_lock import read_status
 
@@ -382,6 +577,81 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
 
 
+def _render_tool_capabilities(tools: ToolsInfo) -> None:
+    """List every credential-bearing tool, configured or not.
+
+    An unconfigured tool is not registered, so the agent never offers it and no
+    other surface says it exists -- this is the only place a deployer can learn
+    the capability is available at all. Ordered by how much they would have to
+    do, so what is one edit away reads before what needs an account.
+
+    A capability registered with no credential is warned about rather than
+    ticked, because that one is not a choice: the agent is offered a tool whose
+    every call returns a missing-key error.
+
+    Still not a fault, though: an install with no image generation is a choice,
+    and the half-finished one fails loudly where it happens rather than
+    silently, so nothing here moves the exit code.
+    """
+    # One fact per line rather than one sentence: the terminal wraps a long line
+    # mid-path, and a config key broken across two rows cannot be copied, which
+    # is the only thing these rows are for.
+    indent = f"{'':<19}"
+    for cap in tools.capabilities:
+        label = f"  {cap.tool + ':':<17}"
+        if cap.configured:
+            where = f"  [dim]({cap.source})[/dim]" if cap.source else ""
+            # The marker carries the answer too: a green tick above a line
+            # saying every call fails is the same misreport in miniature.
+            mark = "[green]✓[/green]" if cap.has_credential else "[yellow]![/yellow]"
+            if cap.disabled:
+                # Not a tick and not a fault: switched off is a decision
+                # someone made, and the row says whose decision it was so it
+                # can be undone in the one place that made it.
+                mark = "[dim]x[/dim]"
+            console.print(f"{label}{mark} {cap.summary}{where}")
+            if cap.disabled:
+                console.print(f"{indent}[dim]switched off in[/dim] tools.disabledTools")
+                continue
+            if not cap.has_credential:
+                console.print(f"{indent}[yellow]no key resolves; calls will fail[/yellow]")
+                console.print(f"{indent}[dim]set:[/dim] {cap.key_path}")
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+            continue
+        glyph = "x" if cap.disabled else "-"
+        console.print(f"{label}[dim]{glyph}  {cap.summary}[/dim]")
+        if cap.disabled:
+            # First, and outside the credential advice below: the two are
+            # independent decisions, and setup instructions that leave the off
+            # switch unsaid send someone to set a key, restart, and find the
+            # tool still gone.
+            console.print(f"{indent}[dim]switched off in[/dim] tools.disabledTools")
+        if cap.need == "own_credential":
+            console.print(f"{indent}[dim]switch on:[/dim] {cap.config_path}")
+            if cap.borrowable:
+                # "reusing" rather than "borrowed from" because the same line
+                # covers a provider entry and an exported variable.
+                console.print(f"{indent}[dim]key: reusing[/dim] {cap.borrowable}")
+            else:
+                # Claiming the borrow with nothing to borrow sends the deployer
+                # to set a model and land in the case flagged above.
+                console.print(f"{indent}[dim]also set:[/dim] {cap.key_path}")
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+        elif cap.need == "new_account":
+            console.print(f"{indent}[dim]set:[/dim] {cap.config_path}")
+            if cap.env_var:
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+            console.print(f"{indent}[dim]key from:[/dim] {cap.obtain_from}")
+        if cap.cost_note:
+            console.print(f"{indent}[dim]{cap.cost_note}[/dim]")
+
+    if not tools.unconfigured:
+        return
+    console.print(
+        f"  [dim]{len(tools.unconfigured)} capability(s) available but not set up; the agent is not offered them.[/dim]"
+    )
+
+
 def _degradation_note(section: str) -> str:
     """What is lost by leaving an optional role unconfigured.
 
@@ -404,20 +674,6 @@ def _server_log_hint() -> str:
 
 def _render_human_output(report: DoctorReport) -> None:
     console.print(f"\n{__logo__} Raven Doctor\n")
-
-    install = report.install
-    if install is not None and not install.complete:
-        console.print("[bold]Installation[/bold]")
-        console.print(f"  [red]✗ incomplete[/red] — {install.detail}")
-        console.print(
-            "  An upgrade was interrupted before it finished writing this environment.\n"
-            "  Repair it with:\n"
-            "    [cyan]curl -fsSL https://raven.evermind.ai/install.sh | sh[/cyan]"
-        )
-        return
-    if install is not None and install.upgrade_in_flight:
-        console.print("[bold]Installation[/bold]")
-        console.print(f"  [yellow]⚠ {install.detail}[/yellow]  [dim]wait for it to finish[/dim]\n")
 
     paths = report.paths
     assert paths is not None  # _gather_static_checks always populates this
@@ -498,6 +754,10 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
 
+    if report.tools is not None:
+        console.print("\n[bold]Tool capabilities[/bold]")
+        _render_tool_capabilities(report.tools)
+
     if report.probe is not None:
         console.print("\n[bold]LLM Probe[/bold]")
         if routing:
@@ -533,12 +793,27 @@ def _render_human_output(report: DoctorReport) -> None:
         )
         console.print("Run [cyan]raven provider list[/cyan] / [cyan]raven provider set[/cyan] to fix routing.")
 
+    health = report.config_health
+    if health and (health.findings or health.applied):
+        console.print("\n[bold]Config[/bold]")
+        for line in health.findings:
+            console.print(
+                f"  [yellow]![/yellow] {line}" if not line.startswith("  ") else f"  [dim]{line.strip()}[/dim]"
+            )
+        for line in health.applied:
+            console.print(f"  [green]fixed[/green] {line}")
+        if health.fixes:
+            console.print("  [dim]Run [cyan]raven doctor --fix[/cyan] to apply:[/dim]")
+            for line in health.fixes:
+                console.print(f"    [dim]- {line}[/dim]")
+
 
 def register(app: typer.Typer) -> None:
     @app.command()
     def doctor(
         probe: bool = typer.Option(False, "--probe", help="Send a test message to verify the LLM responds."),
         json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON (CI-friendly)."),
+        fix: bool = typer.Option(False, "--fix", help="Apply the config fixes this reports, where one exists."),
         timeout: int = typer.Option(
             15,
             "--timeout",
@@ -546,13 +821,20 @@ def register(app: typer.Typer) -> None:
             min=1,
         ),
     ) -> None:
-        """Health-check Raven config, routing, and (optionally) the LLM."""
+        """Health-check Raven config, routing, and (optionally) the LLM.
+
+        ``--fix`` is consent, not a mode: without it the config findings are
+        reported and nothing is written, because each one is a value somebody
+        may have meant.
+        """
         report = _gather_static_checks()
 
         if report.config_loaded:
+            from raven.config.loader import load_config
             from raven.config.raven import load_raven_config
 
             report.memory = _probe_memory(load_raven_config())
+            report.config_health = _inspect_config_health(load_config(), fix=fix)
 
         if probe and report.routing is not None and report.routing.provider is not None:
             report.probe = _run_llm_probe(timeout_s=timeout)

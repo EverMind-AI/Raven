@@ -163,7 +163,7 @@
     },
     "openrouter": {
       "openrouter-probe": "openrouter/openrouter-probe",
-      "openrouter/anthropic/claude-sonnet-5": "openrouter/anthropic/claude-sonnet-5",
+      "openrouter/anthropic/claude-sonnet-4-5": "openrouter/anthropic/claude-sonnet-4-5",
       "openrouter/vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",
       "openrouter/zz-probe-1": "openrouter/zz-probe-1",
       "vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",

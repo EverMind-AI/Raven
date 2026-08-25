@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.12"
+version = "0.1.13"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -34,13 +34,8 @@ dependencies = [
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.2.1",
+    "everos[multimodal]==1.2.3",
     "tomli-w>=1.2.0",
-    # UTS-46 host mapping for the browser's navigation check. Already present
-    # transitively (httpx), declared here because the check is security-load-
-    # bearing: it has to fold a host the way Chromium does before deciding, and
-    # a dependency that only arrives by accident is one an upgrade can remove.
-    "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -53,12 +48,6 @@ dependencies = [
     # three-hop transitive path — pinning it directly so reading an image keeps
     # working if any link in that chain drops it.
     "pillow>=10.0.0",
-    # Rasterises a QR-login channel's scan URL server-side, so the page shows an
-    # <img> instead of carrying a QR encoder. Not in the channel extras where it
-    # started: signing in to WeChat happens in the UI, and an install that cannot
-    # draw the code is one the reader has no way to diagnose. Pure Python, and
-    # its [pil] backend is pillow, already here.
-    "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]
@@ -89,6 +78,7 @@ channel-qq = ["qq-botpy>=1.2.0,<2.0.0"]
 channel-dingtalk = ["dingtalk-stream>=0.24.0,<1.0.0"]
 channel-email = []
 channel-weixin = [
+    "qrcode[pil]>=8.0",
     "pycryptodome>=3.20.0",
 ]
 channels = [
@@ -111,12 +101,6 @@ tools = [
 sandbox = [
     "anyio>=4.0",
     "boxlite==0.9.5 ; sys_platform != 'win32'",
-]
-# Driving a real browser is an opt-in extra: playwright pulls a browser binary
-# of its own, which no other capability needs. raven.browser imports it lazily
-# and reports the extra as missing rather than failing to start.
-browser = [
-    "playwright>=1.49,<2.0",
 ]
 dev = [
     "pytest>=8.0,<10.0",
@@ -165,9 +149,6 @@ include = [
     "raven/skills/**/*.sh",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
-    # Playbook role-pool defaults and the builtin playbook library.
-    "raven/playbook/*.yaml",
-    "raven/playbook/builtin/**/*.md",
     # Tracing dashboard viewer (dependency-free Node server + static client).
     "raven/tracing/viewer/**/*.js",
     "raven/tracing/viewer/**/*.css",
@@ -187,20 +168,6 @@ include = [
 [tool.uv]
 constraint-dependencies = [
     "aiohttp>=3.13.4",
-    # everalgo-boundary 0.3.0 added a required third field to the
-    # DetectionResult NamedTuple; everalgo-agent-memory still constructs it with
-    # two, under a range (>=0.2.0,<2.0.0) wide enough to pick the break up. The
-    # result is a TypeError inside everos, surfacing as a 500 from /memory/add,
-    # so a sub-agent whose memory backend is everos fails every turn.
-    # This guards the resolutions that read this table: `uv lock --upgrade`, a
-    # re-lock after the lockfile is deleted, and in-repo `uv pip install` /
-    # `uv run --with`. It does NOT reach `uv tool install`, which ignores
-    # constraint-dependencies and takes ceilings only from `-c` -- install.sh
-    # passes one exported from the lock, so that path is covered separately.
-    # Not removable when everos next moves: agent-memory 0.4.0 still passes two
-    # fields and still declares >=0.2.0, so the ceiling stays correct and
-    # inactive. It goes when a release actually passes the third field.
-    "everalgo-boundary<0.3",
     "pip>=26.1.2",
     "pyjwt>=2.13.0",
     "python-engineio>=4.13.3",
@@ -211,16 +178,7 @@ constraint-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = [
-    "benchmarks/**/data",
-    "benchmarks/**/results",
-    "benchmarks/**/output",
-    # The vendored sub-agent builds. Not adopted the way agentscope below was:
-    # each is a separate upstream project replaced wholesale on the next zip,
-    # so a lint fix made here cannot survive and reports nobody can act on are
-    # the only thing linting them would produce.
-    "subagents/**",
-]
+extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
@@ -231,26 +189,10 @@ ignore = ["E501"]
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
-# The service's own tests live beside it (they need agentscope, so the root
-# pytest run cannot collect them) and follow the same conventions.
-"ui-webui/service/tests/**" = ["E402", "S101"]
-# agentscope, adopted into the web service (Apache-2.0, see NOTICES.md and
-# ui-webui/service/agentscope/PROVENANCE.md). Linted like the rest of the repo,
-# but its own conventions are grandfathered rather than rewritten: bare asserts,
-# capitalised locals/functions, exception names without an Error suffix, and one
-# `token` variable ruff reads as a credential. Formatting is skipped separately
-# (ruff-format in .pre-commit-config.yaml) -- restyling 207 files would be ~3.5k
-# lines of cosmetic churn with no functional gain.
-"ui-webui/service/agentscope/**" = ["S101", "S105", "N802", "N806", "N812", "N818"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
 "raven/tracing/instrument.py" = ["N803"]
-
-# The login shell has to be resolved through PATH rather than pinned to an
-# absolute path: a fixed /bin/bash would defeat capturing a login shell that
-# may live elsewhere on a given host.
-"raven/agent/subagent/backends/env.py" = ["S607"]
 
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
@@ -362,8 +304,6 @@ output = "coverage.json"
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
-    "jsonschema>=4.23.0",
-    "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",

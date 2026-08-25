@@ -10,8 +10,6 @@ embedding services that the test environment doesn't have).
 from __future__ import annotations
 
 import asyncio
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -28,8 +26,6 @@ from raven.plugin.memory.everos.backend import (
     ServiceState,
     _flatten_profile,
     _HttpEverosAdapter,
-    as_ms_epoch,
-    convert_messages,
     make_backend,
 )
 
@@ -1041,16 +1037,47 @@ class TestIdentityFromServices:
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
     @pytest.mark.parametrize("bad", ["agent:default", "a/b", "..", "."])
-    async def test_illegal_identity_rejected_on_start(self, tmp_path: Path, bad: str) -> None:
+    async def test_illegal_identity_is_reported_as_a_config_error(
+        self, tmp_path: Path, bad: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
         ctx = PluginContext(
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
         )
         backend = make_backend(ctx)
+        await backend.start()
+
         # The message must name the on-disk camelCase key so the user can grep
-        # for it in config.json.
-        with pytest.raises(ValueError, match="memory.userId"):
-            await backend.start()
+        # for it in config.json, and it must reach the terminal: the callers all
+        # swallow a raise into logger.exception, and a one-shot CLI run writes no
+        # log file for it to land in.
+        err = " ".join(capsys.readouterr().err.split())
+        assert "memory.userId" in err
+        # The accepted-character class must survive rich's markup parser: it
+        # looks exactly like a tag, and a swallowed one leaves the user matching
+        # their id against "^+$".
+        assert "[a-zA-Z0-9_.@+-]" in err
+        assert backend._state is ServiceState.BAD_IDENTITY
+
+    async def test_illegal_identity_does_not_report_a_service_outage(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The service is fine; the config is not. Counting the turn as a dropped
+        write sends the user to look at a server that never broke."""
+        ctx = PluginContext(
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default"),
+        )
+        backend = make_backend(ctx)
+        await backend.start()
+        capsys.readouterr()
+
+        assert await backend.store("s1", [{"role": "user", "content": "hi"}]) is False
+        assert backend._dropped_writes == 0
+        await backend.stop()
+        assert "unavailable" not in capsys.readouterr().err
 
 
 class TestServiceStateMachine:
@@ -1162,12 +1189,13 @@ class TestServiceStateMachine:
             assert b._state is ServiceState.READY, start
 
     def test_terminal_states_ignore_probes(self) -> None:
-        """UNCONFIGURED and NO_BINARY describe the install, not the process.
-        Probing cannot fix either, so a stray OK must not paper over them."""
+        """UNCONFIGURED, NO_BINARY and BAD_IDENTITY describe the install and its
+        config, not the process. Probing cannot fix any of them, so a stray OK
+        must not paper over them."""
         from raven.plugin.memory.everos._server import ProbeResult
         from raven.plugin.memory.everos.backend import ServiceState
 
-        for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY):
+        for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY):
             b = self._backend()
             b._state = terminal
             b._apply_probe(ProbeResult.OK)
@@ -1646,108 +1674,3 @@ class TestTheDegradationWarningOnASelfManagedServer:
         await self._start_unowned(monkeypatch, caps={})
 
         assert "embedding is unavailable" not in capsys.readouterr().err
-
-
-class TestConvertMessagesTimestamps:
-    """everos's DTO wants ms epoch, so the conversion must produce one."""
-
-    def test_iso_string_becomes_ms_epoch(self) -> None:
-        # instance_log.build_turn stamps rows with datetime.now().isoformat(),
-        # so this is the shape a trace payload actually arrives in.
-        out = convert_messages(
-            [{"role": "user", "content": "hi", "timestamp": "2026-08-20T09:53:46.693637"}],
-            agent_id="coder",
-            user_id="liv",
-        )
-        assert isinstance(out[0]["timestamp"], int)
-        assert out[0]["timestamp"] == int(datetime(2026, 8, 20, 9, 53, 46, 693637).timestamp() * 1000)
-
-    def test_ms_epoch_int_passes_through(self) -> None:
-        out = convert_messages(
-            [{"role": "user", "content": "hi", "timestamp": 1755683626693}],
-            agent_id="coder",
-            user_id="liv",
-        )
-        assert out[0]["timestamp"] == 1755683626693
-
-    def test_seconds_epoch_is_scaled_to_ms(self) -> None:
-        out = convert_messages(
-            [{"role": "user", "content": "hi", "timestamp": 1755683626}],
-            agent_id="coder",
-            user_id="liv",
-        )
-        assert out[0]["timestamp"] == 1755683626000
-
-    def test_unparseable_timestamp_falls_back_to_now(self) -> None:
-        before = int(time.time() * 1000)
-        out = convert_messages(
-            [{"role": "user", "content": "hi", "timestamp": "not a date"}],
-            agent_id="coder",
-            user_id="liv",
-        )
-        assert isinstance(out[0]["timestamp"], int)
-        assert out[0]["timestamp"] >= before
-
-    def test_missing_timestamp_still_falls_back_to_now(self) -> None:
-        before = int(time.time() * 1000)
-        out = convert_messages([{"role": "user", "content": "hi"}], agent_id="coder", user_id="liv")
-        assert out[0]["timestamp"] >= before
-
-    def test_nan_returns_none(self) -> None:
-        assert as_ms_epoch(float("nan")) is None
-
-    def test_positive_infinity_returns_none(self) -> None:
-        assert as_ms_epoch(float("inf")) is None
-
-    def test_negative_infinity_returns_none(self) -> None:
-        assert as_ms_epoch(float("-inf")) is None
-
-    def test_bool_is_not_a_timestamp(self) -> None:
-        assert as_ms_epoch(True) is None
-        assert as_ms_epoch(False) is None
-
-    def test_zero_and_negative_number_return_none(self) -> None:
-        assert as_ms_epoch(0) is None
-        assert as_ms_epoch(-5) is None
-
-    def test_seconds_epoch_float_is_scaled_to_ms(self) -> None:
-        assert as_ms_epoch(1755683626.5) == 1755683626500
-
-    def test_iso_string_without_microseconds(self) -> None:
-        assert as_ms_epoch("2026-08-20T09:53:46") == int(datetime(2026, 8, 20, 9, 53, 46).timestamp() * 1000)
-
-    def test_iso_string_with_utc_offset(self) -> None:
-        expected = int(datetime(2026, 8, 20, 9, 53, 46, tzinfo=timezone.utc).timestamp() * 1000)
-        assert as_ms_epoch("2026-08-20T09:53:46+00:00") == expected
-
-    def test_iso_string_with_z_suffix(self) -> None:
-        expected = int(datetime(2026, 8, 20, 9, 53, 46, tzinfo=timezone.utc).timestamp() * 1000)
-        assert as_ms_epoch("2026-08-20T09:53:46Z") == expected
-
-    def test_pre_epoch_iso_string_returns_none(self) -> None:
-        # A negative ms value would survive a caller's `as_ms_epoch(...) or
-        # now_ms` fallback -- a negative int is truthy -- and silently keep a
-        # bogus pre-1970 stamp instead of falling back to now.
-        assert as_ms_epoch("1969-12-31T00:00:00Z") is None
-
-
-class TestConvertMessagesIsReusable:
-    """The conversion is callable without an EverosBackend instance."""
-
-    def test_owner_routing_honours_the_given_ids(self) -> None:
-        out = convert_messages(
-            [
-                {"role": "user", "content": "read it"},
-                {"role": "assistant", "content": "reading"},
-                {"role": "tool", "content": "result", "tool_call_id": "c1"},
-            ],
-            agent_id="coder",
-            user_id="liv",
-        )
-        assert [row["sender_id"] for row in out] == ["liv", "coder", "coder"]
-
-    def test_method_delegates_to_the_function(self) -> None:
-        messages = [{"role": "user", "content": "hi"}]
-        assert EverosBackend._convert_messages(messages, agent_id="coder", user_id="liv") == convert_messages(
-            messages, agent_id="coder", user_id="liv"
-        )

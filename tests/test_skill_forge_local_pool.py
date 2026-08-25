@@ -274,7 +274,7 @@ def test_localpool_excludes_always_skills() -> None:
 
 def test_localpool_against_real_skill_registry(tmp_path: Path) -> None:
     """Smoke test against a tiny on-disk SKILL.md tree."""
-    workspace = tmp_path / "chanwork"
+    workspace = tmp_path / "ws"
     skills_root = workspace / "skills"
     skills_root.mkdir(parents=True)
 

@@ -178,7 +178,6 @@ raven gateway
 | `raven status` | 查看配置和运行时状态 |
 | `raven doctor` | 诊断 provider 和环境问题 |
 | `raven tracing` | 打开本地 trace dashboard |
-| `raven tracing compact` | 去重已保存的 trace artifacts，释放磁盘空间 |
 | `raven sessions list` | 浏览、恢复、fork、导出或删除 sessions |
 | `raven skill list` | 查看本地 SkillForge catalog |
 | `raven sentinel status` | 查看主动记忆和计划 nudges |
@@ -233,26 +232,16 @@ Python runtime 和 React/Ink TUI 只通过 typed TUI-RPC 通信。Spine 传递 r
 关键目录：
 
 ```text
-raven/
-├── spine/              # Per-turn backbone: submit -> lanes -> emit
-├── agent/              # Agent loop, tools, hooks, subagents, context builder
-├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
-├── rpc/                # Native TUI protocol 的 Python 侧
-├── providers/          # LLM provider adapters
-├── context_engine/     # Context assembly 与 Curator path
-├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
-├── memory_engine/      # EverOS memory, local skills, SkillForge
-├── token_wise/         # Usage tracking, cache placement, routing
-├── tracing/            # Span capture 和本地 tracing dashboard
-├── evolver/            # Benchmark-driven harness self-evolution
-├── sandbox/            # Isolated command execution
-├── security/           # Trust boundaries and network checks
-├── cli/                # `raven` command line entry point
-└── config/             # Config schema and update helpers
-
-ui-tui/                 # React/Ink 原生终端 UI
-bridge/                 # WhatsApp TypeScript bridge
-benchmarks/             # Benchmark adapters，包括 AppWorld evolver wiring
+raven/agent/             agent loop、tools 和 subagents
+raven/channels/          messaging adapters
+raven/context_engine/    context assembly 和 token budgeting
+raven/memory_engine/     EverOS integration 和 local skill memory
+raven/proactive_engine/  sentinel、scheduling 和 nudges
+raven/providers/         model providers 和 routing
+raven/skill_hub/         external skill retrieval
+raven/tracing/           instrumentation、storage 和 viewer
+raven/tui_rpc/           typed runtime-to-TUI boundary
+ui-tui/                  React/Ink terminal interface
 ```
 
 <br>
