@@ -133,10 +133,14 @@ class ToolRegistry:
                 model_text, display_text = result.model_text, result.display_text
                 retryable, abort_action = result.retryable, result.abort_action
                 blocks = result.blocks
+                metadata, diff = result.metadata, result.diff
+                file_change = result.file_change
             else:
                 model_text, display_text = str(result), None
                 retryable, abort_action = True, False
                 blocks = None
+                metadata, diff = None, None
+                file_change = None
 
             if model_text.startswith("Error"):
                 # ``Error:`` describes presentation, not retry semantics.
@@ -145,7 +149,10 @@ class ToolRegistry:
                 # the generic invitation to find an equivalent implementation.
                 #
                 # An error also replaces the result, so any blocks it came with
-                # are no longer what the model should be looking at.
+                # are no longer what the model should be looking at. Same for
+                # the client-only fields: a diff of a write that failed, or a
+                # manifest of files that were not delivered, describes something
+                # that did not happen.
                 suffix = _hint if retryable else ""
                 return ToolOutput(
                     model_text + suffix,
@@ -159,6 +166,9 @@ class ToolRegistry:
                 retryable=retryable,
                 abort_action=abort_action,
                 blocks=blocks,
+                metadata=metadata,
+                diff=diff,
+                file_change=file_change,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint

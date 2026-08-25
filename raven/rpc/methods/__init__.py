@@ -66,6 +66,7 @@ def register_aligned_methods(
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
     build_error: "RpcError | None" = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -81,6 +82,8 @@ def register_aligned_methods(
     ``confirm_broker`` is forwarded to :func:`register_confirm_methods`;
     ``approval_broker`` gates the shell approval response surface so callers
     without an interactive broker do not expose an unusable approval method.
+    ``default_channel`` is stamped on every turn ``turn.send`` submits and must
+    match the channel the delivery outlet was registered under.
     """
     register_system_methods(dispatcher)
     register_aligned_methods_except_system(
@@ -93,6 +96,7 @@ def register_aligned_methods(
         scheduler=scheduler,
         turn_ids=turn_ids,
         build_error=build_error,
+        default_channel=default_channel,
     )
 
 
@@ -107,6 +111,7 @@ def register_aligned_methods_except_system(
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
     build_error: "RpcError | None" = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -158,6 +163,11 @@ def register_aligned_methods_except_system(
             scheduler=scheduler,
             turn_ids=turn_ids,
             build_error=build_error,
+            # Has to reach BOTH collaborators. The delivery outlet is registered
+            # under one channel name and this stamps the name a turn is submitted
+            # with; the hub routes by that name, so giving it to one side and not
+            # the other loses every turn with no error anywhere.
+            default_channel=default_channel,
         )
     # confirm.respond — needs a ConfirmBroker to resolve the pending
     # confirm future. Gated like turn.*: when no broker is supplied (demo

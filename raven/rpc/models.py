@@ -148,6 +148,84 @@ class EpisodeStartEvent(_Strict):
     payload: EpisodeStartPayload
 
 
+class FileChange(_Strict):
+    """One file a tool call wrote, as contents rather than as a rendering of them.
+
+    Beside ``ToolCompletePayload.diff`` rather than instead of it. A client that
+    draws its own diff needs the text: a unified diff cannot be turned back into
+    the file, its context is limited, and an oversized rewrite is dropped from it
+    entirely.
+    """
+
+    path: str = Field(description="Absolute path of the file that was written.")
+    after: str = Field(description="The file's full contents after the write.")
+    before: str | None = Field(
+        default=None,
+        description=(
+            "The contents the write replaced. Absent when the file did not exist, so a client "
+            "renders a creation differently from a rewrite; an empty string means the file "
+            "existed and was empty. This is why the field cannot use a falsy-means-absent "
+            "shortcut -- an empty file has the same emptiness."
+        ),
+    )
+
+
+class MediaItem(_Strict):
+    """One file the agent produced as part of its reply, by local path."""
+
+    path: str = Field(description="Absolute path of the file on the machine the agent runs on.")
+    mime: str = Field(
+        description=(
+            "MIME type as declared by the emit site. Every producer declares "
+            "application/octet-stream today, so a client that needs the real type should sniff "
+            "the extension rather than trust this."
+        )
+    )
+    kind: str = Field(description='Coarse media class; "file" is the only value emitted today.')
+
+
+class MediaPayload(_Strict):
+    items: list[MediaItem] = Field(
+        description=(
+            "The files, in the order the turn produced them. Never empty: an event with nothing "
+            "to deliver is not emitted."
+        )
+    )
+
+
+class MediaEvent(_Strict):
+    """Files the reply carried, as paths rather than bytes.
+
+    A separate event rather than a field on ``message.complete``: media is emitted
+    before the reply text (the loop's own order) and a turn can produce it without
+    producing text at all, so hanging it off the completion would reorder it and
+    lose the text-free case.
+
+    Paths and not contents because both ends of this wire are on one machine.
+    """
+
+    type: Literal["media"]
+    payload: MediaPayload
+
+
+class NoticePayload(_Strict):
+    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
+    detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
+
+
+class NoticeEvent(_Strict):
+    """Prose the runtime wrote, not the model.
+
+    It must not arrive as `token.delta`: that buffer is the model's voice, so
+    the text would render as the answer -- glued to whatever the model narrated
+    just before it, carrying the answer's copy and branch actions, and stuck in
+    English whatever language the turn was in.
+    """
+
+    type: Literal["notice"]
+    payload: NoticePayload
+
+
 class TokenDeltaPayload(_Strict):
     text: str
 
@@ -171,6 +249,14 @@ class ToolStartPayload(_Strict):
     name: str
     arguments: dict[str, JsonValue]
     display: str | None = None
+    blocking: bool = Field(
+        default=False,
+        description=(
+            "The call is a blocking interaction, so it has no automatic deadline and may emit "
+            "nothing for as long as it runs. A client that clocks the event stream for liveness "
+            "must suspend that clock while it is in flight, or it declares a sub-agent run dead."
+        ),
+    )
 
 
 class ToolStartEvent(_Strict):
@@ -192,6 +278,22 @@ class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
     truncated: bool
+    metadata: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Opt-in structured payload a tool chose to publish (a file manifest, for example), "
+            "straight off ToolResult.metadata. A client that does not understand a key ignores it."
+        ),
+    )
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified diff of what the call changed on disk, when the tool could produce one. "
+            "The only record of what a whole-file write replaced: the arguments carry the new "
+            "content and nothing else, so a client without this draws an overwrite as all additions."
+        ),
+    )
+    file_change: FileChange | None = None
 
 
 class ToolCompleteEvent(_Strict):
@@ -214,6 +316,18 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    turn_id: str | None = Field(
+        default=None,
+        description=(
+            "Which turn failed, when the failure belongs to one. The lane is shared, so a turn "
+            "the runtime submitted can fail while a client's turn is queued behind it: a client "
+            "with no id to compare clears its own turn's state on somebody else's failure, and a "
+            "consumer that answers a request off this event answers the wrong request. Absent when "
+            "there is no turn to name -- a connection-level failure, or a cancellation the client "
+            "asked for on the turn it is watching -- which a consumer reads as not-somebody-else's "
+            "rather than as its own."
+        ),
+    )
 
 
 class ErrorEvent(_Strict):
@@ -253,6 +367,8 @@ TurnEvent = Annotated[
     Union[
         MessageStartEvent,
         EpisodeStartEvent,
+        NoticeEvent,
+        MediaEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -1006,6 +1122,12 @@ __all__ = [
     "SessionExportResult",
     "MessageStartEvent",
     "EpisodeStartEvent",
+    "NoticeEvent",
+    "FileChange",
+    "MediaEvent",
+    "MediaItem",
+    "MediaPayload",
+    "NoticePayload",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",
     "ToolStartEvent",

@@ -1771,7 +1771,11 @@
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
               },
-              "display": { "type": ["string", "null"] }
+              "display": { "type": ["string", "null"] },
+              "blocking": {
+                "type": "boolean",
+                "description": "The call is a blocking interaction with no automatic deadline. A client that clocks the event stream for liveness must suspend that clock while it is in flight."
+              }
             }
           }
         }
@@ -1806,7 +1810,17 @@
             "properties": {
               "tool_call_id": { "type": "string" },
               "result_preview": { "type": "string" },
-              "truncated": { "type": "boolean" }
+              "truncated": { "type": "boolean" },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/JsonValue" },
+                "description": "Opt-in structured payload a tool chose to publish. A client that does not understand a key ignores it."
+              },
+              "diff": {
+                "type": "string",
+                "description": "Unified diff of what the call changed on disk, when the tool could produce one."
+              },
+              "file_change": { "$ref": "#/components/schemas/FileChange" }
             }
           }
         }
@@ -1845,7 +1859,11 @@
                 "type": "string",
                 "enum": ["cancelled_by_client", "internal"]
               },
-              "detail": { "type": "string" }
+              "detail": { "type": "string" },
+              "turn_id": {
+                "type": "string",
+                "description": "Which turn failed, when the failure belongs to one. The lane is shared, so a turn the runtime submitted can fail while a client's turn is queued behind it: a client with no id to compare clears its own turn's state on somebody else's failure, and a consumer that answers a request off this event answers the wrong request. Absent when there is no turn to name -- a connection-level failure, or a cancellation the client asked for on the turn it is watching -- which a consumer reads as not-somebody-else's rather than as its own."
+              }
             }
           }
         }
@@ -1898,11 +1916,85 @@
           }
         }
       },
+      "FileChange": {
+        "description": "One file a tool call wrote, as contents rather than as a rendering of them. Beside ToolCompleteEvent.diff rather than instead of it: a client that draws its own diff needs the text, and a unified diff cannot be turned back into the file.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "after"],
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path of the file that was written." },
+          "after": { "type": "string", "description": "The file's full contents after the write." },
+          "before": {
+            "type": "string",
+            "description": "The contents the write replaced. Absent when the file did not exist, so a client renders a creation differently from a rewrite; an empty string means the file existed and was empty."
+          }
+        }
+      },
+      "MediaItem": {
+        "description": "One file the agent produced as part of its reply, by local path.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "mime", "kind"],
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path of the file on the machine the agent runs on." },
+          "mime": {
+            "type": "string",
+            "description": "MIME type as declared by the emit site. Today every producer declares application/octet-stream, so a client that needs the real type should sniff the extension rather than trust this."
+          },
+          "kind": { "type": "string", "description": "Coarse media class; \"file\" is the only value emitted today." }
+        }
+      },
+      "MediaEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "media" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["items"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MediaItem" },
+                "description": "The files, in the order the turn produced them. Never empty: an event with nothing to deliver is not emitted."
+              }
+            }
+          }
+        }
+      },
+      "NoticeEvent": {
+        "description": "Prose the runtime wrote, not the model. It must not arrive as token.delta: that buffer is the model's voice, so the text would render as the answer.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "notice" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "Which runtime decision this reports; action_blocked today."
+              },
+              "detail": {
+                "type": "string",
+                "description": "The blocking tool's own first line, when it gave one."
+              }
+            }
+          }
+        }
+      },
       "TurnEvent": {
         "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
         "oneOf": [
           { "$ref": "#/components/schemas/MessageStartEvent" },
           { "$ref": "#/components/schemas/EpisodeStartEvent" },
+          { "$ref": "#/components/schemas/NoticeEvent" },
+          { "$ref": "#/components/schemas/MediaEvent" },
           { "$ref": "#/components/schemas/TokenDeltaEvent" },
           { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
           { "$ref": "#/components/schemas/ToolStartEvent" },
@@ -1918,6 +2010,8 @@
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
+            "notice": "#/components/schemas/NoticeEvent",
+            "media": "#/components/schemas/MediaEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",
             "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
             "tool.start": "#/components/schemas/ToolStartEvent",
