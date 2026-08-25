@@ -31,8 +31,8 @@ class FakeDagTool:
     def set_context(self, channel, chat_id, session_key=None):
         self.context = (channel, chat_id, session_key)
 
-    async def execute(self, nodes, background=True, confirm=False, **_):
-        self.calls.append({"nodes": nodes, "background": background, "confirm": confirm})
+    async def execute(self, nodes, task_summary="", background=True, confirm=False, **_):
+        self.calls.append({"nodes": nodes, "task_summary": task_summary, "background": background, "confirm": confirm})
         return "DAG run wf-1 started in the background (%d nodes)." % len(nodes)
 
 
@@ -40,6 +40,7 @@ def _dag_spec(**over):
     base = dict(
         name="weekly-feedback",
         description="weekly user-feedback analysis",
+        task_summary="pull this week's feedback and write the report",
         mode="dag",
         triggers=Triggers(keywords=["user feedback"]),
         params={
@@ -50,12 +51,14 @@ def _dag_spec(**over):
             NodeSpec(
                 id="pull",
                 subagent="data-raven",
+                node_summary="pull the feedback for the week",
                 prompt_template="pull the feedback for ${params.week_of}",
                 skills=["sql-queries"],
             ),
             NodeSpec(
                 id="report",
                 subagent="content-raven",
+                node_summary="write the weekly report from the pulled feedback",
                 prompt_template="write the weekly report for ${params.audience} from {{ pull.output_path }}",
                 depends_on=["pull"],
                 mcps=["slack"],
@@ -103,7 +106,7 @@ async def test_a_blank_node_field_is_a_gap_and_fills_closes_it():
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
         nodes=[
-            NodeSpec(id="draft", subagent="content-raven", prompt_template=""),
+            NodeSpec(id="draft", subagent="content-raven", node_summary="draft the weekly report", prompt_template=""),
         ]
     )
 
@@ -115,6 +118,25 @@ async def test_a_blank_node_field_is_a_gap_and_fills_closes_it():
     plan = await ex.execute(spec, params={"week_of": "w"}, fills={"draft": {"promptTemplate": "write it up"}})
     assert plan.kind == "dag"
     assert tool.calls[0]["nodes"][0]["prompt_template"] == "write it up"
+
+
+async def test_a_blank_node_summary_is_a_gap_and_fills_closes_it():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(id="draft", subagent="content-raven", node_summary="", prompt_template="draft the report"),
+        ]
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "w"})
+    assert plan.kind == "gaps"
+    assert "fills['draft']['nodeSummary']" in plan.reply.replace('"', "'")
+    assert tool.calls == []
+
+    plan = await ex.execute(spec, params={"week_of": "w"}, fills={"draft": {"nodeSummary": "draft the weekly report"}})
+    assert plan.kind == "dag"
+    assert tool.calls[0]["nodes"][0]["node_summary"] == "draft the weekly report"
 
 
 async def test_fills_cannot_touch_a_field_the_playbook_already_wrote():
@@ -154,7 +176,17 @@ async def test_an_empty_skills_list_is_written_not_blank():
     reach, which is the opposite of what the author asked for.
     """
     ex = PlaybookExecutor(dag_tool=FakeDagTool())
-    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", skills=[])])
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull the week's feedback with no extra skills",
+                prompt_template="go",
+                skills=[],
+            )
+        ]
+    )
 
     plan = await ex.execute(spec, params={"week_of": "w"}, fills={"pull": {"skills": ["anything"]}})
 
@@ -198,8 +230,21 @@ async def test_executor_namespaces_the_instance_handle_per_run():
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
         nodes=[
-            NodeSpec(id="a", subagent="data-raven", prompt_template="one", instance="shared"),
-            NodeSpec(id="b", subagent="data-raven", prompt_template="two", depends_on=["a"], instance="shared"),
+            NodeSpec(
+                id="a",
+                subagent="data-raven",
+                node_summary="run the first step of the shared session",
+                prompt_template="one",
+                instance="shared",
+            ),
+            NodeSpec(
+                id="b",
+                subagent="data-raven",
+                node_summary="run the second step of the shared session",
+                prompt_template="two",
+                depends_on=["a"],
+                instance="shared",
+            ),
         ]
     )
 
@@ -223,6 +268,17 @@ async def test_executor_asks_the_graph_tool_to_confirm_unless_the_caller_already
 
     await ex.execute(_dag_spec(), params={"week_of": "w"}, confirmed=True)
     assert tool.calls[1]["confirm"] is False
+
+
+async def test_executor_passes_the_playbooks_own_task_summary_to_the_graph_tool():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec()
+
+    await ex.execute(spec, params={"week_of": "w"})
+
+    assert tool.calls[0]["task_summary"] == spec.task_summary
+    assert tool.calls[0]["task_summary"] != spec.description
 
 
 class ComposeProvider:
@@ -251,6 +307,7 @@ def _prompt_spec():
     return PlaybookSpec(
         name="due-diligence",
         description="run due diligence on a target company",
+        task_summary="scan the target company and summarize what was found",
         mode="prompt",
         triggers=Triggers(keywords=["due diligence"]),
         params={"target": ParamSpec(required=True, description="which company is the target?")},
@@ -260,10 +317,16 @@ def _prompt_spec():
 
 GOOD_GRAPH = {
     "nodes": [
-        {"id": "scan", "subagent": "research-raven", "promptTemplate": "breadth-scan AcmeAI"},
+        {
+            "id": "scan",
+            "subagent": "research-raven",
+            "nodeSummary": "breadth-scan the target company",
+            "promptTemplate": "breadth-scan AcmeAI",
+        },
         {
             "id": "sum",
             "subagent": "content-raven",
+            "nodeSummary": "summarize the scan findings",
             "promptTemplate": "summarize {{ scan.output }}",
             "dependsOn": ["scan"],
         },
@@ -424,7 +487,15 @@ async def test_the_listing_carries_what_a_caller_cannot_guess(tmp_path: Path):
 async def test_the_listing_names_the_fields_left_blank(tmp_path: Path):
     rt = _runtime(
         tmp_path,
-        [_dag_spec(nodes=[NodeSpec(id="draft", subagent="content-raven", prompt_template="")])],
+        [
+            _dag_spec(
+                nodes=[
+                    NodeSpec(
+                        id="draft", subagent="content-raven", node_summary="draft the weekly report", prompt_template=""
+                    )
+                ]
+            )
+        ],
     )
     detail = dict(rt.listing())["weekly-feedback"]
 
@@ -532,6 +603,7 @@ async def test_rewrite_leaves_foreign_references_alone():
             NodeSpec(
                 id="pull",
                 subagent="data-raven",
+                node_summary="read the summary file and an external reference",
                 prompt_template="read {{ ref:notes/summary.md }} then {{ elsewhere.output }}",
             )
         ]
@@ -556,7 +628,17 @@ async def test_an_empty_skills_list_is_the_same_input_as_no_list():
     """
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
-    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", skills=[])])
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull the week's feedback with no extra skills",
+                prompt_template="go",
+                skills=[],
+            )
+        ]
+    )
 
     plan = await ex.execute(spec, params={"week_of": "w"})
 
@@ -575,7 +657,17 @@ async def test_mcps_are_reported_rather_than_written_into_the_prompt():
     """
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
-    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", mcps=["github"])])
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull data that needs a github mcp",
+                prompt_template="go",
+                mcps=["github"],
+            )
+        ]
+    )
 
     plan = await ex.execute(spec, params={"week_of": "w"})
 

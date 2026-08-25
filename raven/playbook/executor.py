@@ -48,7 +48,7 @@ _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}
 #: cannot run without. Deliberately short: ``skills`` absent means "this agent's
 #: own menu", which is a finished answer, so counting it as a gap would put a
 #: question in front of every well-formed playbook.
-FILLABLE_REQUIRED = ("subagent", "prompt_template")
+FILLABLE_REQUIRED = ("subagent", "prompt_template", "node_summary")
 
 
 @dataclass(frozen=True)
@@ -205,14 +205,14 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
-#: Fields ``fills`` may write. The two required ones plus the three optional
+#: Fields ``fills`` may write. The three required ones plus the three optional
 #: per-node knobs, so a caller can add narrowing the author left open -- the
 #: blank-only rule is what keeps that from becoming an edit.
 _FILLABLE = (*FILLABLE_REQUIRED, "skills", "mcps", "instance")
 
 #: The wire spellings a caller might use, mapped to attribute names. Both are
 #: accepted for the same reason the node model accepts both.
-_FILL_ALIASES = {"promptTemplate": "prompt_template", "dependsOn": "depends_on"}
+_FILL_ALIASES = {"promptTemplate": "prompt_template", "dependsOn": "depends_on", "nodeSummary": "node_summary"}
 
 
 def _render_value(value: Any) -> str:
@@ -476,6 +476,7 @@ class PlaybookExecutor:
                 {
                     "id": run_node.id,
                     "subagent": run_node.subagent,
+                    "node_summary": run_node.node_summary,
                     "prompt_template": _with_skills(run_node),
                     "depends_on": list(run_node.depends_on),
                     **({"instance": run_node.instance} if run_node.instance else {}),
@@ -489,6 +490,7 @@ class PlaybookExecutor:
 
         receipt = await self._dag_tool.execute(
             tool_nodes,
+            task_summary=spec.task_summary,
             background=self._background,
             # The gate. With the passive funnel gone, nothing asks ahead of this,
             # so a playbook's ``confirm: true`` lands here or nowhere -- which is

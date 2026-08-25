@@ -11,9 +11,17 @@ def _dag(**over):
     base = dict(
         name="competitor-scan",
         description="research one competitor on the market and technology fronts in parallel",
+        task_summary="research the named competitor and report what was found",
         mode="dag",
         triggers=Triggers(keywords=["competitor"]),
-        nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="research ${params.target}")],
+        nodes=[
+            NodeSpec(
+                id="scan",
+                subagent="research-raven",
+                node_summary="research the target",
+                prompt_template="research ${params.target}",
+            )
+        ],
         params={"target": ParamSpec(required=True, description="which competitor should be scanned?")},
     )
     base.update(over)
@@ -78,3 +86,16 @@ def test_lifecycle_fields_are_rejected():
         _dag(status="ready")
     with pytest.raises(ValidationError):
         _dag(provenance={"blockingQuestions": ["what for?"]})
+
+
+def test_a_playbook_needs_a_task_summary_in_either_mode() -> None:
+    with pytest.raises(ValidationError):
+        _dag(task_summary="")
+    with pytest.raises(ValidationError):
+        _dag(mode="prompt", nodes=None, prompts="layer one: a single breadth-scan node", task_summary="")
+
+
+def test_task_summary_is_a_machine_field_not_frontmatter() -> None:
+    spec = _dag()
+    assert spec.block_dump()["taskSummary"] == spec.task_summary
+    assert PlaybookSpec.FRONTMATTER_FIELDS == ("name", "description")

@@ -327,7 +327,7 @@ async def test_a_completed_spawn_schedules_a_memory_record(tmp_path, monkeypatch
     await manager._run_subagent_inner(
         task_id="t1",
         task="do it",
-        label="l",
+        task_summary="l",
         origin=_spawn_origin("Coder", tmp_path),
         executor=None,
         provider=_StubProvider(),
@@ -351,7 +351,7 @@ async def test_a_failed_spawn_still_schedules_a_memory_record(tmp_path, monkeypa
     await manager._run_subagent_inner(
         task_id="t1",
         task="do it",
-        label="l",
+        task_summary="l",
         origin=_spawn_origin("Coder", tmp_path),
         executor=None,
         provider=_StubProvider(),
@@ -380,7 +380,7 @@ async def test_a_cancelled_spawn_schedules_no_memory_record(tmp_path, monkeypatc
         await manager._run_subagent_inner(
             task_id="t1",
             task="do it",
-            label="l",
+            task_summary="l",
             origin=_spawn_origin("Coder", tmp_path),
             executor=None,
             provider=_StubProvider(),
@@ -403,7 +403,7 @@ async def test_a_spawn_with_no_declared_identity_schedules_no_memory_record(tmp_
     await manager._run_subagent_inner(
         task_id="t1",
         task="do it",
-        label="l",
+        task_summary="l",
         origin=_spawn_origin("Coder", tmp_path),
         executor=None,
         provider=_StubProvider(),

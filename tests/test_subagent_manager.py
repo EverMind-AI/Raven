@@ -14,6 +14,7 @@ acompletion is mocked, so this stays "no real LLM".
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -397,7 +398,7 @@ async def test_announce_result_routes_to_tui_session_key(monkeypatch):
 
     await mgr._announce_result(
         task_id="t1",
-        label="label",
+        task_summary="label",
         task="task",
         result="result",
         origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess123"},
@@ -417,7 +418,7 @@ async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
 
     await mgr._announce_result(
         task_id="t2",
-        label="label",
+        task_summary="label",
         task="task",
         result="result",
         origin={"channel": "whatsapp", "chat_id": "12345", "session_key": "whatsapp:12345"},
@@ -507,7 +508,7 @@ async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
     # Same call from the main agent's context is accepted (empty graph → no-op).
     # A refusal is a plain error string; an accepted run comes back as a
     # ToolResult carrying the transcript label alongside the model text.
-    assert isinstance(await tool.execute(nodes=[]), ToolResult)
+    assert isinstance(await tool.execute(nodes=[], task_summary="run the graph under test"), ToolResult)
 
 
 async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
@@ -944,6 +945,38 @@ async def test_a_spawn_announce_without_a_record_directory_says_nothing_about_it
     )
 
     assert "Record:" not in submitted[0].text
+
+
+def _read_meta(tmp_path: Path) -> dict[str, Any]:
+    (found,) = tmp_path.rglob("meta.json")
+    return json.loads(found.read_text(encoding="utf-8"))
+
+
+async def test_the_record_meta_carries_the_task_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _StubThirdPartyBackend(reply="ok"))
+
+    await manager.spawn(task="do the thing", task_summary="do the thing, briefly")
+    await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+    meta = _read_meta(tmp_path)
+    assert meta["task_summary"] == "do the thing, briefly"
+    assert "label" not in meta
+
+
+async def test_a_caller_without_a_summary_still_gets_one_derived(monkeypatch, tmp_path: Path) -> None:
+    # The sentinel paths have no model to author one, so the manager keeps its
+    # own fallback rather than making the field required here.
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _StubThirdPartyBackend(reply="ok"))
+
+    await manager.spawn(task="x" * 50)
+    await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+    meta = _read_meta(tmp_path)
+    assert meta["task_summary"] == "x" * 30 + "..."
 
 
 # --- a trace agent's record is primed with the call's own turn --------------

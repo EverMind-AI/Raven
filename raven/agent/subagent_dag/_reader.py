@@ -131,6 +131,7 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
                 # about where k came from. Only from graph.json -- the manifest
                 # records what happened, not what was requested.
                 "inputs": node.get("inputs") if isinstance(node.get("inputs"), dict) else None,
+                "node_summary": node.get("node_summary"),
             }
         )
 

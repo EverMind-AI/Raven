@@ -182,7 +182,10 @@ async def test_dag_records_go_to_history_while_nodes_run_in_the_bound_workdir(tm
     tool.set_context("web", "chat-1")
 
     with bind(session):
-        await tool.execute(nodes=[{"id": "a", "subagent": "stub", "prompt_template": "hi"}])
+        await tool.execute(
+            task_summary="run the graph under test",
+            nodes=[{"id": "a", "subagent": "stub", "node_summary": "node a", "prompt_template": "hi"}],
+        )
 
     await asyncio.wait_for(reached.wait(), timeout=5)
 

@@ -7038,6 +7038,10 @@
           "output_file": { "type": "string" },
           "error": { "type": "string" },
           "prompt_template": { "type": "string" },
+          "node_summary": {
+            "description": "One line, for the user, on what this node was asked to do. Absent on a run that predates the field.",
+            "type": "string"
+          },
           "inputs": {
             "description": "What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.",
             "type": "object",
@@ -7137,6 +7141,10 @@
                     "depends_on": { "type": "array", "items": { "type": "string" } },
                     "instance": {
                       "description": "Shared stateful handle. Nodes naming the same one run sequentially.",
+                      "type": "string"
+                    },
+                    "node_summary": {
+                      "description": "One line, for the user, on what this node was asked to do. Absent on a run that predates the field.",
                       "type": "string"
                     }
                   }

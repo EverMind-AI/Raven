@@ -64,7 +64,7 @@ async def _spawn(workspace: Path, task: str = "count the files", *, label: str |
 
     mgr = _manager(workspace)
     mgr.registry.set_builtin_builder(lambda _row, _build, _b=backend or _Answers(): _b)
-    await mgr.spawn(task, label=label, session_key=SESSION)
+    await mgr.spawn(task, task_summary=label, session_key=SESSION)
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
     return mgr
 
@@ -149,7 +149,7 @@ class TestStatus:
 
         mgr = _manager(workspace)
         mgr.registry.set_builtin_builder(lambda _row, _build, _b=_Hangs(): _b)
-        await mgr.spawn("a long one", label="long", session_key=SESSION)
+        await mgr.spawn("a long one", task_summary="long", session_key=SESSION)
         for _ in range(100):
             if (await subagent_list({"session_id": SESSION}))["items"]:
                 break
@@ -180,6 +180,35 @@ class TestStatus:
         # And the title too: with no meta there is no label, and a row whose only
         # title is empty draws as a blank line in the panel.
         assert after["label"] == "count the files"
+
+    async def test_a_row_prefers_the_task_summary(self, workspace: Path) -> None:
+        await _spawn(workspace)
+        row = (await subagent_list({"session_id": SESSION}))["items"][0]
+        directory = _call_dir_on_disk(workspace, row["id"])
+        (directory / "meta.json").write_text(json.dumps({"task_summary": "compare the two vendors"}))
+
+        after = (await subagent_list({"session_id": SESSION}))["items"][0]
+        assert after["label"] == "compare the two vendors"
+
+    async def test_a_row_still_reads_a_legacy_label(self, workspace: Path) -> None:
+        """Records written before the rename keep their row instead of degrading to
+        the prompt's first line."""
+        await _spawn(workspace)
+        row = (await subagent_list({"session_id": SESSION}))["items"][0]
+        directory = _call_dir_on_disk(workspace, row["id"])
+        (directory / "meta.json").write_text(json.dumps({"label": "older spawn"}))
+
+        after = (await subagent_list({"session_id": SESSION}))["items"][0]
+        assert after["label"] == "older spawn"
+
+    async def test_a_row_with_neither_falls_back_to_the_prompt(self, workspace: Path) -> None:
+        await _spawn(workspace, "first line of the prompt\nsecond line")
+        row = (await subagent_list({"session_id": SESSION}))["items"][0]
+        directory = _call_dir_on_disk(workspace, row["id"])
+        (directory / "meta.json").write_text(json.dumps({}))
+
+        after = (await subagent_list({"session_id": SESSION}))["items"][0]
+        assert after["label"] == "first line of the prompt"
 
 
 class TestContext:
@@ -307,7 +336,7 @@ async def test_a_run_in_flight_serves_the_transcript_being_collected(workspace: 
 
     mgr = _manager(workspace)
     mgr.registry.set_builtin_builder(lambda _row, _build, _b=_SlowBackend(): _b)
-    await mgr.spawn("count the files", label="counting", session_key=SESSION)
+    await mgr.spawn("count the files", task_summary="counting", session_key=SESSION)
     await asyncio.wait_for(started.wait(), timeout=5)
     try:
         row = (await subagent_list({"session_id": SESSION}))["items"][0]
@@ -500,7 +529,7 @@ async def test_an_unreadable_usage_report_does_not_fail_the_run(workspace: Path)
 # ---------------------------------------------------------------------------
 
 
-def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None) -> Path:
+def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None, nodes: list[dict] | None = None) -> Path:
     from raven.agent.subagent_history import dag_root
     from raven.session.manager import SessionManager
 
@@ -509,7 +538,9 @@ def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None) ->
     (run / "graph.json").write_text(
         json.dumps(
             {
-                "nodes": [
+                "nodes": nodes
+                if nodes is not None
+                else [
                     {"id": "survey", "subagent": "Researcher", "depends_on": []},
                     {"id": "write", "subagent": "Writer", "depends_on": ["survey"]},
                 ]
@@ -607,6 +638,28 @@ async def test_a_dag_row_is_addressed_by_run_and_node(workspace: Path) -> None:
 
     assert row["run_id"] == "20260812T120000Z-deadbeef"
     assert row["id"] == "20260812T120000Z-deadbeef/survey"
+
+
+async def test_a_dag_row_is_named_by_its_node_summary(workspace: Path) -> None:
+    """`graph.json` is this row's only source for what the node was asked, and it
+    has carried `node_summary` since the field landed on the node model."""
+    _write_run(
+        workspace,
+        "20260812T120000Z-deadbeef",
+        nodes=[{"id": "scan", "subagent": "x", "node_summary": "read the pricing pages"}],
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    assert items[0]["label"] == "read the pricing pages"
+
+
+async def test_a_dag_row_from_an_older_run_still_shows_its_node_id(workspace: Path) -> None:
+    _write_run(workspace, "20260812T120000Z-deadbeef", nodes=[{"id": "scan", "subagent": "x"}])
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    assert items[0]["label"] == "scan"
 
 
 async def test_an_in_flight_run_lists_its_nodes_as_queued_only_while_something_executes_it(workspace: Path) -> None:

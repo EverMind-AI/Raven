@@ -277,7 +277,7 @@ async def test_a_spawned_subagent_keeps_its_conversations_model(tmp_path) -> Non
     loop.subagents._gate = asyncio.Semaphore(0)
 
     async def _body(*args, **kwargs):
-        await loop.subagents.spawn("do it", label="it", session_key="tui:a")
+        await loop.subagents.spawn("do it", task_summary="it", session_key="tui:a")
         return "done"
 
     await _run(loop, "tui:a", _body)
@@ -710,7 +710,7 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     try:
 
         async def _body(*args, **kwargs):
-            await loop.subagents.spawn("do it", label="it", session_key="tui:a")
+            await loop.subagents.spawn("do it", task_summary="it", session_key="tui:a")
             return "done"
 
         await _run(loop, "tui:a", _body)

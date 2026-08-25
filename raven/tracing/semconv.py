@@ -305,7 +305,7 @@ def subagent(span, bound: dict[str, Any], result: Any, exc: BaseException | None
         {
             "subagent.task_id": bound.get("task_id"),
             "subagent.task": _preview(bound.get("task"), 300),
-            "subagent.label": bound.get("label"),
+            "subagent.label": bound.get("task_summary"),
             "subagent.origin_session": origin.get("session_key") if isinstance(origin, dict) else None,
         }
     )

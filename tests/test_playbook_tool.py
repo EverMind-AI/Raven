@@ -37,10 +37,18 @@ def _spec(name="weekly-feedback", **over):
     base = dict(
         name=name,
         description="weekly user-feedback analysis",
+        task_summary="pull this week's feedback and write the report",
         mode="dag",
         triggers=Triggers(keywords=["user feedback"]),
         params={"week_of": ParamSpec(required=True, description="which week should be analyzed?")},
-        nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="pull ${params.week_of}")],
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull the week's feedback",
+                prompt_template="pull ${params.week_of}",
+            )
+        ],
     )
     base.update(over)
     return PlaybookSpec(**base)

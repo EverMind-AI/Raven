@@ -1238,7 +1238,7 @@ async def test_a_spawn_carries_the_instances_message_list(tmp_path, monkeypatch)
         await manager._run_subagent_inner(
             task_id=task_id,
             task="write",
-            label="l",
+            task_summary="l",
             origin=origin,
             executor=None,
             provider=_FakeProvider(),
@@ -1278,7 +1278,7 @@ async def test_a_spawn_that_named_no_instance_persists_nothing(tmp_path, monkeyp
     await manager._run_subagent_inner(
         task_id="t1",
         task="do it",
-        label="l",
+        task_summary="l",
         origin={
             "channel": "cli",
             "chat_id": "direct",

@@ -368,7 +368,7 @@ async def test_spawn_snapshots_before_the_task_queues(tmp_path) -> None:
     original_build = manager_mod.build_executor
     manager_mod.build_executor = lambda *a, **k: _StubExecutor()
     try:
-        await manager.spawn("do the thing", label="thing", session_key="s")
+        await manager.spawn("do the thing", task_summary="thing", session_key="s")
         manager.set_provider(_RecordingProvider("switched-to"), NEW_MODEL)
         manager._gate.release()
         for _ in range(50):

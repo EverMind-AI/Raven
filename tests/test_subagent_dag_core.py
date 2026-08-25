@@ -36,10 +36,17 @@ from raven.agent.subagent_dag.tool import _NODE_SCHEMA
 def test_topo_order_and_parse() -> None:
     spec = parse_dag_spec(
         {
+            "task_summary": "say hello and echo it downstream",
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "hello"},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-            ]
+                {"id": "a", "subagent": "x", "node_summary": "say hello", "prompt_template": "hello"},
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "echo a's output",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ],
         }
     )
     assert validate_and_order(spec) == ["a", "b"]
@@ -51,7 +58,12 @@ def test_subagent_name_takes_any_name_the_config_layer_accepts(name: str) -> Non
     # "General Audit" happily, so a DAG node naming the same agent must not be
     # refused for the name alone. Only the node `id` stays charset-restricted,
     # because it becomes `<id>.prompt.md`.
-    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run a lone node under this agent name",
+            "nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}],
+        }
+    )
     assert spec.nodes[0].subagent == name
 
 
@@ -61,10 +73,15 @@ def test_subagent_name_rejects_edge_whitespace(name: str) -> None:
     # against a name that looks identical to the configured one -- refused here
     # where the error can name the field instead.
     with pytest.raises(DagValidationError):
-        parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
+        parse_dag_spec(
+            {
+                "task_summary": "run a lone node under this agent name",
+                "nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}],
+            }
+        )
 
 
-@pytest.mark.parametrize("field", ["subagent", "prompt_template"])
+@pytest.mark.parametrize("field", ["subagent", "prompt_template", "node_summary"])
 def test_a_blank_required_field_parses_but_never_runs(field: str) -> None:
     """Blank has to survive parsing and be refused before dispatch.
 
@@ -74,11 +91,58 @@ def test_a_blank_required_field_parses_but_never_runs(field: str) -> None:
     any more, which is where it gets refused.
     """
     node = {"id": "a", "subagent": "x", "prompt_template": "hi", field: ""}
-    spec = parse_dag_spec({"nodes": [node]})
+    spec = parse_dag_spec({"task_summary": "run one node with a required field left blank", "nodes": [node]})
     assert getattr(spec.nodes[0], field) == ""
 
     with pytest.raises(DagValidationError, match="cannot run without"):
         validate_and_order(spec)
+
+
+def test_node_summary_survives_the_parse_and_reaches_the_spec() -> None:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "compare the two vendors",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "read the pricing pages",
+                    "prompt_template": "hello",
+                }
+            ],
+        }
+    )
+    assert spec.nodes[0].node_summary == "read the pricing pages"
+
+
+def test_a_long_node_summary_is_accepted_because_length_is_advisory() -> None:
+    # No `max_length`: the ceiling lives in the field's schema description, and a
+    # verbose summary is clipped where it is displayed rather than rejected here.
+    spec = parse_dag_spec(
+        {
+            "task_summary": "s",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "w" * 400, "prompt_template": "hi"}],
+        }
+    )
+    assert len(spec.nodes[0].node_summary) == 400
+
+
+def test_a_graph_without_a_task_summary_is_rejected() -> None:
+    with pytest.raises(DagValidationError):
+        parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "node_summary": "s", "prompt_template": "hi"}]})
+
+
+def test_a_blank_task_summary_is_rejected_at_parse() -> None:
+    # Unlike a node's summary, the graph-level one has no gap-filling path: it is
+    # written by the model through the schema or by the playbook executor, so
+    # blank can be refused at the boundary.
+    with pytest.raises(DagValidationError):
+        parse_dag_spec(
+            {
+                "task_summary": "",
+                "nodes": [{"id": "a", "subagent": "x", "node_summary": "s", "prompt_template": "hi"}],
+            }
+        )
 
 
 @pytest.mark.parametrize("node_id", ["has space", "a/b", "..", "a.out", ""])
@@ -86,16 +150,34 @@ def test_node_id_keeps_its_closed_charset(node_id: str) -> None:
     # The id is a path component; widening the sub-agent charset must not have
     # widened this one with it.
     with pytest.raises(DagValidationError):
-        parse_dag_spec({"nodes": [{"id": node_id, "subagent": "x", "prompt_template": "hi"}]})
+        parse_dag_spec(
+            {
+                "task_summary": "run a lone node whose id may be invalid",
+                "nodes": [{"id": node_id, "subagent": "x", "prompt_template": "hi"}],
+            }
+        )
 
 
 def test_cycle_rejected() -> None:
     spec = parse_dag_spec(
         {
+            "task_summary": "run two nodes that depend on each other",
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-            ]
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "read b's output",
+                    "prompt_template": "{{ b.output }}",
+                    "depends_on": ["b"],
+                },
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "read a's output",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ],
         }
     )
     with pytest.raises(DagValidationError):
@@ -105,10 +187,16 @@ def test_cycle_rejected() -> None:
 def test_default_deny_undeclared_reference() -> None:
     spec = parse_dag_spec(
         {
+            "task_summary": "run a node that reads another without declaring it",
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "hi"},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}"},  # no depends_on
-            ]
+                {"id": "a", "subagent": "x", "node_summary": "node a", "prompt_template": "hi"},
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "read a's output without declaring the dependency",
+                    "prompt_template": "{{ a.output }}",
+                },  # no depends_on
+            ],
         }
     )
     with pytest.raises(DagValidationError):
@@ -122,7 +210,7 @@ _FULL = {"x": AgentCapabilities(stateful=True, reads_local_files=True)}
 
 
 def _spec(*nodes: dict) -> object:
-    return parse_dag_spec({"nodes": list(nodes)})
+    return parse_dag_spec({"task_summary": "run a small capability-gated graph", "nodes": list(nodes)})
 
 
 def test_reused_instance_on_a_stateless_agent_is_rejected() -> None:
@@ -270,6 +358,7 @@ async def test_render_output_and_inputs() -> None:
 
     spec = parse_dag_spec(
         {
+            "task_summary": "render output and inputs for one node",
             "nodes": [
                 {
                     "id": "b",
@@ -278,7 +367,7 @@ async def test_render_output_and_inputs() -> None:
                     "depends_on": ["a"],
                     "inputs": {"k": "LITERAL"},
                 }
-            ]
+            ],
         }
     )
     node = spec.nodes[0]
@@ -496,7 +585,12 @@ def test_split_reference_names_the_root() -> None:
 
 
 def _one_node(template: str, **extra: object) -> object:
-    return parse_dag_spec({"nodes": [{"id": "n", "subagent": "x", "prompt_template": template, **extra}]}).nodes[0]
+    return parse_dag_spec(
+        {
+            "task_summary": "render a single node prompt",
+            "nodes": [{"id": "n", "subagent": "x", "prompt_template": template, **extra}],
+        }
+    ).nodes[0]
 
 
 async def test_render_reaches_an_earlier_run_through_the_runs_prefix() -> None:
@@ -668,13 +762,19 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
     assert set(_NODE_SCHEMA["properties"]) == {
         "id",
         "subagent",
+        "node_summary",
         "prompt_template",
         "depends_on",
         "inputs",
         "instance",
     }
     # Still parseable, so a playbook's own nodes[] survives the round trip.
-    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi", "skills": ["s"]}]})
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run a lone node carrying skills",
+            "nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi", "skills": ["s"]}],
+        }
+    )
     assert spec.nodes[0].skills == ["s"]
 
 
@@ -682,7 +782,7 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
 
 
 def _memory_spec(nodes: list[dict]):
-    return parse_dag_spec({"nodes": nodes})
+    return parse_dag_spec({"task_summary": "run a small memory chain of nodes", "nodes": nodes})
 
 
 _CHAIN = [
