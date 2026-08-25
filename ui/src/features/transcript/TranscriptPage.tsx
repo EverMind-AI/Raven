@@ -18,7 +18,7 @@ import type {
   AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, DeliveryRow, FoldData, Lane,
   NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
-import type { KeyboardEvent, ReactElement, ReactNode, RefObject } from 'react'
+import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
 import * as lightbox from '../../shell/lightbox'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
@@ -873,8 +873,13 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
    height buys. */
 
 const CHANGE_CAP = 4
-const DELIVERY_MIN = 178
-const DELIVERY_GAP = 8
+/* Deliveries are capped by a STATED count, like the changes below them. It
+   used to be whatever fitted one row, measured by an observer that starts at
+   one -- so a full-width card could sit claiming it had no space for a second
+   tile until something happened to resize it, which is how three deliveries
+   came to show two. Three is one row at the reading column and three rows in a
+   desk pane; past that the card asks before it grows. */
+const DELIVERY_CAP = 3
 /* How many of the file's own lines a miniature draws. More than fills the
    tile at this scale; the rest would be rendered and then clipped. */
 const ART_HEAD_LINES = 16
@@ -1003,7 +1008,7 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
       {picture}
       <span className="cap">
         <span className="nm">{row.title}</span>
-        {single && row.description ? <span className="ds">{row.description}</span> : null}
+        {row.description ? <span className="ds">{row.description}</span> : null}
         <span className="mt">{meta}</span>
       </span>
       <button className="hit" disabled={state !== 'ready'}
@@ -1013,30 +1018,13 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
   )
 })
 
-function useDeliveryCapacity(ref: RefObject<HTMLDivElement | null>): number {
-  const [capacity, setCapacity] = useState(1)
-  useEffect(() => {
-    const node = ref.current
-    if (!node) return
-    const measure = (): void => {
-      setCapacity(Math.max(1, Math.floor((node.clientWidth + DELIVERY_GAP) / (DELIVERY_MIN + DELIVERY_GAP))))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [ref])
-  return capacity
-}
 
 const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
   useSeg(lane, seg)
   const changes = store.artifactsOf(lane, seg.turn)
   const deliveries = store.deliveriesOf(lane, seg.turn)
-  const gridRef = useRef<HTMLDivElement | null>(null)
-  const capacity = useDeliveryCapacity(gridRef)
   if (!changes.length && !deliveries.length) return null
-  const shownDeliveries = seg.deliveriesOpen ? deliveries : deliveries.slice(0, capacity)
+  const shownDeliveries = seg.deliveriesOpen ? deliveries : deliveries.slice(0, DELIVERY_CAP)
   const deliveryRest = deliveries.length - shownDeliveries.length
   const shownChanges = seg.changesOpen ? changes : changes.slice(0, CHANGE_CAP)
   const changeRest = changes.length - shownChanges.length
@@ -1047,7 +1035,7 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
         <div className="ahd">
           <span className="ahm"><span className="lb">{t('gui.arts.delivered')}</span><span className="n">{deliveries.length}</span></span>
         </div>
-        <div ref={gridRef} className={'atiles' + (deliveries.length === 1 ? ' single' : '')}>
+        <div className={'atiles' + (deliveries.length === 1 ? ' single' : '')}>
           {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row}
             preview={previews.get(row.path) || null} single={deliveries.length === 1} />)}
         </div>

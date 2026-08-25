@@ -40,7 +40,15 @@ export function update(patch: Partial<DeskState>): void {
   listeners.forEach((listener) => listener())
 }
 
+/* Only when it is not already showing. Opening the workspace is not a cheap
+   setter: it runs a full workspace draw, which unmounts and rebuilds the legacy
+   panel's islands. Every pane opened, and every click on a row whose pane was
+   already up, paid for that -- invisibly, since in desk mode the panel it
+   rebuilds is display:none. The split's own flag is the honest answer to "is it
+   open", the same way the rail reads the app's page flag. */
 function revealWorkspace(): void {
+  const split = document.getElementById('split')
+  if (split && split.dataset.open === 'true') return
   shell().workspaceSetOpen?.(true)
 }
 
@@ -49,6 +57,17 @@ function revealWorkspace(): void {
    ends up with two panes showing one node. */
 function addPane(pane: DeskPane, supersedes?: string | null): void {
   const same = state.panes.findIndex((item) => item.id === pane.id)
+  /* Already on the desk: bring it forward, and nothing else. Re-opening it
+     replaced the pane object, re-tiled the grid and re-revealed the workspace
+     to arrive at exactly the screen that was already there -- a click that
+     looked inert but was not. What the pane draws is read from the live stores
+     (state.instances, state.rows), so the object held here has nothing staler
+     in it than the one that would replace it. */
+  if (same >= 0 && !supersedes) {
+    if (state.active !== pane.id) update({ active: pane.id })
+    revealWorkspace()
+    return
+  }
   const slot = same >= 0
     ? same
     : supersedes ? state.panes.findIndex((item) => item.id === supersedes) : -1

@@ -87,6 +87,16 @@
   --z-page: 24;
   --z-detail: 26;
   --z-rail-handle: 30;
+  /* The floating desk, and a desk pane blown up to fill the window. Both sit
+     ABOVE the page and the workspace column and BELOW every dialog: the desk is
+     a tool you reach for while reading, not something that outranks the thing
+     you opened on top of it. It used to ride at takeover+1 -- above settings,
+     above menus, above toasts -- because its own fullscreen pane was a
+     `takeover`, and the launcher had to stay reachable over it. Giving the two
+     a band of their own is what lets the launcher win over its pane without
+     the whole desk winning over the app. */
+  --z-desk-full: 32;
+  --z-desk: 34;
   --z-veil: 40;
   --z-menu: 42;
   --z-palette: 45;
@@ -893,16 +903,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* One node's request. Below the graph rather than beside it: the card lives in a
    744px reading column, and a two-pane layout inside it leaves neither pane wide
    enough for a prompt. */
-.dagc .npanel { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-.dagc .nhd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-.dagc .nhd .nm { font-size: 12px; font-weight: 600; color: var(--text); }
-.dagc .nhd .st { font-size: 10.5px; color: var(--faint); }
+.dagc .npanel { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; min-width: 0; }
+.dagc .nhd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; min-width: 0; }
+/* The name gives way, and only the name. A node id is unbounded -- a playbook
+   names one `daily-ai-digest-36e275-scan-news` -- and with nothing here to let
+   it shrink, the flex row grew past the panel and pushed the run link off the
+   right edge, where it read as the card having been cut in half. */
+.dagc .nhd .nm {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dagc .nhd .st { font-size: 10.5px; color: var(--faint); flex: none; }
 /* The door to what actually happened. Explicit, because selecting a node and
    opening its transcript are different intentions: the panel takes half the
    window, and comparing two nodes' configuration is the commoner one. */
 .dagc .nhd .go {
-  margin-left: auto; font: inherit; font-size: 11px; background: none; border: 0;
-  color: var(--muted); cursor: pointer; padding: 0; white-space: nowrap;
+  margin-left: auto; flex: none; font: inherit; font-size: 11px; background: none;
+  border: 0; color: var(--muted); cursor: pointer; padding: 0; white-space: nowrap;
 }
 .dagc .nhd .go:hover { color: var(--amber); text-decoration: underline; }
 .dagc .rows { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
@@ -1005,9 +1022,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--muted); font-family: var(--mono); font-size: 9.5px; line-height: 16px;
   text-align: center; font-variant-numeric: tabular-nums;
 }
+/* One tile, two arrangements. A single delivery keeps the headline row it
+   earns -- it IS the turn's product -- and several become a grid, but the two
+   share a preview ratio, a type scale and a spacing rule, so going from one
+   file to two is a rearrangement rather than a different component. The shared
+   half lives in these variables. */
 .atiles {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(178px, 100%), 1fr));
-  gap: 8px; min-width: 0;
+  --atile-ratio: 16 / 10;
+  --atile-pad: 11px 14px;
+  --atile-nm: 15px;
+  --atile-ds: 12.5px;
+  display: grid; gap: 8px; min-width: 0;
+  /* Tracks fill the row between a floor and the column's own width, which is
+     what makes a turn's products read as one block rather than as tiles
+     scattered on a shelf. */
+  grid-template-columns: repeat(auto-fit, minmax(min(178px, 100%), 1fr));
 }
 .atile {
   position: relative; display: grid; min-width: 0; overflow: hidden;
@@ -1032,9 +1061,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
 .atile .hit:disabled { cursor: default; }
+/* The preview is 16:10 wherever it has the room, and never taller than
+   --atile-pic-max. Both halves matter: the ratio is what stops the same
+   document being drawn as a square in one card and a slice in the next, and
+   the ceiling is what stops a tile that has stretched across a wide column
+   from turning its picture into a 269px wall. */
 .atile .pic {
-  --mini-inset: 7px;
-  display: grid; height: 80px; overflow: hidden; position: relative;
+  --atile-pic-max: 124px;
+  /* The width is stated, not left to the ratio. With only `aspect-ratio` and
+     `max-height`, capping the height silently capped the WIDTH too (124 x 1.6
+     = 198px), so a tile that had stretched across the row carried a preview
+     that had not -- the blank right half. Stated width, ratio for the height,
+     cap for the ceiling. */
+  display: grid; width: 100%; aspect-ratio: var(--atile-ratio);
+  max-height: var(--atile-pic-max);
+  overflow: hidden; position: relative;
   background: var(--surface); border-bottom: 1px solid var(--line-soft);
 }
 .atile .pic.none { place-content: center; justify-items: center; gap: 6px; }
@@ -1043,16 +1084,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 600;
   letter-spacing: .08em;
 }
-/* The miniature is a PAGE resting in the tile, not a screenshot cropped to the
-   corner: the document sits inset on the tile's own surface, with the hairline
-   and the small radius every other card in the page gives its content. The
-   chrome is drawn HERE rather than on .mini, because .mini is scaled and a 1px
-   border on it would land as 0.4px. */
-.atile .pic.doc { background: var(--surface); place-items: start; padding: var(--mini-inset); }
-.atile .pic.doc::before {
-  content: ''; position: absolute; inset: var(--mini-inset); border-radius: 4px;
-  background: var(--ink); border: 1px solid var(--line-soft);
-}
+/* ONE surface. The preview used to be a grey mount with a white page inset in
+   it -- two nested rectangles for one picture, and at this size the inner one
+   read as a rendering fault rather than as paper. The box's own border and
+   radius are the frame; the document fills it. */
+.atile .pic.doc { background: var(--surface); place-items: start; }
 .atile .pic.shot { background: var(--surface); }
 .atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
 /* The miniature: the file rendered small and then SCALED down again, so a
@@ -1075,7 +1111,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   --mini-scale: .4;
   font-size: 12px; line-height: 1.55;
   position: relative; display: block; width: calc(100% / var(--mini-scale));
-  height: calc(100% / var(--mini-scale)); padding: calc(9px / var(--mini-scale)) calc(10px / var(--mini-scale));
+  height: calc(100% / var(--mini-scale)); padding: calc(7px / var(--mini-scale)) calc(8px / var(--mini-scale));
   transform: scale(var(--mini-scale)); transform-origin: top left; pointer-events: none;
   /* Faded rather than cut, the same way a folded question ends: a hard edge
      mid-glyph reads as the render having broken, a fade as a page continuing. */
@@ -1090,46 +1126,56 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    past the paper. */
 .atile .amini.prose { overflow-wrap: anywhere; }
 .atile .amini.prose > :first-child { margin-top: 0; }
-.atile .cap { display: grid; gap: 2px; min-height: 43px; padding: 7px 10px 8px; min-width: 0; }
+.atile .cap { display: grid; gap: 3px; align-content: start; padding: var(--atile-pad); min-width: 0; }
+/* One row each, cut with an ellipsis. This is what keeps the card's height
+   independent of the window: a wrapping title grew the card as the column
+   narrowed, so the same delivery was 155px tall at one width and 175px at
+   another. How much of the title survives is the width's business; how tall
+   the card is, is not. */
 .atile .cap .nm {
-  color: var(--text); font-size: 14.5px; font-weight: 600; line-height: 1.4;
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  color: var(--text); font-size: var(--atile-nm); font-weight: 600; line-height: 1.5;
+}
+/* Drawn wherever there is one. It used to be a single delivery's privilege, so
+   the one sentence saying what a file IS vanished the moment a turn produced a
+   second file -- exactly when telling them apart starts to matter. */
+.atile .cap .ds {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  color: var(--muted); font-size: var(--atile-ds); line-height: 1.5;
 }
 .atile .cap .mt {
-  font-family: var(--mono); font-size: 10px; line-height: 1.4; color: var(--muted);
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.4; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* The headline row: the preview beside the caption rather than above it, and
+   CENTRED in its column at the shared ratio. The caption decides how tall the
+   row is -- a title and a file size no longer pay for the height of a square
+   picture, which is what made every single-delivery card the same 155px
+   whatever it actually said. */
+/* One delivery is the turn's product, so its row takes the whole width rather
+   than sitting as a lone 190px tile in an empty grid. */
+.atiles.single { grid-template-columns: minmax(0, 1fr); }
+/* A fixed column, not a fraction of the container: a preview sized in cqi grew
+   with the window, and since it is the taller half of this row it carried the
+   whole card's height up with it -- the same delivery was 133px tall in a desk
+   pane and 147px in a wide window. */
 .atiles.single .atile {
-  grid-template-columns: clamp(92px, 15cqi, 116px) minmax(0, 1fr);
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center; gap: 0;
   transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
 }
-/* The ratio has to stay definite: the miniature inside is sized in PERCENT of
-   this box (see .atile .amini), so an auto height here has nothing to resolve
-   against and the tile grows to the full height of the rendered document.
-   Narrower column, same square. */
+/* `width: auto`, not the 100% the grid tile needs: this preview carries
+   margins inside a fixed 116px column, so a stated full width put it 22px past
+   the column and over the title beside it. */
 .atiles.single .atile .pic {
-  --mini-inset: 9px;
-  width: 100%; height: auto; aspect-ratio: 1;
-  border-right: 1px solid var(--line-soft); border-bottom: 0;
+  width: auto; margin: 11px; border-bottom: 0; border-radius: 7px;
+  border: 1px solid var(--line-soft);
 }
-.atiles.single .atile .cap {
-  align-content: center; gap: 4px; min-height: 0; padding: 11px 15px;
-}
-.atiles.single .atile .cap .nm {
-  display: -webkit-box; overflow: hidden; white-space: normal;
-  -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  font-size: 15px; line-height: 1.35;
-}
-.atiles.single .atile .cap .ds {
-  display: -webkit-box; overflow: hidden; color: var(--muted);
-  font-size: 12.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-}
-.atiles.single .atile .cap .mt { font-size: 10.5px; }
-@container artifacts (max-width: 430px) {
-  .atiles.single .atile .cap { gap: 3px; padding: 9px 11px; }
-  .atiles.single .atile .cap .nm { font-size: 14px; -webkit-line-clamp: 1; }
-  .atiles.single .atile .cap .ds { font-size: 11.5px; -webkit-line-clamp: 1; }
-}
+.atiles.single .atile .cap { align-content: center; padding: 13px 16px 13px 3px; }
+/* No narrow-container type step. Every caption row is one ellipsised line now,
+   so a narrow card already fits without shrinking anything -- and shrinking the
+   type here was the last thing making a delivery's card a different height in a
+   desk pane than in the chat column. */
 @media (prefers-reduced-motion: reduce) { .atiles.single .atile { transition: none; } }
 /* Where it opens, said before the click rather than after it. */
 .atile .cap .away { font-family: var(--mono); font-size: 10px; color: var(--sky); }
@@ -2608,8 +2654,14 @@ textarea:focus, textarea:focus-visible,
 .fview .binote { padding: 20px 16px; display: grid; gap: 8px; justify-items: start; }
 .fview .binote .h { font-size: 13px; }
 .fview .binote .w { font-size: 12px; color: var(--muted); line-height: 1.6; }
-/* The note's grid stacks its rows; the two open actions belong on one line. */
-.fview .binote .acts { display: flex; flex-wrap: wrap; gap: 7px; }
+/* The note's grid stacks its rows; the two open actions belong on one line.
+
+   NOT `.acts`, which this used to be called: that is the transcript answer's
+   icon bar (`.acts button` is a 27px square with `display: grid`), and these
+   two are text buttons. Sharing the name squeezed both labels into 27x27
+   boxes, where they overflowed and drew on top of each other -- the note read
+   as a font or encoding fault rather than as two buttons. */
+.fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
 
@@ -3918,7 +3970,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   margin: 8px 8px 8px 0; pointer-events: none; background: transparent; border: 0;
   border-radius: 0; box-shadow: none; }
 .desk-ready .ws:has(.desk-grid[data-solo="true"]) { position: fixed; inset: 0; width: auto; margin: 0;
-  z-index: var(--z-takeover); }
+  z-index: var(--z-desk-full); }
 .desk-ready .ws:has(.desk-grid[data-solo="true"])::before { display: none; }
 .desk-ready .split:has(.desk-grid[data-solo="true"]) #wsGrip { display: none; }
 .desk-ready .chat #wsGrip::after { display: none; }
@@ -3928,7 +3980,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 
 #deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
   --desk-palette-gap: 12px; --desk-launcher-center: 27px;
-  position: fixed; inset: 0; z-index: calc(var(--z-takeover) + 1); pointer-events: none; }
+  position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
 /* The desk hangs off the workspace's left edge while the workspace is a column
    beside the chat -- but a fullscreen pane IS the window, and then there is no
    column to hang off. Written as an exclusion rather than as a second rule

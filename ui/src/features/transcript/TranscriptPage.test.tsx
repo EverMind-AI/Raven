@@ -798,7 +798,11 @@ describe("the turn's delivered files and file changes", () => {
     const second = grids[grids.length - 1]
     expect(second).toBeTruthy()
     expect(second?.classList.contains('single')).toBe(false)
-    expect(second?.querySelector('.atile .ds')).toBeNull()
+    /* The ARRANGEMENT changes; what a tile says does not. The description used
+       to be a single delivery's privilege, so the one sentence telling two
+       files apart disappeared exactly when there were two of them. */
+    expect([...second!.querySelectorAll('.atile .ds')].map((n) => n.textContent))
+      .toEqual(['Ready to publish', 'Ready to publish'])
   })
 
   it('restores a delivery from stored tool metadata after a reload', () => {
