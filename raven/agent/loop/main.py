@@ -78,6 +78,35 @@ _STORE_MAX_INFLIGHT: int = 4
 _STORE_DRAIN_BUDGET_S: float = 15.0
 
 
+_FILE_CHANGE_MAX_CHARS = 512 * 1024
+
+
+def _file_change_payload(change: Any) -> dict[str, Any] | None:
+    """One write as a plain mapping, or ``None`` when there is nothing to send.
+
+    Flattened here rather than passed as the dataclass: ``spine.events`` is
+    deliberately free of the tools package, and a mapping is also what goes on
+    the wire two hops later.
+
+    ``before`` is preserved as ``None`` when the file did not exist, because a
+    client renders a creation differently from a rewrite -- so this cannot use a
+    "falsy means absent" shortcut, an empty file having the same emptiness.
+    """
+    if change is None:
+        return None
+    after = getattr(change, "after", None)
+    path = getattr(change, "path", None)
+    if not isinstance(after, str) or not isinstance(path, str) or not path:
+        return None
+    before = getattr(change, "before", None)
+    if len(after) + len(before or "") > _FILE_CHANGE_MAX_CHARS:
+        return None
+    payload: dict[str, Any] = {"path": path, "after": after}
+    if before is not None:
+        payload["before"] = before
+    return payload
+
+
 def _first_line(text: str) -> str:
     """The one line of a tool error worth putting in front of a person."""
     for line in str(text or "").splitlines():
@@ -2369,10 +2398,13 @@ class AgentLoop:
                                 # Client-only, straight off the ToolOutput the
                                 # registry built: never shown to the model, and
                                 # ``getattr`` because a tool may still return a
-                                # bare str, which the registry wraps without
-                                # either field.
+                                # bare str, which the registry wraps without any
+                                # of these three.
                                 "metadata": getattr(result, "metadata", None),
                                 "diff": getattr(result, "diff", None),
+                                # Alongside the diff, for a surface that renders
+                                # the change itself rather than a unified form.
+                                "file_change": _file_change_payload(getattr(result, "file_change", None)),
                             },
                         )
                     model_text, blocks, attach_blocks = self._route_result_images(

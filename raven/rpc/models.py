@@ -148,6 +148,66 @@ class EpisodeStartEvent(_Strict):
     payload: EpisodeStartPayload
 
 
+class FileChange(_Strict):
+    """One file a tool call wrote, as contents rather than as a rendering of them.
+
+    Beside ``ToolCompletePayload.diff`` rather than instead of it. A client that
+    draws its own diff needs the text: a unified diff cannot be turned back into
+    the file, its context is limited, and an oversized rewrite is dropped from it
+    entirely.
+    """
+
+    path: str = Field(description="Absolute path of the file that was written.")
+    after: str = Field(description="The file's full contents after the write.")
+    before: str | None = Field(
+        default=None,
+        description=(
+            "The contents the write replaced. Absent when the file did not exist, so a client "
+            "renders a creation differently from a rewrite; an empty string means the file "
+            "existed and was empty. This is why the field cannot use a falsy-means-absent "
+            "shortcut -- an empty file has the same emptiness."
+        ),
+    )
+
+
+class MediaItem(_Strict):
+    """One file the agent produced as part of its reply, by local path."""
+
+    path: str = Field(description="Absolute path of the file on the machine the agent runs on.")
+    mime: str = Field(
+        description=(
+            "MIME type as declared by the emit site. Every producer declares "
+            "application/octet-stream today, so a client that needs the real type should sniff "
+            "the extension rather than trust this."
+        )
+    )
+    kind: str = Field(description='Coarse media class; "file" is the only value emitted today.')
+
+
+class MediaPayload(_Strict):
+    items: list[MediaItem] = Field(
+        description=(
+            "The files, in the order the turn produced them. Never empty: an event with nothing "
+            "to deliver is not emitted."
+        )
+    )
+
+
+class MediaEvent(_Strict):
+    """Files the reply carried, as paths rather than bytes.
+
+    A separate event rather than a field on ``message.complete``: media is emitted
+    before the reply text (the loop's own order) and a turn can produce it without
+    producing text at all, so hanging it off the completion would reorder it and
+    lose the text-free case.
+
+    Paths and not contents because both ends of this wire are on one machine.
+    """
+
+    type: Literal["media"]
+    payload: MediaPayload
+
+
 class NoticePayload(_Strict):
     kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
     detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
@@ -233,6 +293,7 @@ class ToolCompletePayload(_Strict):
             "content and nothing else, so a client without this draws an overwrite as all additions."
         ),
     )
+    file_change: FileChange | None = None
 
 
 class ToolCompleteEvent(_Strict):
@@ -307,6 +368,7 @@ TurnEvent = Annotated[
         MessageStartEvent,
         EpisodeStartEvent,
         NoticeEvent,
+        MediaEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -1061,6 +1123,10 @@ __all__ = [
     "MessageStartEvent",
     "EpisodeStartEvent",
     "NoticeEvent",
+    "FileChange",
+    "MediaEvent",
+    "MediaItem",
+    "MediaPayload",
     "NoticePayload",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",

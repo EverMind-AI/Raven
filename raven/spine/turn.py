@@ -24,6 +24,28 @@ class BusyPolicy(StrEnum):
     INTERRUPT = "interrupt"
 
 
+# A lane is a serial domain, so a turn that is to answer while another is
+# answering needs a lane of its own. The scheduler already keys lanes on
+# ``conversation`` and documents the case: a channel that keys by a
+# sub-conversation within a chat formats that key itself.
+#
+# Nothing in this repo formats such a key yet, so every lane here IS its own
+# session and ``session_of`` returns what it was given. It exists because a
+# consumer that maps a lane to the subscription it belongs to must not have to
+# know whether the lane happens to be a plain session key today.
+_LANE_SEP = "#"
+
+
+def session_of(lane: str) -> str:
+    """The session a lane belongs to; a main-agent lane *is* its session.
+
+    Splits on the **first** separator, which is what makes the encoding safe: a
+    session key is ``channel:chat_id`` and never contains one, while a handle is
+    free-form text the model chose and may contain anything at all.
+    """
+    return lane.split(_LANE_SEP, 1)[0]
+
+
 @dataclass(frozen=True)
 class SentinelExtras:
     """Sentinel's private per-turn extras namespace (canon v8).

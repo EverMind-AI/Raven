@@ -95,6 +95,11 @@ class ToolEvent:
     # tool could produce one (see ToolResult.diff). For an outlet that renders
     # the change; never shown to the model.
     diff: str | None = None
+    # COMPLETE only, and beside ``diff`` rather than instead of it: the same
+    # change as ``{path, after, before}`` for an outlet that draws its own diff
+    # and therefore needs the contents, not a rendering of them. Carried as a
+    # plain mapping so ``spine`` stays free of the tools package.
+    file_change: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

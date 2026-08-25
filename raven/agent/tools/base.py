@@ -7,6 +7,25 @@ from typing import Any
 from raven.utils.helpers import ContentPart
 
 
+@dataclass(frozen=True)
+class FileChange:
+    """One file's whole content before and after a write.
+
+    Whole contents rather than a rendered diff, because a surface that draws its
+    own -- an editor with a diff view -- needs the two versions, and cannot
+    recover them from a unified diff whose context is limited and which is
+    dropped entirely past a few hundred lines.
+
+    ``before`` is ``None`` when the file did not exist. That is a distinction, not
+    a missing value: a client shows a new file differently from a rewritten one,
+    and collapsing the two makes every creation look like a full replacement.
+    """
+
+    path: str
+    after: str
+    before: str | None = None
+
+
 @dataclass
 class ToolResult:
     """A tool's output split into the model-facing text and an optional
@@ -47,6 +66,10 @@ class ToolResult:
     blocks: list[ContentPart] | None = None
     metadata: dict[str, Any] | None = None
     diff: str | None = None
+    # The same change unrendered. A surface that draws its own diff needs the two
+    # versions, and cannot recover them from the unified form. Set beside
+    # ``diff`` by the same tools, from the same two strings they already hold.
+    file_change: "FileChange | None" = None
 
 
 class ToolOutput(str):
@@ -70,6 +93,7 @@ class ToolOutput(str):
     blocks: list[ContentPart] | None
     metadata: dict[str, Any] | None
     diff: str | None
+    file_change: "FileChange | None"
 
     def __new__(
         cls,
@@ -81,6 +105,7 @@ class ToolOutput(str):
         blocks: list[ContentPart] | None = None,
         metadata: dict[str, Any] | None = None,
         diff: str | None = None,
+        file_change: "FileChange | None" = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
@@ -89,6 +114,7 @@ class ToolOutput(str):
         out.blocks = blocks
         out.metadata = metadata
         out.diff = diff
+        out.file_change = file_change
         return out
 
 
