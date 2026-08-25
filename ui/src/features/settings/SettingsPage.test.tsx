@@ -13,6 +13,11 @@ import type { SettingsSnapshot, SettingsSource } from './types'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+/* The connections page is opened by importing its island, so standing in for
+   that module is how the manage button's second half is observed. */
+const connOpens = vi.hoisted(() => ({ n: 0 }))
+vi.mock('../connections/store', () => ({ open: () => { connOpens.n += 1 } }))
+
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
 vi.mock('../../shell/toast', () => ({
   show: (text: string) => { toastWriter.calls.push(['toast', text]) },
@@ -213,6 +218,56 @@ describe('settings island', () => {
     expect(switches[0]!.getAttribute('aria-checked')).toBe('true')
     expect(switches[1]!.getAttribute('aria-checked')).toBe('false')
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.channel')
+  })
+
+  /* The picker is legacy chrome, so the island cannot watch it: after a pick
+     it has to re-read the model from the source or the card keeps showing the
+     old one. Nothing exercised that callback, because the fixture had no
+     picker at all and pickDefault returned early. */
+  it('re-reads the model from the source after the picker changes it', async () => {
+    /* The new model is held OUTSIDE the snapshot object the store loaded.
+       Mutating that object instead would let the assertion pass without the
+       re-read, because the store holds it by reference. */
+    let picked = false
+    install(snap(), {
+      model: () => (picked ? 'anthropic/claude-sonnet-5' : 'claude-opus-4-5'),
+      pickModel: (_anchor, after) => {
+        picked = true
+        after()
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(screen.getByText('claude-opus-4-5')).toBeTruthy()
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('.pickm')!.click()
+    })
+    expect(screen.getByText('claude-sonnet-5')).toBeTruthy()
+  })
+
+  /* Both halves of the manage button, because neither was pinned: closeSet
+     could be cut and every test stayed green, and the page it lands on only
+     became a direct import when the round-trip verbs were retired. */
+  it.each([
+    ['gui.set.pg.channel'],
+    ['gui.set.pg.proact'],
+  ])('closes the dialog and opens connections, from %s', async (page) => {
+    const { shellCalls } = install()
+    await mount()
+    await act(async () => {
+      screen.getByText(page).click()
+    })
+    shellCalls.length = 0
+    connOpens.n = 0
+    const manage = screen.getAllByText('gui.set.chn.manage')
+    expect(manage).toHaveLength(1)
+    await act(async () => {
+      manage[0]!.click()
+    })
+    expect(shellCalls).toContainEqual(['closeSet', null])
+    expect(connOpens.n).toBe(1)
   })
 
   /* The language pick was a shell verb and is a source verb now, because what a

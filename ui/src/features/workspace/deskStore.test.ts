@@ -7,12 +7,18 @@ import * as desk from './deskStore'
 
 import type { Shell } from '../../shell/bridge'
 
+/* Recorded rather than ignored: the panel the desk lives in is legacy chrome,
+   so telling it to open and to shut is the desk's only way to be seen. It was
+   a no-op fake, which left both calls cuttable with the suite green. */
+const panelCalls: boolean[] = []
+
 function wire(): void {
+  panelCalls.length = 0
   const fakeShell: Shell = {
     T: (key) => key,
     confirmAsk: (_title, _body, _label, fn) => fn(),
     showPage: () => {},
-    workspaceSetOpen: () => {},
+    workspaceSetOpen: (open) => { panelCalls.push(open) },
   }
   window.RavenShell = fakeShell
   localStorage.clear()
@@ -71,6 +77,23 @@ describe('desk store', () => {
 
     desk.openDeskFile('/workspace/a.ts')
     expect(desk.getState().solo).toBeNull()
+  })
+
+  /* The desk cannot show itself: the panel it sits in belongs to the legacy
+     chrome. Opening the first pane has to raise it, and closing the last one
+     has to drop it, or the reader is left with an empty panel standing open. */
+  it('raises the panel for the first pane and drops it with the last', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    expect(panelCalls).toContain(true)
+
+    panelCalls.length = 0
+    desk.openDeskFile('/workspace/b.ts')
+    desk.closePane('file:/workspace/b.ts')
+    expect(panelCalls).not.toContain(false)
+
+    desk.closePane('file:/workspace/a.ts')
+    expect(desk.getState().panes).toHaveLength(0)
+    expect(panelCalls).toContain(false)
   })
 
   it('clears session panes without dropping subscribers', () => {
