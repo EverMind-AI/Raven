@@ -20,7 +20,7 @@ from raven.agent.subagent.backends.base import (
     SubagentActionAbortedError,
     SubagentNoAnswerError,
 )
-from raven.agent.tools.base import Continuation
+from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
@@ -305,7 +305,7 @@ class RavenLoopBackend:
                         thinking_blocks=response.thinking_blocks,
                     )
                 )
-                for tool_call in response.tool_calls:
+                for call_index, tool_call in enumerate(response.tool_calls):
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
                     # Before the call, not after: a tool that raises is still
@@ -327,9 +327,32 @@ class RavenLoopBackend:
                     # watches a running node, and an account that only exists
                     # once the answer does is not a live view of anything. Same
                     # reason the acp lane republishes on every update.
+                    blocks_call = getattr(result, "blocks_call", False)
+                    if blocks_call:
+                        # The siblings in this same response are refused with it:
+                        # a refused operation must not be reachable through a
+                        # call the model wrote before it knew the answer. They
+                        # are answered rather than merely skipped, because the
+                        # assistant message above advertises every call id and a
+                        # provider that finds one without a matching result
+                        # rejects the whole history -- which the next round would
+                        # hit on the path where the turn continues.
+                        for skipped in response.tool_calls[call_index + 1 :]:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": skipped.id,
+                                    "name": skipped.name,
+                                    "content": SKIPPED_AFTER_BLOCKED_CALL,
+                                }
+                            )
                     activity.note_transcript(messages[own_turns_from:])
-                    if getattr(result, "continuation", None) is Continuation.ABORT_TURN:
-                        raise SubagentActionAbortedError
+                    if blocks_call:
+                        # Two decisions: the call is refused either way, and the
+                        # continuation says whether the turn survives it.
+                        if getattr(result, "continuation", None) is Continuation.ABORT_TURN:
+                            raise SubagentActionAbortedError
+                        break
             else:
                 final_result = response.content
                 break

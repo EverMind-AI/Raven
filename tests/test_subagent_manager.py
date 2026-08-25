@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,8 @@ from pydantic import ValidationError
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
+from raven.agent.tools.base import Continuation
+from raven.agent.tools.shell import ExecTool
 from raven.config.schema import AgentDefaults, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
@@ -231,6 +234,126 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
             "status": "error",
         }
     ]
+
+
+class _RefusedThenInnocuousProvider(_StubProvider):
+    """One refused call and one the policy would happily run, in one response.
+
+    The sibling is deliberately not a second delete: a command the policy
+    refuses by itself cannot show whether the loop stopped, because it never
+    reaches the executor either way.
+    """
+
+    def __init__(self) -> None:
+        self.responses = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm file.txt"}),
+                    ToolCallRequest(id="call-b", name="exec", arguments={"command": "echo done"}),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="Took another route.", finish_reason="stop"),
+        ]
+
+    async def chat_with_retry(self, **kwargs) -> LLMResponse:
+        return self.responses.pop(0)
+
+
+async def test_a_blocked_call_stops_its_siblings_even_when_the_turn_goes_on(monkeypatch, tmp_path):
+    """The sub-agent loop has to read `blocks_call`, not only `continuation`.
+
+    Every refusal asks for ABORT_TURN today, and the raise cancels the siblings
+    on its way out -- so the two decisions only come apart under a refusal that
+    lets the turn continue. `ExecTool._terminal_error` is the one factory every
+    refusal goes through, so patching it drives the real policy gate rather than
+    a stub tool that could agree with the loop by construction.
+    """
+    original = ExecTool._terminal_error.__func__
+
+    def _refuse_but_keep_the_turn(cls, message):
+        return replace(original(cls, message), continuation=Continuation.CONTINUE)
+
+    monkeypatch.setattr(ExecTool, "_terminal_error", classmethod(_refuse_but_keep_the_turn))
+
+    provider = _RefusedThenInnocuousProvider()
+    manager = SubagentManager(provider=provider, workspace=tmp_path)
+    executor = _RecordingExecutor()
+    announcements: list[dict[str, str]] = []
+
+    async def _capture(task_id, label, task, result, origin, status, record_dir=None) -> None:
+        announcements.append({"result": result, "status": status})
+
+    monkeypatch.setattr(manager, "_announce_result", _capture)
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "delete file.txt",
+        "delete",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
+        executor,
+        manager.provider,
+        manager.model,
+    )
+
+    # The sibling was written before the model knew the first would be refused.
+    assert executor.commands == []
+    # The turn was not ended: the model got another go, and answered.
+    assert provider.responses == []
+    assert announcements == [{"result": "Took another route.", "status": "ok"}]
+
+
+async def test_every_advertised_call_gets_a_result_when_one_is_blocked(monkeypatch, tmp_path):
+    """A refused sibling still needs a tool result.
+
+    The assistant message advertises every call id, and an OpenAI-shaped
+    provider rejects a whole history that contains a `tool_call` without its
+    matching `tool` entry -- so skipping the siblings without answering them
+    would trade a loophole for a broken second request. Asserted on what the
+    loop actually sent the second time.
+    """
+    original = ExecTool._terminal_error.__func__
+
+    def _refuse_but_keep_the_turn(cls, message):
+        return replace(original(cls, message), continuation=Continuation.CONTINUE)
+
+    monkeypatch.setattr(ExecTool, "_terminal_error", classmethod(_refuse_but_keep_the_turn))
+
+    provider = _RefusedThenInnocuousProvider()
+    sent: list[list[dict]] = []
+    inner = provider.chat_with_retry
+
+    async def _record(**kwargs):
+        sent.append(kwargs["messages"])
+        return await inner(**kwargs)
+
+    provider.chat_with_retry = _record
+    manager = SubagentManager(provider=provider, workspace=tmp_path)
+
+    async def _capture(*a, **k) -> None:
+        return None
+
+    monkeypatch.setattr(manager, "_announce_result", _capture)
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "delete file.txt",
+        "delete",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
+        _RecordingExecutor(),
+        manager.provider,
+        manager.model,
+    )
+
+    second_request = sent[1]
+    advertised = {
+        call["id"] for m in second_request if m.get("role") == "assistant" for call in (m.get("tool_calls") or [])
+    }
+    answered = {m["tool_call_id"] for m in second_request if m.get("role") == "tool"}
+
+    assert advertised == {"call-a", "call-b"}
+    assert answered == advertised
 
 
 @pytest.mark.parametrize("bad", [0, -1])

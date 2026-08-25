@@ -27,6 +27,12 @@ class FileChange:
     before: str | None = None
 
 
+#: What a call the model wrote beside a blocked one is told. Every loop that
+#: cancels siblings says this, and it has to be one string: it reaches the model,
+#: so two versions of it are two different instructions.
+SKIPPED_AFTER_BLOCKED_CALL = "Error: Tool call was not executed because a prior safety decision terminated this action."
+
+
 class Continuation(StrEnum):
     """What should happen to the turn after this tool call.
 

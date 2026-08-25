@@ -32,7 +32,7 @@ from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.base import Continuation
+from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -3340,10 +3340,7 @@ class AgentLoop:
                                 messages,
                                 skipped_call.id,
                                 skipped_call.name,
-                                (
-                                    "Error: Tool call was not executed because a prior safety "
-                                    "decision terminated this action."
-                                ),
+                                SKIPPED_AFTER_BLOCKED_CALL,
                             )
                         break
                     # #1b Track consecutive same-tool deterministic failures
