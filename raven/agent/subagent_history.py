@@ -150,6 +150,11 @@ def add_turn_to_instance_log(
             handle=handle,
             session_key=str(meta.get("session_key") or ""),
             kind=kind,
+            # Both spellings, because the two lanes that dispatch write different
+            # ones: a spawn record's meta says `task_summary`, a graph node's
+            # says `node_summary`. A direct chat has neither, and must not: its
+            # meta describes one turn, not what the instance is for.
+            title=str(meta.get("task_summary") or meta.get("node_summary") or ""),
             prompt=prompt,
             messages=getattr(activity, "transcript", None),
             answer=answer,

@@ -35,6 +35,7 @@ describe('a dag call the model made', () => {
       status: 'pending',
       started_at: null,
       ended_at: null,
+      node_summary: null,
       prompt_template: 'summarise {{ scan.output }}',
       inputs: { voice: { file: 'docs/voice.md' }, topic: 'crows' },
     })

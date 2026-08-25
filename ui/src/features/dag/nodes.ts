@@ -32,6 +32,7 @@ interface ArgNode {
   subagent?: unknown
   instance?: unknown
   depends_on?: unknown
+  node_summary?: unknown
   prompt_template?: unknown
   inputs?: unknown
 }
@@ -61,6 +62,7 @@ const blank = (id: string): DagNode => ({
   status: 'pending',
   started_at: null,
   ended_at: null,
+  node_summary: null,
   prompt_template: null,
   inputs: null,
 })
@@ -78,6 +80,7 @@ export function fromArgs(args: unknown): DagNode[] {
       subagent: str(n.subagent),
       instance: str(n.instance) || null,
       depends_on: strs(n.depends_on),
+      node_summary: str(n.node_summary) || null,
       prompt_template: str(n.prompt_template) || null,
       inputs: inputsOf(n.inputs),
     }))
@@ -96,6 +99,9 @@ export function fromStarted(payload: unknown): DagNode[] {
       subagent: str(n.subagent),
       instance: str(n.instance) || null,
       depends_on: strs(n.depends_on),
+      /* The event carries it, and for a playbook load this is the first place
+         the graph exists at all -- the arguments named a playbook, not nodes. */
+      node_summary: str(n.node_summary) || null,
     }))
 }
 
@@ -109,6 +115,7 @@ export interface SnapshotRow {
   status?: unknown
   started_at?: unknown
   ended_at?: unknown
+  node_summary?: unknown
   prompt_template?: unknown
   inputs?: unknown
 }
@@ -129,6 +136,7 @@ export function fromSnapshot(files: unknown): DagNode[] {
       status: str(f.status) || 'pending',
       started_at: num(f.started_at),
       ended_at: num(f.ended_at),
+      node_summary: str(f.node_summary) || null,
       prompt_template: str(f.prompt_template) || null,
       inputs: inputsOf(f.inputs),
     }))
@@ -157,6 +165,7 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
       status: next.status || n.status,
       started_at: next.started_at ?? n.started_at,
       ended_at: next.ended_at ?? n.ended_at,
+      node_summary: next.node_summary ?? n.node_summary,
       prompt_template: next.prompt_template ?? n.prompt_template,
       inputs: next.inputs ?? n.inputs,
     }

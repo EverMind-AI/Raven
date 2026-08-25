@@ -396,7 +396,11 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
   kv('state', t('gui.deleg.d_state'),
     <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})} />)
-  kv('cost', t('gui.deleg.d_cost'), cost)
+  /* Only when there is something to say. Both clocks here can come up empty --
+     a call that finished carrying no duration, and a graph that stopped
+     without leaving an end stamp -- and a labelled row with an empty value
+     cell reads as a broken render rather than as an absent number. */
+  if (cost) kv('cost', t('gui.deleg.d_cost'), cost)
   return (
     <>
       <div ref={rowRef} className={'wrow' + (c.done ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}
@@ -467,6 +471,10 @@ function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): 
     rows.push(<div key={key + 'v'} className="v">{v}</div>)
   }
   const shared = n.instance && c.nodes.filter((x) => x.instance === n.instance).length > 1
+  /* Only once the header stopped being it. The id is what a dependency names,
+     what the run dir is keyed by and what a reader types into a search -- it did
+     not stop mattering when it stopped being the title. */
+  if (n.node_summary) kv('nid', t('gui.dag.node_id'), <span className="nid">{n.id}</span>)
   kv('agent', t('gui.deleg.d_agent'), (
     <>
       {n.subagent + (n.instance ? ' @' + n.instance : '')}
@@ -511,7 +519,11 @@ function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): 
   return (
     <div className="npanel">
       <div className="nhd">
-        <span className="nm">{n.id}</span>
+        {/* What the node was dispatched to do, which the model is required to
+            write. The id stays -- it is what a dependency names and what the run
+            dir is keyed by -- but one row down, among the machine-readable
+            fields, rather than standing in for a title it never was. */}
+        <span className="nm">{n.node_summary || n.id}</span>
         <span className="st">{t('gui.dag.st_' + st, undefined, st)}{n.started_at ? ' · ' + dag.took(n, Date.now()) : ''}</span>
         {c.runId ? (
           <button type="button" className="go"
@@ -528,11 +540,26 @@ function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): 
 const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
   useSeg(lane, c)
   const rowRef = useRef<HTMLDivElement | null>(null)
-  const elapsed = useTick(!c.done, c.t0)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
   const state = c.done ? (c.ok ? 'ok' : 'bad') : 'run'
-  const cost = c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
   const nodes = c.nodes
+  /* The graph's clock, not the call's. A backgrounded graph -- which is the
+     default -- returns as soon as it is submitted, so `c.ms` is that submit: a
+     number near zero, frozen there while the nodes run for minutes. The span
+     comes off the nodes, and ticks for as long as one of them has not stopped. */
+  const span = store.dagSpan(nodes)
+  const live = !!span && span.open
+  const running = useTick(live, span ? span.from : c.t0)
+  const cost = span
+    ? (live
+      ? (running >= 1000 ? store.durText(running) : '…')
+      /* A closed span with no end stamp is a cancel seen over the wire: every
+         node stopped and none of them said when. Blank rather than a made-up
+         number -- one reload reads the manifest, which does carry the stamps. */
+      : (span.to ? store.durText(span.to - span.from) : ''))
+    /* Before any node has started there is no graph clock yet, so this falls
+       back to the call's -- which is the right answer for exactly that window. */
+    : (c.done ? (c.ms ? store.durText(c.ms) : '') : '…')
   const tally = { ok: 0, bad: 0, skip: 0, run: 0 }
   nodes.forEach((n) => {
     const d = store.DOT_OF[n.status]
@@ -563,15 +590,33 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
     grid.push(<div key={key + 'k'} className="k">{label}</div>)
     grid.push(<div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>)
   }
-  /* The row says how much work and what shape it is; the agents are one line
-     down, because the count of them is almost always one and appending them made
-     the row too long to read at a glance. A playbook load keeps its name in
-     front: which playbook ran is the first thing about that call. */
   const shape = nodes.length ? dag.shape(nodes) : ''
-  const rowLabel = [c.label, shape].filter(Boolean).join(' · ') || t('gui.deleg.dag_title')
+  /* The line the graph was dispatched with, and nothing else. The shape used to
+     ride along here and now only sits one row down, under `scale`, where it
+     already was: a model writes a summary that names its own steps, so the row
+     read "...four-node DAG - 4 nodes - 3 layers - at most 2 at once" and said
+     the same thing twice before running out of room.
+
+     `c.runTitle` over `c.label` where they differ: a playbook load's label is
+     the playbook's directory name, and the graph's own line is what running it
+     dispatched. They are the same string for a model-composed graph. */
+  const rowLabel = c.runTitle || c.label || shape || t('gui.deleg.dag_title')
+  /* In full, because the row above truncates it. `.wrow .ar` is a one-line
+     ellipsis with no `title` attribute, so a summary longer than the row is
+     readable nowhere else on the card. Unguarded on purpose: the row IS
+     `c.runTitle` whenever there is one, so any comparison against it is
+     vacuous, and the duplication is the point -- one copy is legible. */
+  if (c.runTitle) kv('task', t('gui.deleg.d_task'), c.runTitle)
   kv('scale', t('gui.deleg.d_scale'),
     [shape, ...(agents.length ? [agents.join(' · ')] : [])].filter(Boolean).join(' · ')
-    || c.label || t('gui.deleg.dag_title'))
+    || c.runTitle || c.label || t('gui.deleg.dag_title'))
+  /* Which playbook ran, once the row above it stopped being the place for it.
+     A playbook's name is its directory -- how it is addressed, edited and
+     re-run -- so it is worth being able to read; what it is not is a
+     description of what running it dispatched, which is what the row says. */
+  if (c.name === 'load_playbook' && c.label && c.label !== c.runTitle) {
+    kv('book', t('gui.dag.playbook'), <span className="nid">{c.label}</span>)
+  }
   /* The receipt whenever the call failed, and the tally beside it. They are not
      two renderings of one fact: `okOf` calls a dag result bad only when its first
      word is error-shaped, which is the graph-level failure
@@ -582,7 +627,15 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
   kv('state', t('gui.deleg.d_state'),
     <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})}
       {...(extra ? { extra } : {})} />)
-  kv('cost', t('gui.deleg.d_cost'), cost)
+  /* Only when there is something to say. Both clocks here can come up empty --
+     a call that finished carrying no duration, and a graph that stopped
+     without leaving an end stamp -- and a labelled row with an empty value
+     cell reads as a broken render rather than as an absent number. */
+  if (cost) kv('cost', t('gui.deleg.d_cost'), cost)
+  /* The run's own id, which is what `dag.get` is keyed by, what a node's record
+     lives under and what a later graph names to depend on this one. Last,
+     because it is the one field here nobody reads unless they went looking. */
+  if (c.runId) kv('run', t('gui.dag.run_id'), <span className="nid">{c.runId}</span>)
   return (
     <>
       <div ref={rowRef} className={'wrow' + (c.done ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}

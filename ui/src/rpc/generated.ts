@@ -734,6 +734,14 @@ export interface InstanceRow {
    * Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row.
    */
   resumable?: boolean;
+  /**
+   * What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle.
+   */
+  title?: string;
+  /**
+   * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
+   */
+  runTitle?: string;
 }
 /**
  * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
@@ -1091,6 +1099,10 @@ export interface DagRunSnapshot {
   run_id: string;
   dir: string;
   finalized: boolean;
+  /**
+   * What the whole graph was dispatched for, in one line. Absent for a run written before the field existed. Per-node the equivalent is DagSnapshotNode.node_summary.
+   */
+  task_summary?: string;
   files: DagSnapshotNode[];
   terminal_outputs?: {
     node: string;
@@ -1137,6 +1149,10 @@ export interface DagRunStartedEvent {
      * The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.
      */
     tool_call_id?: string;
+    /**
+     * What the whole graph was dispatched for, in one line. Absent for a run started before the field existed. Per-node the equivalent is the node's node_summary.
+     */
+    task_summary?: string;
     nodes: {
       id: string;
       subagent: string;
@@ -1570,10 +1586,17 @@ export interface ConfigGetResult {
 export interface ConfigSetParams {
   key: string;
   value: JsonValue;
+  session_id?: string;
+  provider?: string;
+  scope?: 'session' | 'default';
 }
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
+  value?: string;
+  scope?: 'session' | 'default';
+  session_id?: string;
+  applies_to_session?: boolean;
 }
 export interface SubagentListParams {
   /**

@@ -1029,7 +1029,7 @@ describe('transcript island, the delegation verbs', () => {
      half is the contrast: with a reader the nodes take the reported states,
      without one they stay as seeded. */
   it('hydrates a restored dag card from dagRows', async () => {
-    wire({ dagRows: () => Promise.resolve([{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }]) })
+    wire({ dagRun: () => Promise.resolve({ files: [{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }] }) })
     const card = dagCard()
     await act(async () => { await Promise.resolve() })
     expect(nodeStates(card)).toEqual(['completed', 'failed'])
@@ -1059,9 +1059,9 @@ describe('transcript island, the delegation verbs', () => {
 
     const asked: string[] = []
     wire({
-      dagRows: (runId: string) => {
+      dagRun: (runId: string) => {
         asked.push(runId)
-        return Promise.resolve([{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }])
+        return Promise.resolve({ files: [{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }] })
       },
     })
     act(() => {
@@ -1408,6 +1408,204 @@ describe('transcript island, delegated calls', () => {
     expect($('.wk')?.textContent).toContain('topic-briefing')
   })
 
+  /* A node id is not a name a reader picked. A playbook namespaces every node
+     with its own name and a run tag, so the ids across one graph share their
+     first twenty-odd characters and the part that tells them apart is at the
+     end -- exactly where a box runs out of room. The line the model was
+     required to write is what the header shows now. */
+  it('heads a node panel with what the step is for, keeping its id as a field', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'compile the daily ai digest',
+        nodes: [
+          {
+            id: 'daily-ai-digest-36e275-scan-news',
+            subagent: 'Raven-Research',
+            node_summary: 'scan today AI news',
+            depends_on: [],
+          },
+          {
+            id: 'daily-ai-digest-36e275-compile-digest',
+            subagent: 'Raven',
+            node_summary: 'compile the findings into a digest',
+            depends_on: ['daily-ai-digest-36e275-scan-news'],
+          },
+        ],
+      })
+    })
+    const card = openDagCard()
+    const box = card.querySelector<HTMLElement>('.nd')
+    expect(box).not.toBeNull()
+    act(() => { box!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const panel = card.querySelector('.npanel') as HTMLElement
+
+    expect(panel.querySelector('.nhd .nm')!.textContent).toBe('scan today AI news')
+    /* Kept, not dropped: a dependency names a node by its id, and so does the
+       run dir it is stored under. */
+    expect(panel.querySelector('.rows .nid')!.textContent).toBe('daily-ai-digest-36e275-scan-news')
+  })
+
+  it('titles a graph row by what it dispatched, whatever else is on the arguments', () => {
+    /* Asserted on the labeller rather than through a card, because what is being
+       pinned is the thing a rendered row cannot show: the generic branch returns
+       the FIRST string on the arguments, and today a dag call happens to carry
+       exactly one. It would answer correctly by accident right up to the day the
+       tool gains a second string field, and then quietly stop. */
+    expect(store.actLabel('run_subagent_dag', {
+      confirm_note: 'approved by the operator',
+      task_summary: 'compile the daily ai digest',
+      nodes: [{ id: 'a' }],
+    })).toBe('compile the daily ai digest')
+  })
+
+  it('titles a playbook load by what the run was for, and keeps the playbook name', async () => {
+    /* The two answer different questions. A playbook name is its directory --
+       how it is addressed, edited and re-run; the graph line is what running it
+       dispatched. The row is the second, so the first moves one row down rather
+       than being dropped. */
+    /* Only `dag.get` carries the graph line for a load: the arguments named a
+       playbook, and the graph did not exist when they were written. */
+    wire({ dagRun: async () => ({ task_summary: 'compile the daily ai digest', files: [] }) })
+    act(() => {
+      const st = mount.step()
+      st.tool('load_playbook', { name: 'daily-ai-digest', params: {} })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r7',
+        nodes: [
+          { id: 'daily-ai-digest-36e275-scan-news', subagent: 'Raven-Research', depends_on: [] },
+          {
+            id: 'daily-ai-digest-36e275-compile',
+            subagent: 'Raven',
+            depends_on: ['daily-ai-digest-36e275-scan-news'],
+          },
+        ],
+      })
+    })
+    const card = openDagCard()
+    await act(async () => { await Promise.resolve() })
+
+    expect($('.wk .wrow .ar')?.textContent).toContain('compile the daily ai digest')
+    expect([...card.querySelectorAll('.dgr .v')].map((v) => v.textContent)).toContain('daily-ai-digest')
+  })
+
+  it('says only what the graph was for on the row, and the shape one line down', () => {
+    /* The model writes a summary that names its own steps, so appending the
+       shape said the same thing twice and pushed the sentence out of the row. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'AI news pipeline: scan in parallel, then merge',
+        nodes: [
+          { id: 'scan', subagent: 'Raven-Research', node_summary: 'scan', depends_on: [] },
+          { id: 'merge', subagent: 'Raven', node_summary: 'merge', depends_on: ['scan'] },
+        ],
+      })
+    })
+    const card = openDagCard()
+
+    expect($('.wk .wrow .ar')?.textContent).toBe('AI news pipeline: scan in parallel, then merge')
+    /* Not dropped, moved: the shape is still on the card, under `scale`. */
+    expect(card.querySelector('.dgr')!.textContent).toContain('gui.dag.count')
+  })
+
+  it('keeps the run id on the card', () => {
+    /* What `dag.get` is keyed by, what a node record lives under, and what a
+       later graph names to depend on this one. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      }).done(true, "DAG 20260825T051102805861Z-871b6ab4: 1 node done", 5)
+      st.seal()
+    })
+    const card = openDagCard()
+
+    expect(card.querySelector('.dgr')!.textContent).toContain('20260825T051102805861Z-871b6ab4')
+  })
+
+  it('reports how long the graph took, not how long the call took', () => {
+    /* `run_subagent_dag` is backgrounded by default, so the call returns as soon
+       as the run is submitted -- five milliseconds here. The nodes ran for three
+       minutes, and that is the number the card had been hiding. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [
+          { id: 'a', subagent: 'Raven', node_summary: 'first', depends_on: [] },
+          { id: 'b', subagent: 'Raven', node_summary: 'second', depends_on: ['a'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r4',
+        nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }, { id: 'b', subagent: 'Raven', depends_on: ['a'] }],
+      })
+      mount.dagFeed('dag.node_updated',
+        { run_id: 'r4', node: 'a', status: 'completed', started_at: 1_000_000, ended_at: 1_060_000 })
+      mount.dagFeed('dag.node_updated',
+        { run_id: 'r4', node: 'b', status: 'completed', started_at: 1_060_000, ended_at: 1_180_000 })
+      st.seal()
+    })
+    const card = openDagCard()
+
+    const shown = card.querySelector('.dgr')!.textContent as string
+    expect(shown).toContain(store.durText(180_000))
+    expect(shown).not.toContain(store.durText(5))
+  })
+
+  /* The value beside a named key in the field grid, which is a flat run of
+     alternating `.k` / `.v` cells rather than a row per pair. */
+  const dagField = (card: HTMLElement, key: string): string | null => {
+    const cells = [...card.querySelectorAll<HTMLElement>('.dgr > *')]
+    const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
+    return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
+  }
+
+  it('carries the graph line into the fields, in full, where the row cannot show it', () => {
+    /* `.wrow .ar` is a one-line ellipsis with no `title` attribute (page.css),
+       so a summary longer than the row is readable nowhere else on the card.
+       The field has to be unguarded to land: the row IS the summary whenever
+       there is one, so any comparison against the row is vacuous. */
+    const line = 'scan every ai newsletter published today, dedupe the stories, then compile a ranked morning digest'
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: line,
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'scan', depends_on: [] }],
+      })
+    })
+    const card = openDagCard()
+
+    expect(dagField(card, 'gui.deleg.d_task')).toBe(line)
+  })
+
+  it('stops the clock on a graph that stopped without saying when', () => {
+    /* What a cancel looks like over the wire: the runner's transition for
+       `cancelled` carries neither stamp, so a node that took `started_at` from
+       its `running` event settles with `ended_at` still null. Reading that null
+       as "a node has not stopped" left the card counting up forever on the one
+       path with no end to count towards. Nothing at all until a reload, which
+       reads the manifest -- that does carry the stamps. A labelled row with an
+       empty value cell would read as a broken render, not as an absent
+       number. */
+    const started = Date.now() - 60_000
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'scan', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r9', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r9', node: 'a', status: 'running', started_at: started })
+      mount.dagFeed('dag.node_updated', { run_id: 'r9', node: 'a', status: 'cancelled' })
+    })
+    const card = openDagCard()
+
+    expect(dagField(card, 'gui.deleg.d_cost')).toBeNull()
+  })
+
   it('draws the graph at the card dims rather than the sheet ones', () => {
     /* The card sits in a 744px reading column and the sheet has the chat's whole
        width; drawing at the sheet's geometry would run the graph past the card's
@@ -1505,7 +1703,7 @@ describe('transcript island, delegated calls', () => {
        about what any step was asked -- while the identical card for a model-made
        call shows all of it from its own arguments. */
     wire({
-      dagRows: async () => [
+      dagRun: async () => ({ files: [
         { node: 'tb-scan', status: 'completed', subagent: 'scout', depends_on: [] },
         {
           node: 'tb-brief',
@@ -1515,7 +1713,7 @@ describe('transcript island, delegated calls', () => {
           prompt_template: 'write up {{ tb-scan.output }} in the house voice',
           inputs: { voice: { file: 'docs/voice.md' } },
         },
-      ],
+      ] }),
     })
     await act(async () => {
       const st = mount.step()

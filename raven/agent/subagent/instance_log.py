@@ -57,7 +57,7 @@ def transcript_path(session_dir: Path, agent: str, handle: str) -> Path:
     return instance_root(session_dir, agent) / f"{safe_path_segment(handle)}.jsonl"
 
 
-def _header(*, session_key: str, agent: str, handle: str, kind: str) -> dict[str, Any]:
+def _header(*, session_key: str, agent: str, handle: str, kind: str, title: str = "") -> dict[str, Any]:
     """The opening record, in the shape a session log opens with.
 
     ``key`` names the instance rather than the conversation, so two instances of
@@ -65,19 +65,32 @@ def _header(*, session_key: str, agent: str, handle: str, kind: str) -> dict[str
     ``opened_by`` is the lane that created the file and not a claim about the
     rest of it: an instance is reached through several, which is the reason this
     file exists.
+
+    ``title`` is what the dispatch that opened this instance said it was for --
+    a node's ``node_summary``, a spawn's ``task_summary``. It belongs on the
+    header rather than on the turn because it describes the instance, and it
+    lives here rather than in the instance registry because this file is already
+    addressed by ``(agent, handle)``: a reader that has a registry row has the
+    key to this file, while the registry would have to carry a copy that every
+    status write could drop. Omitted when the lane that opened the file has no
+    dispatch behind it (a direct chat, a hand-made instance) -- the reader falls
+    back to the handle rather than showing an empty line.
     """
     now = datetime.now().isoformat()
+    meta: dict[str, Any] = {
+        "session_key": session_key,
+        "agent": agent,
+        "handle": handle,
+        "opened_by": kind,
+    }
+    if title:
+        meta["title"] = title
     return {
         "_type": "metadata",
         "key": f"{session_key}#{agent}/{handle}",
         "created_at": now,
         "updated_at": now,
-        "metadata": {
-            "session_key": session_key,
-            "agent": agent,
-            "handle": handle,
-            "opened_by": kind,
-        },
+        "metadata": meta,
     }
 
 
@@ -131,6 +144,7 @@ def append_turn(
     handle: str,
     session_key: str,
     kind: str = "",
+    title: str = "",
     prompt: str | None = None,
     messages: list[dict[str, Any]] | None = None,
     answer: str | None = None,
@@ -152,9 +166,32 @@ def append_turn(
         return []
     turn = build_turn(prompt=prompt, messages=messages, answer=answer, error=error)
 
-    header = _header(session_key=session_key, agent=agent, handle=handle, kind=kind)
+    header = _header(session_key=session_key, agent=agent, handle=handle, kind=kind, title=title)
     _append(transcript_path(session_dir, agent, handle), turn, header=header)
     return turn
+
+
+def instance_title(session_dir: Path, agent: str, handle: str) -> str:
+    """What this instance was dispatched for, or ``""``.
+
+    Only the header is read: it is the first line of the file, so this costs one
+    small read however long the conversation got.
+    """
+    path = transcript_path(session_dir, agent, handle)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            first = fh.readline()
+    except OSError:
+        return ""
+    try:
+        row = json.loads(first)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(row, dict) or row.get("_type") != "metadata":
+        return ""
+    meta = row.get("metadata")
+    title = meta.get("title") if isinstance(meta, dict) else None
+    return title if isinstance(title, str) else ""
 
 
 def message_rows(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:

@@ -207,7 +207,20 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
       const ps = Array.isArray(a.paths) ? (a.paths as unknown[]).map((p) => String(p).split('/').pop()) : []
       return ps.length > 2 ? `${ps[0]} ×${ps.length}` : ps.join(' ')
     }
-    case 'spawn': return String(a.label || String(a.task || '').split('\n')[0])
+    case 'spawn': return String(a.task_summary || a.label || String(a.task || '').split('\n')[0])
+    /* The graph's own line, which the model is required to write. Not left to
+       the default branch below: it picks the first string in the arguments,
+       which for a dag call is whichever key pydantic happened to serialise
+       first, and for `load_playbook` is the playbook's directory name -- the
+       one thing about that call that is not what it dispatched. A playbook load
+       carries no summary in its arguments at all, so it stays empty here and
+       the card fills it in from `dag.get`. */
+    case 'run_subagent_dag': return s('task_summary')
+    /* The playbook's name, which is all its arguments carry -- the graph it
+       assembles does not exist yet, so what running it dispatched arrives later
+       from `dag.get` and lands on `runTitle`, not here. Spelled out rather than
+       left to the default branch, which picks whichever string comes first. */
+    case 'load_playbook': return s('name')
     case 'message': return a.channel ? '→ ' + s('channel') : s('content').split('\n')[0] as string
     case 'cron': return [a.action, a.cron_expr, a.every_seconds ? `${a.every_seconds}s` : '',
       s('message').split('\n')[0]].filter(Boolean).join(' · ')
@@ -259,7 +272,7 @@ export function stamp(when: number | string | Date): string {
    wrapped in the untrusted-content fence, whose `[BEGIN UNTRUSTED ...]` header
    is the first line. Anchored at the string start this matched only the
    unfenced form -- so every *restored* card failed to bind its run, and with no
-   run id it never asked `dagRows` for the node states. A live card looked right
+   run id it never asked `dagRun` for the node states. A live card looked right
    because its events had already filled it in; the same card after a refresh
    showed its node names with no status and a 0.0s clock. Still line-anchored
    rather than a bare search, so a run id is only read from a line that opens
@@ -270,6 +283,35 @@ export const dagRunIdFrom = (res: unknown): string | null =>
 export const DOT_OF: Record<string, string> = {
   pending: '', running: 'run', completed: 'ok',
   failed: 'bad', skipped: 'skip', interrupted: 'bad',
+}
+
+/* A graph node that has stopped, whatever it stopped as. `pending` and
+   `running` are the two that have not. */
+const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'])
+
+/* How long the GRAPH has been going, which is not how long the call took.
+   `run_subagent_dag` is backgrounded by default, so the call returns as soon as
+   the run is submitted: `c.ms` is that submit, a number near zero that never
+   moves again while the graph runs for minutes. The nodes carry the real clock.
+   `null` when no node has started -- there is nothing to report yet, and zero
+   would read as an answer.
+
+   `open` and a null `to` are two different facts and the caller needs both.
+   `open` means a node has not stopped, so the clock is still running. A null
+   `to` on a CLOSED span means every node stopped without leaving an end stamp,
+   which is what a cancel looks like over the wire: the transition the runner
+   publishes for `cancelled` and `skipped` carries neither stamp, so a node that
+   got `started_at` from its `running` event settles with `ended_at` still null.
+   Reading that as open is what makes a cancelled graph count up forever. */
+export function dagSpan(nodes: Array<{ status?: string; started_at?: number | null; ended_at?: number | null }>):
+  { from: number; to: number | null; open: boolean } | null {
+  const started = nodes.map((n) => n.started_at).filter((x): x is number => typeof x === 'number' && x > 0)
+  if (!started.length) return null
+  const from = Math.min(...started)
+  const open = nodes.some((n) => !NODE_SETTLED.has(String(n.status || 'pending')))
+  if (open) return { from, to: null, open }
+  const ended = nodes.map((n) => n.ended_at).filter((x): x is number => typeof x === 'number' && x > 0)
+  return { from, to: ended.length ? Math.max(...ended) : null, open }
 }
 
 /* ── lanes ─────────────────────────────────────────────────────────────── */
@@ -637,12 +679,17 @@ function bindRun(call: CallData): void {
 function hydrateDag(lane: Lane, call: CallData): void {
   bindRun(call)
   if (!call.runId || call.asked) return
-  const rows = source().dagRows
-  if (!rows) return
+  const read = source().dagRun
+  if (!read) return
   call.asked = true
   const id = call.runId
-  rows(id).then((list) => {
-    call.nodes = dagNodes.merge(call.nodes, dagNodes.fromSnapshot(list))
+  read(id).then((run) => {
+    call.nodes = dagNodes.merge(call.nodes, dagNodes.fromSnapshot(run?.files || []))
+    /* Only when the card has none. A model-composed graph put its line on the
+       arguments and has it from the first paint; a playbook load has nothing
+       until here. Letting the read win either way would replace a title that is
+       already on screen with the identical string on every hydrate. */
+    if (!call.runTitle) call.runTitle = String(run?.task_summary || '')
     openFirstFailure(call)
     bump(lane, call)
   }).catch(() => {
@@ -660,8 +707,9 @@ function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], displ
     label: actLabel(id.name, a, display), rowLabel: '',
     done: false, ok: true, ms: 0, res: '', truncated: false,
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
-    open: false, t0: Date.now(), runId: null, nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
+    open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
   }
+  if (kind === 'dag') c.runTitle = String(a.task_summary || '')
   if (kind === 'spawn') {
     const who = spawnAgentOf(a) ? String(spawnAgentOf(a)) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
     c.rowLabel = c.label ? `${who} · ${c.label}` : who

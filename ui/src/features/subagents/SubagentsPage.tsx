@@ -121,8 +121,14 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       }}
     >
       <span className="desk-status"><Mark status={instanceMark(it.status ?? undefined)} /></span>
-      <span className="nm" title={it.handle}>{it.nodeId || it.handle}</span>
-      <span className="source" title={it.runId || ''}>{it.runId || ''}</span>
+      {/* What it was asked, then what asked it. The handle is the fallback and
+          not a second line: it is a slug the runtime minted, and a row wearing
+          one is a row whose dispatch predates the summaries. */}
+      <span className="nm" title={it.title || it.handle}>{it.title || it.nodeId || it.handle}</span>
+      {/* Only for a row that came out of a graph. A spawn has no source to name,
+          and the run id it used to show here is a timestamp -- which is why the
+          absence is drawn as nothing rather than as an id. */}
+      {it.runTitle ? <span className="source" title={it.runTitle}>{it.runTitle}</span> : null}
     </div>
   )
   const state = instanceState(it.status ?? undefined)
@@ -133,10 +139,11 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       }}>
       <Mark status={instanceMark(it.status ?? undefined)} />
       <div className="bd">
-        <div className="nm" title={it.handle}>{it.nodeId || it.handle}</div>
+        <div className="nm" title={it.title || it.handle}>{it.title || it.nodeId || it.handle}</div>
         <div className="st">
           {it.status && state !== 'live' ? <span>{t('gui.ws.instance_' + state)}</span> : null}
           <span className="who">{it.agent}</span>
+          {it.runTitle ? <span className="from">{it.runTitle}</span> : null}
           <Tags it={it} />
         </div>
       </div>
@@ -413,6 +420,7 @@ function InstanceDetail(
   { s, open }: { s: AgentsState; open: Extract<OpenItem, { kind: 'instance' }> },
 ): JSX.Element {
   const row = s.instances.find((x) => x.agent === open.agent && x.handle === open.handle)
+  const shownName = row?.title || row?.nodeId || open.handle
   /* The same header chrome the run details use. Its own markup had no
      stylesheet behind it at all, which showed as an unsized back chevron the
      height of the panel and a name run together with its agent. */
@@ -421,17 +429,21 @@ function InstanceDetail(
       <div className="sahd">
         <Back />
         <div className="trow">
-          <b>{row?.nodeId || open.handle}</b>
+          <b>{shownName}</b>
           {/* The handle stays visible, in the slot this header already gives
               machine-readable detail: it is what a direct turn is addressed to,
-              so it is worth being able to read even when the node names it.
-              Only when it says something the title does not, though: a graph
-              that names a node's instance after the node itself made the header
-              read "synthesize synthesize". */}
-          {row?.nodeId && row.nodeId !== open.handle
+              and this header is the only place it appears -- the composer and
+              the pane header both take the title now. Suppressed only when the
+              name above already IS the handle, which a graph naming a node's
+              instance after the node itself produces: that read "synthesize
+              synthesize". Compared against what is DRAWN, not against `nodeId`:
+              a row whose node id equals its handle still has a title unlike
+              both, and testing `nodeId` there hid the address entirely. */}
+          {shownName && shownName !== open.handle
             ? <span className="sp">{open.handle}</span>
             : null}
           <span className="who">{open.agent}</span>
+          {row?.runTitle ? <span className="from">{row.runTitle}</span> : null}
           {row?.runId ? <span className="gr">{t('gui.ws.instance_of_graph')}</span> : null}
         </div>
       </div>
@@ -440,7 +452,7 @@ function InstanceDetail(
         ? (
           <InstanceComposer
             open={open}
-            name={row.nodeId || open.handle}
+            name={row.title || row.nodeId || open.handle}
             fail={store.sendFailOf(open.agent, open.handle)}
           />
         )

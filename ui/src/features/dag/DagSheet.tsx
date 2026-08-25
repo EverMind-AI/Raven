@@ -72,7 +72,10 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
   return (
     <>
       <div className="hd">
-        <span className="ttl">{t('gui.dag.title')}</span>
+        {/* What this run is for, in the model's own words. The generic word
+            was the title until there was a line to put here, and it said the
+            same thing on every graph the reader had ever watched. */}
+        <span className="ttl" title={d.task_summary || undefined}>{d.task_summary || t('gui.dag.title')}</span>
         <div className={d.done ? 'sum' : 'gist'}>{d.done ? summary(d) : gist(d)}</div>
         <button className="ic tipdn" data-tip={foldLabel} aria-label={foldLabel}
           onClick={() => store.fold(sess, !d.folded)}>

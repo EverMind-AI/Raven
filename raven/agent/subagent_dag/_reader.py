@@ -145,6 +145,12 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
         "run_id": run_id,
         "dir": rdir,
         "finalized": manifest is not None,
+        # What the whole graph was dispatched for, in the model's own words.
+        # Only from graph.json: the manifest records what each node did, and no
+        # node's line says what the run as a whole is. Read here rather than
+        # left in the file because this reader is what every surface asks; a run
+        # written before the field existed reports None, which reads the same as
+        # a run that has one and is empty.
         "task_summary": graph.get("task_summary"),
         "files": files,
         "terminal_outputs": [],

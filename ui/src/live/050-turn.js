@@ -207,6 +207,7 @@ function onEvent(ev) {
       order: started.map((n) => n.id),
       nodes: new Map(started.map((n) => [n.id, n])),
       summary: null, done: false, folded: false,
+      task_summary: p.task_summary || null,
     });
   } else if (ev.type === 'dag.node_updated') {
     dagFlowFeed(ev.type, p);

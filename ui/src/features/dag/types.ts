@@ -23,6 +23,12 @@ export interface DagNode {
   status: NodeStatus | string
   started_at: number | null
   ended_at: number | null
+  /* One line on what this step is for, written by whoever composed the graph.
+     Not a shortening of the template: the template is the instruction, this is
+     the intent, and the node id is neither -- a playbook namespaces it, so the
+     ids across one graph share their first twenty characters. Absent on a run
+     that predates the field, where the id stands in. */
+  node_summary?: string | null
   /* What the node was asked to do, before rendering. The rendered prompt is a
      different fact and lives behind `dag.node` -- this is the request, that is
      what happened. Absent on a run whose source could not supply it. */
@@ -54,6 +60,10 @@ export interface DagRun {
   done: boolean
   folded: boolean
   dir?: string | null
+  /* The line the graph was dispatched with, which is what the sheet is titled
+     by. Absent for a run started before the field existed, where the sheet
+     falls back to naming itself. */
+  task_summary?: string | null
 }
 
 /* Where one node's box goes, in the graph's own coordinates. */
