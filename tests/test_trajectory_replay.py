@@ -762,6 +762,10 @@ class _MarkerTool:
     name = "marker"
     description = "leaves a marker file"
     parameters = {"type": "object", "properties": {"note": {"type": "string"}}, "required": ["note"]}
+    # Three members Tool carries in this tree and upstream's stub predates: the
+    # registry reads `channels` when it builds the array, and the loop asks every
+    # call for its metadata owner. Same defaults as the base class.
+    channels = None
 
     def __init__(self, marker: Path):
         self._marker = marker
@@ -782,6 +786,15 @@ class _MarkerTool:
     blocking_interaction = False
     truncation_hint = None
     incomplete_hint = None
+
+    def metadata_owner(self, params):
+        return self
+
+    def take_metadata(self):
+        return None
+
+    def blocking_for(self, params) -> bool:
+        return self.blocking_interaction
 
     async def execute(self, note: str) -> str:
         self._marker.write_text(note, encoding="utf-8")

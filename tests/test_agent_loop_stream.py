@@ -373,7 +373,9 @@ async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
     response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
     assert provider.calls == 2
-    assert response.finish_reason == "stop"
+    # The reconnected stream carried no terminal reason either, and none is
+    # invented now; what this states is that the reconnect happened.
+    assert response.finish_reason == "unknown"
     assert response.content == "recovered"
     assert seen == ["recovered"]
 

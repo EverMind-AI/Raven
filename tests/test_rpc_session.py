@@ -22,13 +22,14 @@ from types import SimpleNamespace
 import pytest
 
 from raven.config.loader import load_config
-from raven.session.manager import SessionManager
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
+from raven.rpc.errors import TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (
+    _map_to_wire,
     register_session_methods,
+    session_archive,
     session_branch,
     session_close,
     session_create,
@@ -36,9 +37,11 @@ from raven.rpc.methods.session import (
     session_export,
     session_list,
     session_most_recent,
+    session_pin,
     session_resume,
     session_title,
 )
+from raven.session.manager import SessionManager
 
 _SESSION_ID_RE = re.compile(r"^tui:\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -922,7 +925,7 @@ async def test_session_clear_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_clear
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: k == key)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: k == key)
     with pytest.raises(TurnInProgressError):
         await session_clear({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -949,7 +952,7 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_undo
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: True)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: True)
     with pytest.raises(TurnInProgressError):
         await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -1131,7 +1134,7 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda key: True)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda key: True)
 
     session_key = "tui:20260622_120000_eeeeee"
     _write_session(tmp_path, session_key, [{"role": "user", "content": "hi"}])
@@ -1184,8 +1187,8 @@ async def test_session_resume_reports_the_model_the_loop_restored(tmp_path) -> N
     passing the session key down, so the bundle reports *this* session's model
     instead of the configured default.
     """
-    from raven.session.manager import SessionManager
     from raven.rpc.methods.session import session_resume
+    from raven.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path)
     record = sessions.get_or_create("tui:a")
@@ -2154,3 +2157,13 @@ async def test_session_title_answers_with_the_stored_form_not_the_argument(
     result = await session_title({"session_id": "tui:20260610_143052_ws", "title": "  Ship\n the   fix "})
 
     assert result["title"] == "Ship the fix"
+
+
+import inspect
+
+from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
+from raven.rpc.dispatcher import Dispatcher
+from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
+from raven.rpc.methods import session as session_module
+from raven.rpc.models import METHOD_MODELS
+from raven.utils.helpers import estimate_prompt_tokens

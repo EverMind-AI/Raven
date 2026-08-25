@@ -10,9 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from raven.rpc.methods.question import question_respond, register_question_methods
-from raven.rpc.question_broker import QuestionBroker, RoutingQuestionBroker
-from raven.rpc.methods.question import question_respond, register_question_methods
-from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError
+from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError, RoutingQuestionBroker
 
 CID = "telegram:123"
 PAGE_CID = "tui:abc123"
@@ -375,6 +373,8 @@ async def test_a_claim_dies_with_its_connection() -> None:
     assert connection.frame_sink_for(PAGE_CID) is None
     await scoped({"jsonrpc": "2.0", "method": "clarify.request", "params": {"conversation_id": PAGE_CID}})
     assert len(broadcast_frames) == 2
+
+
 async def test_undeliverable_question_fails_fast_to_default() -> None:
     """A surface that cannot render the question must not cost the full budget.
 

@@ -702,8 +702,8 @@ async def test_a_model_switch_before_the_first_message_writes_no_session_file(tm
     session's first real save. Persisting the model here used to manufacture a
     zero-message record, which ``/sessions list`` then showed as an untitled
     row for every switch made before saying anything."""
-    from raven.session.manager import SessionManager
     from raven.rpc.methods.config import _remember_session_model
+    from raven.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path)
     loop = SimpleNamespace(sessions=sessions)
@@ -717,8 +717,8 @@ async def test_a_model_switch_before_the_first_message_writes_no_session_file(tm
 
 
 async def test_a_model_switch_on_a_saved_session_is_persisted_at_once(tmp_path) -> None:
-    from raven.session.manager import SessionManager
     from raven.rpc.methods.config import _remember_session_model
+    from raven.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path)
     record = sessions.get_or_create("tui:saved")

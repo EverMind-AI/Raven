@@ -99,6 +99,7 @@ def _loads(raw: Any) -> Any:
         raw = parsed
     return raw
 
+
 MAX_QUESTIONS = 4
 """Cap on one call. Each question is its own round-trip, so an uncapped
 batch is an uncapped number of prompts in front of one user."""

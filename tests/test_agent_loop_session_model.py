@@ -51,7 +51,10 @@ def _loop(tmp_path) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         context_config=ContextConfig(),
-        skill_forge_config=SkillForgeConfig(),
+        # Push discovery, because that is what builds the skills segment and the
+        # gate these tests reach for. Upstream had no such switch and got the
+        # segment unconditionally; here the default is pull, which drops it.
+        skill_forge_config=SkillForgeConfig(discovery="push"),
     )
 
 
@@ -456,6 +459,7 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
         model="boot/model",
         context_config=ContextConfig(),
         skill_forge_config=SkillForgeConfig(
+            discovery="push",
             llm_gate_model="claude-haiku-4-5",
             llm_gate_provider="openrouter",
         ),
@@ -651,7 +655,7 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
         workspace=tmp_path,
         model="boot/model",
         context_config=ContextConfig(),
-        skill_forge_config=SkillForgeConfig(llm_gate_model="openai/gpt-5-mini"),
+        skill_forge_config=SkillForgeConfig(discovery="push", llm_gate_model="openai/gpt-5-mini"),
         provider_pool=ProviderPool(cfg),
     )
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
@@ -702,7 +706,7 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     loop.subagents._gate = asyncio.Semaphore(0)
 
     original_build = manager_mod.build_executor
-    manager_mod.build_executor = lambda cfg, workspace, owned_ids=None: _StubExecutor()
+    manager_mod.build_executor = lambda *args, **kwargs: _StubExecutor()
     try:
 
         async def _body(*args, **kwargs):

@@ -681,6 +681,8 @@ def test_the_request_source_carries_the_surface_into_the_turn_seed():
         text="hi",
     )
     assert turn_seed({"self": None, "req": undeclared, "session_key": "tui:c"})["surface"] is None
+
+
 def test_attempt_id_defaults_to_trace_id(trace_dir):
     """Without an open attempt, every turn is its own single-turn attempt."""
     with trace.span("session.turn", session_key="cli:a"):

@@ -9,13 +9,18 @@ raw arguments blob.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
-import asyncio
 
 import pytest
 
-from raven.agent.tools.ask_user import _MAX_JSON_LAYERS, AskUserTool, _normalize_questions
+from raven.agent.tools.ask_user import (
+    _MAX_JSON_LAYERS,
+    AskUserTool,
+    _normalize_options,
+    _normalize_questions,
+)
 from raven.agent.tools.base import ToolResult
 from raven.agent.tools.registry import ToolRegistry
 
@@ -135,10 +140,10 @@ async def test_execute_accepts_a_json_encoded_questions_argument():
     # the empty-questions guard passed it straight through to entry.get().
     tool, broker = _tool({"Which base branch?": "main"})
 
-    result = await tool.execute(questions='[{"question": "Which base branch?", "options": ["main"]}]')
+    result = await tool.execute(questions='[{"question": "Which base branch?", "options": ["main", "develop"]}]')
 
     assert isinstance(result, ToolResult)
-    assert broker.asked == [("Which base branch?", ["main"])]
+    assert broker.asked == [("Which base branch?", ["main", "develop"])]
     assert result.display_text == "answered: main"
 
 
@@ -174,13 +179,13 @@ async def test_json_encoded_options_reach_the_user_as_options():
     assert broker.asked == [("Which base?", ["main", "develop"])]
 
 
-@pytest.mark.asyncio
-async def test_a_lone_option_string_is_one_option_not_its_letters():
-    tool, broker = _tool({"Proceed?": "yes"})
-
-    await tool.execute(questions=[{"question": "Proceed?", "options": "yes"}])
-
-    assert broker.asked == [("Proceed?", ["yes"])]
+def test_a_lone_option_string_is_one_option_not_its_letters():
+    """Asserted on the normalizer, not through execute: upstream's contract
+    refuses a one-option question outright, so a lone string never reaches a
+    human either way. What must not happen is it arriving as three options.
+    """
+    assert _normalize_options("yes") == ["yes"]
+    assert _normalize_options('["yes", "no"]') == ["yes", "no"]
 
 
 @pytest.mark.asyncio
@@ -314,6 +319,8 @@ async def test_the_registry_path_does_not_rewrite_the_callers_arguments():
 
     assert broker.asked == [("Which base?", ["main", "develop"])]
     assert args == frozen
+
+
 def test_schema_advertises_only_fields_the_tool_reads():
     """Every declared field must reach the broker; a decorative one misleads.
 

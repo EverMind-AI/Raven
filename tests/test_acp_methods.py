@@ -709,9 +709,7 @@ class TestSessionInfoUpdate:
         rig.translator.settle_turn(session_id, "end_turn")
         await task
 
-        titles = [
-            u for u in rig.updates() if u.get("sessionUpdate") == "session_info_update"
-        ]
+        titles = [u for u in rig.updates() if u.get("sessionUpdate") == "session_info_update"]
         assert [t["title"] for t in titles] == ["Hi there"]
 
     async def test_an_unchanged_title_is_not_reannounced(self, rig):

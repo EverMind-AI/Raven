@@ -273,7 +273,6 @@ def register(app: typer.Typer) -> None:
         )
         from raven.agent.tools._deliverables import DeliverableStore
         from raven.config.paths import get_deliverables_path
-
         from raven.providers.pool import ProviderPool
 
         # No cron_service here: with the REPL gone this process is never a
