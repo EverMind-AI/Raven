@@ -7,10 +7,13 @@ material -- so the channel is a generic option list with one entry carrying
 never be asked to switch a model.
 
 Two of raven's own facts are asserted here as *visible* rather than merely true:
-the switch is process-wide, and it is refused during a turn. Both are stated in
-the option's ``description``, which the schema declares as text for the client to
-display -- so a person reads the caveat where they make the choice, not in a
-document they will not open.
+the switch is scoped to the calling session, and a running turn keeps the binding
+it entered with rather than refusing the change. Both are stated in the option's
+``description``, which the schema declares as text for the client to display --
+so a person reads the caveat where they make the choice, not in a document they
+will not open. Both read the other way round until v0.1.13 moved the model onto a
+per-session binding, and the description said so for a while after it stopped
+being true.
 """
 
 from __future__ import annotations
@@ -130,11 +133,20 @@ class TestTheOffer:
             "description": "Claude Sonnet 5",
         }
 
-    async def test_a_catalogue_that_already_qualifies_its_ids_is_not_qualified_twice(self):
-        """Measured against the real catalogue, which does qualify them: the
-        fixtures above use bare ids, so nothing here would have caught
-        ``anthropic/anthropic/claude-opus-5`` -- a value ``config.set`` refuses
-        and a dropdown nobody can use."""
+    async def test_a_catalogue_that_already_qualifies_its_ids_still_leads_with_the_slug(self):
+        """The doubled prefix used to be the bug; now it is the contract.
+
+        The old rule was "do not prefix an id that already carries one", because
+        ``anthropic/anthropic/claude-opus-5`` was a value ``config.set`` refused.
+        What refused it was sending the whole string as the model; ``set_model``
+        splits the leading segment into ``provider`` now, so the runtime sees the
+        canonical id and the double is never stored. Declining to prefix is what
+        turned out to be unsafe: it left ten registry pairs whose leading segment
+        was some other provider's slug, which is a different account.
+
+        ``TestAgainstTheRealSetter`` is where the round trip is asserted; this
+        pins the wire shape it depends on.
+        """
         call, _ = _caller(
             _catalogue(
                 model="anthropic/opus-5",
@@ -153,8 +165,11 @@ class TestTheOffer:
         option = await model_option(call)
 
         values = [o["value"] for group in option["options"] for o in group["options"]]
-        assert values == ["anthropic/opus-5", "anthropic/sonnet-5"]
-        assert option["currentValue"] == "anthropic/opus-5"
+        assert values == ["anthropic/anthropic/opus-5", "anthropic/anthropic/sonnet-5"]
+        assert option["currentValue"] == "anthropic/anthropic/opus-5"
+        assert [o["name"] for group in option["options"] for o in group["options"]] == ["opus-5", "sonnet-5"], (
+            "the doubling is on the wire only; the displayed name is still the bare tail"
+        )
         assert [group["group"] for group in option["options"]] == ["anthropic"], (
             "the current model resolved inside its own group, so no separate Current group is needed"
         )
@@ -335,10 +350,12 @@ class TestApplying:
             await set_model(call, session_id="acp:s1", value="opus-5")
         assert calls == []
 
-    async def test_the_session_id_is_passed_so_a_running_turn_can_refuse_it(self):
-        """``config.set`` guards on ``is_session_busy``. Swapping the provider
-        under a running request is the failure that guard exists for, and this
-        layer must not route around it by omitting the id."""
+    async def test_the_session_id_is_passed_so_the_switch_scopes_to_that_session(self):
+        """``config.set`` sends no ``scope``, so the session id is what makes the
+        switch this session's rather than the installation's. Omitting it would
+        widen a change the caller narrowed. It is no longer what lets a running
+        turn refuse the switch -- that guard went with the per-session binding,
+        and a running turn keeps the binding it entered with."""
         call, calls = _caller()
 
         await set_model(call, session_id="acp:busy", value="anthropic/opus-5")
@@ -383,3 +400,24 @@ class TestAgainstTheRealSetter:
 
         assert [s["provider"] for s in sent] == ["anthropic", "openrouter"]
         assert [s["value"] for s in sent] == ["claude-opus-4-5", "anthropic/claude-haiku-4-5"]
+
+    def test_the_leading_segment_is_the_slug_for_every_provider(self) -> None:
+        """The round trip, over the registry rather than over two examples.
+
+        ``stored_model_id`` declines to prefix an id that already carries a
+        prefix the provider accepts, and rewrites a slug to its canonical
+        spelling. Both are right for storage and lossy for a value that has to
+        be split back: ten pairs left a leading segment that was not the slug,
+        so ``set_model`` would have named the wrong account or one that does not
+        exist.
+        """
+        from raven.acp.config_options import _qualified
+        from raven.providers.registry import PROVIDERS
+
+        lossy = [
+            (spec.name, prefix)
+            for spec in PROVIDERS
+            for prefix in [*(getattr(spec, "skip_prefixes", ()) or ()), ""]
+            if _qualified(spec.name, f"{prefix}some-model").partition("/")[0] != spec.name
+        ]
+        assert lossy == [], f"the split would name the wrong provider for {lossy}"
