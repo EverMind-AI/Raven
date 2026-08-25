@@ -10,8 +10,9 @@ the notification so a frontend that prefers to answer by request_id can.
 Like ConfirmBroker it is transport-agnostic: constructed with a notification
 emit callable (bound to ``RpcServer.send_frame`` in production), and every
 fail-safe path (timeout, cancel, internal error, connection EOF via
-:meth:`cancel_all`) resolves to the prompt's ``default`` rather than raising —
-the agent loop must always get a string back.
+:meth:`cancel_all`, and a surface that reports the question as undeliverable)
+resolves to the prompt's ``default`` rather than raising — the agent loop must
+always get a string back.
 """
 
 from __future__ import annotations
@@ -25,6 +26,18 @@ from uuid import uuid4
 from loguru import logger
 
 SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
+
+DEFAULT_TIMEOUT_S = 600.0
+
+
+class QuestionUndeliverableError(Exception):
+    """A ``send_frame`` adapter could not put the question in front of anyone.
+
+    Raised rather than returned so the broker can tell "the surface refused
+    it" apart from "nobody has answered yet": an adapter that swallowed the
+    drop left the round-trip waiting out its whole budget on a question that
+    was never rendered.
+    """
 
 
 @dataclass
@@ -42,8 +55,13 @@ class QuestionBroker:
     concurrently.
     """
 
-    def __init__(self, send_frame: SendFrame) -> None:
+    def __init__(self, send_frame: SendFrame, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
         self._send_frame = send_frame
+        # The budget belongs to the surface, not to the caller: a chat channel
+        # and a rendered page wait out a silent user very differently. Callers
+        # may still override per question, which is what lets one batch share
+        # a single deadline across several round-trips.
+        self.default_timeout_s = timeout_s
         self._pending: dict[str, _PendingQuestion] = {}
         # Reverse index request_id -> conversation_id so :meth:`reply` can
         # accept either handle.
@@ -56,12 +74,25 @@ class QuestionBroker:
         prompt: str,
         choices: list[str] | None = None,
         default: str = "",
-        timeout_s: float = 600.0,
+        timeout_s: float | None = None,
+        header: str = "",
+        recommended: str = "",
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str:
         """Emit a ``clarify.request`` and await the matching answer.
 
         Returns ``default`` on timeout, cancellation, EOF
-        (:meth:`cancel_all`), or any internal error — never raises.
+        (:meth:`cancel_all`), an undeliverable question, or any internal
+        error — never raises.
+
+        ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
+        in the notification so a surface can show how long the question
+        stands. ``recommended`` is the option label to mark. ``header``,
+        ``index``, ``total`` and ``batch`` describe the question's place in a
+        batch so a surface can render the whole set and its progress while
+        still collecting one answer at a time.
 
         A turn is serial, so a second pending question for the same
         conversation is a programming error: we drop the stale one (fail-safe
@@ -82,6 +113,8 @@ class QuestionBroker:
         future: asyncio.Future = loop.create_future()
         self._pending[conversation_id] = _PendingQuestion(future=future, request_id=request_id, default=default)
         self._by_request[request_id] = conversation_id
+        if timeout_s is None:
+            timeout_s = self.default_timeout_s
         try:
             # ``clarify.request`` is the ui-tui frontend's existing multi-choice
             # prompt contract ({question, choices, request_id} -> ClarifyPrompt ->
@@ -96,11 +129,26 @@ class QuestionBroker:
                         "request_id": request_id,
                         "question": prompt,
                         "choices": choices or [],
+                        "header": header,
+                        "recommended": recommended,
+                        "timeout_s": timeout_s,
+                        "index": index,
+                        "total": total,
+                        "batch": batch if batch is not None else [{"question": prompt, "header": header}],
                     },
                 }
             )
             return await asyncio.wait_for(future, timeout_s)
         except (asyncio.TimeoutError, asyncio.CancelledError):
+            return default
+        except QuestionUndeliverableError as exc:
+            # Expected, not exceptional: the conversation has no live surface.
+            # warning, not exception, so a routine drop leaves no stack trace.
+            logger.warning(
+                "question_broker: question for {} is undeliverable ({}); failing safe to the default",
+                conversation_id,
+                exc,
+            )
             return default
         except Exception:  # noqa: BLE001 — fail-safe: the loop needs a string back
             logger.exception("question_broker: await_question failed for {}", conversation_id)
@@ -139,4 +187,4 @@ class QuestionBroker:
                 pending.future.set_result(pending.default)
 
 
-__all__ = ["QuestionBroker", "SendFrame"]
+__all__ = ["DEFAULT_TIMEOUT_S", "QuestionBroker", "QuestionUndeliverableError", "SendFrame"]

@@ -26,20 +26,20 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from raven.cli._helpers import load_runtime_config, make_provider
-from raven.providers import pin
 from raven.providers.auth import MissingCredentialsError
 from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
     ModelNotAvailableError,
-    ModelSwitchInTurnError,
 )
-from raven.tui_rpc.methods.turn import is_turn_active
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
@@ -280,10 +280,21 @@ def _set_model(
     raw_value: Any,
     agent_loop_factory: "AgentLoopFactory | None",
 ) -> dict:
-    """Switch the global model (and provider) and reassign the live loop.
+    """Switch the model this session runs on, or the default new ones start on.
 
-    Build the provider from the prospective config BEFORE persisting, so a
-    rebuild failure aborts cleanly with the on-disk model untouched.
+    Two scopes, because they answer different questions. With a
+    ``session_id`` (what the picker sends) the switch is scoped to that
+    session: no other session moves, and ``agents.defaults`` is left alone so
+    a new session still starts on the configured default. Pass
+    ``scope="default"``, or omit ``session_id``, to change that default
+    instead; sessions that already switched keep their own model.
+
+    Either way the provider is built before anything is persisted or applied,
+    so a rebuild failure aborts with the on-disk model untouched.
+
+    A switch during a turn is not refused. The running turn holds the binding
+    it started on for its whole tree, so the new model takes effect on the
+    session's next turn -- which is what a user asking mid-answer means.
     """
     if not isinstance(raw_value, str) or not raw_value:
         raise ConfigValidationError(
@@ -296,45 +307,52 @@ def _set_model(
             "config.set model provider must be a string",
             data={"field": "provider", "got": repr(new_provider)},
         )
-    # Bare `/model <name>` carries no provider; derive it from the model so a
-    # previously-forced provider does not silently mis-route the new model. The
-    # picker always sends one, so this is the hand-typed path. The rule itself is
-    # `providers.pin`, which `raven provider use` asks too.
-    if new_provider is None:
-        new_provider = pin.resolve(raw_value, pinned=_get_nested(_load_config(), "agents.defaults.provider") or "")
-        if new_provider is None:
-            raise ConfigValidationError(
-                f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
-                data={"field": "value", "got": raw_value},
-            )
+    # Required, not derived. A model id does not name whose credential serves
+    # it -- `openrouter` serving `anthropic/claude-haiku-4-5` and `anthropic`
+    # serving `claude-haiku-4-5` are both real and bill different accounts --
+    # and a prefix is LiteLLM routing syntax rather than evidence about a key.
+    # The picker sends one, `/model` refuses without one, and this is the same
+    # rule at the boundary where it can actually be enforced.
+    if not new_provider:
+        raise ConfigValidationError(
+            f"config.set model needs a provider: {raw_value!r} does not name whose credential serves it",
+            data={"field": "provider", "model": raw_value},
+        )
 
     # Stored the way every other surface stores it -- naming its provider -- so
     # the three cannot disagree about what was chosen. A hand-typed bare id used
     # to be written raw here while the wizard qualified the same input, which is
-    # the spelling drift the storage rule exists to end. `auto` names nobody,
-    # so there is no prefix to add.
-    if new_provider and new_provider != pin.AUTO:
-        raw_value = stored_model_id(new_provider, raw_value)
+    # the spelling drift the storage rule exists to end.
+    raw_value = stored_model_id(new_provider, raw_value)
 
     session_id = params.get("session_id")
-    if isinstance(session_id, str) and session_id and is_turn_active(session_id):
-        raise ModelSwitchInTurnError(
-            f"cannot switch model while session {session_id!r} has an active turn",
-            data={"session_id": session_id},
+    scope = params.get("scope")
+    if scope not in (None, "session", "default"):
+        raise ConfigValidationError(
+            "config.set model scope must be 'session' or 'default'",
+            data={"field": "scope", "got": repr(scope)},
         )
-
-    payload = _load_config()
-    previous = _get_nested(payload, "agents.defaults.model")
+    has_session = isinstance(session_id, str) and bool(session_id)
+    if scope == "session" and not has_session:
+        # Never widen a scope the caller narrowed: falling through to the
+        # default branch here would write agents.defaults and move every
+        # session that never switched. The TUI sends a session_id that is null
+        # until the first session.create resolves, so this is reachable.
+        raise ConfigValidationError(
+            "config.set model scope 'session' needs a session_id",
+            data={"field": "session_id", "got": repr(session_id)},
+        )
+    session_scoped = scope != "default" and has_session
 
     loop = agent_loop_factory() if agent_loop_factory is not None else None
-    built_provider = None
+    binding = None
     if loop is not None:
         runtime = load_runtime_config(None, None)
         runtime.agents.defaults.model = raw_value
         if new_provider is not None:
             runtime.agents.defaults.provider = new_provider
         try:
-            built_provider = make_provider(runtime)
+            binding = _build_binding(loop, runtime, raw_value, new_provider)
         except MissingCredentialsError as exc:
             # Carried through as the sentence the user needs. `typer.Exit`
             # subclasses RuntimeError, so this used to land in the branch below
@@ -350,20 +368,98 @@ def _set_model(
                 data={"model": raw_value, "error": str(exc)},
             ) from exc
 
+    if session_scoped:
+        if loop is None:
+            # Nothing was built, so nothing was validated -- do not report a
+            # switch that did not happen.
+            return {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
+        previous = loop.session_model(session_id)
+        loop.set_session_binding(session_id, binding)
+        _remember_session_model(loop, session_id, raw_value, new_provider)
+        return {
+            "applied": True,
+            "previous": previous,
+            "value": raw_value,
+            "scope": "session",
+            "session_id": session_id,
+            "applies_to_session": True,
+        }
+
+    # A default-scoped switch still moves the asking conversation when that
+    # conversation never chose a model of its own, because it reads the
+    # default. Answered here rather than inferred from the scope: the client
+    # cannot see which sessions have their own binding.
+    follows_default = None
+    if loop is not None and has_session:
+        has_own = getattr(loop, "has_session_binding", None)
+        if callable(has_own):
+            follows_default = not has_own(session_id)
+
+    payload = _load_config()
+    previous = _get_nested(payload, "agents.defaults.model")
     _set_nested(payload, "agents.defaults.model", raw_value)
     if new_provider is not None:
         _set_nested(payload, "agents.defaults.provider", new_provider)
     _save_config(payload)
 
     if loop is not None:
-        # Not a two-attribute assignment: the loop hands its provider to the
-        # subagent manager, the context engine and the consolidator at build
-        # time, and each keeps it. set_provider is what reaches them (and
-        # re-resolves the context window at adoption -- which for a parked
-        # switch happens long after this call returns).
-        loop.set_provider(built_provider, raw_value)
+        # Not a two-attribute assignment: the subagent manager, the context
+        # engine and the consolidator each hold a fallback for work that runs
+        # outside a turn, and this is what re-points them.
+        loop.set_default_binding(binding)
 
-    return {"applied": True, "previous": previous, "value": raw_value}
+    return {
+        "applied": True,
+        "previous": previous,
+        "value": raw_value,
+        "scope": "default",
+        "applies_to_session": follows_default,
+    }
+
+
+def _remember_session_model(loop: Any, session_key: str, model: str, provider_name: str | None) -> None:
+    """Persist the choice on the session, so a restart does not undo it.
+
+    Stored on the session record rather than in ``agents.defaults``: it is
+    this conversation's model, and a new conversation must still start on the
+    configured default.
+
+    Written in memory unconditionally, saved only for a session that already
+    has a file. ``session.create`` is lazy -- it mints a key and writes
+    nothing until the session's first real save -- so saving here would
+    manufacture a record with zero messages for anyone who runs ``/model``
+    before saying anything, and ``/sessions list`` would grow an untitled row
+    per switch. The choice still reaches disk: it rides the session's first
+    real save. ``session.title`` guards the identical case the same way.
+    """
+    sessions = getattr(loop, "sessions", None)
+    if sessions is None:
+        return
+    try:
+        session = sessions.get_or_create(session_key)
+        session.metadata["model"] = model
+        if provider_name:
+            session.metadata["provider"] = provider_name
+        if sessions.exists(session_key):
+            sessions.save(session)
+    except Exception:
+        logger.warning("could not persist the model on session {!r}", session_key)
+
+
+def _build_binding(loop: Any, runtime: Any, model: str, provider_name: str | None) -> Any:
+    """One provider per (vendor, model), reused across sessions and switches.
+
+    Building one imports LiteLLM and writes vendor env vars, so a session
+    flipping between two models must not pay for it twice. The pool is the
+    loop's; without one (an older wiring, a test) fall back to building
+    directly.
+    """
+    from raven.providers.binding import ModelBinding
+
+    pool = getattr(loop, "provider_pool", None)
+    if pool is not None:
+        return pool.bind(model, provider_name)
+    return ModelBinding(make_provider(runtime), model)
 
 
 def register_config_methods(

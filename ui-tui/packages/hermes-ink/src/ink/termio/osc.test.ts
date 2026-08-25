@@ -4,11 +4,15 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-{hermes-agent,ink}.txt.
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { env, supportsOsc52Clipboard } from '../../utils/env.js'
 
-import { shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
+import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
+
+import { clipboardDebugEnabled, setClipboard, shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
+
+vi.mock('../../utils/execFileNoThrow.js', () => ({ execFileNoThrow: vi.fn() }))
 
 describe('shouldEmitClipboardSequence', () => {
   it('suppresses local multiplexer clipboard OSC by default', () => {
@@ -99,6 +103,57 @@ describe('supportsOsc52Clipboard', () => {
 // than mocking copyNative inside setClipboard) matches the package's
 // existing style — tests pass env/terminal as arguments instead of using
 // vi.mock — and gives broader coverage of the env x terminal matrix.
+describe('RAVEN_TUI clipboard env aliases', () => {
+  it('honours the RAVEN_TUI spelling of the OSC 52 override', () => {
+    // The defect this closes: `/copy`'s own failure hint tells the user to
+    // set RAVEN_TUI_FORCE_OSC52, and every other env knob in this repo uses
+    // that prefix -- but only the upstream HERMES_TUI names were ever read,
+    // so following the hint changed nothing.
+    expect(
+      shouldEmitClipboardSequence({ RAVEN_TUI_FORCE_OSC52: '1', TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv)
+    ).toBe(true)
+    expect(
+      shouldEmitClipboardSequence({ RAVEN_TUI_FORCE_OSC52: '0', SSH_CONNECTION: '1' } as NodeJS.ProcessEnv)
+    ).toBe(false)
+  })
+
+  it('keeps reading the upstream HERMES_TUI names', () => {
+    // The vendored fork is still upstream code; an env var that worked
+    // before this change has to keep working after it.
+    expect(
+      shouldEmitClipboardSequence({ HERMES_TUI_FORCE_OSC52: '1', TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv)
+    ).toBe(true)
+  })
+
+  it('lets the RAVEN_TUI spelling win when both are set', () => {
+    // Pinning the precedence rather than leaving it to `??` ordering: this
+    // repo documents the RAVEN_TUI name, so that is the one a user who set
+    // both most recently meant.
+    expect(
+      shouldEmitClipboardSequence({
+        HERMES_TUI_FORCE_OSC52: '0',
+        RAVEN_TUI_FORCE_OSC52: '1',
+        TMUX: '/tmp/t,1,0'
+      } as NodeJS.ProcessEnv)
+    ).toBe(true)
+  })
+})
+
+describe('clipboardDebugEnabled', () => {
+  it('accepts either env prefix', () => {
+    // The same hint promises RAVEN_TUI_DEBUG_CLIPBOARD=1 explains a failed
+    // copy. It read HERMES_TUI_DEBUG_CLIPBOARD only, so the diagnostic the
+    // user was told to turn on stayed silent.
+    expect(clipboardDebugEnabled({ RAVEN_TUI_DEBUG_CLIPBOARD: '1' } as NodeJS.ProcessEnv)).toBe(true)
+    expect(clipboardDebugEnabled({ HERMES_TUI_DEBUG_CLIPBOARD: '1' } as NodeJS.ProcessEnv)).toBe(true)
+  })
+
+  it('stays off when neither is set', () => {
+    expect(clipboardDebugEnabled({} as NodeJS.ProcessEnv)).toBe(false)
+    expect(clipboardDebugEnabled({ RAVEN_TUI_DEBUG_CLIPBOARD: '' } as NodeJS.ProcessEnv)).toBe(false)
+  })
+})
+
 describe('shouldUseNativeClipboard', () => {
   it('returns false over SSH (native would write to remote clipboard)', () => {
     // Over SSH the user's terminal is on the local end of the pty;
@@ -193,5 +248,73 @@ describe('shouldUseNativeClipboard', () => {
     // (the module-level detected terminal), not null. Returns a boolean
     // without throwing.
     expect(typeof shouldUseNativeClipboard()).toBe('boolean')
+  })
+})
+
+describe('setClipboard path reporting', () => {
+  // The path is what a caller puts in front of the user, and inside tmux the
+  // environment cannot tell a load-buffer that worked from one that did not:
+  // both have TMUX set. So it has to come from the call, which means driving
+  // the real one with `tmux` stubbed rather than asserting on a predictor.
+  const run = vi.mocked(execFileNoThrow)
+  const realPlatform = process.platform
+
+  beforeEach(() => {
+    run.mockReset()
+    // SSH suppresses the native tool, so tmux and OSC 52 are the only paths
+    // left and the case is not decided by whatever this runner has installed.
+    vi.stubEnv('SSH_CONNECTION', '1')
+    vi.stubEnv('TMUX', '/tmp/tmux-1/default,1,0')
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '1')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    // One case forces the platform; restore it so the rest of the file, and any
+    // runner that is not Linux, are not left with it.
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+  })
+
+  it('names the tmux buffer when load-buffer succeeds', async () => {
+    run.mockResolvedValue({ stdout: '', stderr: '', code: 0 })
+
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: true, path: 'tmux-buffer' })
+  })
+
+  it('names osc52 when load-buffer failed and the sequence carried the text', async () => {
+    // A stale TMUX socket: the variable is set, the server is gone. The bytes
+    // went out as raw OSC 52, so telling the user to check tmux set-clipboard
+    // sends them to a setting that had nothing to do with it.
+    run.mockResolvedValue({ stdout: '', stderr: 'no server running', code: 1 })
+
+    const result = await setClipboard('probe')
+
+    expect(result.success).toBe(true)
+    expect(result.path).toBe('osc52')
+    expect(result.sequence).toContain(']52;c;')
+  })
+
+  it('waits for the first Linux probe before claiming a native path', async () => {
+    // A display server says a native tool could exist, not that one does. The
+    // first call used to report `native` while the probe was still running, so
+    // a machine with DISPLAY and no wl-copy/xclip/xsel was told its very first
+    // copy landed. Nothing had been written.
+    vi.stubEnv('DISPLAY', ':0')
+    vi.stubEnv('TMUX', '')
+    vi.stubEnv('SSH_CONNECTION', '')
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '0')
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    run.mockResolvedValue({ stdout: '', stderr: 'not found', code: 1 })
+
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: false, path: null })
+  })
+
+  it('reports no path when nothing took the text', async () => {
+    // Suppressing the sequence with the same override leaves a failed
+    // load-buffer as the only attempt, and success false has to agree.
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '0')
+    run.mockResolvedValue({ stdout: '', stderr: 'no server running', code: 1 })
+
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: false, path: null })
   })
 })

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1138,3 +1139,142 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     result = await session_export({"session_id": session_key})
 
     assert result["exported"] is True
+
+
+async def test_session_info_reports_this_sessions_model_not_the_default(monkeypatch) -> None:
+    """The picker and the status bar sit next to each other; reporting the
+    global default here would show two models for one conversation.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.tui_rpc.methods.session as session_mod
+
+    # MagicMock so the unrelated skills/tools enumeration in the bundle works;
+    # only ``session_model`` is under test.
+    loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
+    loop.session_model = lambda key: "vendor-a/model" if key == "tui:a" else "boot/model"
+    info = await session_mod._default_session_info(loop, session_mod.load_config(), "tui:a")
+
+    assert info["model"] == "vendor-a/model"
+    assert info["model_id"] == "vendor-a/model"
+
+
+async def test_session_info_without_a_session_reports_the_default() -> None:
+    """A session being created has no model of its own yet; the default is the
+    right answer, because that is what it will start on.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.tui_rpc.methods.session as session_mod
+
+    config = session_mod.load_config()
+    loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
+    loop.session_model = lambda key: "vendor-a/model"
+    info = await session_mod._default_session_info(loop, config, None)
+
+    assert info["model"] == config.agents.defaults.model
+
+
+async def test_session_resume_reports_the_model_the_loop_restored(tmp_path) -> None:
+    """The handler no longer restores anything -- the loop reads the stored model
+    on first ask, which is what makes the choice survive on every surface and not
+    only on the one that calls this handler. What the handler still owes is
+    passing the session key down, so the bundle reports *this* session's model
+    instead of the configured default.
+    """
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.session import session_resume
+
+    sessions = SessionManager(tmp_path)
+    record = sessions.get_or_create("tui:a")
+    record.metadata["model"] = "vendor-a/model"
+    sessions.save(record)
+
+    from unittest.mock import MagicMock
+
+    asked: list[str] = []
+    loop = MagicMock()
+    loop.sessions = sessions
+    # A real id, not the MagicMock default: the init bundle resolves a window
+    # from whatever the loop reports as its model.
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: (asked.append(key), "vendor-a/model")[1]
+
+    result = await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert asked == ["tui:a"], "the handler stopped passing the session key down"
+    assert result["info"]["model"] == "vendor-a/model"
+
+
+async def test_session_branch_carries_the_parents_model_to_the_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork continues its parent's conversation on its parent's model, and
+    keeps it across a restart.
+
+    Both halves matter and fail independently: dropping the binding hand-off
+    leaves the child running on the default in this process, and dropping the
+    record leaves it running on the default in the next one.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    src_key = "tui:20260610_143052_bb0001"
+    _write_session(tmp_path, src_key, [{"role": "user", "content": "hi"}])
+
+    sessions = SessionManager(tmp_path)
+    parent = sessions.get_or_create(src_key)
+    parent.metadata["model"] = "vendor-a/model"
+    parent.metadata["provider"] = "anthropic"
+    sessions.save(parent)
+
+    parent_binding = SimpleNamespace(provider="prov-a", model="vendor-a/model")
+
+    class _Loop:
+        def __init__(self) -> None:
+            self.sessions = sessions
+            self.bindings: dict[str, object] = {src_key: parent_binding}
+
+        def has_session_binding(self, key: str) -> bool:
+            return key in self.bindings
+
+        def binding_for_session(self, key: str) -> object:
+            return self.bindings.get(key, SimpleNamespace(provider="boot", model="boot/model"))
+
+        def set_session_binding(self, key: str, binding: object) -> None:
+            self.bindings[key] = binding
+
+    loop = _Loop()
+    result = await session_branch({"session_id": src_key}, agent_loop_factory=lambda: loop)
+
+    child_key = result["session_id"]
+    assert loop.bindings[child_key] is parent_binding, "the fork must run on its parent's model now"
+
+    reloaded = SessionManager(tmp_path).get_or_create(child_key)
+    assert reloaded.metadata["model"] == "vendor-a/model", "and after a restart"
+    assert reloaded.metadata["provider"] == "anthropic"
+
+
+async def test_session_delete_releases_the_sessions_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deleted session must not leave its override -- and the live provider
+    behind it -- held for the life of the process.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    key = "tui:20260610_100000_bb0002"
+    _write_session(tmp_path, key, [{"role": "user", "content": "hi"}])
+
+    cleared: list[str] = []
+
+    class _Loop:
+        sessions = None
+
+        def clear_session_binding(self, session_key: str) -> None:
+            cleared.append(session_key)
+
+    await session_delete({"session_id": key}, agent_loop_factory=lambda: _Loop())
+
+    assert cleared == [key]

@@ -21,6 +21,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop import main as agent_loop_main
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.binding import ModelBinding, use_binding
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -228,7 +229,7 @@ def test_no_configured_window_resolves_via_the_ladder_and_is_not_explicit(worksp
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=None)
 
-    assert agent._context_window_explicit is False
+    assert agent._configured_window is None
     assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
@@ -236,25 +237,24 @@ def test_a_configured_window_is_explicit_at_construction(workspace):
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=8192)
 
-    assert agent._context_window_explicit is True
+    assert agent._configured_window == 8192
     assert agent.context_window_tokens == 8192
 
 
-def test_refresh_context_window_is_a_noop_once_explicit(workspace, monkeypatch):
-    """A pin is a deliberate override; a later model switch must not discard it."""
+def test_a_pinned_window_outranks_the_model_a_session_switched_to(workspace, monkeypatch):
+    """A pin is a deliberate override; the model a session runs on cannot discard it."""
     _patch_live_openrouter_window(monkeypatch, 163840)
 
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=8192)
 
-    agent.model = "openrouter/deepseek/deepseek-v4-pro"
-    agent.refresh_context_window()
+    switched = ModelBinding(provider, "openrouter/deepseek/deepseek-v4-pro", agent._configured_window)
+    with use_binding(switched):
+        assert agent.context_window_tokens == 8192
 
-    assert agent.context_window_tokens == 8192
 
-
-def test_refresh_context_window_follows_the_new_model_when_not_explicit(workspace, monkeypatch):
-    """Without an explicit window, a ``/model`` switch re-walks the ladder for the new model.
+def test_the_window_follows_the_model_the_turn_is_bound_to(workspace, monkeypatch):
+    """Without an explicit pin, the window is whatever the turn's own model holds.
 
     The switch runs inside the running event loop, so the ladder is walked with
     ``allow_fetch=False`` -- an in-process cache entry of any age answers rather
@@ -273,10 +273,9 @@ def test_refresh_context_window_follows_the_new_model_when_not_explicit(workspac
         "context_length": 163840,
     }
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", time.time() - rates._OPENROUTER_CACHE_TTL - 1000)
-    agent.model = "openrouter/deepseek/deepseek-v4-pro"
-    agent.refresh_context_window()
-
-    assert agent.context_window_tokens == 163840
+    switched = ModelBinding(provider, "openrouter/deepseek/deepseek-v4-pro")
+    with use_binding(switched):
+        assert agent.context_window_tokens == 163840
 
 
 # --------------------------------------------------------------------------- #
@@ -320,9 +319,9 @@ def test_construction_on_an_openrouter_model_never_touches_the_network(workspace
     assert counter["calls"] == 0
 
 
-def test_refresh_context_window_on_an_openrouter_model_never_touches_the_network(workspace, monkeypatch, tmp_path):
-    """The other half: a ``/model`` switch inside the running event loop must not
-    freeze it on a synchronous fetch either."""
+def test_reading_the_window_for_an_openrouter_model_never_touches_the_network(workspace, monkeypatch, tmp_path):
+    """The window is read inside a running turn, so resolving it must not freeze
+    the event loop on a synchronous fetch."""
     from raven.providers import model_catalog_cache
 
     monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", tmp_path / "model-catalog.json", raising=False)
@@ -331,8 +330,7 @@ def test_refresh_context_window_on_an_openrouter_model_never_touches_the_network
     agent = _make_agent(workspace, provider, model="stub", window=None)
 
     counter = _forbid_network_client(monkeypatch)
-    agent.model = "openrouter/deepseek/deepseek-v4-pro"
-    agent.refresh_context_window()
-
-    assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    switched = ModelBinding(provider, "openrouter/deepseek/deepseek-v4-pro")
+    with use_binding(switched):
+        assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
     assert counter["calls"] == 0

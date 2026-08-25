@@ -12,7 +12,6 @@ Code table — frozen in `specs/tui-ipc.md` §4 (server-defined range -32000..-3
 | -32006 | skill_not_found               | skill_name not indexed           |
 | -32007 | skill_pin_conflict            | pin/unpin already in that state  |
 | -32008 | model_not_available           | model_id not routable            |
-| -32009 | model_switch_in_turn          | switch attempt while turn live   |
 | -32010 | config_field_readonly         | not on hot-changeable whitelist  |
 | -32011 | config_validation_error       | Pydantic / semver validation     |
 | -32012 | not_supported_in_v01          | hermes-only stub methods         |
@@ -102,11 +101,6 @@ class ModelNotAvailableError(RpcError):
     MESSAGE = "model_not_available"
 
 
-class ModelSwitchInTurnError(RpcError):
-    CODE = -32009
-    MESSAGE = "model_switch_in_turn"
-
-
 class ConfigFieldReadonlyError(RpcError):
     CODE = -32010
     MESSAGE = "config_field_readonly"
@@ -140,6 +134,11 @@ class NotDispatchCompatibleError(RpcError):
 # Follow-up extension range (-32016..-32049). -32016 is subscription
 # overflow; was incorrectly aliased to -32010 in early drafts — -32010 is
 # already ConfigFieldReadonlyError.
+class SessionTitleTooLongError(RpcError):
+    CODE = -32018
+    MESSAGE = "session_title_too_long"
+
+
 class SubscriptionCapacityExceededError(RpcError):
     CODE = -32016
     MESSAGE = "subscription_capacity_exceeded"
@@ -180,7 +179,6 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         SkillNotFoundError,
         SkillPinConflictError,
         ModelNotAvailableError,
-        ModelSwitchInTurnError,
         ConfigFieldReadonlyError,
         ConfigValidationError,
         NotSupportedInV01Error,
@@ -204,7 +202,6 @@ __all__ = [
     "SkillNotFoundError",
     "SkillPinConflictError",
     "ModelNotAvailableError",
-    "ModelSwitchInTurnError",
     "ConfigFieldReadonlyError",
     "ConfigValidationError",
     "NotSupportedInV01Error",

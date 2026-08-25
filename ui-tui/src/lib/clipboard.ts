@@ -3,6 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { type ClipboardPath } from '@hermes/ink'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -168,4 +169,93 @@ export async function writeClipboardText(
   }
 
   return false
+}
+
+/**
+ * Transcript line for a completed copy, naming the channel it actually took.
+ *
+ * Only the OSC 52 path can silently fail: the bytes reach the terminal and
+ * the terminal decides whether to honour them, which is a setting the user
+ * owns. Saying so there -- and not saying it where a native tool really did
+ * write the clipboard -- is what keeps the wording worth reading.
+ */
+/**
+ * How many characters a reader would say the text has.
+ *
+ * `String.length` counts UTF-16 code units, so it reports three emoji as six
+ * and a combining accent as two. Segmenter is the only built-in that counts
+ * what is on screen; the spread fallback at least collapses surrogate pairs.
+ */
+export function graphemeCount(text: string): number {
+  if (typeof Intl.Segmenter === 'function') {
+    let count = 0
+
+    for (const _ of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      count++
+    }
+
+    return count
+  }
+
+  return [...text].length
+}
+
+/** 'copied'/'sent' plus a correctly pluralised count. The verb is the caller's
+ *  because only the native and tmux paths actually wrote anything. */
+function counted(verb: string, charCount: number): string {
+  return `${verb} ${charCount} character${charCount === 1 ? '' : 's'}`
+}
+
+/** OSC 52 hands bytes to the terminal and the terminal decides whether to keep
+ *  them -- an oversized sequence is dropped without a word, and a 2000-row
+ *  drag-scroll selection is one half-megabyte escape sequence. So that path
+ *  reports what was sent; the paths that really wrote a clipboard say copied. */
+const verbFor = (path: ClipboardPath): string => (path === 'osc52' ? 'sent' : 'copied')
+
+export function copyResultNotice(charCount: number, path: ClipboardPath): string {
+  const head = counted(verbFor(path), charCount)
+
+  switch (path) {
+    case 'native':
+      return head
+
+    case 'osc52':
+      return `${head} via OSC 52 — if the paste comes up empty, allow clipboard access in your terminal`
+
+    case 'tmux-buffer':
+      return `${head} to the tmux buffer — reaching the system clipboard needs tmux set-clipboard`
+  }
+}
+
+/**
+ * Transcript line for an automatic copy-on-select write.
+ *
+ * This fires on every drag, so it stays terse -- except the first one of a
+ * session, which carries the path caveat. OSC 52 is the one path the terminal
+ * can still refuse, and the first copy is the only moment a user is looking
+ * for the reason a paste came up empty.
+ */
+export function copyOnSelectNotice(charCount: number, path: ClipboardPath, firstOfSession: boolean): string {
+  return firstOfSession ? copyResultNotice(charCount, path) : counted(verbFor(path), charCount)
+}
+
+/**
+ * Report copies for a TUI process, spending the path caveat once per session.
+ *
+ * The caller keeps one of these for as long as its component lives, which
+ * outlasts any single session -- so which sessions have already been told is
+ * state this has to own, rather than a boolean the caller flips. `sessionKey`
+ * is whatever identifies the current session to the caller; a resumed session
+ * reaching the same key has already had its caveat and does not repeat it.
+ */
+export function createCopyOnSelectReporter(): (charCount: number, path: ClipboardPath, sessionKey: string) => string {
+  const told = new Set<string>()
+
+  return (charCount, path, sessionKey) => {
+    const firstOfSession = !told.has(sessionKey)
+
+    told.add(sessionKey)
+
+    return copyOnSelectNotice(charCount, path, firstOfSession)
+  }
 }
