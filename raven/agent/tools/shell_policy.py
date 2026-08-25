@@ -124,6 +124,26 @@ _OPERATORS = ("|&", "&&", "||", ";;", ";", "&", "|", "(", ")", "`", "\n")
 # -I{}`` depend on.
 _WORD_OPERATORS = ("{", "}")
 _OPERATOR_ADJACENT = frozenset(" \t\r\n;&|()`")
+# What may sit immediately before a ``#`` for it to start a comment. Its own
+# set, deliberately not ``_OPERATOR_ADJACENT``: that one answers "is this an
+# operator boundary", which is a different question from "does a word start
+# here", and for ``)`` and a backtick the shell answers them differently.
+#
+#   $ bash -c 'echo X$(echo b)#; echo PWNED'   ->  Xb#   then  PWNED
+#   $ bash -c 'echo X`echo b`#; echo PWNED'    ->  Xb#   then  PWNED
+#
+# The ``#`` stays part of the word and the ``;`` after it still separates a
+# command, so cutting there would drop the rest of the line out of every check
+# while the shell went on running it.
+#
+# ``)`` cannot be settled without tracking ``$(``: after a *subshell* close,
+# ``(ls)# note``, bash really does read a comment. Left out rather than
+# guessed. That costs a false refusal on ``(ls)# a comment with an apostrophe``
+# -- the conservative direction, and a far rarer shape than the one it closes.
+#
+# ``${#PATH}``, ``$#`` and ``file#1`` are excluded by the same rule: a ``#``
+# glued to a word is part of it.
+_COMMENT_OPENS_AFTER = frozenset(" \t\r\n;&|(")
 
 
 def _operator_at(command: str, index: int) -> str | None:
@@ -192,6 +212,66 @@ def _split_on_operators(command: str) -> Iterator[str]:
     text = "".join(piece).strip()
     if text:
         yield text
+
+
+def executable_text(command: str) -> str:
+    """The command with its comments removed: what the shell would run.
+
+    Every safety check reads this rather than the raw text, so a comment cannot
+    decide the outcome in either direction -- it cannot break the parse of code
+    that is fine, and it cannot contribute a denied pattern to code that is.
+    The raw command still goes to the executor, the audit trail and the
+    approval prompt, which are about what the user asked for rather than about
+    what it does.
+
+    Quote and escape handling is the same walk :func:`_split_on_operators`
+    does, and for the same reason: those rules are what decide whether a ``#``
+    is a comment at all. A ``#`` opens one only outside quoting and at the
+    start of a word -- ``foo#bar``, ``${#PATH}`` and ``$#`` are ordinary text,
+    and cutting at every ``#`` would quietly shorten commands, which is how a
+    classifier stops seeing the half that matters.
+
+    An unterminated quote is left as it is. The comment before it is still
+    removed, but what follows stays broken, so the caller's ``shlex`` pass
+    still refuses it -- a well-formed comment does not license a command that
+    cannot be parsed.
+    """
+
+    out: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            out.append(char)
+            if char == "\\" and quote == '"' and index + 1 < len(command):
+                out.append(command[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            out.append(char)
+            out.append(command[index + 1])
+            index += 2
+            continue
+        if char == "#" and (not out or out[-1] in _COMMENT_OPENS_AFTER):
+            # To the end of the line, which is where the shell resumes reading.
+            newline = command.find("\n", index)
+            if newline == -1:
+                break
+            index = newline
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def _command_segments(command: str) -> Iterator[list[str]]:
@@ -866,15 +946,20 @@ class ShellCommandPolicy:
         hard-denied command: there is no prompt to explain.
         """
 
-        if not sandboxed and any(pattern.search(command) for pattern in self._deny_patterns):
+        # The same lexical view ``evaluate`` decided on. Read from the raw text,
+        # a comment can erase the family -- the delete short-circuit stops
+        # matching -- or name the wrong one, and the prompt then describes an
+        # operation the command does not perform.
+        executable = executable_text(command)
+        if not sandboxed and any(pattern.search(executable) for pattern in self._deny_patterns):
             return None
         try:
-            if not sandboxed and (_matches_recursive_delete(command) or _matches_system_power_command(command)):
+            if not sandboxed and (_matches_recursive_delete(executable) or _matches_system_power_command(executable)):
                 return None
             for name, matcher, escapes in self._approval_matchers:
                 if sandboxed and not escapes:
                     continue
-                if matcher(command):
+                if matcher(executable):
                     return name
         except Exception:
             # Mirrors ``evaluate``'s fail-closed branch, which turns a faulty
@@ -902,13 +987,19 @@ class ShellCommandPolicy:
         # tree walked away, the machine powered off. Inside a microVM the machine
         # in question IS the sandbox, which is what the sandboxed path is allowed
         # to skip -- and skipping it is the point of running one.
+        # One lexical view for every check below, including the matchers a
+        # surface registered: a comment that decides one of them and not the
+        # others is the same divergence in miniature.
+        executable = executable_text(command)
         if not sandboxed:
-            if any(pattern.search(command) for pattern in self._deny_patterns):
+            if any(pattern.search(executable) for pattern in self._deny_patterns):
                 return CommandDecision.HARD_DENY
         try:
-            if not sandboxed and (_matches_recursive_delete(command) or _matches_system_power_command(command)):
+            if not sandboxed and (_matches_recursive_delete(executable) or _matches_system_power_command(executable)):
                 return CommandDecision.HARD_DENY
-            if any(matcher(command) for _name, matcher, escapes in self._approval_matchers if escapes or not sandboxed):
+            if any(
+                matcher(executable) for _name, matcher, escapes in self._approval_matchers if escapes or not sandboxed
+            ):
                 return CommandDecision.REQUIRE_APPROVAL
         except Exception:
             # Matchers inspect untrusted command text and may be extended later.
@@ -922,6 +1013,7 @@ __all__ = [
     "ApprovalMatcher",
     "CommandDecision",
     "ShellCommandPolicy",
+    "executable_text",
     "set_surface_approval_families",
     "surface_approval_families",
 ]
