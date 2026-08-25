@@ -77,6 +77,16 @@ def _render_header(session: Session) -> str:
 def _render_message(msg: dict[str, Any]) -> str:
     role = msg.get("role", "")
     heading = _ROLE_HEADINGS.get(role, f"## {role or 'message'}")
+    if role == "user" and (origin := msg.get("origin")):
+        # A turn the runtime opened, not a person typing. Its text is internal
+        # prose -- a sub-agent's announce carries an untrusted fence, an instance
+        # handle and an instruction not to repeat either to the user -- and under
+        # "User" an export asserts that someone typed it.
+        #
+        # The text is kept, unlike on the served page: this file IS the audit
+        # trail, and a record that drops what it cannot attribute is worse than
+        # one that attributes it correctly.
+        heading = f"## ⚙️ Runtime ({origin})"
     if role == "tool":
         name = msg.get("name") or msg.get("tool_call_id") or ""
         suffix = f": `{name}`" if name else ""

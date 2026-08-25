@@ -49,7 +49,7 @@ class TestDefaults:
         assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
-        assert c.top_k == 5
+        assert c.top_k == 2
         assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source);
         # disabled until an endpoint is set.
@@ -66,6 +66,7 @@ class TestDefaults:
 
     def test_skill_forge_public_defaults(self) -> None:
         c = SkillForgeConfig()
+        assert c.discovery == "pull"
         assert c.embedding_model == "default"
         assert c.embedding_url == "http://localhost:1357"
         assert c.embedding_api_key is None

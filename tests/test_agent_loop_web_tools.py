@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.subagent.manager import SubagentManager
+from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.web import WebSearchTool
 from raven.providers.base import LLMProvider, LLMResponse
@@ -61,10 +61,6 @@ def _loop(workspace: Path, **kw) -> AgentLoop:
     return AgentLoop(provider=_StubProvider(), workspace=workspace, model="stub", **kw)
 
 
-async def _noop(*_a, **_kw) -> None:
-    return None
-
-
 def test_web_search_is_withheld_without_a_key(workspace) -> None:
     loop = _loop(workspace)
 
@@ -91,16 +87,16 @@ def test_the_env_var_alone_registers_web_search(workspace, monkeypatch: pytest.M
     assert loop.tools.has("web_search")
 
 
-def test_the_subagent_surface_applies_the_same_rule(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     # A sub-agent reaching for a search it cannot run reports the failure to its
     # caller, and that text lands in the parent turn.
     #
-    # The manager builds its registry inside the run and keeps no reference, so
-    # the names are observed as they are registered. The collector opens before
-    # the manager is constructed and drops nothing on the floor: were a
-    # registration ever to happen outside a window, it would land in the previous
-    # run's list and be caught, rather than vanishing and leaving an assertion
-    # that passes over an empty list.
+    # The backend builds its registry inside `run` and keeps no reference, so the
+    # names are observed as they are registered. The collector opens before the
+    # backend is constructed and drops nothing on the floor: were a registration
+    # ever to happen outside a window, it would land in the previous run's list
+    # and be caught, rather than vanishing and leaving an assertion that passes
+    # over an empty list.
     registered: list[list[str]] = []
     real = ToolRegistry.register
 
@@ -110,14 +106,11 @@ def test_the_subagent_surface_applies_the_same_rule(workspace, monkeypatch: pyte
         registered[-1].append(tool.name)
 
     monkeypatch.setattr(ToolRegistry, "register", _spy)
-    # The run announces its result through the spine, which is not wired here and
-    # is not what this is about.
-    monkeypatch.setattr(SubagentManager, "_announce_result", _noop)
 
     async def _names(**kw) -> list[str]:
         registered.append([])
-        manager = SubagentManager(provider=_StubProvider(), workspace=workspace, model="stub", **kw)
-        await manager._run_subagent_inner("t1", "task", "label", {}, None, manager.provider, manager.model)
+        backend = RavenLoopBackend(provider=_StubProvider(), model="stub", agent_home=workspace / "home", **kw)
+        await backend.run("task", task_id="t1", workspace=workspace, executor=None)
         return registered[-1]
 
     import asyncio

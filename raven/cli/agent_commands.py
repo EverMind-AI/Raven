@@ -12,6 +12,7 @@ and exits non-zero.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -20,6 +21,7 @@ from rich.text import Text
 
 from raven import __logo__
 from raven.cli._helpers import (
+    build_model_routing,
     load_runtime_config,
     make_provider,
     parse_fake_now,
@@ -31,7 +33,7 @@ from raven.cli._plugin_stack import (
     build_plugin_tools,
     maybe_build_memory_backend,
 )
-from raven.utils.helpers import sync_workspace_templates
+from raven.utils.helpers import project_slug, sync_workspace_templates
 
 console = Console()
 
@@ -122,7 +124,17 @@ def register(app: typer.Typer) -> None:
         ),
         continue_: bool = typer.Option(False, "--continue", "-c", help="Continue the most recent cli session"),
         resume: str | None = typer.Option(None, "--resume", "-r", help="Resume session by bare id or unique prefix"),
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+        workspace: str | None = typer.Option(
+            None,
+            "--workspace",
+            "-w",
+            help="Working directory for this run (default: current directory)",
+        ),
+        home: str | None = typer.Option(
+            None,
+            "--home",
+            help="Agent home directory (memory, skills, transcripts)",
+        ),
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
@@ -152,6 +164,7 @@ def register(app: typer.Typer) -> None:
 
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
@@ -164,7 +177,7 @@ def register(app: typer.Typer) -> None:
         # that subsequent load_raven_config() reads from --config, not the
         # default ~/.raven/config.json. Otherwise skill_forge / sentinel
         # from --config are silently ignored.
-        config = load_runtime_config(config, workspace)
+        config = load_runtime_config(config, home=home)
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
@@ -173,7 +186,31 @@ def register(app: typer.Typer) -> None:
         sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
-        session_manager = SessionManager(config.workspace_path)
+        # Model routing (config.routing). Returns the provider unchanged when
+        # routing is disabled, and wraps it for the knn backend so routed model
+        # names reach their own endpoints.
+        router, provider = build_model_routing(config, provider)
+        # Sessions group by launch directory here, the way Claude Code groups
+        # by project: one terminal session belongs to the checkout it was
+        # started in. The gateway passes no slug -- one daemon serves every
+        # project, so its grouping is the channel instead.
+        launch_dir = Path.cwd()
+        session_manager = SessionManager(
+            config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
+        )
+        explicit_workdir = None
+        if workspace:
+            try:
+                explicit_workdir = validate_override(workspace, config.workspace_path)
+            except ValueError as e:
+                raise typer.BadParameter(str(e)) from e
+        workdir_resolver = WorkdirResolver(
+            WorkdirPolicy.LAUNCH_DIR,
+            agent_home=config.workspace_path,
+            launch_dir=Path.cwd(),
+            explicit_workdir=explicit_workdir,
+            sessions=session_manager,
+        )
 
         # New-session-by-default: independent one-shots don't bleed into each other.
         if resume is not None:
@@ -181,7 +218,9 @@ def register(app: typer.Typer) -> None:
 
             session_id = resolve_session(session_manager, resume)
         elif continue_:
-            recent = session_manager.find_most_recent_chat_id("cli")
+            # Scoped to this checkout: resuming must not reopen a conversation
+            # started elsewhere just because it is the newer one.
+            recent = session_manager.find_most_recent_chat_id("cli", this_project_only=True)
             if recent is None:
                 console.print("[dim]no previous cli session — starting fresh[/dim]")
                 recent = new_chat_id()
@@ -232,6 +271,8 @@ def register(app: typer.Typer) -> None:
             ec_config,
             registry=plugin_registry,
         )
+        from raven.agent.tools._deliverables import DeliverableStore
+        from raven.config.paths import get_deliverables_path
 
         from raven.providers.pool import ProviderPool
 
@@ -250,6 +291,9 @@ def register(app: typer.Typer) -> None:
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            router=router,
+            agents=config.subagents.agents,
+            playbook_config=config.playbooks,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
@@ -259,8 +303,8 @@ def register(app: typer.Typer) -> None:
             ask_user_config=config.tools.ask_user,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
+            workdir_resolver=workdir_resolver,
             mcp_servers=config.tools.mcp_servers,
-            disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
@@ -277,6 +321,7 @@ def register(app: typer.Typer) -> None:
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
             plugin_tools=plugin_tools,
+            deliverables=DeliverableStore(get_deliverables_path()),
         )
         agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
         attach_sentinel_spawn(sentinel_runner, agent_loop)

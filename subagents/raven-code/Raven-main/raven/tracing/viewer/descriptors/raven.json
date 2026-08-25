@@ -1,0 +1,22 @@
+[
+  { "type": "session.turn", "label": "Turn", "render": "custom:sessionTurn" },
+  { "type": "llm.call", "label": "Model Call", "subtitle": "{llm.provider} / {llm.model}", "usage": true, "render": "custom:llmCall" },
+  {
+    "type": "tool.call",
+    "label": "Tool Call",
+    "subtitle": "{tool.name}",
+    "status": [{ "when": "attr:tool.error", "label": "Tool Error" }],
+    "panels": [
+      { "title": "Tool Input", "source": "artifact:tool.input", "pick": "params", "render": "json" },
+      { "title": "Tool Output", "source": "artifact:tool.output", "pick": "result", "render": "json" }
+    ]
+  },
+  { "type": "subagent.call", "label": "Subagent Dispatch", "render": "custom:subagentCall" },
+  { "type": "skill.read", "label": "Skill", "render": "custom:skillRead" },
+  { "type": "skill.rewrite", "label": "Query Rewrite", "subtitle": "{skill.rewrite.query_preview}" },
+  { "type": "skill.gate", "label": "Skill Gate", "subtitle": "{skill.gate.selected_count}/{skill.gate.candidate_count} selected" },
+  { "type": "context.curate", "label": "Context Curation" },
+  { "type": "memory.recall", "label": "Memory Recall", "render": "custom:memoryRecall" },
+  { "type": "memory.store", "label": "Memory Store", "render": "custom:memoryStore" },
+  { "type": "memory.feedback", "label": "Memory Feedback", "render": "custom:memoryFeedback" }
+]

@@ -71,9 +71,16 @@ PYINJECT
 # ── 4. run the agent ───────────────────────────────────────────────────
 PROMPT="${1:-Use the image-gen skill to generate a watercolor painting of a fox sitting in autumn leaves, save it to ./fox.png}"
 
+# --home points the agent at this directory's staged skill pool; --workspace is
+# where the run writes its output. They are two different directories now, and
+# the working directory may not be agent home itself.
+OUT_DIR="$DEMO_DIR/output"
+mkdir -p "$OUT_DIR"
+
 cd "$REPO_ROOT"
 exec uv run raven agent \
     --config "$TMPCONFIG" \
-    --workspace "$DEMO_DIR" \
+    --home "$DEMO_DIR" \
+    --workspace "$OUT_DIR" \
     --no-markdown \
     -m "$PROMPT"

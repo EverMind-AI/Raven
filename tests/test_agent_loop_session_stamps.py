@@ -96,3 +96,141 @@ async def test_persisted_messages_carry_timestamp_not_turn_fields(workspace):
         assert m.get("timestamp"), f"missing timestamp: {m}"
         assert "received_at" not in m, f"received_at should be dropped: {m}"
         assert "turn_id" not in m, f"turn_id should be dropped: {m}"
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_turn_is_marked_on_disk_as_one(workspace):
+    """A re-injected result is a user entry the RUNTIME wrote, and the stored
+    line has to say so.
+
+    Without the mark it is an ordinary user message, and the only reader that
+    can tell the difference is one watching live (which hears
+    ``subagent.delivered``). A reload has nothing to go on and draws the
+    injection as a question the user asked -- prompt-injection fence and all.
+    The private spelling must not survive the write: it exists to stay out of
+    the provider payload, and ``session.resume`` puts the plain one on the wire.
+    """
+    agent = _make_agent(workspace)
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="tui", chat_id="chat1", sender_id="subagent", chat_type=ChatType.DM),
+        text="[BEGIN UNTRUSTED subagent #ab12cd34 - ...]\n3 completed\n[END UNTRUSTED subagent #ab12cd34]",
+        delegated={"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"},
+    )
+
+    out = await agent._process_message(req, origin=Origin.SUBAGENT)
+    assert out is not None
+
+    msgs = _persisted_messages(workspace)
+    users = [m for m in msgs if m.get("role") == "user"]
+    assert len(users) == 1, users
+    assert users[0]["delegated"] == {"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"}
+    assert "_delegated" not in users[0]
+    # The text is still there: the model reads it on its next turn. Only the
+    # reader must not read it as prose.
+    assert "3 completed" in users[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_turn_carries_no_delegation_mark(workspace):
+    """The mark means something, so it must be absent from a real question."""
+    agent = _make_agent(workspace)
+    await agent._process_message(_make_msg("what is the status"))
+    for m in _persisted_messages(workspace):
+        assert "delegated" not in m, m
+        assert "_delegated" not in m, m
+
+
+@pytest.mark.asyncio
+async def test_the_user_message_is_stamped_at_turn_start_not_turn_end(workspace):
+    """The regression that made every restored fold read "1s".
+
+    ``_save_turn`` runs after the turn completes, so left alone it stamps the
+    user message and the final answer with the same clock read. A restored
+    transcript derives the turn's duration from exactly that gap, so the user
+    entry must carry the wall clock at which the message *arrived*.
+    """
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 8, 13, 12, 0, 0)
+    ticks = {"n": 0}
+
+    def fake_now() -> datetime:
+        ticks["n"] += 1
+        return base + timedelta(seconds=ticks["n"])
+
+    agent = AgentLoop(
+        provider=StubProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+        now_fn=fake_now,
+    )
+    out = await agent._process_message(_make_msg("hello"))
+    assert out is not None
+
+    msgs = _persisted_messages(workspace)
+    user_ts = next(m["timestamp"] for m in msgs if m.get("role") == "user")
+    answer_ts = next(m["timestamp"] for m in reversed(msgs) if m.get("role") == "assistant")
+    assert user_ts < answer_ts, (
+        f"user message must be stamped when it arrived, before the answer: {user_ts} !< {answer_ts}"
+    )
+
+
+class ScriptedProvider(LLMProvider):
+    """Plays back a fixed list of responses, one per call."""
+
+    def __init__(self, script):
+        super().__init__(api_key="test")
+        self._script = list(script)
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        return self._script.pop(0)
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_file_tools_diff_is_stored_on_its_tool_entry(workspace):
+    """The live tool event was the diff's only carrier, so a reloaded page
+    could never number a change again. The stored tool entry keeps it -- under
+    the plain key, with the in-flight private spelling gone."""
+    from raven.providers.base import ToolCallRequest
+
+    provider = ScriptedProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="write_file", arguments={"path": "a.txt", "content": "one\ntwo\n"})
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=3,
+        restrict_to_workspace=True,
+    )
+    out = await agent._process_message(_make_msg("write it"))
+    assert out is not None
+
+    msgs = _persisted_messages(workspace)
+    tool_entry = next(m for m in msgs if m.get("role") == "tool")
+    assert "_diff" not in tool_entry
+    assert "+one" in (tool_entry.get("diff") or ""), f"stored tool entry carries no diff: {tool_entry}"

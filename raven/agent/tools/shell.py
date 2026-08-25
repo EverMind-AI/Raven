@@ -3,13 +3,15 @@
 import os
 import re
 import shlex
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
-from raven.agent.tools.base import Tool, ToolResult
+from raven.agent import workdir
+from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
@@ -43,6 +45,22 @@ class _ApprovalTurn:
     denied_digests: frozenset[str] = frozenset()
 
 
+# What the reader is being asked about, per family. A constant string was here
+# before -- "Delete files using a shell command" -- which was accurate only while
+# deletion was the one family registered, and became wrong the moment a surface
+# registered more. The fallback is deliberately vague rather than a guess: a
+# prompt that names the wrong reason is worse than one that names none.
+_APPROVAL_DESCRIPTIONS: dict[str, str] = {
+    "delete_command": "Delete files using a shell command",
+    "publish_command": "Publish or push work to a remote",
+    "install_command": "Install software, which runs code from the network",
+    "remote_exec_command": "Run a command on, or copy files to, another machine",
+    "credential_command": "Read or change stored credentials",
+    "destructive_vcs_command": "Discard uncommitted work in this repository",
+    "fetch_side_effect": "Download to a file, upload data, or run what it downloads",
+}
+
+
 class ExecTool(Tool):
     """Tool to execute shell commands."""
 
@@ -60,11 +78,19 @@ class ExecTool(Tool):
         path_append: str = "",
         executor: SandboxExecutor | None = None,
         extra_deny_patterns: list[str] | None = None,
+        extra_allowed_dirs: tuple[Path, ...] = (),
+        *,
+        follow_binding: bool = True,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        # `rm` is absent here on purpose: the policy classifies it from tokens
+        # (`_matches_recursive_delete` hard-denies a recursive one, everything
+        # else goes to approval). A regexp here cannot tell `rm -rf /` from
+        # `rm -f a.py b.json`, and denying both means the agent cannot clean up
+        # after itself -- with no prompt offered, because hard deny outranks
+        # approval.
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",  # del /f, del /q
             r"\brmdir\s+/s\b",  # rmdir /s
             r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
@@ -83,12 +109,35 @@ class ExecTool(Tool):
         self._policy = ShellCommandPolicy(deny_patterns=self.deny_patterns)
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.extra_allowed_dirs = extra_allowed_dirs
+        # A sub-agent run is a background asyncio task that can outlive the turn
+        # that spawned it, since SubagentManager.spawn captures the workspace at
+        # spawn time; its ExecTool must resolve cwd from the directory captured
+        # for that run, never from the ambient binding, or it disagrees with its
+        # own fs tools about which directory it is in (the same follow_binding
+        # convention as the filesystem tools). The main loop's ExecTool keeps
+        # following the live binding as normal.
+        self.follow_binding = follow_binding
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
         self._approval_turn: ContextVar[_ApprovalTurn] = ContextVar(
             "exec_tool_approval_turn",
             default=_ApprovalTurn(),
         )
+
+    def register_approval_matcher(self, name: str, matcher: Callable[[str], bool]) -> None:
+        """Add a command family this tool must ask about before running.
+
+        The policy is per-tool rather than process-wide, so a surface that needs
+        to ask about more than deletion has to reach it through the tool it will
+        actually run on. Exposed here because the alternative is a caller
+        touching ``_policy`` -- and the set of families a surface asks about is a
+        property of that surface, not of the policy's internals.
+
+        See ``shell_policy.EXTERNAL_EFFECT_MATCHERS`` for the group ``raven acp``
+        registers and for why the terminal does not.
+        """
+        self._policy.register_approval_matcher(name, matcher)
 
     def start_approval_turn(
         self,
@@ -177,26 +226,34 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        bound = str(workdir.current() or "") if self.follow_binding else ""
+        cwd = working_dir or bound or self.working_dir or os.getcwd()
 
-        if not self._executor.is_sandboxed:
+        sandboxed = self._executor.is_sandboxed
+        if not sandboxed:
             # Non-sandboxed: full guard — deny-list patterns AND workspace restriction.
             guard_error = self._guard_command(command, cwd)
             if guard_error:
                 return self._terminal_error(guard_error)
-            decision = self._policy.evaluate(command)
-            if decision is CommandDecision.HARD_DENY:
-                return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
-            if decision is CommandDecision.REQUIRE_APPROVAL:
-                approval_error = await self._request_approval(command)
-                if approval_error:
-                    return approval_error
         elif self.restrict_to_workspace:
             # Sandboxed: skip the deny-list (microVM provides real isolation), but still
             # enforce workspace restriction so operator-set boundaries are respected.
             workspace_error = self._check_workspace_restriction(command, cwd)
             if workspace_error:
                 return self._terminal_error(workspace_error)
+        # Classification runs either way, and the sandbox flag reaches it rather
+        # than skipping it. A microVM contains what a command does to files; it
+        # does not contain a push, an install, or a connection to another machine.
+        # Short-circuiting the whole check on the flag made the SAFER
+        # configuration prompt less than the plain one, for exactly the
+        # operations the sandbox has no say over.
+        decision = self._policy.evaluate(command, sandboxed=sandboxed)
+        if decision is CommandDecision.HARD_DENY:
+            return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
+        if decision is CommandDecision.REQUIRE_APPROVAL:
+            approval_error = await self._request_approval(command, sandboxed=sandboxed)
+            if approval_error:
+                return approval_error
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
@@ -218,9 +275,13 @@ class ExecTool(Tool):
             result = await self._executor.exec(command, cwd=cwd, timeout=effective_timeout, env=env)
         except Exception as e:
             return f"Error executing command: {str(e)}"
-        return result.as_text(self._MAX_OUTPUT)
+        text = result.as_text(self._MAX_OUTPUT)
+        # The exit code is the verdict a config change, a security call or a
+        # syntax error share, and the text a failing command produced is not
+        # token-safe to classify from -- so the caller gets it structurally.
+        return ToolOutput(text, ok=result.exit_code == 0)
 
-    async def _request_approval(self, command: str) -> ToolResult | None:
+    async def _request_approval(self, command: str, *, sandboxed: bool = False) -> ToolResult | None:
         """Request one-shot authority for an exact command, failing closed.
 
         The responder belongs to the current turn and is installed only for an
@@ -239,7 +300,10 @@ class ExecTool(Tool):
             turn_id=turn.turn_id,
             tool_call_id=turn.tool_call_id,
             command=command,
-            description="Delete files using a shell command",
+            description=_APPROVAL_DESCRIPTIONS.get(
+                self._policy.approval_reason(command, sandboxed=sandboxed) or "",
+                "Run a command that needs your approval",
+            ),
         )
         if approved:
             return None
@@ -258,6 +322,7 @@ class ExecTool(Tool):
             model_text=message + cls._STOP_INSTRUCTION,
             retryable=False,
             abort_action=True,
+            ok=False,
         )
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
@@ -289,14 +354,18 @@ class ExecTool(Tool):
             return "Error: Command blocked by safety guard (path traversal detected)"
 
         cwd_path = Path(cwd).resolve()
+        roots = [cwd_path, *(Path(d).resolve() for d in self.extra_allowed_dirs)]
         for raw in self._extract_absolute_paths(cmd):
             try:
                 expanded = os.path.expandvars(raw.strip())
                 p = Path(expanded).expanduser().resolve()
             except Exception:
                 continue
-            if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                return "Error: Command blocked by safety guard (path outside working dir)"
+            if not p.is_absolute():
+                continue
+            if any(root == p or root in p.parents for root in roots):
+                continue
+            return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
 

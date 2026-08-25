@@ -3,11 +3,19 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { Msg } from '../types.js'
+import type { EpisodeTool, Msg } from '../types.js'
 
-import { groupTools } from '../domain/episodeSummary.js'
+import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
+import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { layoutDagGraph } from './dagGraphLayout.js'
+import { dagNodeToggleKey } from './dagOpenNodes.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
+import { hasMeaningfulReasoning } from './reasoning.js'
 import { boundedHistoryRenderText } from './text.js'
+
+// One allocation shared by every caller that has no open node, rather than one
+// per estimatedMsgHeight call.
+const EMPTY_OPEN: ReadonlySet<string> = new Set()
 
 const hashText = (text: string) => {
   let h = 5381
@@ -31,13 +39,17 @@ export const messageHeightKey = (msg: Msg) => {
 
   // Episodes drive the height for `kind: 'episodes'`, so they must be part of
   // the cache key — otherwise a stale height survives a step-count change.
+  // A DAG call's own graph can change shape (nodes finish, the run completes)
+  // without `foldedPreviewRows` noticing, so it gets its own signature too.
+  const dagSig = (dag: EpisodeTool['dag']) =>
+    dag
+      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}`
+      : ''
   const epSig =
     msg.episodes
       ?.map(
         ep =>
-          `${ep.narration?.length ?? 0}:${ep.tools
-            .map(tool => (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length + 1 : 1))
-            .join(',')}`
+          `${ep.narration?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}`).join(',')}`
       )
       .join('\u0001') ?? ''
 
@@ -54,17 +66,55 @@ export const wrappedLines = (text: string, width: number) => {
   return text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / w)), 0)
 }
 
+// Mirrors episodeView.tsx's own INDENT/STEP. Kept local rather than shared
+// across the lib/component boundary -- this estimator is the only other place
+// that needs them.
+const INDENT = 2
+const STEP = 2
+
+/**
+ * Row count for one DAG call's panel: a header, the optional ascii picture,
+ * one row per node, each node's live slot, and an outputs line once the run
+ * is done -- exactly `DagPanel`'s own structure. Reuses the same layout
+ * function the panel renders from, so the estimate cannot drift from what it
+ * actually draws.
+ */
+const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open: ReadonlySet<string>): number => {
+  if (run.nodes.length === 0) {
+    return 0
+  }
+
+  const picture = layoutDagGraph(run.nodes, { width })
+
+  // What `DagNodeSlot` draws under each row: a box when expanded, one live
+  // line while it runs, nothing otherwise. `dagNodeToggleKey` is reused
+  // rather than restated because it is also the rule for what a click can
+  // open -- a pending node with no template is never expandable, whatever
+  // `open` holds. The box is a constant because it is a fixed height; reading
+  // its real height here would make this estimator depend on the fold it is
+  // estimating.
+  const slots = run.nodes.reduce((rows, node) => {
+    const toggle = dagNodeToggleKey(run.runId, node)
+
+    return rows + (toggle && open.has(toggle) ? DAG_TRACE_BOX_ROWS : node.status === 'running' ? 1 : 0)
+  }, 0)
+
+  return 1 + (picture?.height ?? 0) + run.nodes.length + slots + (run.done && run.dir ? 1 : 0)
+}
+
 export const estimatedMsgHeight = (
   msg: Msg,
   cols: number,
   {
     compact,
+    dagOpen = EMPTY_OPEN,
     details,
     limitHistory = false,
     userPrompt = '',
     withSeparator = false
   }: {
     compact: boolean
+    dagOpen?: ReadonlySet<string>
     details: boolean
     limitHistory?: boolean
     userPrompt?: string
@@ -95,41 +145,49 @@ export const estimatedMsgHeight = (
   // virtualized transcript reserve too few rows and leave stale cells behind.
   if (msg.kind === 'episodes') {
     let h = 0
-    // episodeView spaces a step from the previous one with marginTop={1} when
-    // that previous step showed tool rows. Counting no row for it is what keeps
-    // this estimate low, and a low estimate is the stale-cell symptom.
-    let prevShowedTools = false
 
-    for (const ep of msg.episodes ?? []) {
-      const narration = (ep.narration ?? '').trim()
+    // A committed message is never live and never opened at first paint, so
+    // every stretch of work is exactly one row and every talk segment is its
+    // reasoning row plus its wrapped prose. episodeView separates segments with
+    // marginTop={1}; counting no row for that is what keeps the estimate low,
+    // and a low estimate is the stale-cell symptom.
+    for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
+      h += i > 0 ? 1 : 0
 
-      if (prevShowedTools) {
-        h++
-      }
+      if (seg.kind === 'work') {
+        const dagTools = seg.tools.filter(tool => tool.dag)
 
-      prevShowedTools = ep.tools.length > 0
+        if (dagTools.length === 0) {
+          h++
+          continue
+        }
 
-      // A step with no narration collapses to a single summary row.
-      if (!narration) {
-        h++
+        // A DAG call's graph renders under its own row at every fold depth,
+        // including the folded default -- see dagFor/WorkSegment in
+        // episodeView.tsx -- so this mirrors that instead of the one-row
+        // approximation below. depth/width match episodeView's own
+        // INDENT/STEP and width formula so the two cannot drift apart.
+        const dagWidth = cols ? Math.max(20, cols - 4) : 116
+
+        if (seg.tools.length === 1) {
+          h += 1 + dagPanelRows(dagTools[0]!.dag!, Math.max(24, dagWidth - (INDENT + STEP)), dagOpen)
+        } else {
+          h += 1 + seg.tools.length
+
+          for (const tool of dagTools) {
+            h += dagPanelRows(tool.dag!, Math.max(24, dagWidth - (INDENT + STEP * 2)), dagOpen)
+          }
+        }
+
         continue
       }
 
-      // reasoning row + blank line + wrapped prose
-      h += 2 + wrappedLines(narration, bodyWidth)
+      const narration = (seg.episode.narration ?? '').trim()
+      const reasoning = (seg.episode.reasoning ?? '').trim()
 
-      if (ep.tools.length) {
-        h++ // blank line above the tool block
-
-        for (const group of groupTools(ep.tools)) {
-          // A multi-call run adds a header row above its children.
-          h += group.length > 1 ? 1 : 0
-          for (const tool of group) {
-            // 1 row for the call + one row per reported result line.
-            h += 1 + (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length : 0)
-          }
-        }
-      }
+      // reasoning row (+ its own blank line above the prose)
+      h += hasMeaningfulReasoning(reasoning) ? 2 : 0
+      h += narration ? wrappedLines(narration, bodyWidth) : 0
     }
 
     if (msg.text) {

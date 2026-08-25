@@ -1834,18 +1834,28 @@ class MemoryConsolidator:
             return ok
 
     @trace.instrument("memory.consolidate", extract=semconv.memory_consolidate)
-    async def maybe_consolidate_by_tokens(self, session: Session) -> None:
-        """Loop: archive old messages until prompt fits within half the context window."""
+    async def maybe_consolidate_by_tokens(self, session: Session, *, force: bool = False) -> dict[str, int]:
+        """Loop: archive old messages until prompt fits within half the context window.
+
+        ``force`` skips the "prompt still fits" early return, which is what a
+        user-triggered compaction wants: archive down to the target now rather
+        than waiting to hit the window. Returns before/after token estimates
+        and how many messages moved behind the consolidation boundary — callers
+        that only want the side effect can ignore it.
+        """
+        stats = {"before_tokens": 0, "after_tokens": 0, "archived": 0}
         if not session.messages or self.context_window_tokens <= 0:
-            return
+            return stats
 
         lock = self.get_lock(session.key)
         async with lock:
             target = self.context_window_tokens // 2
+            boundary_before = session.last_consolidated
             estimated, source = self.estimate_session_prompt_tokens(session)
+            stats["before_tokens"] = stats["after_tokens"] = estimated
             if estimated <= 0:
-                return
-            if estimated < self.context_window_tokens:
+                return stats
+            if not force and estimated < self.context_window_tokens:
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}",
                     session.key,
@@ -1853,7 +1863,7 @@ class MemoryConsolidator:
                     self.context_window_tokens,
                     source,
                 )
-                return
+                return stats
 
             chunks_annotated = 0
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
@@ -1899,3 +1909,7 @@ class MemoryConsolidator:
             # how many annotation rounds fired.
             if chunks_annotated:
                 await self.maybe_refresh_hot_tags()
+
+            stats["after_tokens"] = max(estimated, 0)
+            stats["archived"] = max(session.last_consolidated - boundary_before, 0)
+            return stats

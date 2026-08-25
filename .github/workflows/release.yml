@@ -44,6 +44,17 @@ jobs:
           npm run build
           test -f dist/entry.js  # fail fast if the bundle didn't land
 
+      # 2b) Build the served page into ui/dist. `ui/dist` is gitignored, so a
+      #     fresh CI checkout has none and the wheel hook's else-branch fires
+      #     its warning -- every tagged release would answer `/` with
+      #     "No front end built here", which is the state this MR exists to end.
+      - name: Build the served page
+        run: |
+          npm ci --prefix ui
+          npm run --prefix ui build
+          python ui/build.py
+          test -f ui/dist/index.html  # fail fast if the page didn't land
+
       # 3) Build the wheel directly from the checkout so the freshly generated
       #    ui-tui/dist/entry.js is visible to Hatch's conditional build hook.
       #    Then build the sdist separately. A combined `uv build` first creates
@@ -66,11 +77,16 @@ jobs:
           whl = sorted(glob.glob("dist/*.whl"))[-1]
           names = zipfile.ZipFile(whl).namelist()
           assert "raven/ui-tui/dist/entry.js" in names, "entry.js missing from wheel"
+          assert "raven/ui/dist/index.html" in names, "index.html missing from wheel"
+          # The half that degrades quietly: `resolve_ui_dist` accepts a dist with
+          # no assets, `build_app` skips mounting /assets, and the page loads
+          # with broken images rather than failing.
+          assert any(n.startswith("raven/ui/dist/assets/") for n in names), "page assets missing from wheel"
           assert not any("node_modules" in n for n in names), "node_modules leaked into wheel"
           # The only ui-tui/ entry must be the bundle — no TS source, no stray files.
           ui = [n for n in names if "ui-tui/" in n]
           assert ui == ["raven/ui-tui/dist/entry.js"], f"unexpected ui-tui entries: {ui}"
-          print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules")
+          print(f"OK: {whl} ships entry.js and the served page, no node_modules")
           PY
 
       # 4b) Export the locked dependency set as a constraints file. The install

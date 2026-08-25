@@ -1,0 +1,23 @@
+{
+  "name": "Raven-Research",
+  "kind": "cli",
+  "description": "A powerful research agent that can research a topic by searching and reading the live web, then commits a sourced report. Use this agent to get comprehensive information. It reads local files on this host too. IMPORTANT: Only ask this agent to generate a research report. Its FIRST reply is normally clarifying questions rather than the report - relay them and send the answers back to the SAME instance, which is what starts the research. It is stateful, so a follow-up is a follow-up: do not restate the whole question, that begins a new round of questions instead of continuing.",
+  "owns": "owns research: anything needing the live web read and a sourced write-up. Do not research it yourself.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "idSource": "provisioned",
+  "readsLocalFiles": true,
+  "transcriptFormat": "text",
+  "maxOutputChars": 30000,
+  "timeout": null,
+  "everos": {
+    "userId": "raven-research",
+    "agentId": "raven-research"
+  },
+  "recommendedLlm": {
+    "provider": "custom",
+    "model": "openai/gpt-5.6-sol-pro",
+    "apiBase": "https://openrouter.ai/api/v1"
+  }
+}

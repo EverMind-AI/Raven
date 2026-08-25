@@ -86,6 +86,58 @@ export const clipToWidth = (raw: string, width: number) => {
   return `${out}…`
 }
 
+// The mirror of `clipToWidth`: keep the *end* and mark the cut at the front.
+// For a tail that is being refreshed in place, where the newest characters are
+// the ones worth the cells.
+export const clipToWidthFromEnd = (raw: string, width: number) => {
+  const one = raw.replace(WS_RE, ' ').trim()
+
+  if (width <= 0) {
+    return ''
+  }
+
+  if (stringWidth(one) <= width) {
+    return one
+  }
+
+  const chars = [...one]
+  let out = ''
+  let w = 0
+
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const ch = chars[i]!
+    const cw = stringWidth(ch)
+
+    if (w + cw > width - 1) {
+      break
+    }
+
+    out = ch + out
+    w += cw
+  }
+
+  // The cut often lands on a space, and `… bbbb` spends a cell saying nothing.
+  return `…${out.replace(/^ /, '')}`
+}
+
+export const TOOL_RESULT_PREVIEW_CHARS = 200
+
+// A tool's inline result preview. Cutting on a raw character budget alone split
+// the last line mid-token ("updat" for "updated", a table header whose body
+// never arrives), so drop that partial line instead. A preview that is one long
+// line has nowhere to break and still gets the ellipsis treatment.
+export const toolResultPreview = (raw: string, max = TOOL_RESULT_PREVIEW_CHARS) => {
+  const text = raw.trimEnd()
+
+  if (text.length <= max) {
+    return text
+  }
+
+  const lastBreak = text.slice(0, max).lastIndexOf('\n')
+
+  return lastBreak > 0 ? text.slice(0, lastBreak) : compactPreview(text, max)
+}
+
 // Like compactPreview but keeps the tail — for live-streaming text (reasoning)
 // where the most recent tokens matter, so the view follows the stream instead
 // of freezing on the first `max` chars.

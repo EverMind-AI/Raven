@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import get_args
+from uuid import uuid4
 
 from loguru import logger
 
@@ -45,11 +46,24 @@ class OriginPools:
     origins, sized independently. No global cap (total concurrency is their sum)
     and no borrowing between them, so a user turn never waits on an LLM slot
     behind a proactive task.
+
+    A direct chat is a third pool rather than a third origin: it *is* a USER
+    turn, and inventing an origin for it would need a deliberate home in every
+    origin switch in the codebase. It is separated because several sub-agents
+    answering must not make the user queue to say one sentence to the main agent.
     """
 
-    def __init__(self, user: int, system: int):
+    def __init__(self, user: int, system: int, direct: int = 8):
         self._user = asyncio.Semaphore(user)
         self._system = asyncio.Semaphore(system)
+        self._direct = asyncio.Semaphore(direct)
+
+    def for_request(self, req: TurnRequest) -> asyncio.Semaphore:
+        """The gate this turn waits on, read from the request rather than the
+        origin alone -- a direct chat is a USER turn with its own pool."""
+        if req.direct_target is not None:
+            return self._direct
+        return self.for_origin(req.origin)
 
     def for_origin(self, origin: Origin) -> asyncio.Semaphore:
         if origin is Origin.USER:
@@ -72,12 +86,24 @@ class Lane:
         self._run_task: asyncio.Task | None = None
         self._running_fut: asyncio.Future | None = None
         self._idle_since: float | None = None  # set when the worker drains; the reaper's clock
+        # Whether the running turn's payload has already emitted its own terminal
+        # event. Deliberately not "did the payload start": a cancel can land while
+        # the payload is parked mid-emit, and that report never arrives, so entering
+        # is not evidence of having reported. A lane is serial, so one flag
+        # describes the one turn in flight.
+        self._payload_reported = False
         # Injects submitted while a turn runs, waiting to be drained (merged) at a
         # tool-loop gap. Once drained, an inject is chained to the running turn
         # inside _run_turn (a per-turn local), not held here.
         self._inject_mailbox: deque[tuple[TurnRequest, asyncio.Future]] = deque()
 
     def submit(self, req: TurnRequest, policy: BusyPolicy = BusyPolicy.APPEND) -> asyncio.Future:
+        # Identity is resolved on the way in, not at run time: a turn can end
+        # WITHOUT ever running (cancelled while queued) and still has to name
+        # itself on its terminal event, or the consumer holding its slots has
+        # nothing to match and never releases them.
+        if not req.turn_id:
+            req = replace(req, turn_id=uuid4().hex)
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._idle_since = None  # active again: reset the reaper's silence clock
@@ -120,23 +146,51 @@ class Lane:
                 _DEPTH_WARN_THRESHOLD,
             )
 
-    def cancel_turn(self, fut: asyncio.Future) -> None:
+    async def cancel_turn(self, fut: asyncio.Future) -> None:
         """Cancel one turn (its handle's): drop it if queued, cancel its task if
         running. Idempotent on an already-resolved future. Never resolves the
         running turn's future — the worker stays its sole resolver.
+
+        Async because a queued turn ends here rather than in the worker, and every
+        turn that ends emits at least one lifecycle event naming itself -- a
+        second can land for the same turn, so every consumer must treat its own
+        per-turn release as idempotent. Without even one, a consumer keyed on the
+        ending turn's identity never learns this turn is over: it holds whatever
+        the turn bound (an active-turn slot that rejects the next send) and no
+        later turn can claim ownership to release it, so the conversation stays
+        closed until the process restarts.
         """
         if fut.done():
             return
-        for i, (_req, queued) in enumerate(self._pending):
+        for i, (req, queued) in enumerate(self._pending):
             if queued is fut:
                 del self._pending[i]
-                fut.set_result(None)
+                try:
+                    await self._sink(
+                        TurnFailed(
+                            error="cancelled",
+                            cancelled=True,
+                            conversation_id=self._conversation_id,
+                            turn_id=req.turn_id or "",
+                        )
+                    )
+                finally:
+                    # After the sink, so a caller awaiting this future cannot resume
+                    # and submit the next turn while the consumer still holds this
+                    # turn's slots -- the phantom rejection turn.cancel's drain step
+                    # exists to rule out. In a finally so a sink that raises still
+                    # cannot leave that caller waiting forever.
+                    fut.set_result(None)
                 return
         for i, (_req, pending_inject) in enumerate(self._inject_mailbox):
             if pending_inject is fut:
                 # Still in the mailbox (not yet merged): the inject can cancel
                 # itself. Once drained/merged it is no longer here, so cancelling
                 # its handle is a no-op — it cannot kill the host turn.
+                # Silent, unlike the queued branch above: an inject is destined for
+                # the running turn and never binds slots of its own, so a terminal
+                # event here would only announce an end on the host turn's lane
+                # while the host is still going.
                 del self._inject_mailbox[i]
                 fut.set_result(None)
                 return
@@ -164,6 +218,13 @@ class Lane:
 
         Already-drained injects are chained to the running turn and follow its
         fate inside _run_turn — not here, so each future resolves exactly once.
+
+        Silent by design, unlike cancel_turn's queued branch above: its only two
+        callers are Scheduler.shutdown's phase 2, where the process is already
+        going down and every slot dies with it, and Lane.cancel via the gateway's
+        /stop path (raven.cli.gateway_commands -> cancel_conversation), whose
+        scheduler's lanes turn.send never binds -- so there is no client-facing
+        slot here for the silence to strand.
         """
         stopped = 0
         while self._pending:
@@ -195,7 +256,11 @@ class Lane:
             req, fut = self._pending.popleft()
             self._running_fut = fut
             # Create the task synchronously (no await before this) so the turn is
-            # cancel-visible via _run_task the moment it leaves the queue.
+            # cancel-visible via _run_task the moment it leaves the queue. Which is
+            # also why the flag is armed here: from this line until the payload's
+            # own report completes, the turn is cancellable without having named
+            # its end.
+            self._payload_reported = False
             self._run_task = asyncio.create_task(self._run_turn(req))
             outcome: TurnOutcome | None = None
             try:
@@ -203,15 +268,53 @@ class Lane:
             except asyncio.CancelledError:
                 if not self._run_task.cancelled():
                     # The worker itself was cancelled (process shutdown): cascade
-                    # to the payload and await its cleanup — its finally emits
-                    # TurnFailed and resolves any chained inject — so it leaves no
-                    # zombie, then re-raise. (Normal shutdown cancels payloads, not
-                    # workers; this path is the hard-kill case, a single cancel.)
+                    # to the payload and await its cleanup — its except emits
+                    # TurnFailed and its finally resolves any chained inject — so it
+                    # leaves no zombie, then re-raise. (Normal shutdown cancels
+                    # payloads, not workers; this path is the hard-kill case, a
+                    # single cancel.) Re-raising before the compensating emit below
+                    # is why the payload has to own its report at all: here the
+                    # worker never reaches that emit.
+                    # Reachable today only through asyncio.run's own cancel-all sweep
+                    # at loop close, not interpreter exit as such -- every current
+                    # host is a top-level asyncio.run returning straight to process
+                    # exit, so the sweep coincides with _active_turns dying with the
+                    # process. But _active_turns is a module global that outlives a
+                    # loop: a future host that ran a Scheduler inside asyncio.run and
+                    # then kept the process alive would open this door without a
+                    # restart.
                     self._run_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await self._run_task
                     raise
-                # payload cancelled: the turn emitted its own terminal
+                # Payload cancelled without having reported its end -- either the
+                # cancel landed in the gap above, before a line of it ran, or it was
+                # cancelled again while parked inside its own emit. Compensating here
+                # is safe, but for two different reasons depending on which report was
+                # interrupted. For a cancelled TurnFailed, the only interruptible
+                # stretch of its sink call is the render barrier, which runs BEFORE
+                # the consumer releases anything, so an unfinished report there
+                # released nothing -- this compensator's own emit is the first. A
+                # TurnEnded or a non-cancelled TurnFailed has no such barrier: its
+                # sink awaits AFTER releasing (emit_complete, emit_error), so a cancel
+                # landing there leaves a real second terminal event reachable; safety
+                # there rests instead on every consumer's per-turn release being
+                # idempotent -- see _owns_lane's pop of turn_ids/direct_targets,
+                # sources.pop in the gateway sink, and make_hub_sink dropping
+                # lifecycle events outright. It has to be named regardless: a turn
+                # that ends silently leaves a consumer holding slots it can only
+                # release against the ending turn's id -- an active-turn slot that
+                # then rejects every later send on this lane, with no later turn able
+                # to claim ownership and free it.
+                if not self._payload_reported:
+                    await self._sink(
+                        TurnFailed(
+                            error="cancelled",
+                            cancelled=True,
+                            conversation_id=self._conversation_id,
+                            turn_id=req.turn_id or "",
+                        )
+                    )
             finally:
                 # Sole resolver: resolve on every exit, including a cancel that
                 # lands before the task body (and its handlers) ever runs. (A
@@ -252,6 +355,20 @@ class Lane:
         return emit
 
     async def _run_turn(self, req: TurnRequest) -> TurnOutcome | None:
+        # Resolve the turn's identity here, once, and put it back on the request so
+        # the runner and the lifecycle events agree on one value. Minted when the
+        # submitter supplied none: a turn the runtime submits onto a busy lane (a
+        # sub-agent announce, a deep-research delivery) must still be
+        # distinguishable from the client turn queued behind it, or a consumer keyed
+        # on a per-lane slot ends the wrong turn.
+        # Falsy, not just None: turn_id is a public field and an empty string
+        # would otherwise pass through to be stamped, which makes the turn a
+        # permanent non-owner of its own slots -- the exact shape the identity
+        # carried here exists to rule out. Normally already resolved by submit;
+        # this covers a runner driven directly.
+        if not req.turn_id:
+            req = replace(req, turn_id=uuid4().hex)
+        turn_id = req.turn_id
         chained: list[asyncio.Future] = []
 
         def drain() -> list[TurnRequest]:
@@ -264,20 +381,65 @@ class Lane:
             return [req for req, _fut in drained]
 
         outcome: TurnOutcome | None = None
-        started = False
         try:
-            async with self._pools.for_origin(req.origin):
-                await self._sink(TurnStarted(conversation_id=self._conversation_id))
-                started = True
+            async with self._pools.for_request(req):
+                await self._sink(
+                    TurnStarted(
+                        origin=req.origin,
+                        delegated=req.delegated,
+                        content=req.text,
+                        conversation_id=self._conversation_id,
+                        turn_id=turn_id,
+                    )
+                )
                 run_start = time.monotonic()
                 outcome = await self._runner.run(req, self._make_emit(req), drain)
         except asyncio.CancelledError:
-            if started:  # only pair a TurnStarted; a pre-start cancel emits nothing
-                await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
+            # Emitted whether or not TurnStarted was: a cancel can land while the
+            # turn is past the queue but still waiting on its origin semaphore (the
+            # user pool is one slot, so any two user turns overlap there), and a
+            # turn that ends without naming itself leaves a consumer holding its
+            # slots with nothing to match -- an active-turn slot that rejects every
+            # later send, which no later turn can then claim ownership to release.
+            # Unpaired is safe for the consumers of this event: the sink emits no
+            # wire event for a cancelled turn, and closing a stream that was never
+            # opened is a no-op.
+            await self._sink(
+                TurnFailed(
+                    error="cancelled",
+                    cancelled=True,
+                    conversation_id=self._conversation_id,
+                    turn_id=turn_id,
+                )
+            )
+            # Only once the emit has landed. Claiming it before would let a second
+            # cancel -- which turn.cancel issues while the slot it is waiting on is
+            # still bound -- interrupt the emit above and still tell the worker this
+            # turn had reported, leaving the end unnamed for good.
+            self._payload_reported = True
             raise
         except Exception as exc:
-            if started:
-                await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
+            # The event carries only str(exc) to the front-end, so this is the
+            # only place the traceback is ever recorded — without it a failed
+            # turn leaves no trace on the process side at all.
+            logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
+            # Unpaired with TurnStarted when the failure came from acquiring the pool
+            # or from the sink's own TurnStarted call, both of which sit inside the
+            # try above ahead of it. Reported anyway, for the reason the cancelled
+            # branch is: silence leaves the consumer holding this turn's slots for
+            # good, and here it also leaves the client with a turn that never
+            # resolves -- this event is what clears it. Both branches reporting
+            # unconditionally is what retired the ``started`` flag they used to
+            # consult.
+            await self._sink(
+                TurnFailed(
+                    error=str(exc),
+                    cancelled=False,
+                    conversation_id=self._conversation_id,
+                    turn_id=turn_id,
+                )
+            )
+            self._payload_reported = True
             return None
         finally:
             # A drained inject shares this turn's outcome (None on cancel/failure);
@@ -291,6 +453,7 @@ class Lane:
                 latency_ms=latency_ms,
                 explicit_reply=outcome.explicit_reply,
                 conversation_id=self._conversation_id,
+                turn_id=turn_id,
             )
         )
         return outcome
@@ -306,8 +469,8 @@ class TurnHandle:
     async def result(self) -> TurnOutcome | None:
         return await self._fut
 
-    def cancel(self) -> None:
-        self._lane.cancel_turn(self._fut)
+    async def cancel(self) -> None:
+        await self._lane.cancel_turn(self._fut)
 
 
 class Scheduler:

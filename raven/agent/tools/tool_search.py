@@ -26,9 +26,10 @@ Two visibility tiers per turn (see :class:`ToolSearchStrategy`):
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from raven.agent.tools.base import Tool
+from raven.agent.tools.registry import absent_tool_error
 from raven.agent.tools.tool_index import ToolIndex
 from raven.token_wise.base import TokenStrategy
 
@@ -39,8 +40,15 @@ if TYPE_CHECKING:
 # search for these. Beyond the file/search/exec primitives, ``message``,
 # ``ask_user`` and ``spawn`` are interaction/orchestration primitives the agent
 # must reach on any turn (reply, unblock via a question, delegate a subagent) —
-# hiding them risks the model not thinking to search for them at all. Config
-# ``tools.tool_search.always_visible`` extends this set.
+# hiding them risks the model not thinking to search for them at all.
+#
+# Deliberately NOT here: ``run_subagent_dag`` (a fan-out of minute-scale
+# sub-agent runs is a deliberate act, not a per-turn primitive; it should be
+# reached through ``tool_search`` like any other optional capability) and
+# ``read_skill``. Under compaction that costs a ``tool_search`` hop before a
+# ``inject: description`` skill's body can be loaded — accepted, since the
+# alternative is keeping every progressive-disclosure entry point resident.
+# Config ``tools.tool_search.always_visible`` adds either one back per deploy.
 DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "read_file",
     "write_file",
@@ -59,6 +67,13 @@ TOOL_CALL_NAME: str = "tool_call"
 META_TOOL_NAMES: frozenset[str] = frozenset({"tool_search", TOOL_CALL_NAME})
 
 
+class _Target(NamedTuple):
+    """What one ``tool_call`` name resolves to. Exactly one field is set."""
+
+    tool: "Tool | None"
+    refusal: str | None
+
+
 class ToolSearchController:
     """Shared state between the meta-tools and the strategy.
 
@@ -75,12 +90,21 @@ class ToolSearchController:
         search_result_limit: int = 10,
     ) -> None:
         self._registry = registry
-        self.always_visible = set(always_visible) | META_TOOL_NAMES
+        # The configured spellings, kept as configured. Resolved to registered
+        # names on every read instead of once here -- see visible_names.
+        self._configured_visible = set(always_visible)
         self.search_result_limit = search_result_limit
         self._index = ToolIndex()
 
     def _catalog_tools(self) -> list[Tool]:
-        """All registered tools except the meta-tools (never self-searchable)."""
+        """All registered tools except the meta-tools (never self-searchable).
+
+        Deliberately not channel-filtered: the BM25 index is keyed on this set
+        and shared by every concurrent turn, so making it channel-dependent
+        would have web and IM turns swapping the index out from under each
+        other. The channel filter belongs on the reads instead -- ``search``
+        and ``resolve_target``.
+        """
         out = []
         for name in self._registry.tool_names:
             if name in META_TOOL_NAMES:
@@ -95,16 +119,52 @@ class ToolSearchController:
         self._index.ensure(self._catalog_tools())
 
     def visible_names(self) -> set[str]:
-        return self.always_visible
+        """Configured names resolved against the registry, per call.
+
+        Not resolved once in ``__init__``, for two reasons that both point the
+        same way. MCP servers attach while raven runs, so a name configured here
+        may not be registered yet when this object is built. And a namespaced
+        tool's registered name need not equal the configured one: sanitising and
+        the length cap rewrite it, so a config entry written against the old
+        spelling would silently stop keeping its tool resident -- one extra
+        search hop for the model, and no error anywhere to say why.
+
+        A configured name that resolves to nothing is kept as written. Such an
+        entry usually names a tool this deploy does not have, which is ordinary,
+        and dropping it would only hide the typo case rather than report it.
+        """
+        out = set(META_TOOL_NAMES)
+        for entry in self._configured_visible:
+            out.update(self._registry.resolve_configured(entry) or [entry])
+        return out
 
     def search(self, query: str, limit: int | None = None) -> list[dict[str, Any]]:
         """Hits carry name + description + parameter schema, so the model can go
-        straight to tool_call without a separate describe round-trip."""
-        names = self._index.search(query, limit or self.search_result_limit)
+        straight to tool_call without a separate describe round-trip.
+
+        Rank, then filter, then truncate -- in that order. Truncating first lets
+        a tool this channel cannot use consume a result slot, so a usable
+        lower-ranked hit is dropped and the model is told nothing matched.
+        Reading that many names is free: the index scores and sorts the whole
+        catalog either way, and only the final slice is bounded. The bound is
+        the registry's current size, not the index's -- it stays >= the indexed
+        catalog because ``refresh()`` runs at the top of every
+        ``before_llm_call``, ahead of any search. Unregistering a tool after the
+        last refresh is the one state that inverts that and truncates the
+        ranking ahead of the filter.
+        """
+        cap = limit or self.search_result_limit
+        ranked = self._index.search(query, len(self._registry.tool_names) or cap)
+        # Asked once for the whole scan, not once per candidate: the source
+        # behind it is a file read, and the loop below walks the entire ranked
+        # catalog. One answer for the scan is also the more correct one -- a set
+        # re-read mid-loop could offer a tool and withhold its neighbour from
+        # the same list.
+        withheld = self._registry.withheld_names()
         hits = []
-        for name in names:
+        for name in ranked:
             tool = self._registry.get(name)
-            if tool is None:
+            if tool is None or not self._registry.offers(tool, withheld):
                 continue
             hits.append(
                 {
@@ -113,7 +173,51 @@ class ToolSearchController:
                     "parameters": tool.parameters,
                 }
             )
+            if len(hits) >= cap:
+                break
         return hits
+
+    def resolve_target(self, name: Any) -> _Target:
+        """What ``tool_call`` would forward this name to, and why not when it would not.
+
+        One resolution with two readers. Splitting it meant walking the same
+        three checks twice -- the meta-tool guard, the registry lookup, the
+        channel filter -- so exactly one of ``tool`` and ``refusal`` is set.
+
+        The reason is part of the return rather than the caller's to reconstruct,
+        because the two ways a name fails want different answers:
+
+        - not a string, or a meta-tool: refused here rather than resolved, or
+          ``tool_call`` would recurse into itself.
+        - absent, or withheld from this channel: one answer for both, and the
+          same sentence the direct path uses. Withheld is answered as absent
+          deliberately -- "it exists but not for you" is itself the way around
+          the filter that keeping it out of the schema was meant to close.
+          Appending where the catalog is is safe for that branch because
+          ``search`` filters by channel too. It reads as a statement of where
+          the truth lives, not an instruction to search again: a model that
+          searched, called what it found, and lost the tool in between would
+          otherwise be sent round the same loop.
+        """
+        if not isinstance(name, str):
+            return _Target(None, "Error: 'name' must be a string naming a tool.")
+        if name in META_TOOL_NAMES:
+            return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
+        tool = self._registry.get(name)
+        if tool is None or not self._registry.offers(tool):
+            return _Target(None, absent_tool_error(name, tail=" -- tool_search lists what is currently loaded"))
+        return _Target(tool, None)
+
+    def target_is_blocking(self, name: Any) -> bool:
+        """Whether the tool ``tool_call`` would forward to is a blocking interaction.
+
+        A meta-tool target is refused by :meth:`call`, so it reports non-blocking
+        here too — which also stops the registry lookup recursing back into this
+        controller.
+        """
+        if not isinstance(name, str) or name in META_TOOL_NAMES:
+            return False
+        return self._registry.is_blocking(name)
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -126,10 +230,9 @@ class ToolSearchController:
                 arguments = json.loads(arguments)
             except json.JSONDecodeError:
                 return "Error: 'arguments' must be a JSON object."
-        if name in META_TOOL_NAMES:
-            return f"Error: '{name}' cannot be invoked via tool_call."
-        if not self._registry.has(name):
-            return f"Error: tool '{name}' not found. Use tool_search to find it."
+        target = self.resolve_target(name)
+        if target.refusal is not None:
+            return target.refusal
         return await self._registry.execute(name, arguments or {})
 
 
@@ -212,6 +315,12 @@ class ToolCallTool(Tool):
             },
             "required": ["name"],
         }
+
+    def blocking_for(self, params: dict[str, Any]) -> bool:
+        return self._ctrl.target_is_blocking(params.get("name"))
+
+    def metadata_owner(self, params: dict[str, Any]) -> Tool:
+        return self._ctrl.resolve_target(params.get("name")).tool or self
 
     async def execute(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         return await self._ctrl.call(name, arguments)

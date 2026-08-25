@@ -20,3 +20,41 @@ export const THINKING_COT_MAX = 160
 // (each scroll < viewport-1) and produces smooth motion. wheelAccel.ts
 // ramps this on sustained scrolls.
 export const WHEEL_SCROLL_STEP = 1
+
+// How often the instance on screen is re-read while it is answering. Its steps
+// live only in the runtime's in-flight activity, so this is the one thing that
+// makes them appear before the turn ends. Fast enough to read as live, slow
+// enough that a folded read of one conversation is not a per-frame cost.
+export const DIRECT_STEP_POLL_MS = 400
+
+// One `dag.node` per running-or-expanded node per tick, so a little slower than
+// the direct-chat poll, which is one call however many instances exist.
+export const DAG_NODE_POLL_MS = 500
+
+// Rows of trace inside an expanded node's box. Blank-padded when the trace is
+// shorter, so the box's height never depends on its content.
+export const DAG_TRACE_ROWS = 8
+
+// The box's outer height: DAG_TRACE_ROWS plus a header, a footer, and the two
+// border rows. `height` on a bordered Box is the outer height -- the fork sets a
+// Yoga border -- so this is what the height model adds and what the Box takes.
+export const DAG_TRACE_BOX_ROWS = DAG_TRACE_ROWS + 4
+
+// How many trailing wire rows the trace box will consider when deciding what
+// fits. The fold can collapse an un-narrated run of tool calls into one row, so
+// the height it measures does not grow with the slice and the search cannot
+// rely on overflowing to stop. Past this many rows the fold has certainly
+// collapsed them into summaries, and another row cannot add a line a reader
+// could tell apart.
+export const DAG_TRACE_FIT_MAX_ROWS = 64
+
+// `max_output_chars` for the trace read. A finished node's output arrives as the
+// last message of the trace, so this bounds the answer the box can show; matches
+// what `/dag <node>` already asks for.
+export const DAG_TRACE_OUTPUT_CHARS = 4000
+
+// Consecutive failed `dag.node` reads before a node is given up on. A run dir
+// that is merely busy does not throw; one that throws this many times in a row
+// has been pruned, and without a cap a node whose pinned status is frozen at
+// `running` would be re-read for the rest of the session.
+export const DAG_TRACE_READ_FAILURE_CAP = 5

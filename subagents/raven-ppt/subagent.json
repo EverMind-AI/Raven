@@ -1,0 +1,23 @@
+{
+  "name": "Raven-PPT",
+  "kind": "cli",
+  "description": "A powerful deck-building agent that can turn source documents into a fact-grounded .pptx, reviewing every rendered page before it publishes. Use this agent for slides built from material you already have. IMPORTANT: name each source document by absolute path in the task text - nothing else reaches it.",
+  "owns": "owns decks and slides built from source documents. Do not build the deck yourself.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py --job {agent_id} --session cli:{agent_id} --prompt-file {prompt_file}",
+  "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --job {agent_id} --session cli:{agent_id} --prompt-file {prompt_file}",
+  "idSource": "provisioned",
+  "readsLocalFiles": true,
+  "maxOutputChars": 60000,
+  "timeout": null,
+  "transcriptFormat": "text",
+  "everos": {
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt"
+  },
+  "recommendedLlm": {
+    "provider": "custom",
+    "model": "anthropic/claude-sonnet-5",
+    "apiBase": "https://openrouter.ai/api/v1"
+  }
+}

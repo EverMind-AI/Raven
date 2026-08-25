@@ -79,11 +79,24 @@ def set_config_path(path: Path) -> None:
     _current_config_path = path
 
 
+def raven_home() -> Path:
+    """The directory raven keeps everything in.
+
+    ``RAVEN_HOME`` was already honoured by the installer, the node runtime
+    lookup, the tracing directory, the serve state file and the file server --
+    and ignored here, which is the one that decides where config.json, the cron
+    store and every runtime subdirectory live. Setting it used to give you a
+    split installation: the runtime in one place, the configuration in another.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip()
+    return Path(home).expanduser() if home else Path.home() / ".raven"
+
+
 def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
-    return Path.home() / ".raven" / "config.json"
+    return raven_home() / "config.json"
 
 
 class ConfigReadError(Exception):

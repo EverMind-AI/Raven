@@ -3,6 +3,8 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { DagRunState } from './domain/dagRun.js'
+
 export interface ActiveTool {
   context?: string
   id: string
@@ -137,7 +139,17 @@ export interface EpisodeTool {
   id: string
   name: string
   summary: string
+  // The model's own one-line description of what a call is for, when the
+  // transport sends one -- claude-agent-acp puts Claude's Bash `description`
+  // in the call's arguments. Preferred over a derived label because it names
+  // the intent rather than the programs; absent for every transport that sends
+  // none, so a row without one is unaffected.
+  intent?: string
   resultPreview?: string
+  // A run_subagent_dag call's graph, pinned here when the run reported one. The
+  // live store is cleared at turn end and the tool result is clamped to 200
+  // chars, so this is what keeps the graph in the transcript.
+  dag?: DagRunState
   diff?: string
   added?: number
   removed?: number
@@ -167,7 +179,8 @@ export interface Episode {
 
 export interface Msg {
   info?: SessionInfo
-  kind?: 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  kind?: 'artifacts' | 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  artifacts?: TurnArtifacts
   panelData?: PanelData
   role: Role
   text: string
@@ -176,9 +189,30 @@ export interface Msg {
   toolTokens?: number
   tools?: string[]
   episodes?: Episode[]
+  /**
+   * The identity of the turn this message was folded from, where it was folded
+   * from one. Stable while that turn is still running and the runtime keeps
+   * handing over a fresh object for it, which is what a fold has to be keyed on
+   * to outlive the row under it.
+   */
+  foldId?: string
   todos?: TodoItem[]
   todoIncomplete?: boolean
   todoCollapsedByDefault?: boolean
+}
+
+export interface TurnArtifactFile {
+  change?: 'edit' | 'new'
+  ext: string
+  missing?: boolean
+  name: string
+  size?: number
+  title?: string
+}
+
+export interface TurnArtifacts {
+  changes: TurnArtifactFile[]
+  deliveries: TurnArtifactFile[]
 }
 
 export type Role = 'assistant' | 'system' | 'tool' | 'user'

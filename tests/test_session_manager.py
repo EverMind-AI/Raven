@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from raven.session.manager import Session, SessionManager, new_chat_id
 
 
@@ -103,6 +105,21 @@ def test_save_reserves_metadata_keys(tmp_path: Path):
     assert "title" in meta
 
 
+def test_metadata_model_survives_a_save_load_round_trip(tmp_path: Path):
+    """metadata["model"] is the per-session model's home; the append-only file's
+    last metadata record must win on reload."""
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("web:abc")
+    s.metadata["model"] = "deepseek/deepseek-v3"
+    mgr.save(s)
+
+    s.metadata["model"] = "anthropic/claude-opus-4-5"
+    mgr.save(s)
+
+    mgr.invalidate("web:abc")
+    assert mgr.get_or_create("web:abc").metadata["model"] == "anthropic/claude-opus-4-5"
+
+
 def test_load_preserves_on_disk_message_order(tmp_path: Path):
     """Messages keep file order on load even when received_at is out of order."""
     session_dir = tmp_path / "sessions" / "tui"
@@ -167,6 +184,24 @@ def test_find_most_recent_chat_id_nested_by_updated_at(tmp_path: Path):
     assert mgr.find_most_recent_chat_id("tui") == "newer"
     assert mgr.find_most_recent_chat_id("cli") == "distractor"
     assert mgr.find_most_recent_chat_id("feishu") is None
+
+
+def test_find_most_recent_can_exclude_archived_sessions(tmp_path: Path):
+    """Resume skips archived sessions while delivery keeps its existing default."""
+    mgr = SessionManager(tmp_path)
+    active = mgr.get_or_create("tui:active")
+    active.add_message("user", "keep visible")
+    active.updated_at = datetime(2026, 6, 10, 10, 0, 0)
+    mgr.save(active)
+
+    archived = mgr.get_or_create("tui:archived")
+    archived.add_message("user", "hide me")
+    archived.metadata["archived"] = True
+    archived.updated_at = datetime(2026, 6, 10, 11, 0, 0)
+    mgr.save(archived)
+
+    assert mgr.find_most_recent_chat_id("tui") == "archived"
+    assert mgr.find_most_recent_chat_id("tui", include_archived=False) == "active"
 
 
 def test_find_most_recent_ignores_old_flat_files(tmp_path: Path):
@@ -341,7 +376,7 @@ def test_legacy_global_sessions_shim_removed(tmp_path: Path, monkeypatch):
         raising=False,
     )
 
-    session = SessionManager(tmp_path / "ws").get_or_create("tui:x")
+    session = SessionManager(tmp_path / "chanwork").get_or_create("tui:x")
     assert session.messages == []
     assert legacy_file.exists()
 
@@ -524,6 +559,23 @@ def test_list_sessions_channel_filter(tmp_path: Path):
     tui_sessions = mgr.list_sessions(channel="tui")
     keys = {info["key"] for info in tui_sessions}
     assert keys == {"tui:ch01", "tui:ch03"}
+
+
+def test_list_sessions_multi_channel_filter(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:a", "cron:b", "cli:c"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", key)
+        mgr.save(session)
+
+    assert {info["key"] for info in mgr.list_sessions(channels={"tui", "cron"})} == {"tui:a", "cron:b"}
+
+
+def test_list_sessions_rejects_two_filter_modes(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        mgr.list_sessions(channel="tui", channels={"tui"})
 
 
 def test_list_sessions_no_channel_returns_all(tmp_path: Path):

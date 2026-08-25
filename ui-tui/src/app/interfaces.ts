@@ -61,8 +61,20 @@ export interface CompletionItem {
   text: string
 }
 
+export interface RpcOptions {
+  /**
+   * Suppress the helper's automatic `error: …` transcript line and rethrow
+   * instead, so the caller's own catch decides what the user sees.
+   *
+   * Without this the helper both reports and swallows, which makes a
+   * `.catch(() => {})` at the call site a no-op — the line is already in the
+   * transcript by the time it runs. Every best-effort call needs this.
+   */
+  quiet?: boolean
+}
+
 export interface GatewayRpc {
-  <T extends object = RpcResult>(method: string, params?: Record<string, unknown>): Promise<null | T>
+  <T extends object = RpcResult>(method: string, params?: Record<string, unknown>, opts?: RpcOptions): Promise<null | T>
 }
 
 export interface GatewayServices {
@@ -91,10 +103,12 @@ export interface OverlayState {
   // selection it makes must change the new-session default, not this
   // conversation. Plain `true` is the session-scoped open.
   modelPicker: boolean | 'default'
+  newInstance: boolean
   pager: null | PagerState
   picker: boolean
   secret: null | SecretReq
   skillsHub: boolean
+  subagentsHub: boolean
   sudo: null | SudoReq
 }
 

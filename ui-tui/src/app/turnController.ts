@@ -3,7 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { DagEvent } from '../domain/dagRun.js'
 import type { SessionInterruptResponse, SubagentEventPayload } from '../gatewayTypes.js'
+import type { DagRunSnapshot } from '../rpc/index.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import {
@@ -13,6 +15,7 @@ import {
   STREAM_SCROLL_BATCH_MS,
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
+import { foldDagEvent, foldDagSnapshot, withPromptTemplates } from '../domain/dagRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
@@ -21,6 +24,7 @@ import {
   estimateTokensRough,
   isTransientTrailLine,
   sameToolTrailGroup,
+  toolResultPreview,
   toolTrailLabel
 } from '../lib/text.js'
 import { resetFlowOverlays } from './overlayStore.js'
@@ -136,6 +140,7 @@ const clear = (t: Timer): null => {
 
 class TurnController {
   bufRef = ''
+  private dagPromptsByCall = new Map<string, Record<string, string>>()
   episodes: Episode[] = []
   private lastEpisodeStartMs = 0
   interrupted = false
@@ -201,6 +206,9 @@ class TurnController {
     this.lastEpisodeStartMs = 0
 
     patchTurnState({
+      // The live graphs go with the turn; a finished one is already pinned onto
+      // its tool row by recordDagEvent, which is what the transcript renders.
+      dagRuns: [],
       episodes: [],
       streamPendingTools: [],
       streamSegments: [],
@@ -806,7 +814,7 @@ class TurnController {
       if (et) {
         et.ok = !error
         et.done = true
-        et.resultPreview = (error || summary || '').slice(0, 200) || undefined
+        et.resultPreview = toolResultPreview(error || summary || '') || undefined
         // Fall back to the client-measured span: the typed RPC path does not
         // carry a duration, and leaving it unset made the row's live timer keep
         // ticking after the step had moved on.
@@ -941,6 +949,7 @@ class TurnController {
     this.clearStatusTimer()
     this.idle()
     this.bufRef = ''
+    this.dagPromptsByCall.clear()
     this.interrupted = false
     this.lastStatusNote = ''
     this.activeReasoningText = ''
@@ -1003,6 +1012,142 @@ class TurnController {
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
     patchTurnState({ activity: [], outcome: '', subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
+  }
+
+  /**
+   * Fold one `run_subagent_dag` progress frame into the turn's graphs.
+   *
+   * The graph is written twice on purpose: into the live store, which drives the
+   * in-flight panel and is cleared at turn end, and onto the tool row that
+   * produced it, which is what survives into the transcript. Pinning it here
+   * rather than at tool-complete keeps the two from diverging if the run's last
+   * frame and the tool result arrive out of order.
+   */
+  recordDagEvent(event: DagEvent) {
+    const callId = event.payload.tool_call_id
+    const templates = callId ? this.dagPromptsByCall.get(callId) : undefined
+
+    patchTurnState(state => {
+      const at = state.dagRuns.findIndex(run => run.runId === event.payload.run_id)
+      const folded = foldDagEvent(at === -1 ? null : state.dagRuns[at]!, event, templates)
+
+      // A frame for a run we never saw start: nothing to draw (see foldDagEvent).
+      if (folded === null) {
+        return state
+      }
+
+      return {
+        ...state,
+        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
+      }
+    })
+
+    // Spent: the templates now live on the nodes, which is what the transcript
+    // keeps. Holding the call's whole prompt set past that would grow with every
+    // graph the session runs.
+    if (callId && event.type === 'dag.run_started') {
+      this.dagPromptsByCall.delete(callId)
+    }
+
+    this.pinDagToEpisodeTool(event.payload.run_id)
+  }
+
+  /**
+   * Remember a `run_subagent_dag` call's per-node prompts until its run starts.
+   *
+   * Kept here rather than on the tool row because the graph is built from
+   * `dag.run_started`, which is the only frame that carries the node list. The
+   * two are matched by tool call id; a host that does not correlate the two
+   * sends none, and those rows fall back to naming their node id.
+   *
+   * `dag.run_started` releases an entry, but not every call reaches one: a graph
+   * rejected by validation returns its error before any `dag.*` frame, so its
+   * entry would sit for the life of the process. Insertion order therefore
+   * bounds the map as well -- and it is the only thing that can, because the
+   * obvious alternative of releasing on the call's completion races the
+   * background path, where the tool returns as soon as the runner is scheduled
+   * and so can complete before `dag.run_started` is emitted.
+   */
+  recordDagPrompts(toolCallId: string, templates: Record<string, string>) {
+    if (Object.keys(templates).length === 0) {
+      return
+    }
+
+    // The run may already be open: this frame and `dag.run_started` travel on
+    // different channels, so either arrives first. Storing for the fold below
+    // only serves the order where this one leads; a run already built needs the
+    // prompts put on it here, or the order decides whether its rows expand.
+    // Re-pinned because the episode row holds the state object by reference and
+    // the backfill replaces it.
+    if (getTurnState().dagRuns.some(run => run.toolCallId === toolCallId)) {
+      patchTurnState(state => ({
+        ...state,
+        dagRuns: state.dagRuns.map(run =>
+          run.toolCallId === toolCallId ? withPromptTemplates(run, templates) : run
+        )
+      }))
+
+      for (const run of getTurnState().dagRuns.filter(item => item.toolCallId === toolCallId)) {
+        this.pinDagToEpisodeTool(run.runId)
+      }
+    }
+
+    // Generous next to how many graphs a turn runs, so eviction only ever
+    // reaches calls that never started a run.
+    const LIMIT = 8
+
+    this.dagPromptsByCall.set(toolCallId, templates)
+
+    while (this.dagPromptsByCall.size > LIMIT) {
+      const oldest = this.dagPromptsByCall.keys().next()
+
+      if (oldest.done) {
+        break
+      }
+
+      this.dagPromptsByCall.delete(oldest.value)
+    }
+  }
+
+  /**
+   * Replace a run with a snapshot read back off disk (`dag.get`).
+   *
+   * The repair path for a graph whose live frames were lost -- a gateway that
+   * restarted mid-run leaves its nodes pinned to `running` forever. A run the
+   * client never saw start is appended rather than dropped: the snapshot carries
+   * the topology, so it is drawable on its own.
+   */
+  applyDagSnapshot(snapshot: DagRunSnapshot) {
+    patchTurnState(state => {
+      const at = state.dagRuns.findIndex(run => run.runId === snapshot.run_id)
+      const folded = foldDagSnapshot(at === -1 ? null : state.dagRuns[at]!, snapshot)
+
+      return {
+        ...state,
+        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
+      }
+    })
+    this.pinDagToEpisodeTool(snapshot.run_id)
+  }
+
+  private pinDagToEpisodeTool(runId: string) {
+    const run = getTurnState().dagRuns.find(item => item.runId === runId)
+
+    // No tool_call_id means the host does not correlate progress with a row, so
+    // there is no row to pin to -- the live panel is all this run ever gets.
+    if (!this.episodes.length || !run?.toolCallId) {
+      return
+    }
+
+    for (const ep of this.episodes) {
+      const et = ep.tools.find(tool => tool.id === run.toolCallId)
+
+      if (et) {
+        et.dag = run
+        this.publishEpisodes()
+        break
+      }
+    }
   }
 
   upsertSubagent(

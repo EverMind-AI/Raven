@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
+from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
@@ -1036,61 +1038,101 @@ class EverosBackend:
         agent_id: str,
         user_id: str = "default",
     ) -> list[dict[str, Any]]:
-        """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
+        return convert_messages(messages, agent_id=agent_id, user_id=user_id)
 
-        AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
-        "user", "assistant", "tool"} and ``content`` either ``str`` or
-        a list of multimodal parts.
 
-        EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
-        epoch, required), "content"}`` with role ∈ {"user",
-        "assistant", "tool"} (no ``"system"``).
+def as_ms_epoch(value: Any) -> int | None:
+    """A message's timestamp as everos's DTO wants it, or ``None`` if unreadable.
 
-        Owner mapping (EverOS derives the memory owner from ``sender_id``):
-        - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
-          agent track (cases / skills) accrues under the configured,
-          stable agent identity — and ``recall(agent_id=…)`` finds it.
-        - ``user`` → keep the caller's ``sender_id`` (the user identity);
-          ``recall(user_id=<X>)`` must use that same ``<X>``.
+    Public because ``subagent_memory`` needs it too, for the same reason
+    ``convert_messages`` is: reaching across a module boundary for a private
+    helper would work and would be the wrong shape.
 
-        Other conversions: drop ``system``; missing ``sender_id`` on a
-        user message → ``user_id``; missing ``timestamp`` → now (ms);
-        multimodal ``content`` → space-joined text; empty text → drop.
-        """
-        now_ms = int(time.time() * 1000)
-        out: list[dict[str, Any]] = []
-        for m in messages:
-            role = m.get("role")
-            if role not in ("user", "assistant", "tool"):
-                continue
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    str(part.get("text", "")).strip()
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                ).strip()
-            if not isinstance(content, str):
-                content = str(content)
-            # An assistant message may carry tool_calls with empty text —
-            # keep it (the tool result downstream references its id). The
-            # host's tool_calls are already in everos's ToolCallDTO shape
-            # (``to_openai_tool_call``); tool messages carry tool_call_id.
-            tool_calls = m.get("tool_calls") if role == "assistant" else None
-            if not content and not tool_calls:
-                continue
-            entry: dict[str, Any] = {
-                "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
-                "role": role,
-                "timestamp": m.get("timestamp") or now_ms,
-                "content": content,
-            }
-            if tool_calls:
-                entry["tool_calls"] = tool_calls
-            if role == "tool" and m.get("tool_call_id"):
-                entry["tool_call_id"] = m["tool_call_id"]
-            out.append(entry)
-        return out
+    Accepts the three spellings that reach here: a ms-epoch int, a seconds-epoch
+    int, and an ISO 8601 string (which is what ``instance_log.build_turn``
+    stamps rows with). The seconds/ms split is by magnitude -- a seconds value
+    stays below the threshold until the year 5138, and a ms value clears it
+    only once the date reaches 1973-03-03.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if not math.isfinite(number) or number <= 0:
+            return None
+        return int(number * 1000) if number < 100_000_000_000 else int(number)
+    if isinstance(value, str):
+        try:
+            ms = int(datetime.fromisoformat(value).timestamp() * 1000)
+        except ValueError:
+            return None
+        return ms if ms > 0 else None
+    return None
+
+
+def convert_messages(
+    messages: list[dict[str, Any]],
+    *,
+    agent_id: str,
+    user_id: str = "default",
+) -> list[dict[str, Any]]:
+    """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
+
+    AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
+    "user", "assistant", "tool"} and ``content`` either ``str`` or
+    a list of multimodal parts.
+
+    EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
+    epoch, required), "content"}`` with role ∈ {"user",
+    "assistant", "tool"} (no ``"system"``).
+
+    Owner mapping (EverOS derives the memory owner from ``sender_id``):
+    - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
+      agent track (cases / skills) accrues under the configured,
+      stable agent identity — and ``recall(agent_id=…)`` finds it.
+    - ``user`` → keep the caller's ``sender_id`` (the user identity);
+      ``recall(user_id=<X>)`` must use that same ``<X>``.
+
+    Other conversions: drop ``system``; missing ``sender_id`` on a
+    user message → ``user_id``; missing or unreadable ``timestamp`` ->
+    now (ms); an ISO 8601 string or a seconds-epoch number -> ms epoch
+    (everos's DTO takes only ms, and ``build_turn`` stamps ISO);
+    multimodal ``content`` → space-joined text; empty text → drop.
+    """
+    now_ms = int(time.time() * 1000)
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        role = m.get("role")
+        if role not in ("user", "assistant", "tool"):
+            continue
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                str(part.get("text", "")).strip()
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+        if not isinstance(content, str):
+            content = str(content)
+        # An assistant message may carry tool_calls with empty text —
+        # keep it (the tool result downstream references its id). The
+        # host's tool_calls are already in everos's ToolCallDTO shape
+        # (``to_openai_tool_call``); tool messages carry tool_call_id.
+        tool_calls = m.get("tool_calls") if role == "assistant" else None
+        if not content and not tool_calls:
+            continue
+        entry: dict[str, Any] = {
+            "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
+            "role": role,
+            "timestamp": as_ms_epoch(m.get("timestamp")) or now_ms,
+            "content": content,
+        }
+        if tool_calls:
+            entry["tool_calls"] = tool_calls
+        if role == "tool" and m.get("tool_call_id"):
+            entry["tool_call_id"] = m["tool_call_id"]
+        out.append(entry)
+    return out
 
 
 # EverOS accumulates the profile monotonically over an install's life with no
@@ -1187,4 +1229,4 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     return EverosBackend(ctx)
 
 
-__all__ = ["EverosBackend", "make_backend"]
+__all__ = ["EverosBackend", "as_ms_epoch", "convert_messages", "make_backend"]
