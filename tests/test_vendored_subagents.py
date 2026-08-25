@@ -1,8 +1,11 @@
 """The vendored subagent checkouts must not drift without a deliberate record.
 
-Lives in the suite rather than only in pre-commit because the GitLab pipeline
-runs pytest and not pre-commit, and a sync that lands on these trees reaches main
-through that pipeline.
+Lives in the suite as well as in pre-commit because the two see different
+things. The hook is gated on ``files: '^subagents/'`` and fires on a diff, so it
+says nothing about a tree that arrived already drifted; this checks the whole
+tree on every run. The GitLab side reinforces it: that pipeline's config is not
+in this tree at all -- it is ``.gitlab-ci.yml`` on the orphan ``ci`` branch --
+and its ``tests`` job runs pytest without pre-commit.
 """
 
 from __future__ import annotations

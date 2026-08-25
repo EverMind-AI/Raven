@@ -79,15 +79,21 @@ class TestTheOffer:
 
     async def test_the_caveats_are_where_a_person_will_read_them(self):
         """The schema declares ``description`` as text for the client to display.
-        Raven has one model setting per installation, and the switch is refused
-        mid-turn -- neither is inferable from the protocol's shape."""
+
+        Both caveats changed with the per-session binding: the switch is scoped
+        to this session, and a running turn no longer refuses it -- it keeps the
+        binding it entered with. Neither is inferable from the protocol's shape,
+        and the assertions are on the substance rather than the sentence so a
+        reword does not read as a behaviour change.
+        """
         call, _ = _caller()
 
         option = await model_option(call)
 
         assert option["description"] == MODEL_DESCRIPTION
-        assert "every session" in option["description"]
-        assert "while a turn is running" in option["description"]
+        assert "this session only" in option["description"]
+        assert "next turn" in option["description"]
+        assert "every session" not in option["description"], "the process-wide caveat is no longer true"
 
     async def test_the_current_value_names_its_provider(self):
         """Stored the way every other surface stores it, so the value a client
@@ -302,7 +308,32 @@ class TestApplying:
 
         await set_model(call, session_id="acp:s1", value="anthropic/opus-5")
 
-        assert calls == [("config.set", {"key": "model", "value": "anthropic/opus-5", "session_id": "acp:s1"})]
+        # The slug travels as its own field, not as a prefix: config.set model
+        # requires the provider and refuses to derive it from the id.
+        assert calls == [
+            ("config.set", {"key": "model", "value": "opus-5", "provider": "anthropic", "session_id": "acp:s1"})
+        ]
+
+    async def test_a_gateway_model_keeps_the_slug_that_pays_for_it(self):
+        """The case a prefix cannot express. ``openrouter`` serving
+        ``anthropic/claude-haiku-4-5`` and ``anthropic`` serving
+        ``claude-haiku-4-5`` are both real and bill different accounts; only the
+        leading slug tells them apart, and it has to survive the split."""
+        call, calls = _caller()
+
+        await set_model(call, session_id="acp:s1", value="openrouter/anthropic/claude-haiku-4-5")
+
+        assert calls[0][1]["provider"] == "openrouter"
+        assert calls[0][1]["value"] == "anthropic/claude-haiku-4-5"
+
+    async def test_a_value_naming_no_provider_is_refused_here(self):
+        """Refused in this layer rather than sent on. The runtime would refuse it
+        too, but as a validation error about a field the client never set."""
+        call, calls = _caller()
+
+        with pytest.raises(ValueError):
+            await set_model(call, session_id="acp:s1", value="opus-5")
+        assert calls == []
 
     async def test_the_session_id_is_passed_so_a_running_turn_can_refuse_it(self):
         """``config.set`` guards on ``is_session_busy``. Swapping the provider
@@ -322,3 +353,33 @@ class TestApplying:
             await set_model(call, session_id="acp:s1", value=value)
 
         assert calls == []
+
+
+class TestAgainstTheRealSetter:
+    """The one shape that catches an adapter drifting from the runtime.
+
+    Every other test here and in ``test_acp_methods.py`` stubs ``config.set``
+    and asserts which params were sent, so both stayed green while the real
+    setter refused every switch this adapter made: upstream's v0.1.13 made the
+    provider required and nothing here supplied it. A stub cannot notice that.
+    """
+
+    async def test_a_switch_this_adapter_emits_is_one_the_runtime_accepts(self, tmp_path, monkeypatch) -> None:
+        from pathlib import Path
+
+        from raven.rpc.methods.config import config_set
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        sent: list[dict] = []
+
+        async def call(method: str, params: dict):
+            sent.append({"method": method, **params})
+            return await config_set(params)
+
+        # Both shapes this module emits: a direct vendor, and a gateway serving
+        # an id that already carries a vendor prefix of its own.
+        for value in ("anthropic/claude-opus-4-5", "openrouter/anthropic/claude-haiku-4-5"):
+            await set_model(call, session_id="acp:s1", value=value)
+
+        assert [s["provider"] for s in sent] == ["anthropic", "openrouter"]
+        assert [s["value"] for s in sent] == ["claude-opus-4-5", "anthropic/claude-haiku-4-5"]

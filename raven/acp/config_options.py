@@ -32,15 +32,17 @@ from typing import Any
 
 from loguru import logger
 
+from raven.providers.wire import stored_model_id
+
 MODEL_OPTION_ID = "model"
 
 # Said in the option itself, not just in the compatibility matrix: the schema
 # declares ``description`` as text for the client to display, and this is the
 # caveat a person needs at the moment they pick.
 MODEL_DESCRIPTION = (
-    "The model this agent answers with. Raven has one model setting per installation "
-    "rather than per session, so changing it here affects every session on this "
-    "connection, and it cannot be changed while a turn is running."
+    "The model this agent answers with. The change applies to this session only, "
+    "so other sessions on this connection keep theirs, and it takes effect on the "
+    "session's next turn if one is running."
 )
 
 # A dropdown built from every configured provider's catalogue. Past this the list
@@ -94,13 +96,25 @@ async def model_option(call: Call) -> dict[str, Any] | None:
 async def set_model(call: Call, *, session_id: str, value: Any) -> None:
     """Apply a model selection, letting the runtime's own refusals through.
 
-    ``session_id`` is passed so ``config.set`` can refuse a switch during that
-    session's turn. Swapping the provider under a running request is the failure
-    the guard exists for, and this layer must not route around it.
+    ``session_id`` is what scopes the switch to this session: ``config.set``
+    sends no ``scope``, so a call carrying a session id writes that session's
+    binding and leaves every other session alone.
+
+    The leading segment of the value is the provider, and it is sent as its own
+    field because ``config.set model`` requires one -- a model id does not name
+    whose credential serves it, and deriving it from the prefix is the
+    mis-routing the wire format exists to prevent. The value the client sends
+    back is one this module emitted, so the split is on a shape we wrote.
     """
     if not isinstance(value, str) or not value:
         raise ValueError("the model value must be a non-empty string")
-    await call("config.set", {"key": MODEL_OPTION_ID, "value": value, "session_id": session_id})
+    provider, _, model = value.partition("/")
+    if not model:
+        raise ValueError("the model value must name its provider as '<provider>/<model>'")
+    await call(
+        "config.set",
+        {"key": MODEL_OPTION_ID, "value": model, "provider": provider, "session_id": session_id},
+    )
 
 
 def _provider_of(options: Any) -> str:
@@ -160,20 +174,19 @@ def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]
 
 
 def _qualified(provider: str, model: str) -> str:
-    """A model id naming its provider, without naming it twice.
+    """A model id with the slug of the credential that serves it in front.
 
-    Measured, not defensive: the catalogue's own ids are *already* qualified
-    (``anthropic/claude-opus-5``), so prefixing unconditionally produced
-    ``anthropic/anthropic/claude-opus-5`` -- a value ``config.set`` would refuse
-    and a dropdown a person could not use. The fixtures used bare ids, so only the
-    real catalogue showed it.
-
-    Qualified because that is how every other surface stores a selection, so the
-    value a client sends back is one ``config.set`` already understands.
+    ``stored_model_id`` is the same spelling every other surface stores, and it
+    prefixes unconditionally on purpose. Skipping the prefix for an id that
+    already held a slash -- which is what this did -- collapsed two different
+    choices onto one string: ``openrouter`` serving ``anthropic/claude-haiku-4-5``
+    and ``anthropic`` serving ``claude-haiku-4-5`` both came out as the latter,
+    and the two bill different accounts. Nothing downstream could recover which
+    one a person picked, so the prefix is the only thing carrying it.
     """
-    if not provider or "/" in model:
+    if not provider:
         return model
-    return f"{provider}/{model}"
+    return stored_model_id(provider, model)
 
 
 def _option(slug: str, model: str, label: Any) -> dict[str, Any]:
