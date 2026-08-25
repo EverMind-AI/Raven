@@ -11,8 +11,7 @@ from raven.spine import (
     ToolEvent,
     ToolPhase,
 )
-from raven.spine.delivery import Outlet
-from raven.spine.delivery import Capabilities
+from raven.spine.delivery import Capabilities, Outlet
 from raven.spine.message import Media
 
 
@@ -111,8 +110,10 @@ async def test_deliver_files_falls_back_to_a_compact_list_without_attachments():
 
     await adapter.deliver(event)
 
-    assert ch.sent == [(
-        "c1",
-        "Final files\nFiles ready: report.pdf. This channel cannot attach files; open the same session in Raven UI or TUI.",
-        None,
-    )]
+    assert ch.sent == [
+        (
+            "c1",
+            "Final files\nFiles ready: report.pdf. This channel cannot attach files; open the same session in Raven UI or TUI.",
+            None,
+        )
+    ]

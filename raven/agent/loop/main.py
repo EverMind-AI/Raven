@@ -3131,10 +3131,10 @@ class AgentLoop:
                                 "result_preview": preview,
                                 "truncated": len(display_src) > _TOOL_PREVIEW_MAX_CHARS,
                                 "metadata": tool_metadata,
-                            # The tool's own verdict, with the registry's
-                            # failure text kept as the backstop for a result
-                            # that carried none. See ToolEvent.ok.
-                            "ok": bool(getattr(result, "ok", True)) and not model_text.startswith("Error"),
+                                # The tool's own verdict, with the registry's
+                                # failure text kept as the backstop for a result
+                                # that carried none. See ToolEvent.ok.
+                                "ok": bool(getattr(result, "ok", True)) and not model_text.startswith("Error"),
                                 # The one hop the diff has to make by hand: the
                                 # registry attaches it to the result, and only
                                 # this event reaches a UI.

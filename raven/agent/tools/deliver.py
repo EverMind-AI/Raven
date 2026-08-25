@@ -14,6 +14,7 @@ from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.base import Tool
 from raven.agent.tools.filesystem import _resolve_path, _with_current_root
 
+
 @dataclass(frozen=True)
 class _DeliverCtx:
     channel: str
