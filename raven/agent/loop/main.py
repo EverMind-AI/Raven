@@ -630,6 +630,10 @@ class AgentLoop:
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()
         self._tool_search_config = tool_search_config
+        # Assigned for real only when the feature is on, but read on every
+        # backgrounded DAG submission -- including default deploys, where an
+        # unset attribute would raise instead of answering "no route".
+        self.tool_search_controller = None
         self.tools = ToolRegistry()
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
@@ -1226,8 +1230,18 @@ class AgentLoop:
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 ask=self._confirm_graph,
+                control_reachable=self.dag_control_reachable,
             )
         )
+        # The graph tool's own acceptance text is the only advertisement these
+        # two get: hidden from the schema so the per-turn tool list carries
+        # nothing a conversation that never starts a DAG has any use for, they
+        # stay reachable through the registry (and tool_call where it exists).
+        from raven.agent.subagent_dag.control_tools import CancelDagTool, DagStatusTool
+
+        self.tools.register(CancelDagTool(loop=self))
+        self.tools.register(DagStatusTool(loop=self))
+        self.tools.hide_from_schema("cancel_dag", "dag_status")
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
@@ -1321,6 +1335,7 @@ class AgentLoop:
                 self.tools,
                 always_visible=always,
                 search_result_limit=cfg.search_result_limit,
+                compaction_threshold=cfg.compaction_threshold,
             )
             self.tools.register(ToolSearchTool(self.tool_search_controller))
             self.tools.register(ToolCallTool(self.tool_search_controller))
@@ -1328,10 +1343,7 @@ class AgentLoop:
             # the final tool with ``cache_control`` (else the marked tool may be
             # filtered out and the breakpoint lost).
             self.strategies.register(
-                ToolSearchStrategy(
-                    self.tool_search_controller,
-                    compaction_threshold=cfg.compaction_threshold,
-                ),
+                ToolSearchStrategy(self.tool_search_controller),
                 first=True,
             )
 
@@ -2480,13 +2492,29 @@ class AgentLoop:
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
         self.tools.set_channel(channel)
-        for name in ("message", "spawn", "cron", "deep_research", "run_subagent_dag", "deliver_files"):
+        for name in (
+            "message",
+            "spawn",
+            "cron",
+            "deep_research",
+            "run_subagent_dag",
+            "deliver_files",
+            "dag_status",
+            "cancel_dag",
+        ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research", "run_subagent_dag", "deliver_files"):
+                elif name in (
+                    "spawn",
+                    "deep_research",
+                    "run_subagent_dag",
+                    "deliver_files",
+                    "dag_status",
+                    "cancel_dag",
+                ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
@@ -2537,6 +2565,19 @@ class AgentLoop:
     def cancel_dag_run(self, run_id: str) -> bool:
         """Stop one in-flight run, whichever instance owns it."""
         return any(tool.request_cancel(run_id) for tool in self.dag_tools())
+
+    def dag_control_reachable(self) -> bool:
+        """Whether the schema-hidden dag control tools have a call path.
+
+        The graph tool advertises ``dag_status`` / ``cancel_dag`` in its
+        acceptance text, and this is the gate that keeps the advertisement
+        honest: it answers the same question ToolSearchStrategy answers when it
+        assembles the per-turn tool list, through the controller's single
+        predicate rather than a second copy of the fold condition.
+        """
+        if self.tool_search_controller is None:
+            return False
+        return self.tool_search_controller.tool_call_available()
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the graph tools' progress sink (host wires it to the web
