@@ -272,7 +272,7 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
       <div className="h">{t('gui.ws.file_binary')}</div>
       <div className="w">{f.path}</div>
       {canApp ? (
-        <div className="acts">
+        <div className="binacts">
           <button className="mini ghost" onClick={() => hand(chosen)}>
             {chosen
               ? t('gui.ws.open_with_app', { a: chosen })

@@ -22,8 +22,11 @@ function wire(): void {
   }
   window.RavenShell = fakeShell
   localStorage.clear()
+  document.body.innerHTML = '<div id="split" data-open="false"></div>'
   desk._resetForTests()
 }
+
+const split = (): HTMLElement => document.getElementById('split') as HTMLElement
 
 beforeEach(wire)
 
@@ -34,6 +37,39 @@ afterEach(() => {
 })
 
 describe('desk store', () => {
+  it('re-opening a pane that is already up changes nothing', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+    split().dataset.open = 'true'
+    desk.toggleSolo('file:/workspace/a.ts')
+    const before = desk.getState()
+    const panesBefore = before.panes
+    panelCalls.length = 0
+
+    desk.openDeskFile('/workspace/a.ts')
+
+    const after = desk.getState()
+    /* The same pane objects, not equal copies: replacing them re-tiled the grid
+       and repainted panes to arrive at the screen that was already there. */
+    expect(after.panes).toBe(panesBefore)
+    expect(after.panes[0]).toBe(panesBefore[0])
+    expect(after.solo).toBe('file:/workspace/a.ts')
+    expect(after.active).toBe('file:/workspace/a.ts')
+  })
+
+  it('does not re-open a workspace that is already showing', () => {
+    split().dataset.open = 'true'
+    panelCalls.length = 0
+    desk.openDeskFile('/workspace/a.ts')
+    /* Opening the workspace runs a full workspace draw; asking for one while it
+       is already open rebuilt the legacy panel's islands for nothing. */
+    expect(panelCalls).toHaveLength(0)
+
+    split().dataset.open = 'false'
+    desk.openDeskFile('/workspace/c.ts')
+    expect(panelCalls).toEqual([true])
+  })
+
   it('updates pane identity and selection when navigating to another file', () => {
     desk.openDeskFile('/workspace/a.ts')
     desk.toggleSolo('file:/workspace/a.ts')
