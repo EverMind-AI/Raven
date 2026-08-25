@@ -16,7 +16,6 @@ import type {
   AppLayoutComposerProps,
   AppLayoutProps,
   AppLayoutStatusProps,
-  CompletionItem,
   GatewayServices
 } from '../app/interfaces.js'
 import type { Msg } from '../types.js'
@@ -57,14 +56,14 @@ const status: AppLayoutStatusProps = {
   voiceLabel: ''
 }
 
-const makeComposer = (completions: CompletionItem[]): AppLayoutComposerProps => ({
+const makeComposer = (): AppLayoutComposerProps => ({
   cols: 80,
   compIdx: 0,
-  completions,
-  empty: completions.length === 0,
+  completions: [],
+  empty: true,
   handleTextPaste: async () => null,
-  input: completions.length ? '/comp' : '',
-  inputBuf: completions.length ? ['/comp'] : [],
+  input: '',
+  inputBuf: [],
   pagerPageSize: 10,
   queueEditIdx: null,
   queuedDisplay: [],
@@ -75,9 +74,9 @@ const makeComposer = (completions: CompletionItem[]): AppLayoutComposerProps => 
 
 const gwServices = { gw: {}, rpc: async () => null } as unknown as GatewayServices
 
-const makeProps = (completions: CompletionItem[]): AppLayoutProps => ({
+const makeProps = (): AppLayoutProps => ({
   actions,
-  composer: makeComposer(completions),
+  composer: makeComposer(),
   mouseTracking: false,
   progress: { showProgressArea: false },
   status,
@@ -96,9 +95,9 @@ const makeProps = (completions: CompletionItem[]): AppLayoutProps => ({
   }
 })
 
-const App = ({ completions = [] }: { completions?: CompletionItem[] }) => (
+const App = () => (
   <GatewayProvider value={gwServices}>
-    <AppLayout {...makeProps(completions)} />
+    <AppLayout {...makeProps()} />
   </GatewayProvider>
 )
 
