@@ -542,6 +542,43 @@ class SubagentDeliveredEvent(_Strict):
     payload: SubagentDeliveredPayload
 
 
+SubagentRunStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+
+
+class SubagentStatusPayload(_Strict):
+    task_id: str = Field(..., description="The manager's short id for this run, stable across its lifecycle.")
+    agent: str
+    label: str
+    status: SubagentRunStatus
+    call_id: str | None = Field(
+        default=None,
+        description=(
+            "The spawn record id `subagent.context` reads. Known from `running` onward; a "
+            "`pending` run has not opened its record yet, so there is nothing to read."
+        ),
+    )
+    instance: str | None = Field(
+        default=None,
+        description="The addressable handle, when the caller named or minted one.",
+    )
+    started_at: int | None = None
+    ended_at: int | None = None
+
+
+class SubagentStatusEvent(_Strict):
+    """One spawned run's lifecycle transition, as it happens.
+
+    ``subagent.delivered`` marks where a finished result re-entered the
+    conversation; this event is the run itself moving -- queued, started,
+    finished -- so a client can render live delegation without polling the
+    disk-backed lists. Terminal transitions are not replayed: a client that
+    reconnects reconciles against ``subagent.list`` instead.
+    """
+
+    type: Literal["subagent.status"]
+    payload: SubagentStatusPayload
+
+
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
 
 
@@ -800,6 +837,7 @@ TurnEvent = Annotated[
         ErrorEvent,
         CronDeliveredEvent,
         SubagentDeliveredEvent,
+        SubagentStatusEvent,
         DagRunStartedEvent,
         DagNodeUpdatedEvent,
         DagRunCompletedEvent,

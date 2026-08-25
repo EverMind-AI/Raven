@@ -213,6 +213,44 @@ describe('Md wrapping', () => {
     expect(lines).toContain('  │ nested quote')
   })
 
+  it('runs a quote rule down every wrapped row, not only the first', () => {
+    const lines = renderPlain(
+      React.createElement(
+        Box,
+        { flexDirection: 'column', width: 24 },
+        React.createElement(Md, {
+          t: DEFAULT_THEME,
+          text: '> one quoted sentence long enough to wrap over several rows'
+        })
+      )
+    )
+
+    const body = lines.filter(line => line.trim())
+
+    expect(body.length).toBeGreaterThan(1)
+    expect(body.every(line => line.startsWith('\u2502 '))).toBe(true)
+  })
+
+  it('keeps the rule across a bare `>` paragraph break', () => {
+    const lines = renderPlain(
+      React.createElement(
+        Box,
+        { flexDirection: 'column', width: 30 },
+        React.createElement(Md, { t: DEFAULT_THEME, text: '> first quoted paragraph\n>\n> second quoted paragraph' })
+      )
+    )
+
+    const body = lines.filter(line => line.trim())
+
+    const first = body.indexOf('\u2502 first quoted paragraph')
+    const gap = body.findIndex(line => line.trim() === '\u2502')
+    const second = body.indexOf('\u2502 second quoted paragraph')
+
+    expect(first).toBeGreaterThanOrEqual(0)
+    expect(gap).toBeGreaterThan(first)
+    expect(second).toBeGreaterThan(gap)
+  })
+
   it('preserves original inline-code edge spaces', () => {
     const lines = renderPlain(
       React.createElement(Box, { width: 24 }, React.createElement(Md, { t: DEFAULT_THEME, text: '` hi ` ok' }))

@@ -20,7 +20,7 @@ import { STARTUP_RESUME_ID } from '../config/env.js'
 import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
 import { dagRunsFromHistory } from '../domain/dagRun.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
-import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
+import { attachedImageNotice, imageTokenMeta, withoutSpentIntro } from '../domain/messages.js'
 import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
@@ -49,6 +49,7 @@ import {
 import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './directChatSync.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
+import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
 import { $overlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
@@ -273,7 +274,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // `historyItems` stays the main conversation's throughout -- session save,
   // /export and the slash handlers all read it, and none of them mean "whatever
   // is on screen".
-  const visibleItems = useMemo(() => visibleRows(directChat, historyItems), [directChat, historyItems])
+  const visibleItems = useMemo(
+    () => withoutSpentIntro(visibleRows(directChat, historyItems)),
+    [directChat, historyItems]
+  )
 
   const virtualRows = useMemo<TranscriptRow[]>(
     () => visibleItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
@@ -554,12 +558,14 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // three chances to forget the fourth.
   useEffect(() => {
     void fetchInstances(rpc, ui.sid)
+    void fetchLiveAgents(rpc, ui.sid)
   }, [rpc, ui.sid])
 
   // Both event paths refresh the strip through this binding: `subagent.*`
   // arrives on the legacy gateway bus, `dag.*` only on the typed chat stream,
   // and neither owns a gateway rpc.
   useEffect(() => bindInstanceRefresh(rpc, () => getUiState().sid), [rpc])
+  useEffect(() => bindLiveAgentsRefresh(rpc, () => getUiState().sid), [rpc])
 
   // Entering an instance loads its past turns. The record directories are the
   // only memory of a direct chat that survives a restart -- they are absent
@@ -581,6 +587,66 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // A watched DAG node is re-read while it works; see `useDagNodePoll` for why
   // that is a read rather than a stream.
   useDagNodePoll(rpc, sidRef, dagRuns, pinnedDagRuns, dagOpen)
+
+  // A graph outlives the turn that started it: `run_subagent_dag` returns and the
+  // reply commits while nodes are still running, and from then on the transcript
+  // is drawing `tool.dag` -- the copy frozen at commit time. So a run that
+  // finished after its turn read "0 done" forever.
+  //
+  // Written back into the history item rather than merged at render, because the
+  // frozen copy is also what `messageHeightKey` measures: overriding only the
+  // draw would leave the virtualizer reserving rows for the old graph shape.
+  // `hydrateDagRuns` sets the same field the same way on session resume.
+  useEffect(() => {
+    if (dagRuns.length === 0) {
+      return
+    }
+
+    const live = new Map(dagRuns.map(run => [run.runId, run]))
+
+    setHistoryItems(prev => {
+      let touched = false
+      const next = prev.map(msg => {
+        if (!msg.episodes?.length) {
+          return msg
+        }
+
+        let msgTouched = false
+        const episodes = msg.episodes.map(episode => {
+          let epTouched = false
+          const tools = episode.tools.map(tool => {
+            const run = tool.dag && live.get(tool.dag.runId)
+
+            if (!run || run === tool.dag) {
+              return tool
+            }
+
+            epTouched = true
+
+            return { ...tool, dag: run }
+          })
+
+          if (!epTouched) {
+            return episode
+          }
+
+          msgTouched = true
+
+          return { ...episode, tools }
+        })
+
+        if (!msgTouched) {
+          return msg
+        }
+
+        touched = true
+
+        return { ...msg, episodes }
+      })
+
+      return touched ? next : prev
+    })
+  }, [dagRuns, setHistoryItems])
 
   const answerClarify = useCallback(
     (answer: string) => {

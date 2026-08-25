@@ -426,6 +426,36 @@ class TestExecToolWithMockExecutor:
         assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
+    async def test_workspace_restriction_allows_null_device_redirection(self, tmp_path):
+        """`2>/dev/null` names a device, not a workspace escape. Blocking it
+        turned every quiet read-only probe (`fc-list ... 2>/dev/null`) into a
+        terminal safety refusal that ended headless runs."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("fc-list :lang=zh 2>/dev/null | head -5", working_dir=str(tmp_path))
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
+    async def test_workspace_restriction_still_blocks_real_paths_beside_a_device(self, tmp_path):
+        """The device exemption must not open the door for the path next to it."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("cat /etc/passwd 2>/dev/null", working_dir=str(tmp_path))
+        assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
         """Non-sandboxed executor: deny-list guard is applied."""
         from raven.agent.tools.shell import ExecTool

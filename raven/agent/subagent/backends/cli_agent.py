@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.subagent import activity
 from raven.agent.subagent.backends.base import bounded_delta
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
@@ -269,14 +270,25 @@ class CliAgentBackend:
         self,
         proc: asyncio.subprocess.Process,
         stdin_bytes: bytes | None,
-        on_delta: Callable[[str], Awaitable[None]],
+        on_delta: Callable[[str], Awaitable[None]] | None,
     ) -> tuple[bytes, bytes]:
-        """``communicate()``, plus the reply text of each stdout line as it lands.
+        """``communicate()``, plus the run's output observed as it lands.
 
         Returns the same ``(stdout, stderr)`` bytes the buffered call does, so
         everything downstream -- the transcript parse, the session-id search,
         the recorded attempt -- reads exactly what it read before. Streaming is
         an observation of the run, not a second way of getting its result.
+
+        Two observers, both optional and both live-only:
+
+        * ``on_delta`` gets the reply text of each stdout line, where the
+          transcript format carries partial text (``delta_reader``);
+        * the activity console (:func:`activity.note_console`) gets whatever a
+          human watching the terminal would have seen -- extracted reply text
+          where a delta reader exists, raw stdout lines for the plain ``text``
+          format, and stderr always, since that is where a CLI logs its
+          progress. Machine formats with no delta reader (codex_jsonl and kin)
+          put nothing readable on stdout mid-run, so only their stderr shows.
 
         Fixed-size reads with a line buffer of its own rather than
         ``StreamReader.readline``, whose 64 KiB limit raises on a longer line:
@@ -290,6 +302,7 @@ class CliAgentBackend:
         is still writing its prompt deadlocks both ends.
         """
         read_delta = delta_reader(self.transcript_format)
+        raw_console = read_delta is None and (self.transcript_format or "text") == "text"
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
 
@@ -307,27 +320,39 @@ class CliAgentBackend:
             finally:
                 proc.stdin.close()
 
+        async def publish_out_line(line: str) -> None:
+            if read_delta is not None:
+                if text := read_delta(line):
+                    activity.note_console(text)
+                    if on_delta is not None:
+                        await on_delta(text)
+            elif raw_console:
+                activity.note_console(line + "\n")
+
         async def pump_out() -> None:
             if proc.stdout is None:
                 return
             pending = b""
             while chunk := await proc.stdout.read(_READ_CHUNK):
                 out_chunks.append(chunk)
-                if read_delta is None:
-                    continue
                 *lines, pending = (pending + chunk).split(b"\n")
                 for line in lines:
-                    if text := read_delta(line.decode("utf-8", "replace")):
-                        await on_delta(text)
+                    await publish_out_line(line.decode("utf-8", "replace"))
             # A transcript's last line need not end in a newline.
-            if pending and read_delta is not None and (text := read_delta(pending.decode("utf-8", "replace"))):
-                await on_delta(text)
+            if pending:
+                await publish_out_line(pending.decode("utf-8", "replace"))
 
         async def pump_err() -> None:
             if proc.stderr is None:
                 return
+            pending = b""
             while chunk := await proc.stderr.read(_READ_CHUNK):
                 err_chunks.append(chunk)
+                *lines, pending = (pending + chunk).split(b"\n")
+                for line in lines:
+                    activity.note_console(line.decode("utf-8", "replace") + "\n")
+            if pending:
+                activity.note_console(pending.decode("utf-8", "replace"))
 
         pumps = [asyncio.create_task(coro) for coro in (feed(), pump_out(), pump_err())]
         try:
@@ -382,13 +407,11 @@ class CliAgentBackend:
             # exit and have its pid recycled by the OS.
             pgid = proc.pid
             stdin_bytes = None if used_placeholder else task.encode("utf-8")
-            # A spawn keeps `communicate()` -- the well-worn path -- and only a
-            # caller that asked to watch the reply pays for the line pump.
-            capture = (
-                proc.communicate(input=stdin_bytes)
-                if on_delta is None
-                else self._communicate_streaming(proc, stdin_bytes, on_delta)
-            )
+            # Always the line pump, never buffered `communicate()`: the live
+            # activity console watches every run now, not only the ones whose
+            # caller asked to stream the reply. The pump returns the same bytes
+            # the buffered call did.
+            capture = self._communicate_streaming(proc, stdin_bytes, on_delta)
             try:
                 if self.timeout is not None:
                     out, err = await asyncio.wait_for(capture, timeout=self.timeout)
@@ -687,7 +710,8 @@ class CliAgentBackend:
                 agent_id = jsonl_id
             elif self._session_id_re is not None:
                 # stdout first, then stderr: hermes prints the id only on stderr,
-                # which `combined` below already counts as part of the transcript.
+                # so id recovery has to read both streams even though the reply
+                # no longer does.
                 for stream in (stdout, stderr):
                     if (m := self._session_id_re.search(stream)) is not None:
                         agent_id = m.group(1)
@@ -698,13 +722,18 @@ class CliAgentBackend:
         if created and agent_id is not None:
             await self._registry.commit(skey, self.name, handle, agent_id)
 
-        combined = f"{stdout}\n{stderr}" if stderr else stdout
         if jsonl_reply is not None:
             output = jsonl_reply.strip()
         elif self._output_re is not None and (m := self._output_re.search(stdout)) is not None:
             output = m.group(1).strip()
         else:
-            output = combined.strip()
+            # stderr is a log lane, not part of the answer: it streams to the
+            # live console and rides in the attempts record, and folding it
+            # into a successful reply is what forced quiet launchers to bury
+            # their progress in files instead of logging it. It still stands
+            # in when stdout said nothing at all -- an answerless run's stderr
+            # is the only account it left.
+            output = stdout.strip() or stderr.strip()
 
         warning = None
         if created and self.id_source == "derived" and agent_id is None:

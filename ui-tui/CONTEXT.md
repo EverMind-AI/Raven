@@ -67,7 +67,29 @@ _Avoid_: "StatusRulePane" — the exported component is `StatusRule`, there is n
 
 **Agents Overlay**:
 The overlay showing the subagent tree (`SubagentNode` hierarchy with subtree
-token/cost aggregates); opened with `/agents`, including for past turns by history index.
+token/cost aggregates) merged with the Live Agents rows; opened with `/agents` or Ctrl+T,
+including for past turns by history index. A running row's detail pane polls that run's
+own transcript (`subagent.context` for a spawn, `dag.node` for a graph node — the same
+message shape by design) and redraws it while the run works.
+
+**Live Agents** (`ui-tui/src/app/liveAgentsStore.ts`):
+The session's delegated runs — spawns and dag nodes — folded from `subagent.status` and
+`dag.*` events, reconciled against `subagent.list` on the boundaries events cannot cover
+(cold start, reconnect, a missed terminal frame). Deliberately not turn-scoped: a
+background spawn outlives the turn that made it, and `$turnState.subagents` is cleared at
+every turn end. Feeds the Status Bar's ⚡ HUD, the Live Agents Strip, and the Agents
+Overlay's live view.
+_Avoid_: "running agents" — finished rows linger for a retention window so a just-ended
+run is still inspectable.
+
+**Live Agents Strip** (`ui-tui/src/components/liveAgentsStrip.tsx`):
+The rows under the status rule, one per *active* delegated run (running or queued, spawns
+and dag nodes alike), with a ticking elapsed time. Clicking a row opens the Agents Overlay
+straight into that run's detail (`agentsFocusId`, consumed once), where its transcript
+streams as it works. Hidden entirely while nothing is active — a live monitor, not a
+history; finished runs are the Agents Overlay's business.
+_Avoid_: confusing it with Instance Chips — a chip addresses an *instance* for Direct
+Chat (talking), a strip row watches a *run* (working).
 
 **Subagents Overlay**:
 The overlay for configuring third-party sub-agents - listing them by whether they can

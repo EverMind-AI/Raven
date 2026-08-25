@@ -9,6 +9,7 @@ import type { OverlayState } from './interfaces.js'
 
 const buildOverlayState = (): OverlayState => ({
   agents: false,
+  agentsFocusId: null,
   agentsInitialHistoryIndex: 0,
   approval: null,
   clarify: null,
@@ -77,6 +78,7 @@ export const resetFlowOverlays = () =>
   $overlayState.set({
     ...buildOverlayState(),
     agents: $overlayState.get().agents,
+    agentsFocusId: $overlayState.get().agentsFocusId,
     agentsInitialHistoryIndex: $overlayState.get().agentsInitialHistoryIndex,
     modelPicker: $overlayState.get().modelPicker,
     newInstance: $overlayState.get().newInstance,

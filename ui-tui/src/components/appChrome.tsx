@@ -13,13 +13,15 @@ import type { Theme } from '../theme.js'
 import type { Msg, Usage } from '../types.js'
 
 import { $delegationState } from '../app/delegationStore.js'
+import { $liveAgents, liveAgentCounts } from '../app/liveAgentsStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 import { fmtDuration } from '../domain/messages.js'
 import { stickyPromptFromViewport } from '../domain/viewport.js'
-import { buildSubagentTree, treeTotals, widthByDepth } from '../lib/subagentTree.js'
+import { hasMeaningfulReasoning } from '../lib/reasoning.js'
+import { buildSubagentTree, treeTotals } from '../lib/subagentTree.js'
 import { fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot, useViewportSnapshot } from '../lib/viewportStore.js'
 
@@ -82,7 +84,7 @@ const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string)
   return { frame, intervalMs: Math.max(SPINNER_TICK_MS, spinner.interval), showVerb: false }
 }
 
-function FaceTicker({ color, startedAt }: { color: string; startedAt?: null | number }) {
+export function FaceTicker({ color, startedAt }: { color: string; startedAt?: null | number }) {
   const ui = useStore($uiState)
   const style = ui.indicatorStyle
   const [tick, setTick] = useState(() => Math.floor(Math.random() * 1000))
@@ -131,6 +133,43 @@ function FaceTicker({ color, startedAt }: { color: string; startedAt?: null | nu
   )
 }
 
+/**
+ * The turn's live indicator, rendered at the tail of the transcript rather than
+ * in the status rule: it marks the spot the reply is about to land in, which is
+ * what a reader watching for output is actually looking at.
+ *
+ * It shows only while the turn has nothing else to show for itself -- after the
+ * prompt and before the first token, and again between a tool result and the
+ * text that follows it. Once `streaming` has content the reply itself is the
+ * progress, a running tool row carries its own spinner and elapsed, and a
+ * reasoning row carries both as well while it scrolls its own live tail; any of
+ * the three stands in for this and it steps aside. Idle turns render nothing,
+ * so the transcript gains and loses exactly one row.
+ */
+export function WorkingIndicator({
+  busy,
+  color,
+  startedAt
+}: {
+  busy: boolean
+  color: string
+  startedAt?: null | number
+}) {
+  const awaitingReply = useTurnSelector(
+    state => !state.streaming && state.tools.length === 0 && !hasMeaningfulReasoning(state.reasoning)
+  )
+
+  if (!busy || !awaitingReply) {
+    return null
+  }
+
+  return (
+    <Box height={1}>
+      <FaceTicker color={color} startedAt={startedAt} />
+    </Box>
+  )
+}
+
 function ctxBarColor(pct: number | undefined, t: Theme) {
   if (pct == null) {
     return t.color.muted
@@ -164,29 +203,26 @@ function ctxBar(pct: number | undefined, w = 10) {
 function SpawnHud({ t }: { t: Theme }) {
   // Tight HUD that only appears when the session is actually fanning out.
   // Colour escalates to warn/error as depth or concurrency approaches the cap.
+  // Live counts come from `$liveAgents` (spawns and dag nodes, cross-turn);
+  // the turn tree still contributes depth when a gateway streams one.
   const delegation = useStore($delegationState)
+  const liveRows = useStore($liveAgents)
   const subagents = useTurnSelector(state => state.subagents)
 
   const tree = useMemo(() => buildSubagentTree(subagents), [subagents])
   const totals = useMemo(() => treeTotals(tree), [tree])
+  const { pending, running } = liveAgentCounts(liveRows)
 
-  if (!totals.descendantCount && !delegation.paused) {
+  if (!totals.descendantCount && !delegation.paused && running === 0 && pending === 0) {
     return null
   }
 
   const maxDepth = delegation.maxSpawnDepth
   const maxConc = delegation.maxConcurrentChildren
   const depth = Math.max(0, totals.maxDepthFromHere)
-  const active = totals.activeCount
 
-  // `max_concurrent_children` is a per-parent cap, not a global one.
-  // `activeCount` sums every running agent across the tree and would
-  // over-warn for multi-orchestrator runs.  The widest level of the tree
-  // is a closer proxy to "most concurrent spawns that could be hitting a
-  // single parent's slot budget".
-  const widestLevel = widthByDepth(tree).reduce((a, b) => Math.max(a, b), 0)
   const depthRatio = maxDepth ? depth / maxDepth : 0
-  const concRatio = maxConc ? widestLevel / maxConc : 0
+  const concRatio = maxConc ? running / maxConc : 0
   const ratio = Math.max(depthRatio, concRatio)
 
   const color = delegation.paused || ratio >= 1 ? t.color.error : ratio >= 0.66 ? t.color.warn : t.color.muted
@@ -200,16 +236,14 @@ function SpawnHud({ t }: { t: Theme }) {
   if (totals.descendantCount > 0) {
     const depthLabel = maxDepth ? `${depth}/${maxDepth}` : `${depth}`
     pieces.push(`d${depthLabel}`)
+  }
 
-    if (active > 0) {
-      // Label pairs the widest-level count (drives concRatio above) with
-      // the total active count for context.  `W/cap` triggers the warn,
-      // `+N` is everything else currently running across the tree.
-      const extra = Math.max(0, active - widestLevel)
-      const widthLabel = maxConc ? `${widestLevel}/${maxConc}` : `${widestLevel}`
-      const suffix = extra > 0 ? `+${extra}` : ''
-      pieces.push(`⚡${widthLabel}${suffix}`)
-    }
+  if (running > 0 || pending > 0) {
+    // `running/cap` is what drives the warn colour; `+N○` is what is still
+    // queued behind the gate.
+    const widthLabel = maxConc ? `${running}/${maxConc}` : `${running}`
+    const suffix = pending > 0 ? `+${pending}○` : ''
+    pieces.push(`⚡${widthLabel}${suffix}`)
   }
 
   const atCap = depthRatio >= 1 || concRatio >= 1
@@ -218,6 +252,7 @@ function SpawnHud({ t }: { t: Theme }) {
     <Text color={color}>
       {atCap ? ' │ ⚠ ' : ' │ '}
       {pieces.join(' ')}
+      {running > 0 || pending > 0 ? <Text color={t.color.label}> ^T</Text> : null}
     </Text>
   )
 }
@@ -284,7 +319,6 @@ export function GoodVibesHeart({ tick, t }: { tick: number; t: Theme }) {
 export function StatusRule({
   cwdLabel,
   cols,
-  busy,
   status,
   statusColor,
   model,
@@ -294,7 +328,6 @@ export function StatusRule({
   bgCount,
   sessionStartedAt,
   showCost,
-  turnStartedAt,
   updateAvailable,
   updateCommand,
   t
@@ -319,11 +352,7 @@ export function StatusRule({
       <Box flexShrink={1} width={leftWidth}>
         <Text color={t.color.border} wrap="truncate-end">
           {'─ '}
-          {busy ? (
-            <FaceTicker color={statusColor} startedAt={turnStartedAt} />
-          ) : (
-            <Text color={statusColor}>{`● ${status} `}</Text>
-          )}
+          <Text color={statusColor}>{`● ${status} `}</Text>
           <Text color={t.color.muted}> {modelLabel(model, modelReasoningEffort, modelFast)}</Text>
           {ctxLabel ? <Text color={t.color.muted}> {ctxLabel}</Text> : null}
           {bar ? (
@@ -464,7 +493,6 @@ export function TranscriptScrollbar({ scrollRef, t }: TranscriptScrollbarProps) 
 
 interface StatusRuleProps {
   bgCount: number
-  busy: boolean
   cols: number
   cwdLabel: string
   model: string
@@ -475,7 +503,6 @@ interface StatusRuleProps {
   status: string
   statusColor: string
   t: Theme
-  turnStartedAt?: null | number
   updateAvailable?: boolean
   updateCommand?: string
   usage: Usage

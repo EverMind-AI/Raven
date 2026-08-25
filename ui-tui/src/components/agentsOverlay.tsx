@@ -9,8 +9,9 @@ import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } 
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
+import type { DagNodeResult, SubagentContextResult, TranscriptMessage } from '../rpc/generated.js'
 import type { Theme } from '../theme.js'
-import type { SubagentNode, SubagentProgress } from '../types.js'
+import type { Msg, SubagentLiveRef, SubagentNode, SubagentProgress } from '../types.js'
 
 import {
   $delegationState,
@@ -18,9 +19,13 @@ import {
   applyDelegationStatus,
   toggleOverlaySection
 } from '../app/delegationStore.js'
+import { $liveAgents, toSubagentProgress } from '../app/liveAgentsStore.js'
+import { scheduleLiveAgentsRefresh } from '../app/liveAgentsSync.js'
 import { patchOverlayState } from '../app/overlayStore.js'
 import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '../app/spawnHistoryStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
+import { getUiState } from '../app/uiStore.js'
+import { toTranscriptMessages } from '../domain/messages.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
   buildSubagentTree,
@@ -37,7 +42,8 @@ import {
   treeTotals,
   widthByDepth
 } from '../lib/subagentTree.js'
-import { compactPreview } from '../lib/text.js'
+import { buildToolTrailLine, compactPreview } from '../lib/text.js'
+import { MessageLine } from './messageLine.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 
@@ -394,7 +400,197 @@ function Field({ name, t, value }: { name: string; t: Theme; value: ReactNode })
   )
 }
 
-function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) {
+const TRANSCRIPT_TAIL_MSGS = 6
+const TRANSCRIPT_POLL_MS = 600
+const CONSOLE_TAIL_CHARS = 1200
+
+/** The wire rows the main transcript's mapper would drop from a live tail:
+ * tool results after the last text-bearing message. Mid-run those are the
+ * newest activity — exactly what the watcher opened this pane for. */
+const trailingToolMsg = (rows: TranscriptMessage[]): Msg | null => {
+  let lastText = -1
+
+  rows.forEach((r, i) => {
+    if ((r.role === 'assistant' || r.role === 'user' || r.role === 'system') && (r.text ?? '').trim()) {
+      lastText = i
+    }
+  })
+
+  const trailing = rows.slice(lastText + 1).filter(r => r.role === 'tool')
+
+  if (trailing.length === 0) {
+    return null
+  }
+
+  return {
+    kind: 'trail',
+    role: 'system',
+    text: '',
+    tools: trailing.map(r =>
+      buildToolTrailLine(
+        r.name ?? 'tool',
+        typeof r.context === 'string' ? r.context : '',
+        undefined,
+        undefined,
+        r.duration_ms != null ? r.duration_ms / 1000 : undefined
+      )
+    )
+  }
+}
+
+/**
+ * The run's own transcript, read back while it runs.
+ *
+ * Polls rather than subscribes: there is no per-subagent event stream, but the
+ * server keeps a live activity index that `subagent.context` and `dag.node`
+ * both serve mid-flight (they return the same message shape by design). A
+ * finished run is fetched once — the record on disk no longer changes.
+ *
+ * Rendered through `toTranscriptMessages` + `MessageLine` — the exact pipeline
+ * a resumed main session draws with — so a delegated run reads like the main
+ * agent, not like a second renderer that drifts. The console tail (a cli
+ * lane's raw output) has no main-agent equivalent and stays a dim block.
+ */
+function LiveTranscript({
+  cols,
+  gw,
+  live,
+  refInfo,
+  t
+}: {
+  cols: number
+  gw: GatewayClient
+  live: boolean
+  refInfo: SubagentLiveRef
+  t: Theme
+}) {
+  const [msgs, setMsgs] = useState<null | TranscriptMessage[]>(null)
+
+  const callId = refInfo.kind === 'spawn' ? refInfo.callId : undefined
+  const runId = refInfo.kind === 'dag' ? refInfo.runId : undefined
+  const nodeId = refInfo.kind === 'dag' ? refInfo.nodeId : undefined
+
+  useEffect(() => {
+    let alive = true
+
+    const load = () => {
+      const sid = getUiState().sid
+
+      if (!sid) {
+        return
+      }
+
+      if (callId) {
+        gw.request<SubagentContextResult>('subagent.context', { id: callId, session_id: sid })
+          .then(raw => {
+            const r = asRpcResult<SubagentContextResult>(raw)
+
+            if (alive && r?.messages) {
+              setMsgs(r.messages)
+            }
+          })
+          .catch(() => {})
+      } else if (runId && nodeId) {
+        gw.request<DagNodeResult>('dag.node', { node: nodeId, run_id: runId, session_key: sid })
+          .then(raw => {
+            const r = asRpcResult<DagNodeResult>(raw)
+
+            if (alive && r?.node?.messages) {
+              setMsgs(r.node.messages)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
+    load()
+
+    if (!live) {
+      return () => {
+        alive = false
+      }
+    }
+
+    const timer = setInterval(load, TRANSCRIPT_POLL_MS)
+
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [callId, gw, live, nodeId, runId])
+
+  if (refInfo.kind === 'spawn' && !callId) {
+    return (
+      <OverlaySection defaultOpen t={t} title="Transcript">
+        <Text color={t.color.muted}>queued — nothing has run yet</Text>
+      </OverlaySection>
+    )
+  }
+
+  if (!msgs || msgs.length === 0) {
+    return (
+      <OverlaySection defaultOpen t={t} title="Transcript">
+        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+      </OverlaySection>
+    )
+  }
+
+  const rows = msgs.filter(m => m.role !== 'console')
+  const consoleTail = msgs
+    .filter(m => m.role === 'console')
+    .map(m => m.text ?? '')
+    .join('')
+    .slice(-CONSOLE_TAIL_CHARS)
+
+  const mapped = toTranscriptMessages(rows)
+  const trailing = trailingToolMsg(rows)
+  const items = trailing ? [...mapped, trailing] : mapped
+  const tail = items.slice(-TRANSCRIPT_TAIL_MSGS)
+  const dropped = items.length - tail.length
+
+  return (
+    <OverlaySection count={rows.length} defaultOpen t={t} title={live ? 'Transcript · live' : 'Transcript'}>
+      {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
+
+      {tail.map((m, i) => (
+        <MessageLine
+          cols={Math.max(40, cols - 6)}
+          isStreaming={live && i === tail.length - 1 && m.role === 'assistant'}
+          key={i}
+          msg={m}
+          t={t}
+        />
+      ))}
+
+      {tail.length === 0 && !consoleTail ? (
+        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+      ) : null}
+
+      {consoleTail ? (
+        <Box flexDirection="column" marginTop={tail.length > 0 ? 1 : 0}>
+          <Text color={t.color.label}>console</Text>
+          <Text color={t.color.muted} wrap="wrap">
+            {consoleTail}
+          </Text>
+        </Box>
+      ) : null}
+    </OverlaySection>
+  )
+}
+
+function Detail({
+  cols,
+  gw,
+  id,
+  node,
+  t
+}: {
+  cols: number
+  gw: GatewayClient
+  id?: string
+  node: SubagentNode
+  t: Theme
+}) {
   const { aggregate: agg, item } = node
   const { color, glyph } = statusGlyph(item, t)
 
@@ -436,6 +632,16 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
         {item.iteration != null ? <Field name="iteration" t={t} value={String(item.iteration)} /> : null}
         {item.apiCalls ? <Field name="api calls" t={t} value={String(item.apiCalls)} /> : null}
       </Box>
+
+      {item.liveRef ? (
+        <LiveTranscript
+          cols={cols}
+          gw={gw}
+          live={item.status === 'running' || item.status === 'queued'}
+          refInfo={item.liveRef}
+          t={t}
+        />
+      ) : null}
 
       {localTokens > 0 || localCost > 0 ? (
         <OverlaySection defaultOpen t={t} title="Budget">
@@ -686,12 +892,22 @@ function DiffView({
 
 // ── Main overlay ─────────────────────────────────────────────────────
 
-export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: AgentsOverlayProps) {
-  const liveSubagents = useTurnSelector(state => state.subagents)
+export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onClose, t }: AgentsOverlayProps) {
+  const turnSubagents = useTurnSelector(state => state.subagents)
+  const liveAgentRows = useStore($liveAgents)
   const delegation = useStore($delegationState)
   const history = useStore($spawnHistory)
   const diffPair = useStore($spawnDiff)
   const { stdout } = useStdout()
+
+  // The turn-scoped tree (legacy gateway bus) and the cross-turn live rows
+  // (`subagent.status` + `dag.*`) describe the same runs from different
+  // sources; the richer turn rows win when both name an id.
+  const liveSubagents = useMemo(() => {
+    const seen = new Set(turnSubagents.map(s => s.id))
+
+    return [...turnSubagents, ...liveAgentRows.filter(r => !seen.has(r.id)).map(toSubagentProgress)]
+  }, [liveAgentRows, turnSubagents])
 
   // historyIndex === 0: live turn.  1..N pulls the Nth-most-recent archived
   // snapshot.  /replay passes N on open.
@@ -772,10 +988,11 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
   }, [cursor, historyIndex, mode])
 
   useEffect(() => {
-    // Warm caps + paused flag on open.
+    // Warm caps + paused flag on open, and settle the live rows against disk.
     gw.request<DelegationStatusResponse>('delegation.status', {})
       .then(r => applyDelegationStatus(asRpcResult<DelegationStatusResponse>(r)))
       .catch(() => {})
+    scheduleLiveAgentsRefresh()
   }, [gw])
 
   useEffect(() => {
@@ -783,6 +1000,25 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
       setCursor(Math.max(0, rows.length - 1))
     }
   }, [cursor, rows.length])
+
+  useEffect(() => {
+    // A strip click asked for one row's detail. Consumed exactly once — the
+    // id is cleared even when the row is gone by the time the overlay opens,
+    // so reopening later does not replay a stale jump.
+    if (!focusId) {
+      return
+    }
+
+    const idx = rows.findIndex(r => r.item.id === focusId)
+
+    if (idx >= 0) {
+      setHistoryIndex(0)
+      setCursor(idx)
+      setMode('detail')
+    }
+
+    patchOverlayState({ agentsFocusId: null })
+  }, [focusId, rows])
 
   // ── Actions ────────────────────────────────────────────────────────
 
@@ -870,10 +1106,19 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
     }
 
     if (ch === 'x' && selected) {
+      // subagent.interrupt reaches spawns only; a graph node stops with its run.
+      if (selected.item.liveRef?.kind === 'dag') {
+        return setFlash('graph nodes stop with their run — no per-node kill')
+      }
+
       return killOne(selected.item.id)
     }
 
     if (ch === 'X' && selected) {
+      if (selected.item.liveRef?.kind === 'dag') {
+        return setFlash('graph nodes stop with their run — no per-node kill')
+      }
+
       return killSubtree(selected)
     }
 
@@ -1003,7 +1248,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
 
       {rows.length === 0 ? (
         <Box flexDirection="column" flexGrow={1}>
-          <Text color={t.color.muted}>No subagents this turn. Trigger delegate_task to populate the tree.</Text>
+          <Text color={t.color.muted}>No delegated runs. spawn and run_subagent_dag populate this view live.</Text>
         </Box>
       ) : mode === 'list' ? (
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0}>
@@ -1027,7 +1272,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
         <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
           <ScrollBox flexDirection="column" flexGrow={1} flexShrink={1} ref={detailScrollRef}>
             <Box flexDirection="column" paddingBottom={4} paddingRight={1}>
-              {selected ? <Detail id={formatRowId(cursor).trim()} node={selected} t={t} /> : null}
+              {selected ? <Detail cols={cols} gw={gw} id={formatRowId(cursor).trim()} node={selected} t={t} /> : null}
             </Box>
           </ScrollBox>
 
@@ -1058,6 +1303,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
 }
 
 interface AgentsOverlayProps {
+  focusId?: null | string
   gw: GatewayClient
   initialHistoryIndex?: number
   onClose: () => void
@@ -1066,3 +1312,5 @@ interface AgentsOverlayProps {
 
 export const closeAgentsOverlay = () => patchOverlayState({ agents: false })
 export const openAgentsOverlay = () => patchOverlayState({ agents: true })
+/** Open straight into one row's detail — what a Live Agents Strip row click does. */
+export const openAgentsOverlayAt = (id: string) => patchOverlayState({ agents: true, agentsFocusId: id })

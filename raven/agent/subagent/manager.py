@@ -572,6 +572,7 @@ class SubagentManager:
         # at all until it starts running, making it invisible and unstoppable
         # from the UI for however long it waits.
         await _write_spawn_status(session_key, agent, handle, "pending")
+        self._emit_status(origin, task_id, display_summary, "pending")
 
         # Snapshot here rather than where the task starts running: it queues
         # behind the concurrency gate and a sandbox boot first, and a switch
@@ -858,6 +859,10 @@ class SubagentManager:
         logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
 
         effective_workspace = origin.get("workspace") or self.workspace
+        # From dispatch onward the inner run emits its own status transitions;
+        # before it, this frame is the only one that can report how a run
+        # still queued behind the gate (or a booting sandbox) ended.
+        dispatched = False
         try:
             # Each subagent runs its own sandbox VM; gate the count so heavy
             # fan-out can't exhaust host resources.
@@ -869,10 +874,17 @@ class SubagentManager:
                     self._home_volume(effective_workspace),
                 )
                 async with executor:
+                    dispatched = True
                     await self._run_subagent_inner(task_id, task, task_summary, origin, executor, provider, model)
+        except asyncio.CancelledError:
+            if not dispatched:
+                self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
+            raise
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
+            if not dispatched:
+                self._emit_status(origin, task_id, task_summary, "failed", ended_at=int(time.time() * 1000))
             await self._announce_result(task_id, task_summary, task, error_msg, origin, "error")
 
     def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
@@ -945,11 +957,15 @@ class SubagentManager:
         # can: a spawned call is a turn of the same instance a direct chat talks
         # to, and watching it there is the same question.
         cancelled = False
+        call_id = record.dir.name
         with activity.collecting(
-            live_key=record.dir.name, instance=(session_key or "", agent or "", handle), prompt=task
+            live_key=call_id, instance=(session_key or "", agent or "", handle), prompt=task
         ) as did:
             try:
                 await _write_spawn_status(session_key, agent, handle, "running")
+                self._emit_status(
+                    origin, task_id, task_summary, "running", call_id=call_id, started_at=int(time.time() * 1000)
+                )
                 backend = self._resolve_backend(agent)
                 # The same message list a direct chat to this handle would carry.
                 # Without it an agent the roster advertises as stateful started every
@@ -990,6 +1006,9 @@ class SubagentManager:
                         **state_kwargs,
                     )
                 await _write_spawn_status(session_key, agent, handle, "completed")
+                self._emit_status(
+                    origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)
+                )
                 record.finish(status="completed", output=final_result, activity=did)
                 await self._announce_result(
                     task_id, task_summary, task, final_result, origin, "ok", record_dir=str(record.dir)
@@ -997,10 +1016,16 @@ class SubagentManager:
             except asyncio.CancelledError:
                 cancelled = True
                 await _write_spawn_status(session_key, agent, handle, "cancelled")
+                self._emit_status(
+                    origin, task_id, task_summary, "cancelled", call_id=call_id, ended_at=int(time.time() * 1000)
+                )
                 record.finish(status="cancelled", activity=did)
                 raise
             except SubagentActionAbortedError:
                 await _write_spawn_status(session_key, agent, handle, "failed")
+                self._emit_status(
+                    origin, task_id, task_summary, "failed", call_id=call_id, ended_at=int(time.time() * 1000)
+                )
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
                 await self._announce_result(
@@ -1008,6 +1033,9 @@ class SubagentManager:
                 )
             except Exception as e:
                 await _write_spawn_status(session_key, agent, handle, "failed")
+                self._emit_status(
+                    origin, task_id, task_summary, "failed", call_id=call_id, ended_at=int(time.time() * 1000)
+                )
                 error_msg = f"Error: {str(e)}"
                 logger.error("Subagent [{}] failed: {}", task_id, e)
                 record.finish(status="failed", error=error_msg, activity=did)
@@ -1034,26 +1062,56 @@ class SubagentManager:
         self._submit = submit
 
     def set_delivery_sink(self, sink) -> None:
-        """Late-bind where ``subagent.delivered`` events go.
+        """Late-bind where ``subagent.delivered`` and ``subagent.status`` events go.
 
-        ``sink`` is an async callable ``(conversation, event_dict)``. It marks
-        the seam a delegated result re-enters its conversation at, so a client
-        can draw that seam instead of showing an unprompted assistant turn.
+        ``sink`` is an async callable ``(conversation, event_dict)``. Delivered
+        marks the seam a delegated result re-enters its conversation at, so a
+        client can draw that seam instead of showing an unprompted assistant
+        turn; status is the run itself moving, so a client can render live
+        delegation without polling the disk-backed lists.
         """
         self._delivery_sink = sink
 
-    def _emit_delivered(self, origin: dict[str, Any], payload: dict[str, Any]) -> None:
+    def _emit_event(self, session_key: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: a client that cannot hear this loses a marker, and
-        the announce it marks must not fail with it."""
+        the work it marks must not fail with it."""
         sink = self._delivery_sink
         if sink is None:
             return
         try:
-            asyncio.get_running_loop().create_task(
-                sink(origin["session_key"], {"type": "subagent.delivered", "payload": payload})
-            )
+            asyncio.get_running_loop().create_task(sink(session_key, event))
         except RuntimeError:
             pass  # no loop (sync CLI path): nothing is listening anyway
+
+    def _emit_delivered(self, origin: dict[str, Any], payload: dict[str, Any]) -> None:
+        self._emit_event(origin["session_key"], {"type": "subagent.delivered", "payload": payload})
+
+    def _emit_status(
+        self,
+        origin: dict[str, Any],
+        task_id: str,
+        label: str,
+        status: str,
+        *,
+        call_id: str | None = None,
+        started_at: int | None = None,
+        ended_at: int | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "agent": origin.get("agent") or GENERIC_AGENT,
+            "label": label,
+            "status": status,
+        }
+        if call_id is not None:
+            payload["call_id"] = call_id
+        if origin.get("instance"):
+            payload["instance"] = origin["instance"]
+        if started_at is not None:
+            payload["started_at"] = started_at
+        if ended_at is not None:
+            payload["ended_at"] = ended_at
+        self._emit_event(origin["session_key"], {"type": "subagent.status", "payload": payload})
 
     async def _announce_result(
         self,

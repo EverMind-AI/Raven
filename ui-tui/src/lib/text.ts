@@ -86,9 +86,10 @@ export const clipToWidth = (raw: string, width: number) => {
   return `${out}…`
 }
 
-// The mirror of `clipToWidth`: keep the *end* and mark the cut at the front.
-// For a tail that is being refreshed in place, where the newest characters are
-// the ones worth the cells.
+// The mirror of `clipToWidth`: keep the *end* of a string inside a display-cell
+// budget. A live tail grows at the right, so the row has to shed cells from the
+// left to stay on one line -- slicing by character instead would cut a CJK tail
+// to half the columns it was given.
 export const clipToWidthFromEnd = (raw: string, width: number) => {
   const one = raw.replace(WS_RE, ' ').trim()
 
@@ -118,6 +119,69 @@ export const clipToWidthFromEnd = (raw: string, width: number) => {
 
   // The cut often lands on a space, and `… bbbb` spends a cell saying nothing.
   return `…${out.replace(/^ /, '')}`
+}
+
+const headCells = (chars: readonly string[], budget: number) => {
+  let out = ''
+  let w = 0
+
+  for (const ch of chars) {
+    const cw = stringWidth(ch)
+
+    if (w + cw > budget) {
+      break
+    }
+
+    out += ch
+    w += cw
+  }
+
+  return out
+}
+
+const tailCells = (chars: readonly string[], budget: number) => {
+  let out = ''
+  let w = 0
+
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const cw = stringWidth(chars[i]!)
+
+    if (w + cw > budget) {
+      break
+    }
+
+    out = chars[i]! + out
+    w += cw
+  }
+
+  return out
+}
+
+// Keep both ends of an identifier inside a display-cell budget. A generated id
+// is recognisable by its head and its tail and by nothing in between: clipping
+// from the right leaves two runs of the same session looking identical for
+// twenty cells, which is worse than showing less of each.
+export const elideMiddle = (raw: string, width: number) => {
+  const one = raw.trim()
+
+  if (width <= 1 || stringWidth(one) <= width) {
+    return one
+  }
+
+  const chars = [...one]
+  const keep = width - 1
+  const head = Math.ceil(keep / 2)
+
+  return `${headCells(chars, head)}\u2026${tailCells(chars, keep - head)}`
+}
+
+// Pad to a display-cell width, clipping anything that overruns it. Used for the
+// row columns a reader scans down: `padEnd` counts code points, so one CJK name
+// in the column knocks every row below it out of alignment.
+export const padToWidth = (raw: string, width: number) => {
+  const clipped = stringWidth(raw) > width ? clipToWidth(raw, width) : raw
+
+  return clipped + ' '.repeat(Math.max(0, width - stringWidth(clipped)))
 }
 
 export const TOOL_RESULT_PREVIEW_CHARS = 200

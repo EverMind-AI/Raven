@@ -30,6 +30,7 @@ import type { Theme } from '../theme.js'
 import { $dagNodeTraces } from '../app/dagNodeStore.js'
 import { DAG_TRACE_BOX_ROWS, DAG_TRACE_ROWS } from '../config/limits.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
+import { dagNodeHandle } from '../lib/dagStatus.js'
 import { dagStreamTail, fitTraceTail } from '../lib/dagStream.js'
 import { MessageLine } from './messageLine.js'
 import { Spinner } from './thinking.js'
@@ -114,8 +115,12 @@ const TraceBox = ({
       overflow="hidden"
       width={Math.max(28, width - INDENT)}
     >
+      {/* The handle rather than the bare agent when the node has one: this box is
+          the expanded block `dagNodeHandle` is written for, and since the rows
+          carry only a short tag of a *shared* handle, it is the only place the
+          full `agent@instance` a reader needs for `/dag` exists. */}
       <Text color={t.color.muted} dim wrap="truncate-end">
-        {node.id} · {node.subagent}
+        {node.id} · {dagNodeHandle(node) || node.subagent}
         {fit.shown.length > 0 ? ` · ${messages?.length ?? 0} msgs` : ''}
         {node.outputFile ? ` → ${node.outputFile}` : ''}
       </Text>

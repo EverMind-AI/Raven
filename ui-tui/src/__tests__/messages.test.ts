@@ -8,13 +8,18 @@ import React from 'react'
 import { PassThrough } from 'stream'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import type { Episode, Msg } from '../types.js'
+
 import { turnController } from '../app/turnController.js'
 import { patchUiState } from '../app/uiStore.js'
+import { EpisodeView } from '../components/episodeView.js'
 import { MessageLine } from '../components/messageLine.js'
-import { toTranscriptMessages } from '../domain/messages.js'
+import { toTranscriptMessages, withoutSpentIntro } from '../domain/messages.js'
+import { composerPromptWidth, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import { upsert } from '../lib/messages.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
+import { TerminalScreen } from './support/terminalScreen.js'
 
 describe('toTranscriptMessages', () => {
   it('preserves assistant tool-call rows so resume does not drop prior turns', () => {
@@ -125,7 +130,10 @@ describe('toTranscriptMessages', () => {
   })
 
   it('keeps a reasoning-only row even though its own text is empty', () => {
-    const rows = [{ role: 'user', text: 'go on' }, { reasoning_content: 'thinking it through', role: 'assistant', text: '' }]
+    const rows = [
+      { role: 'user', text: 'go on' },
+      { reasoning_content: 'thinking it through', role: 'assistant', text: '' }
+    ]
 
     const turn = toTranscriptMessages(rows).find(msg => msg.kind === 'episodes')!
 
@@ -207,7 +215,12 @@ describe('toTranscriptMessages: resumed tool calls', () => {
 
   it('draws the failed variant of the delivered-arrow line for an error status', () => {
     const msgs = toTranscriptMessages([
-      { delegated: { kind: 'dag', label: 'raven-research', status: 'error' }, origin: 'subagent', role: 'user', text: 'internal' }
+      {
+        delegated: { kind: 'dag', label: 'raven-research', status: 'error' },
+        origin: 'subagent',
+        role: 'user',
+        text: 'internal'
+      }
     ])
 
     expect(msgs[0]!.text).toBe('↩ raven-research — failed; the error just joined this conversation')
@@ -367,6 +380,138 @@ describe('fold-id parity between live and resumed transcripts', () => {
   })
 })
 
+const renderRow = (msg: Msg, extra: Record<string, unknown> = {}): string => {
+  const stdout = new PassThrough()
+  const stdin = new PassThrough()
+  const stderr = new PassThrough()
+  let output = ''
+
+  Object.assign(stdout, { columns: 80, isTTY: false, rows: 24 })
+  Object.assign(stdin, { isTTY: false })
+  Object.assign(stderr, { isTTY: false })
+  stdout.on('data', chunk => {
+    output += chunk.toString()
+  })
+
+  const instance = renderSync(React.createElement(MessageLine, { cols: 80, msg, t: DEFAULT_THEME, ...extra }), {
+    patchConsole: false,
+    stderr: stderr as NodeJS.WriteStream,
+    stdin: stdin as NodeJS.ReadStream,
+    stdout: stdout as NodeJS.WriteStream
+  })
+
+  instance.unmount()
+  instance.cleanup()
+
+  return stripAnsi(output)
+}
+
+const renderEpisodes = async (props: { episodes?: Episode[]; live?: boolean; text?: string }): Promise<string> => {
+  const stdout = new PassThrough()
+  const stdin = new PassThrough()
+  const stderr = new PassThrough()
+  // Row order matters here, so the bytes go through a screen model rather than
+  // being read as a flat stream: the renderer's cursor moves would otherwise
+  // splice two transcript rows into one line of output.
+  const screen = new TerminalScreen(80, 24)
+
+  Object.assign(stdout, { columns: 80, isTTY: true, rows: 24 })
+  Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
+  Object.assign(stderr, { isTTY: true })
+  stdout.on('data', chunk => {
+    screen.write(chunk.toString())
+  })
+
+  const instance = renderSync(
+    React.createElement(EpisodeView, { cols: 80, episodes: [], t: DEFAULT_THEME, ...props }),
+    {
+      patchConsole: false,
+      stderr: stderr as NodeJS.WriteStream,
+      stdin: stdin as NodeJS.ReadStream,
+      stdout: stdout as NodeJS.WriteStream
+    }
+  )
+
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const text = screen.text()
+
+  instance.unmount()
+  instance.cleanup()
+
+  return text
+}
+
+describe('transcript reply gutter', () => {
+  it('marks a finished reply with the theme glyph', () => {
+    const line = renderRow({ role: 'assistant', text: 'ANSWER' })
+      .split('\n')
+      .find(row => row.includes('ANSWER'))
+
+    expect(line).toContain(`${DEFAULT_THEME.brand.tool} ANSWER`)
+  })
+
+  it('marks a streaming reply with the same glyph, so it does not change on settle', () => {
+    const line = renderRow({ role: 'assistant', text: 'ANSWER' }, { isStreaming: true })
+      .split('\n')
+      .find(row => row.includes('ANSWER'))
+
+    expect(line).toContain(`${DEFAULT_THEME.brand.tool} ANSWER`)
+  })
+
+  it('leaves a system notice on its own glyph, so a notice cannot read as a reply', () => {
+    const line = renderRow({ role: 'system', text: 'NOTICE' })
+      .split('\n')
+      .find(row => row.includes('NOTICE'))
+
+    expect(line).toContain('· NOTICE')
+    expect(line).not.toContain(DEFAULT_THEME.brand.tool)
+  })
+
+  it('marks a streaming reply in the episodes view, not only once it settles', async () => {
+    const frame = (await renderEpisodes({ live: true, text: 'STREAMED' }))
+      .split('\n')
+      .find(row => row.includes('STREAMED'))
+
+    expect(frame).toContain(`${DEFAULT_THEME.brand.tool} STREAMED`)
+  })
+
+  it('leaves the episodes view activity rows unmarked, so prose stays the marked voice', async () => {
+    const frame = await renderEpisodes({
+      episodes: [
+        {
+          index: 0,
+          narration: 'NARRATION',
+          reasoning: '',
+          startedAt: Date.now() - 2000,
+          tools: [
+            {
+              done: true,
+              durationMs: 1200,
+              id: 'c1',
+              name: 'read_file',
+              ok: true,
+              startedAt: Date.now() - 1800,
+              summary: 'ACTIVITY_ARG'
+            }
+          ]
+        }
+      ]
+    })
+
+    const narration = frame.split('\n').find(row => row.includes('NARRATION'))
+    const activity = frame.split('\n').find(row => row.includes('ACTIVITY_ARG'))
+
+    expect(narration).toContain(`${DEFAULT_THEME.brand.tool} NARRATION`)
+    expect(activity).not.toContain(DEFAULT_THEME.brand.tool)
+  })
+
+  it('sizes the gutter for the glyph the transcript actually draws', () => {
+    expect(transcriptGutterWidth('assistant', DEFAULT_THEME.brand.prompt)).toBe(
+      composerPromptWidth(DEFAULT_THEME.brand.tool)
+    )
+  })
+})
+
 describe('MessageLine', () => {
   it('preserves a separator after compound user prompt glyphs in transcript rows', () => {
     const stdout = new PassThrough()
@@ -419,7 +564,9 @@ describe('MessageLine', () => {
     Object.assign(stdout, { columns: 80, isTTY: false, rows: 24 })
     Object.assign(stdin, { isTTY: false })
     Object.assign(stderr, { isTTY: false })
-    stdout.on('data', chunk => { output += chunk.toString() })
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
 
     const instance = renderSync(
       React.createElement(MessageLine, {
@@ -470,5 +617,33 @@ describe('upsert', () => {
     const prev = [{ role: 'user' as const, text: 'hi' }]
     upsert(prev, 'assistant', 'yo')
     expect(prev).toHaveLength(1)
+  })
+})
+
+describe('withoutSpentIntro', () => {
+  const intro = { kind: 'intro' as const, role: 'system' as const, text: '' }
+
+  it('keeps the intro before the user has sent anything', () => {
+    const rows = [intro, { role: 'system' as const, text: 'startup notice' }]
+
+    expect(withoutSpentIntro(rows)).toBe(rows)
+  })
+
+  it('drops the intro once a prompt was sent', () => {
+    const rows = [intro, { role: 'user' as const, text: 'hello' }]
+
+    expect(withoutSpentIntro(rows)).toEqual([{ role: 'user', text: 'hello' }])
+  })
+
+  it('drops the intro once a slash command was run', () => {
+    const rows = [intro, { kind: 'slash' as const, role: 'system' as const, text: '/help' }]
+
+    expect(withoutSpentIntro(rows).some(m => m.kind === 'intro')).toBe(false)
+  })
+
+  it('leaves a transcript without an intro alone', () => {
+    const rows = [{ role: 'user' as const, text: 'hello' }]
+
+    expect(withoutSpentIntro(rows)).toEqual(rows)
   })
 })

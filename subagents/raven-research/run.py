@@ -22,12 +22,12 @@ workspace would file every turn under a fresh session and lose the history that
 `drFlow.conversation` exists to use. Distinct ids therefore still get distinct
 workspaces, which is what keeps concurrent conversations from interleaving.
 
-stdout carries the answer and the research trail, and nothing else. Raven's CLI
-backend uses the whole of a child's output as the subagent's reply (stdout plus
-stderr when stderr is non-empty), so any progress or diagnostic line printed
-here would be pasted into the conversation as if the agent had said it. Diagnostics go to `launcher.log`
-inside the run workspace instead; `--verbose` additionally mirrors them to
-stderr for a human running this by hand.
+stdout carries the answer and nothing else; raven's CLI backend takes stdout as
+the reply. stderr is the progress lane: the backend streams it to the live
+console beside the run and keeps it with the attempt record, without folding it
+into the reply, so the child's output is mirrored there as it happens.
+Diagnostics also land in `launcher.log` inside the run workspace; `--verbose`
+mirrors this launcher's own lines to stderr too, for a human running it by hand.
 """
 
 from __future__ import annotations
@@ -37,7 +37,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -304,6 +306,67 @@ def session_log(workspace: Path, chat_id: str) -> Path:
     return workspace / "sessions" / "cli" / f"{chat_id}.jsonl"
 
 
+def _preview(text: str, limit: int = 110) -> str:
+    one = " ".join(str(text).split())
+    return one if len(one) <= limit else one[: limit - 1] + "…"
+
+
+def tool_lines(entry: dict) -> list[str]:
+    """Render one transcript entry as compact tool-activity lines, or nothing.
+
+    Only the work is mirrored -- calls going out and results coming back. The
+    narration around them already reaches stderr through the child's own
+    stdout render; repeating it here would print every sentence twice.
+    """
+    if entry.get("role") == "assistant":
+        lines = []
+        for call in entry.get("tool_calls") or []:
+            fn = (call or {}).get("function") or {}
+            if name := fn.get("name"):
+                lines.append(f"→ {name}({_preview(fn.get('arguments') or '')})")
+        return lines
+    if entry.get("role") == "tool":
+        content = str(entry.get("content") or "")
+        # The untrusted fence is for the model reading the result, not for a
+        # human glancing at a progress line.
+        if content.startswith("[BEGIN UNTRUSTED") and "\n" in content:
+            content = content.split("\n", 1)[1]
+        return [f"← {entry.get('name') or 'tool'}: {_preview(content)}"]
+    return []
+
+
+def follow_partial(final: Path, stop: "threading.Event") -> None:
+    """Mirror the turn's tool activity to stderr while the child runs.
+
+    The child narrates on stdout (mirrored already) but draws tool calls as
+    transient console lines that never survive a pipe, so the committed
+    transcript is the only reliable account of them. This tails the turn's
+    `.partial.jsonl` -- the file the writer appends this turn's events to --
+    and stays quiet if it never appears; a writer that appends somewhere else
+    loses nothing but this mirror. Whole lines only: the last line of an
+    appended file may be mid-write, and parses on a later pass.
+    """
+    partial = final.with_name(final.stem + ".partial.jsonl")
+    seen = 0
+    while True:
+        finished = stop.wait(0.5)
+        try:
+            text = partial.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        lines = text[: text.rfind("\n") + 1].splitlines()
+        for raw in lines[seen:]:
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            for line in tool_lines(entry):
+                print(line, file=sys.stderr, flush=True)
+        seen = max(seen, len(lines))
+        if finished:
+            return
+
+
 def count_lines(path: Path) -> int:
     """Lines already in the transcript, so a resumed turn can skip them.
 
@@ -491,18 +554,68 @@ def main() -> int:
     )
 
     started = time.time()
+    # The child's output is mirrored to stderr line by line as it happens:
+    # raven's cli backend treats stderr as a log lane (streamed to the live
+    # console beside the run, kept with the attempt record) and no longer folds
+    # it into the reply, so a watcher sees the research work instead of a
+    # silence that ends in a report. The reply contract is unchanged: stdout
+    # still carries the answer, verbatim and alone. PYTHONUNBUFFERED because a
+    # piped child block-buffers its stdout otherwise, and a mirror that lands
+    # in 8 KiB bursts is not a live view; COLUMNS/TERM stop the child's console
+    # from wrapping long paths mid-line.
+    child_env = {
+        **os.environ,
+        "RAVEN_CLI_DEBUG": os.environ.get("RAVEN_CLI_DEBUG", ""),
+        "PYTHONUNBUFFERED": "1",
+        "COLUMNS": "400",
+        "TERM": "dumb",
+    }
+    tail: deque[str] = deque(maxlen=5)
+    timed_out = False
     try:
-        proc = subprocess.run(
-            argv, cwd=str(root), timeout=args.timeout,
-            capture_output=True, text=True,
-            env={**os.environ, "RAVEN_CLI_DEBUG": os.environ.get("RAVEN_CLI_DEBUG", "")},
+        proc = subprocess.Popen(
+            argv, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace", env=child_env,
         )
-        rc: int | None = proc.returncode
-        stderr_tail = (proc.stderr or "").strip().splitlines()[-5:]
-    except subprocess.TimeoutExpired:
-        rc, stderr_tail = None, ["timed out"]
-    finally:
+    except OSError as exc:
         rendered.unlink(missing_ok=True)
+        log(f"[run] FAILED: could not start Raven-X ({exc})")
+        print(f"FAILED: could not start Raven-X ({exc}). See {_LOG_FILE}", flush=True)
+        return 1
+
+    # A watchdog rather than a deadline checked inside the read loop: that loop
+    # blocks on the pipe, so a check inside it only runs when the child happens
+    # to say something, and a silent hang would never be killed.
+    def _expire() -> None:
+        nonlocal timed_out
+        timed_out = True
+        log(f"[run] timeout after {args.timeout}s, killing the agent")
+        proc.kill()
+
+    watchdog = threading.Timer(args.timeout, _expire)
+    watchdog.daemon = True
+    watchdog.start()
+    follow_stop = threading.Event()
+    follower = threading.Thread(target=follow_partial, args=(transcript, follow_stop), daemon=True)
+    follower.start()
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            tail.append(line)
+            log(line)
+            if not _VERBOSE:
+                print(line, file=sys.stderr, flush=True)
+        rc: int | None = proc.wait()
+    finally:
+        watchdog.cancel()
+        follow_stop.set()
+        follower.join(timeout=2)
+        rendered.unlink(missing_ok=True)
+    if timed_out:
+        rc, stderr_tail = None, ["timed out"]
+    else:
+        stderr_tail = list(tail)
     elapsed = int(time.time() - started)
 
     if rc == 1:

@@ -16,6 +16,7 @@ import type {
 } from '../gatewayTypes.js'
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
+import { openAgentsOverlay } from '../components/agentsOverlay.js'
 import { chipsForWidth, cycleTarget } from '../components/instanceChips.js'
 import { TYPING_IDLE_MS } from '../config/timing.js'
 import { buildApprovalRespond } from '../lib/approval.js'
@@ -441,6 +442,13 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     // existing priority, and before the cancel-turn path below.
     if (key.escape && getDirectChat().active !== null) {
       return leaveDirect()
+    }
+
+    // The agents overlay, from anywhere: the status bar's ⚡ HUD advertises
+    // this chord. Ctrl+T is free of the composer's line-editing chords and of
+    // tmux's default prefix (Ctrl+B), which never reaches the app.
+    if (isCtrl(key, ch, 't')) {
+      return openAgentsOverlay()
     }
 
     // Cycle the chip strip. Left/Right are otherwise the input cursor's, so

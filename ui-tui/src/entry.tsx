@@ -25,7 +25,13 @@ import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
 import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
 import { resetTerminalModes } from './lib/terminalModes.js'
+import { installWriteLog } from './lib/writeLog.js'
 import { DEFAULT_THEME } from './theme.js'
+
+// Ahead of every other write, including the mode reset below: a recording that
+// starts mid-session cannot be replayed, because the terminal state it began
+// from is not in it.
+installWriteLog()
 
 // `raven tui --print-colors` is a no-IPC diagnostic: dump the resolved
 // palette as swatches and exit. Runs before the TTY guard so it works when

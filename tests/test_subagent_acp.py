@@ -1061,6 +1061,27 @@ async def test_stderr_is_journalled_beside_the_frames(tmp_path: Path) -> None:
     assert any(r.get("dir") == "err" and "401" in r.get("text", "") for r in records)
 
 
+async def test_an_oversized_stderr_line_does_not_stop_the_drain(tmp_path: Path) -> None:
+    """The measured deadlock: one long stderr line took the drain down for good.
+
+    ``readline`` raises past its limit, and the reader used to exit its loop on
+    that -- so nothing emptied the pipe again. The child blocked at its next
+    write, inside ``logging.StreamHandler.emit`` holding the handler lock, and
+    every thread that logged queued behind it: 0% CPU, no error, no exit. It was
+    litellm's DEBUG request dumps that supplied the 146 KiB line.
+
+    Answering the turn only proves the raise was survived. The line written
+    *after* the oversized one is what proves the drain went on.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="flood"))
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    records = _journal_records(_journal_for("a"))
+    assert any(r.get("dir") == "err" and "still talking after the flood" in r.get("text", "") for r in records), (
+        "the reader stopped draining at the oversized line"
+    )
+
+
 async def test_a_failed_turn_still_records_where_its_frames_are(tmp_path: Path) -> None:
     """The failing call is the one whose wire log is worth finding."""
     from raven.agent.subagent import activity

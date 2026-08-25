@@ -856,9 +856,29 @@ function MdImpl({ avail, compact, t, text }: MdProps) {
         nodes.push(
           <Box flexDirection="column" key={key}>
             {quoteLines.map((ql, qi) => (
-              <Box key={qi} paddingLeft={Math.max(0, ql.depth - 1) * 2}>
+              // The rule is a left border rather than a `|` written into the
+              // text: a glyph in the string only lands on the first visual row,
+              // so a quote long enough to wrap lost its rule on every row but
+              // the first. A border spans the box, which is as tall as the
+              // wrapped text. Depth indents with margin, outside the rule --
+              // padding would push the text off its own rule instead.
+              <Box
+                borderBottom={false}
+                borderColor={t.color.muted}
+                borderLeft
+                borderRight={false}
+                borderStyle="single"
+                borderTop={false}
+                key={qi}
+                marginLeft={Math.max(0, ql.depth - 1) * 2}
+                // A bare `>` separates two quoted paragraphs. Its text is
+                // empty, which sizes the box to nothing and drops the row --
+                // the rule has to carry on across the gap it marks.
+                minHeight={1}
+                paddingLeft={1}
+              >
                 <Text color={t.color.muted} wrap="wrap-trim">
-                  │ <MdInline t={t} text={ql.text} />
+                  <MdInline t={t} text={ql.text} />
                 </Text>
               </Box>
             ))}

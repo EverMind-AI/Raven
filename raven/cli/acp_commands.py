@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import sys
 import threading
 from collections.abc import AsyncIterator
@@ -48,6 +49,24 @@ def acp(ctx: typer.Context) -> None:
         raise typer.Exit(code=1) from None
 
 
+def _file_log_level() -> str:
+    """The level the acp log file accepts. INFO unless asked for more.
+
+    DEBUG is expensive here in a way a level usually is not. LiteLLM's
+    ``print_args_passed_to_litellm`` writes the whole request -- system prompt,
+    history, every tool schema -- as one DEBUG record per call, measured at
+    146 KiB on a single line. Those lines also reach the client over fd 2, and a
+    client whose reader gives up on one deadlocks this process at its next write
+    (see ``AcpClient._read_stderr``, which no longer does). INFO keeps the volume
+    off that path by default rather than relying on the reader to survive it.
+
+    ``RAVEN_ACP_LOG_LEVEL`` is the way back to a full trace, for a session where
+    the payloads are the thing being debugged. The gateway's entry point has
+    always taken this level from config; only this one had it hardcoded.
+    """
+    return os.environ.get("RAVEN_ACP_LOG_LEVEL", "").strip().upper() or "INFO"
+
+
 async def _serve() -> None:
     """Own the stdio channel, then serve the protocol until the client closes it.
 
@@ -58,7 +77,7 @@ async def _serve() -> None:
     ``print`` lands on stderr, where it is noise in a log rather than a frame the
     client cannot decode.
     """
-    log_path = redirect_loguru_to_file("acp.log", retention=3, terminal_level="WARNING")
+    log_path = redirect_loguru_to_file("acp.log", file_level=_file_log_level(), retention=3, terminal_level="WARNING")
     install_crash_handlers()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)

@@ -6990,6 +6990,39 @@
           }
         }
       },
+      "SubagentStatusEvent": {
+        "description": "One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the conversation; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "subagent.status" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "agent", "label", "status"],
+            "properties": {
+              "task_id": {
+                "description": "The manager's short id for this run, stable across its lifecycle.",
+                "type": "string"
+              },
+              "agent": { "type": "string" },
+              "label": { "type": "string" },
+              "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "cancelled"] },
+              "call_id": {
+                "description": "The spawn record id subagent.context reads. Known from 'running' onward; a 'pending' run has not opened its record yet, so there is nothing to read.",
+                "type": "string"
+              },
+              "instance": {
+                "description": "The addressable handle, when the caller named or minted one.",
+                "type": "string"
+              },
+              "started_at": { "type": "integer" },
+              "ended_at": { "type": "integer" }
+            }
+          }
+        }
+      },
       "DagNodeStatus": {
         "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.",
         "type": "string",
@@ -7247,6 +7280,7 @@
           { "$ref": "#/components/schemas/ErrorEvent" },
           { "$ref": "#/components/schemas/CronDeliveredEvent" },
           { "$ref": "#/components/schemas/SubagentDeliveredEvent" },
+          { "$ref": "#/components/schemas/SubagentStatusEvent" },
           { "$ref": "#/components/schemas/DagRunStartedEvent" },
           { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
           { "$ref": "#/components/schemas/DagRunCompletedEvent" },
@@ -7269,6 +7303,7 @@
             "error": "#/components/schemas/ErrorEvent",
             "cron.delivered": "#/components/schemas/CronDeliveredEvent",
             "subagent.delivered": "#/components/schemas/SubagentDeliveredEvent",
+            "subagent.status": "#/components/schemas/SubagentStatusEvent",
             "dag.run_started": "#/components/schemas/DagRunStartedEvent",
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",

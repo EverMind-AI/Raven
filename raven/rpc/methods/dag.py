@@ -126,6 +126,11 @@ def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
         live = run_activity.live(node_live_key(run_id, node_id))
         turns = [m for m in list(live.transcript) if isinstance(m, dict) and m.get("role")] if live else []
     stored.extend(normalize_row(turn) for turn in turns)
+    # The console tail, same as subagent.context: the only in-flight account a
+    # cli-lane node has is its own output, and it is live-only by construction.
+    live_run = run_activity.live(node_live_key(run_id, node_id))
+    if live_run is not None and live_run.console:
+        stored.append({"role": "console", "content": live_run.console})
     if node.get("output"):
         stored.append({"role": "assistant", "content": node["output"]})
     elif node.get("error"):

@@ -1,12 +1,13 @@
 """``delegation.*`` and ``subagent.interrupt`` RPC handlers.
 
-ui-tui primes its spawn HUD from ``delegation.status`` on every
-``subagent.spawn_requested`` event, and drives the agents overlay's pause and
-kill controls from ``delegation.pause`` / ``subagent.interrupt``. None of the
-three had a handler, so each call came back -32601 -- and because the shared
-``rpc`` helper in ``ui-tui/src/app/useMainApp.ts`` reports a rejection by
-writing to the transcript, the status call in particular printed an error line
-into the chat every time the agent spawned anything.
+ui-tui primes its spawn HUD caps from ``delegation.status`` when the agents
+overlay opens (the HUD's rows themselves ride the ``subagent.status`` and
+``dag.*`` events), and drives the overlay's pause and kill controls from
+``delegation.pause`` / ``subagent.interrupt``. None of the three had a handler
+originally, so each call came back -32601 -- and because the shared ``rpc``
+helper in ``ui-tui/src/app/useMainApp.ts`` reports a rejection by writing to
+the transcript, the status call in particular printed an error line into the
+chat every time the agent spawned anything.
 
 The caps are read off the live ``SubagentManager`` rather than off config, so a
 runtime override (or a future hot-apply) cannot make the HUD disagree with the

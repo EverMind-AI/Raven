@@ -1216,3 +1216,115 @@ def test_refresh_keeps_the_hot_applied_configs() -> None:
     assert {r.name for r in mgr.registry.rows()} == {GENERIC_AGENT, "hot-applied"}, (
         "refresh must reapply the last-applied configs, not the startup list"
     )
+
+
+def _status_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e["payload"] for e in events if e["type"] == "subagent.status"]
+
+
+async def test_spawn_emits_a_pending_status(monkeypatch) -> None:
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    events: list[dict[str, Any]] = []
+
+    async def _sink(session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+    release = asyncio.Event()
+
+    async def _stub_inner(*a: Any, **k: Any) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _stub_inner)
+
+    await mgr.spawn(task="do a thing", session_key="tui:s1")
+    await _settle(lambda: len(_status_events(events)) == 1)
+
+    payload = _status_events(events)[0]
+    assert payload["status"] == "pending"
+    assert payload["label"] == "do a thing"
+    assert payload["agent"] == GENERIC_AGENT
+    assert "call_id" not in payload, "a pending run has no record for subagent.context to read"
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+async def test_run_emits_running_then_completed_with_the_record_id(monkeypatch, tmp_path) -> None:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    events: list[dict[str, Any]] = []
+
+    async def _sink(session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+
+    async def _no_announce(*a: Any, **k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(mgr, "_announce_result", _no_announce)
+
+    class _Backend:
+        streams = False
+
+        async def run(self, task: str, **kwargs: Any) -> str:
+            return "done"
+
+    monkeypatch.setattr(mgr, "_resolve_backend", lambda agent: _Backend())
+
+    await mgr._run_subagent_inner(
+        "task-b",
+        "say hi",
+        "hi",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:s2", "agent": GENERIC_AGENT},
+        _RecordingExecutor(),
+        mgr.provider,
+        mgr.model,
+    )
+    await _settle(lambda: len(_status_events(events)) == 2)
+
+    running, completed = _status_events(events)
+    assert running["status"] == "running"
+    assert completed["status"] == "completed"
+    assert running["call_id"] and running["call_id"] == completed["call_id"]
+    assert isinstance(running["started_at"], int)
+    assert isinstance(completed["ended_at"], int)
+
+
+async def test_cancel_while_queued_emits_a_cancelled_status(monkeypatch) -> None:
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    events: list[dict[str, Any]] = []
+
+    async def _sink(session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _stub_inner(*a: Any, **k: Any) -> None:
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _stub_inner)
+
+    await mgr.spawn(task="first", session_key="tui:s3")
+    await entered.wait()
+    await mgr.spawn(task="second", session_key="tui:s3")
+    second_task_id = list(mgr._running_tasks)[1]
+    # Let the queued coroutine run to its first await (the gate) -- a task
+    # cancelled before it ever ran executes no handler and emits nothing.
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+    assert await mgr.cancel_by_id(second_task_id)
+    await _settle(lambda: any(p["status"] == "cancelled" for p in _status_events(events)))
+
+    cancelled = [p for p in _status_events(events) if p["status"] == "cancelled"]
+    assert cancelled[0]["label"] == "second"
+    assert "call_id" not in cancelled[0], "the run never opened a record"
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)

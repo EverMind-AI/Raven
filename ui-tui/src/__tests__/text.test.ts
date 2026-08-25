@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   clipToWidth,
+  clipToWidthFromEnd,
   boundedHistoryRenderText,
   boundedLiveRenderText,
   buildToolTrailLine,
@@ -214,5 +215,24 @@ describe('clipToWidth', () => {
 
   it('treats a non-positive budget as no clipping', () => {
     expect(clipToWidth('abc', 0)).toBe('abc')
+  })
+})
+
+describe('clipToWidthFromEnd', () => {
+  it('leaves text that already fits, collapsing whitespace', () => {
+    expect(clipToWidthFromEnd('hello world', 20)).toBe('hello world')
+    expect(clipToWidthFromEnd('  a\n\tb  ', 20)).toBe('a b')
+  })
+
+  it('keeps the end and marks the cut at the front', () => {
+    expect(clipToWidthFromEnd('hello world', 8)).toBe('\u2026o world')
+  })
+
+  it('counts display cells, not code points, so wide glyphs do not overflow', () => {
+    expect(clipToWidthFromEnd('\u4e2d\u6587\u5b57\u7b26\u6d4b\u8bd5', 6)).toBe('\u2026\u6d4b\u8bd5')
+  })
+
+  it('yields nothing when there is no room, rather than a bare ellipsis', () => {
+    expect(clipToWidthFromEnd('abc', 0)).toBe('')
   })
 })

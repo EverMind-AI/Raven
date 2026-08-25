@@ -49,6 +49,8 @@ import {
   viewKeyOf
 } from './directChatStore.js'
 import { scheduleInstanceRefresh, settleDirectHistory } from './directChatSync.js'
+import { applyDagEvent, applySubagentStatus } from './liveAgentsStore.js'
+import { scheduleLiveAgentsRefresh } from './liveAgentsSync.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { patchUiState } from './uiStore.js'
@@ -263,9 +265,9 @@ const dispatch = (
     case 'tool.start':
       onToolStart(state, event)
 
-      // The runtime emits no subagent.* event of any kind, so a dispatch tool
-      // starting is the earliest signal that the session is about to have a new
-      // instance in it.
+      // `subagent.status` covers a spawn's own lifecycle, but the instance
+      // strip reads the registry, so a dispatch tool starting is still the
+      // earliest signal that the session is about to have a new instance in it.
       if (DISPATCH_TOOLS.has(event.payload.name)) {
         scheduleInstanceRefresh()
       }
@@ -283,6 +285,7 @@ const dispatch = (
       // The backstop: a turn can register an instance without any tool this
       // knows about, and a status only reaches its terminal value at the end.
       scheduleInstanceRefresh()
+      scheduleLiveAgentsRefresh()
       return
     case 'error':
       onError(state, event, sys, appendMessage)
@@ -318,17 +321,25 @@ const dispatch = (
         const key = event.payload.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered'
         sys(`↩ ${event.payload.label} — ${t(key, key)}`)
       }
+      // Settle the live rows against disk: the terminal `subagent.status`
+      // frame and this marker race, and a run that died with its gateway
+      // emits neither.
+      scheduleLiveAgentsRefresh()
       return
     }
+    case 'subagent.status':
+      applySubagentStatus(event.payload)
+      return
     case 'dag.run_started':
     case 'dag.node_updated':
     case 'dag.run_completed':
       // run_subagent_dag's fan-out progress. One controller call per frame keeps
       // the fold in one place (see turnController.recordDagEvent).
       turnController.recordDagEvent(event)
+      applyDagEvent(event)
       // A DAG dispatch registers instances without emitting a single
-      // `subagent.*` event, so these are the only signal the strip gets that a
-      // fan-out put new instances in the session.
+      // per-node registry notification, so these are the only signal the strip
+      // gets that a fan-out put new instances in the session.
       scheduleInstanceRefresh()
       return
 

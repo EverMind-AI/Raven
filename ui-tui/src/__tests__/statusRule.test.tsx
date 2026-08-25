@@ -16,7 +16,6 @@ const USAGE: Usage = { calls: 0, input: 0, output: 0, total: 0 }
 
 const base = {
   bgCount: 0,
-  busy: false,
   cols: 100,
   cwdLabel: '~/proj (main)',
   model: 'minimax/m3',

@@ -16,6 +16,8 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``hermes acp`` whose provider rejected the credential.
 - ``noisy``        - like ``ok``, but writes non-JSON diagnostics to stdout and a
                      large volume to stderr before answering.
+- ``flood``        - like ``ok``, but writes one stderr line past the reader's limit,
+                     followed by an ordinary one, before answering.
 - ``asks``         - requests something raven does not implement (``fs/read_text_file``,
                      declared unsupported in ``CLIENT_CAPABILITIES``) and, having been
                      refused, ends the turn with no content and nothing on stderr. This
@@ -272,6 +274,16 @@ def main() -> None:
         sys.stdout.write("[plugins] stub diagnostics on stdout\n")
         sys.stdout.flush()
         sys.stderr.write("x" * 50_000 + "\n")
+        sys.stderr.flush()
+    if MODE == "flood":
+        # One line past the reader's limit, then an ordinary one. Sized against
+        # `client._READER_LIMIT` rather than against the litellm dump that found
+        # this (146 KiB, which the raised limit now carries), because the case
+        # under test is what the reader does when a line does not fit at all. The
+        # line after it is how a test tells "survived the raise" apart from "went
+        # on draining".
+        sys.stderr.write("x" * (9 * 1024 * 1024) + "\n")
+        sys.stderr.write("stub: still talking after the flood\n")
         sys.stderr.flush()
     for line in sys.stdin:
         line = line.strip()

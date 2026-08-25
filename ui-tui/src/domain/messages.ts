@@ -24,6 +24,25 @@ type Rpc = <T extends object>(
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
+/**
+ * Whether the transcript shows the user has already driven this session: a
+ * typed prompt (`role: 'user'`, which `!cmd` also lands as) or the echo of a
+ * slash command. Plain system rows are startup notices, not the user's doing,
+ * so they do not count.
+ */
+const userHasActed = (rows: Msg[]): boolean => rows.some(m => m.role === 'user' || m.kind === 'slash')
+
+/**
+ * Drops the intro banner once the session is under way. It is a first-paint
+ * affordance -- it tells an empty transcript what this session is -- and after
+ * the first command it only costs scrollback the conversation wants back.
+ *
+ * View-only: `historyItems` keeps the intro row, so /export, session save and
+ * the `session.info` patch that fills it in all still see it.
+ */
+export const withoutSpentIntro = (rows: Msg[]): Msg[] =>
+  userHasActed(rows) ? rows.filter(m => m.kind !== 'intro') : rows
+
 export const imageTokenMeta = (info?: ImageMeta | null) => {
   const { width, height, token_estimate: t } = info ?? {}
 
