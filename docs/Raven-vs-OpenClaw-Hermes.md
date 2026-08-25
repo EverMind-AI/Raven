@@ -34,7 +34,7 @@
 
 **Hermes 的做法**：`ContextCompressor` — 一套固定的 4 阶段（裁剪工具输出 → 保护边界 → 中段摘要 → 增量更新）。触发式、被动、不可恢复。
 
-**我们的做法**：Curator 是一个**独立的小模型 Agent**（默认 gemini-2.5-flash），有自己的 11 个内部工具：
+**我们的做法**：Curator 是一个**独立的小模型 Agent**（默认跟随对话所用的模型；可通过 context.curator_model 单独指定一个更小更快的模型），有自己的 11 个内部工具：
 
 ```
 curator_check_budget          — 理解当前 token 压力

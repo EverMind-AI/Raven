@@ -14,7 +14,6 @@ optional banner fields actually populated by the stub.
 
 from __future__ import annotations
 
-import inspect
 import json
 import re
 from pathlib import Path
@@ -23,15 +22,13 @@ from types import SimpleNamespace
 import pytest
 
 from raven.config.loader import load_config
-from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
+from raven.session.manager import SessionManager
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (
-    _map_to_wire,
     register_session_methods,
-    session_archive,
     session_branch,
     session_close,
     session_create,
@@ -39,13 +36,9 @@ from raven.rpc.methods.session import (
     session_export,
     session_list,
     session_most_recent,
-    session_pin,
     session_resume,
     session_title,
 )
-from raven.rpc.models import METHOD_MODELS
-from raven.session.manager import SessionManager
-from raven.utils.helpers import estimate_prompt_tokens
 
 _SESSION_ID_RE = re.compile(r"^tui:\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -207,77 +200,6 @@ async def test_session_resume_loads_n_stored_messages(tmp_path: Path, monkeypatc
     assert msgs[2]["text"] == "how are you"
 
 
-async def test_session_resume_estimates_only_what_the_next_call_sends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The context meter counts the unconsolidated tail, not the whole file.
-
-    The runtime consolidates on every user-inbound turn and never removes the
-    archived messages from the transcript, so estimating over everything stored
-    reported the size of a context that had already been archived -- a session a
-    quarter full resumed showing a meter pegged at 100%.
-    """
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    session_key = "tui:20260610_143052_consol"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(session_key)
-    for i in range(4):
-        session.add_message("user", f"message number {i} " * 40)
-    session.last_consolidated = 3
-    mgr.save(session)
-
-    result = await session_resume({"session_id": session_key})
-    used = result["info"]["usage"]["context_used"]
-
-    # The floor is what the tail alone costs; the ceiling keeps this from
-    # passing on a version that counts everything -- four near-identical
-    # messages make the whole file roughly four times the tail.
-    tail_only = estimate_prompt_tokens(session.get_history())
-    assert used == tail_only, "the estimate must be over what get_history() returns"
-    whole_file = estimate_prompt_tokens(
-        [{"role": m["role"], "content": m.get("content", "")} for m in session.messages]
-    )
-    assert used < whole_file / 2, f"{used} looks like the whole transcript ({whole_file}), not the tail"
-
-    # The transcript itself is unchanged: resume still hands back everything on
-    # disk, because that is what the caller draws.
-    assert len(result["messages"]) == 4
-
-
-async def test_session_resume_estimates_past_the_five_hundred_message_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The tail is bounded in tokens, not in messages, so it can run past 500.
-
-    `get_history()` defaults to the last 500; the two places that build or
-    measure the real prompt both pass `max_messages=0`. Taking the default here
-    under-reported a long unconsolidated session -- and it does not converge,
-    because the reported number pins at whatever the newest 500 cost while the
-    real prompt keeps growing toward the window.
-    """
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    session_key = "tui:20260610_143052_long01"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(session_key)
-    for i in range(600):
-        session.add_message("user", f"message number {i} " * 10)
-    mgr.save(session)
-
-    result = await session_resume({"session_id": session_key})
-    used = result["info"]["usage"]["context_used"]
-
-    whole_tail = estimate_prompt_tokens(session.get_history(max_messages=0))
-    newest_500 = estimate_prompt_tokens(session.get_history())
-    assert newest_500 < whole_tail, "fixture must exceed the default cap for this to mean anything"
-    assert used == whole_tail, f"{used} is the newest 500 ({newest_500}), not the whole tail ({whole_tail})"
-
-
 async def test_session_resume_joins_text_blocks_of_list_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -342,69 +264,6 @@ async def test_session_resume_maps_tool_role_with_name_and_context(
     assert tool_msg["text"] == "tool output here"
     assert tool_msg["name"] == "exec"
     assert tool_msg["context"] == "ls -la"
-
-
-async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The stored diff is the one record with real line numbers -- the wire
-    must carry it or a reloaded page can never renumber a change."""
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    session_key = "tui:20260610_143052_445566"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(session_key)
-    session.add_message("user", "edit it")
-    session.add_message("tool", "Successfully edited", tool_call_id="c1", name="edit_file", diff="@@ -1 +1 @@\n-a\n+b")
-    mgr.save(session)
-
-    msgs = (await session_resume({"session_id": session_key}))["messages"]
-    assert msgs[1]["diff"].startswith("@@ -1 +1 @@")
-
-
-async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``turn_ended`` says why a transcript stops where it does; without it a
-    reloaded page renders the marker's model-facing text as an answer."""
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    session_key = "tui:20260610_143052_778899"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(session_key)
-    session.add_message("user", "do it")
-    session.add_message("assistant", "(turn cancelled by the user)", turn_ended={"status": "cancelled"})
-    mgr.save(session)
-
-    msgs = (await session_resume({"session_id": session_key}))["messages"]
-    assert msgs[1]["turn_ended"] == {"status": "cancelled"}
-
-
-async def test_session_resume_carries_the_runtime_notice_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Runtime prose is stored as an assistant message because the MODEL has to
-    read it on the next turn. A reader must not: without ``notice`` on the wire
-    the reload attributes it to the model, contradicting the live view, which
-    drew it as its own row."""
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    session_key = "tui:20260610_143052_991122"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(session_key)
-    session.add_message("user", "clean up")
-    session.add_message(
-        "assistant",
-        "The operation was not completed",
-        notice={"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
-    )
-    mgr.save(session)
-
-    msgs = (await session_resume({"session_id": session_key}))["messages"]
-    assert msgs[1]["notice"]["kind"] == "action_blocked"
-    assert "safety guard" in msgs[1]["notice"]["detail"]
 
 
 async def test_session_resume_skips_malformed_stored_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,33 +343,6 @@ async def test_session_resume_prefers_live_cache_with_unflushed_tail(
     msgs = result["messages"]
     assert len(msgs) == 2, f"cached unflushed tail must be visible, got: {msgs}"
     assert msgs[1]["text"] == "unflushed tail"
-
-
-def test_resume_marks_missing_deliveries_without_dropping_metadata(tmp_path: Path) -> None:
-    present = tmp_path / "report.pdf"
-    present.write_bytes(b"pdf")
-    messages = [
-        {
-            "role": "tool",
-            "content": "Delivered files",
-            "metadata": {
-                "raven_delivery": {
-                    "message": "Final files",
-                    "files": [
-                        {"name": "report.pdf", "path": str(present), "size": 3},
-                        {"name": "gone.csv", "path": str(tmp_path / "gone.csv"), "size": 8},
-                    ],
-                },
-                "other": "kept",
-            },
-        }
-    ]
-
-    wire = session_module._map_to_wire(messages, "tui:s1")
-
-    metadata = wire[0]["metadata"]
-    assert metadata["other"] == "kept"
-    assert [item["missing"] for item in metadata["raven_delivery"]["files"]] == [False, True]
 
 
 async def test_session_resume_unknown_id_does_not_create_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -602,7 +434,7 @@ async def test_session_close_returns_ok_without_session_key() -> None:
 
 
 async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """session.list returns a sessions list from the tui channel."""
+    """session.list returns a sessions list from the tui channel, sorted by updated_at desc."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -625,10 +457,8 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
     assert "tui:20260610_110000_bbb222" in ids
 
 
-async def test_session_list_sorted_by_latest_conversation_message(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """session.list returns sessions ordered by latest readable message."""
+async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """session.list returns sessions ordered by updated_at descending."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -678,54 +508,6 @@ async def test_session_list_item_shape(tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(item["started_at"], (int, float))
 
 
-async def test_session_list_contract_accepts_real_multichannel_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The declared contract includes the fields the browser actually sends
-    and consumes, including a populated nested row."""
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create("cron:contract")
-    session.add_message("user", "run the digest")
-    session.add_message("assistant", "digest complete")
-    mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    params_model, result_model = METHOD_MODELS["session.list"]
-    params_model.model_validate({"channels": ["tui", "cron"], "limit": 10})
-    result_model.model_validate(await session_list({"channels": ["tui", "cron"]}))
-
-
-async def test_session_list_scans_once_for_multiple_channels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    mgr = SessionManager(tmp_path)
-    for key in ("tui:one", "cron:two", "cli:three"):
-        session = mgr.get_or_create(key)
-        session.add_message("user", key)
-        mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    scans = 0
-    scan_file = mgr._scan_file
-
-    def counted(path: Path):
-        nonlocal scans
-        scans += 1
-        return scan_file(path)
-
-    monkeypatch.setattr(mgr, "_scan_file", counted)
-    result = await session_list({"channels": ["tui", "cron"]})
-
-    assert {row["source"] for row in result["sessions"]} == {"tui", "cron"}
-    assert scans == 3, "every stored file is scanned once, not once per requested channel"
-
-
 async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list does not include sessions from non-tui channels."""
     cfg = load_config()
@@ -750,7 +532,7 @@ async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest
 
 
 async def test_session_list_honors_limit_after_sort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """limit slices after the activity sort, so newest sessions win."""
+    """limit slices AFTER the updated_at-desc sort — newest sessions win."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -842,25 +624,6 @@ async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypat
     assert result == {"deleted": None}
 
 
-async def test_session_delete_rejects_a_running_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    key = "tui:running"
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create(key)
-    session.add_message("user", "keep working")
-    mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-    monkeypatch.setattr(turn_module, "is_session_busy", lambda candidate: candidate == key)
-
-    with pytest.raises(TurnInProgressError):
-        await session_delete({"session_id": key})
-
-    assert mgr.exists(key), "a running writer must keep its transcript"
-
-
 async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete with no session_id returns {deleted: null}."""
     cfg = load_config()
@@ -892,23 +655,6 @@ async def test_session_most_recent_returns_session_key(tmp_path: Path, monkeypat
 
     result = await session_most_recent({})
     assert result["session_id"] == "tui:20260610_100000_recent1"
-
-
-async def test_session_most_recent_skips_archived_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """session.most_recent does not auto-resume a session hidden by archiving."""
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    mgr = SessionManager(tmp_path)
-    archived = mgr.get_or_create("tui:20260610_110000_archived")
-    archived.add_message("user", "hide this")
-    archived.metadata["archived"] = True
-    mgr.save(archived)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    result = await session_most_recent({})
-    assert result["session_id"] is None
 
 
 async def test_session_most_recent_returns_null_when_no_sessions(
@@ -985,64 +731,6 @@ async def test_session_title_on_fresh_session_is_pending_and_writes_no_file(
     assert mgr.get_or_create("tui:20260610_100000_lazy01").metadata.get("title") == "Early"
 
 
-async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pinning survives a reload and rides the session.list rows.
-
-    The regression this pins: the web UI used to keep the flag in page memory
-    only, so every refresh silently dropped the pinned group.
-    """
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    from raven.session.manager import SessionManager
-
-    mgr = SessionManager(tmp_path)
-    s = mgr.get_or_create("tui:20260610_100000_pin001")
-    s.add_message("user", "hello")
-    mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": True})
-    assert result == {"pinned": True, "session_key": "tui:20260610_100000_pin001", "pending": False}
-
-    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
-    assert reloaded is not None and reloaded.metadata.get("pinned") is True
-
-    listed = await session_list({})
-    row = next(r for r in listed["sessions"] if r["id"] == "tui:20260610_100000_pin001")
-    assert row["pinned"] is True
-
-    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": False})
-    assert result["pinned"] is False
-    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
-    assert reloaded is not None and "pinned" not in reloaded.metadata
-
-
-async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    mgr = SessionManager(tmp_path)
-    session_key = "tui:20260610_100000_archive1"
-    session = mgr.get_or_create(session_key)
-    session.add_message("user", "hide this session")
-    mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    result = await session_archive({"session_id": session_key, "archived": True})
-    assert result == {"archived": True, "session_key": session_key, "pending": False}
-    assert await session_list({}) == {"sessions": []}
-
-    reloaded = SessionManager(tmp_path).peek(session_key)
-    assert reloaded is not None and reloaded.metadata.get("archived") is True
-
-    result = await session_archive({"session_id": session_key, "archived": False})
-    assert result == {"archived": False, "session_key": session_key, "pending": False}
-    assert [row["id"] for row in (await session_list({}))["sessions"]] == [session_key]
-
-
 async def test_session_title_missing_session_id_returns_early(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1092,32 +780,6 @@ async def test_session_list_via_dispatcher(tmp_path: Path, monkeypatch: pytest.M
     resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "session.list", "params": {}})
     assert "error" not in resp, f"session.list dispatch failed: {resp}"
     assert "sessions" in resp["result"]
-
-
-async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(tmp_path)
-    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-
-    mgr = SessionManager(tmp_path)
-    session_key = "tui:20260610_100000_archive2"
-    session = mgr.get_or_create(session_key)
-    session.add_message("user", "archive through dispatcher")
-    mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
-
-    dispatcher = Dispatcher()
-    register_session_methods(dispatcher)
-    response = await dispatcher.dispatch(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "session.archive",
-            "params": {"session_id": session_key, "archived": True},
-        }
-    )
-    assert "error" not in response
-    assert response["result"] == {"archived": True, "session_key": session_key, "pending": False}
 
 
 async def test_session_delete_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1209,27 +871,6 @@ def test_manager_for_falls_through_when_loop_sessions_not_a_manager(
     assert session_module._manager_for(loop, cfg) is sentinel
 
 
-async def test_a_direct_turn_still_counts_as_the_session_being_busy(monkeypatch):
-    """A direct chat runs on a lane of its own, which is what makes it
-    concurrent -- but clear / undo / compress / model-switch mean "is anything
-    running in this session", and a sub-agent answering is."""
-    from raven.rpc.methods import turn as turn_module
-    from raven.spine import direct_lane
-
-    turn_module._active_turns.clear()
-    try:
-        lane = direct_lane("tui:busy", "Coder", "h1")
-        turn_module._active_turns[lane] = object()
-
-        # Not the lane the guard is asked about ...
-        assert turn_module.is_turn_active("tui:busy") is False
-        # ... but the session it belongs to is busy.
-        assert turn_module.is_session_busy("tui:busy") is True
-        assert turn_module.is_session_busy("tui:other") is False
-    finally:
-        turn_module._active_turns.clear()
-
-
 def test_is_turn_active_reflects_active_turns(monkeypatch):
     import asyncio
 
@@ -1281,7 +922,7 @@ async def test_session_clear_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_clear
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: k == key)
+    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: k == key)
     with pytest.raises(TurnInProgressError):
         await session_clear({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -1308,7 +949,7 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_undo
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: True)
+    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: True)
     with pytest.raises(TurnInProgressError):
         await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -1490,7 +1131,7 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-    monkeypatch.setattr(turn_module, "is_session_busy", lambda key: True)
+    monkeypatch.setattr(turn_module, "is_turn_active", lambda key: True)
 
     session_key = "tui:20260622_120000_eeeeee"
     _write_session(tmp_path, session_key, [{"role": "user", "content": "hi"}])
@@ -1500,9 +1141,520 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     assert result["exported"] is True
 
 
-# ---------------------------------------------------------------------------
-# session.compress: promoted from the stub group to a real handler
-# ---------------------------------------------------------------------------
+async def test_session_info_reports_this_sessions_model_not_the_default(monkeypatch) -> None:
+    """The picker and the status bar sit next to each other; reporting the
+    global default here would show two models for one conversation.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.rpc.methods.session as session_mod
+
+    # MagicMock so the unrelated skills/tools enumeration in the bundle works;
+    # only ``session_model`` is under test.
+    loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
+    loop.session_model = lambda key: "vendor-a/model" if key == "tui:a" else "boot/model"
+    info = await session_mod._default_session_info(loop, session_mod.load_config(), "tui:a")
+
+    assert info["model"] == "vendor-a/model"
+    assert info["model_id"] == "vendor-a/model"
+
+
+async def test_session_info_without_a_session_reports_the_default() -> None:
+    """A session being created has no model of its own yet; the default is the
+    right answer, because that is what it will start on.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.rpc.methods.session as session_mod
+
+    config = session_mod.load_config()
+    loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
+    loop.session_model = lambda key: "vendor-a/model"
+    info = await session_mod._default_session_info(loop, config, None)
+
+    assert info["model"] == config.agents.defaults.model
+
+
+async def test_session_resume_reports_the_model_the_loop_restored(tmp_path) -> None:
+    """The handler no longer restores anything -- the loop reads the stored model
+    on first ask, which is what makes the choice survive on every surface and not
+    only on the one that calls this handler. What the handler still owes is
+    passing the session key down, so the bundle reports *this* session's model
+    instead of the configured default.
+    """
+    from raven.session.manager import SessionManager
+    from raven.rpc.methods.session import session_resume
+
+    sessions = SessionManager(tmp_path)
+    record = sessions.get_or_create("tui:a")
+    record.metadata["model"] = "vendor-a/model"
+    sessions.save(record)
+
+    from unittest.mock import MagicMock
+
+    asked: list[str] = []
+    loop = MagicMock()
+    loop.sessions = sessions
+    # A real id, not the MagicMock default: the init bundle resolves a window
+    # from whatever the loop reports as its model.
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: (asked.append(key), "vendor-a/model")[1]
+
+    result = await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert asked == ["tui:a"], "the handler stopped passing the session key down"
+    assert result["info"]["model"] == "vendor-a/model"
+
+
+async def test_session_branch_carries_the_parents_model_to_the_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork continues its parent's conversation on its parent's model, and
+    keeps it across a restart.
+
+    Both halves matter and fail independently: dropping the binding hand-off
+    leaves the child running on the default in this process, and dropping the
+    record leaves it running on the default in the next one.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    src_key = "tui:20260610_143052_bb0001"
+    _write_session(tmp_path, src_key, [{"role": "user", "content": "hi"}])
+
+    sessions = SessionManager(tmp_path)
+    parent = sessions.get_or_create(src_key)
+    parent.metadata["model"] = "vendor-a/model"
+    parent.metadata["provider"] = "anthropic"
+    sessions.save(parent)
+
+    parent_binding = SimpleNamespace(provider="prov-a", model="vendor-a/model")
+
+    class _Loop:
+        def __init__(self) -> None:
+            self.sessions = sessions
+            self.bindings: dict[str, object] = {src_key: parent_binding}
+
+        def has_session_binding(self, key: str) -> bool:
+            return key in self.bindings
+
+        def binding_for_session(self, key: str) -> object:
+            return self.bindings.get(key, SimpleNamespace(provider="boot", model="boot/model"))
+
+        def set_session_binding(self, key: str, binding: object) -> None:
+            self.bindings[key] = binding
+
+    loop = _Loop()
+    result = await session_branch({"session_id": src_key}, agent_loop_factory=lambda: loop)
+
+    child_key = result["session_id"]
+    assert loop.bindings[child_key] is parent_binding, "the fork must run on its parent's model now"
+
+    reloaded = SessionManager(tmp_path).get_or_create(child_key)
+    assert reloaded.metadata["model"] == "vendor-a/model", "and after a restart"
+    assert reloaded.metadata["provider"] == "anthropic"
+
+
+async def test_session_delete_releases_the_sessions_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deleted session must not leave its override -- and the live provider
+    behind it -- held for the life of the process.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    key = "tui:20260610_100000_bb0002"
+    _write_session(tmp_path, key, [{"role": "user", "content": "hi"}])
+
+    cleared: list[str] = []
+
+    class _Loop:
+        sessions = None
+
+        def clear_session_binding(self, session_key: str) -> None:
+            cleared.append(session_key)
+
+    await session_delete({"session_id": key}, agent_loop_factory=lambda: _Loop())
+
+    assert cleared == [key]
+
+
+async def test_session_resume_estimates_only_what_the_next_call_sends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The context meter counts the unconsolidated tail, not the whole file.
+
+    The runtime consolidates on every user-inbound turn and never removes the
+    archived messages from the transcript, so estimating over everything stored
+    reported the size of a context that had already been archived -- a session a
+    quarter full resumed showing a meter pegged at 100%.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_consol"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(4):
+        session.add_message("user", f"message number {i} " * 40)
+    session.last_consolidated = 3
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    used = result["info"]["usage"]["context_used"]
+
+    # The floor is what the tail alone costs; the ceiling keeps this from
+    # passing on a version that counts everything -- four near-identical
+    # messages make the whole file roughly four times the tail.
+    tail_only = estimate_prompt_tokens(session.get_history())
+    assert used == tail_only, "the estimate must be over what get_history() returns"
+    whole_file = estimate_prompt_tokens(
+        [{"role": m["role"], "content": m.get("content", "")} for m in session.messages]
+    )
+    assert used < whole_file / 2, f"{used} looks like the whole transcript ({whole_file}), not the tail"
+
+    # The transcript itself is unchanged: resume still hands back everything on
+    # disk, because that is what the caller draws.
+    assert len(result["messages"]) == 4
+
+
+async def test_session_resume_estimates_past_the_five_hundred_message_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tail is bounded in tokens, not in messages, so it can run past 500.
+
+    `get_history()` defaults to the last 500; the two places that build or
+    measure the real prompt both pass `max_messages=0`. Taking the default here
+    under-reported a long unconsolidated session -- and it does not converge,
+    because the reported number pins at whatever the newest 500 cost while the
+    real prompt keeps growing toward the window.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_long01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(600):
+        session.add_message("user", f"message number {i} " * 10)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    used = result["info"]["usage"]["context_used"]
+
+    whole_tail = estimate_prompt_tokens(session.get_history(max_messages=0))
+    newest_500 = estimate_prompt_tokens(session.get_history())
+    assert newest_500 < whole_tail, "fixture must exceed the default cap for this to mean anything"
+    assert used == whole_tail, f"{used} is the newest 500 ({newest_500}), not the whole tail ({whole_tail})"
+
+
+async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stored diff is the one record with real line numbers -- the wire
+    must carry it or a reloaded page can never renumber a change."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_445566"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "edit it")
+    session.add_message("tool", "Successfully edited", tool_call_id="c1", name="edit_file", diff="@@ -1 +1 @@\n-a\n+b")
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["diff"].startswith("@@ -1 +1 @@")
+
+
+async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``turn_ended`` says why a transcript stops where it does; without it a
+    reloaded page renders the marker's model-facing text as an answer."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_778899"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "do it")
+    session.add_message("assistant", "(turn cancelled by the user)", turn_ended={"status": "cancelled"})
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["turn_ended"] == {"status": "cancelled"}
+
+
+async def test_session_resume_carries_the_runtime_notice_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runtime prose is stored as an assistant message because the MODEL has to
+    read it on the next turn. A reader must not: without ``notice`` on the wire
+    the reload attributes it to the model, contradicting the live view, which
+    drew it as its own row."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_991122"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "clean up")
+    session.add_message(
+        "assistant",
+        "The operation was not completed",
+        notice={"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["notice"]["kind"] == "action_blocked"
+    assert "safety guard" in msgs[1]["notice"]["detail"]
+
+
+def test_resume_marks_missing_deliveries_without_dropping_metadata(tmp_path: Path) -> None:
+    present = tmp_path / "report.pdf"
+    present.write_bytes(b"pdf")
+    messages = [
+        {
+            "role": "tool",
+            "content": "Delivered files",
+            "metadata": {
+                "raven_delivery": {
+                    "message": "Final files",
+                    "files": [
+                        {"name": "report.pdf", "path": str(present), "size": 3},
+                        {"name": "gone.csv", "path": str(tmp_path / "gone.csv"), "size": 8},
+                    ],
+                },
+                "other": "kept",
+            },
+        }
+    ]
+
+    wire = session_module._map_to_wire(messages, "tui:s1")
+
+    metadata = wire[0]["metadata"]
+    assert metadata["other"] == "kept"
+    assert [item["missing"] for item in metadata["raven_delivery"]["files"]] == [False, True]
+
+
+async def test_session_list_sorted_by_latest_conversation_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """session.list returns sessions ordered by latest readable message."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    older = mgr.get_or_create("tui:20260610_090000_old111")
+    older.add_message("user", "old")
+    mgr.save(older)
+
+    newer = mgr.get_or_create("tui:20260610_120000_new222")
+    newer.add_message("user", "new")
+    mgr.save(newer)
+
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_list({})
+    items = result["sessions"]
+    assert items[0]["id"] == "tui:20260610_120000_new222"
+    assert items[1]["id"] == "tui:20260610_090000_old111"
+
+
+async def test_session_list_contract_accepts_real_multichannel_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared contract includes the fields the browser actually sends
+    and consumes, including a populated nested row."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("cron:contract")
+    session.add_message("user", "run the digest")
+    session.add_message("assistant", "digest complete")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    params_model, result_model = METHOD_MODELS["session.list"]
+    params_model.model_validate({"channels": ["tui", "cron"], "limit": 10})
+    result_model.model_validate(await session_list({"channels": ["tui", "cron"]}))
+
+
+async def test_session_list_scans_once_for_multiple_channels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:one", "cron:two", "cli:three"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", key)
+        mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    scans = 0
+    scan_file = mgr._scan_file
+
+    def counted(path: Path):
+        nonlocal scans
+        scans += 1
+        return scan_file(path)
+
+    monkeypatch.setattr(mgr, "_scan_file", counted)
+    result = await session_list({"channels": ["tui", "cron"]})
+
+    assert {row["source"] for row in result["sessions"]} == {"tui", "cron"}
+    assert scans == 3, "every stored file is scanned once, not once per requested channel"
+
+
+async def test_session_delete_rejects_a_running_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    key = "tui:running"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "keep working")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda candidate: candidate == key)
+
+    with pytest.raises(TurnInProgressError):
+        await session_delete({"session_id": key})
+
+    assert mgr.exists(key), "a running writer must keep its transcript"
+
+
+async def test_session_most_recent_skips_archived_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """session.most_recent does not auto-resume a session hidden by archiving."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    archived = mgr.get_or_create("tui:20260610_110000_archived")
+    archived.add_message("user", "hide this")
+    archived.metadata["archived"] = True
+    mgr.save(archived)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_most_recent({})
+    assert result["session_id"] is None
+
+
+async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pinning survives a reload and rides the session.list rows.
+
+    The regression this pins: the web UI used to keep the flag in page memory
+    only, so every refresh silently dropped the pinned group.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("tui:20260610_100000_pin001")
+    s.add_message("user", "hello")
+    mgr.save(s)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": True})
+    assert result == {"pinned": True, "session_key": "tui:20260610_100000_pin001", "pending": False}
+
+    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
+    assert reloaded is not None and reloaded.metadata.get("pinned") is True
+
+    listed = await session_list({})
+    row = next(r for r in listed["sessions"] if r["id"] == "tui:20260610_100000_pin001")
+    assert row["pinned"] is True
+
+    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": False})
+    assert result["pinned"] is False
+    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
+    assert reloaded is not None and "pinned" not in reloaded.metadata
+
+
+async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_100000_archive1"
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hide this session")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": False}
+    assert await session_list({}) == {"sessions": []}
+
+    reloaded = SessionManager(tmp_path).peek(session_key)
+    assert reloaded is not None and reloaded.metadata.get("archived") is True
+
+    result = await session_archive({"session_id": session_key, "archived": False})
+    assert result == {"archived": False, "session_key": session_key, "pending": False}
+    assert [row["id"] for row in (await session_list({}))["sessions"]] == [session_key]
+
+
+async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_100000_archive2"
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "archive through dispatcher")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    dispatcher = Dispatcher()
+    register_session_methods(dispatcher)
+    response = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session.archive",
+            "params": {"session_id": session_key, "archived": True},
+        }
+    )
+    assert "error" not in response
+    assert response["result"] == {"archived": True, "session_key": session_key, "pending": False}
+
+
+async def test_a_direct_turn_still_counts_as_the_session_being_busy(monkeypatch):
+    """A direct chat runs on a lane of its own, which is what makes it
+    concurrent -- but clear / undo / compress / model-switch mean "is anything
+    running in this session", and a sub-agent answering is."""
+    from raven.rpc.methods import turn as turn_module
+    from raven.spine import direct_lane
+
+    turn_module._active_turns.clear()
+    try:
+        lane = direct_lane("tui:busy", "Coder", "h1")
+        turn_module._active_turns[lane] = object()
+
+        # Not the lane the guard is asked about ...
+        assert turn_module.is_turn_active("tui:busy") is False
+        # ... but the session it belongs to is busy.
+        assert turn_module.is_session_busy("tui:busy") is True
+        assert turn_module.is_session_busy("tui:other") is False
+    finally:
+        turn_module._active_turns.clear()
 
 
 async def test_session_compress_requires_a_session_id() -> None:
@@ -1601,13 +1753,6 @@ async def test_session_compress_reports_what_the_consolidator_archived(
     assert result["summary"]["headline"] == "archived 3 messages"
     assert result["summary"]["noop"] is False
     assert result["summary"]["token_line"] == "900 -> 300 tokens"
-
-
-# ---------------------------------------------------------------------------
-# Regressions for the three defects this branch set out to fix. Each of these
-# began as a mutation that survived the whole suite: revert the fix, and nothing
-# went red. They exist so that cannot happen twice.
-# ---------------------------------------------------------------------------
 
 
 async def test_session_list_reaches_the_channels_it_was_asked_for(
@@ -1808,11 +1953,6 @@ async def test_session_compress_hands_back_what_the_caller_must_redraw(
     assert isinstance(result["usage"], dict)
 
 
-# ---------------------------------------------------------------------------
-# session.create workdir override (the attach-to-gateway contract)
-# ---------------------------------------------------------------------------
-
-
 async def test_session_create_persists_the_workdir_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``workdir`` param must land in the minted session's metadata — the
     override ``WorkdirResolver`` reads — and be reported back as ``info.cwd``,
@@ -1862,11 +2002,6 @@ async def test_session_create_without_workdir_stays_lazy_and_unpinned(
 
     result = await session_create({"cols": 80})
     assert _SESSION_ID_RE.match(result["session_id"])
-
-
-# ---------------------------------------------------------------------------
-# _map_to_wire dag_run_id derivation (the DAG-graph hand-off)
-# ---------------------------------------------------------------------------
 
 
 def test_a_dag_tool_row_names_the_run_it_started() -> None:

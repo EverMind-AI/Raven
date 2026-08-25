@@ -797,16 +797,19 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker, every id carrying the provider's route prefix.
-    # The schema's pre-existing default (``anthropic/claude-opus-4-5``) is one of
-    # them rather than a fourth entry: while bare and prefixed spellings coexisted
-    # the same model appeared twice, once in each form.
+    # Catalog feeds the picker, every id carrying the provider's route prefix,
+    # with the provider's own recommended default at the head when the catalog
+    # does not already carry it. It used to be the schema default that led here,
+    # because the bootstrap wrote every default into the config and the wizard
+    # read it back as "the current model" -- a value nobody had chosen, offered
+    # as though somebody had.
     assert captured_choices["choices"] == [
+        "anthropic/claude-sonnet-5",
         "anthropic/claude-haiku-4-5",
         "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
     ]
-    assert captured_choices["default"] == "anthropic/claude-opus-4-5"
+    assert captured_choices["default"] == "anthropic/claude-sonnet-5"
     # The pick made it into config, carrying the route prefix. The user may type
     # a bare id -- autocomplete accepts free text -- and a bare id is routed by
     # keyword and fallback rather than to the provider just configured, so the
