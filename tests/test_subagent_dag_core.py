@@ -403,21 +403,31 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
     """Write a two-node run dir the way DagRunStore/_finalize would."""
     rdir = f"/hist/mas_dag/{run_id}"
     graph = {
+        "task_summary": "the whole graph",
         "nodes": [
             {
                 "id": "a",
                 "subagent": "x",
+                "node_summary": "do the thing",
                 "prompt_template": "do {{ inputs.k }}",
                 "depends_on": [],
                 "instance": None,
                 "inputs": {"k": "LITERAL", "spec": {"file": "/w/spec.md"}},
             },
-            {"id": "b", "subagent": "y", "prompt_template": "use {{ a.output }}", "depends_on": ["a"], "instance": "h"},
-        ]
+            {
+                "id": "b",
+                "subagent": "y",
+                "node_summary": "then use it",
+                "prompt_template": "use {{ a.output }}",
+                "depends_on": ["a"],
+                "instance": "h",
+            },
+        ],
     }
     be.files[f"{rdir}/graph.json"] = json.dumps(graph).encode()
     be.files[f"{rdir}/a.prompt.md"] = b"do LITERAL"
     be.files[f"{rdir}/a.out.md"] = b"OUTPUT_A"
+    be.files[f"{rdir}/a.memory.json"] = b"{}"
     if finalized:
         manifest = {
             "a": {
@@ -463,6 +473,10 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     assert b["inputs"] is None
     assert (b["node"], b["status"], b["error"], b["instance"]) == ("b", "failed", "boom", "h")
     assert b["depends_on"] == ["a"]
+    assert run["task_summary"] == "the whole graph"
+    assert (a["node_summary"], b["node_summary"]) == ("do the thing", "then use it")
+    assert a["memory_file"] == "/hist/mas_dag/20260730T060242Z-6b0b89a3/a.memory.json"
+    assert b["memory_file"] is None, "a memory file that was never written reads back as absent"
 
 
 async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
@@ -480,6 +494,9 @@ async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
     # Structure includes what each node was handed: it lives in graph.json, which
     # is written before the first node runs, so an in-flight run has it too.
     assert run["files"][0]["inputs"] == {"k": "LITERAL", "spec": {"file": "/w/spec.md"}}
+    assert run["task_summary"] == "the whole graph"
+    assert run["files"][0]["node_summary"] == "do the thing"
+    assert run["files"][0]["memory_file"] is not None
 
 
 async def test_read_run_without_a_run_dir_raises() -> None:

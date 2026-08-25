@@ -1,17 +1,5 @@
 const state = {
-  // The session list, without any session's traces. A session's traces arrive
-  // from /api/sessions/<id> when it is selected and are kept in sessionDetails,
-  // so opening the panel no longer costs the whole retained history.
   data: null,
-  sessionDetails: new Map(),
-  loadingSessions: new Set(),
-  apiCallsByWindow: new Map(),
-  loadingApiWindows: new Set(),
-  // Failures have to be remembered, not just not-cached: render() re-enters the
-  // loaders, so an unrecorded failure retries immediately and forever.
-  failedSessions: new Set(),
-  failedApiWindows: new Set(),
-  traceOwnerHint: null,
   descriptors: {},
   appView: 'trace',
   selectedSessionId: null,
@@ -458,12 +446,13 @@ function filteredSessions() {
   return allSessions().filter((session) => {
     if (state.agent !== 'all' && session.agentId !== state.agent) return false;
     if (!query) return true;
-    // A trace id typed in here is resolved by the index instead of by scanning,
-    // which is both exact and instant; traceOwnerHint carries that answer.
-    if (state.traceOwnerHint?.query === query && state.traceOwnerHint.sessionId === session.sessionId) {
-      return true;
-    }
-    const haystack = [session.agentId, session.sessionId, session.sessionKey, session.workspaceDir]
+    const haystack = [
+      session.agentId,
+      session.sessionId,
+      session.sessionKey,
+      session.workspaceDir,
+      ...session.traces.map((trace) => `${trace.traceId} ${trace.traceKey || ''}`)
+    ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
@@ -471,40 +460,29 @@ function filteredSessions() {
   });
 }
 
-// A quarter of every span in the store is an llm.call, so this view is the one
-// that wants the whole corpus. The server windows it; ask for the window on
-// screen and nothing more.
-async function ensureApiCallsLoaded(windowKey) {
-  if (
-    state.apiCallsByWindow.has(windowKey) ||
-    state.loadingApiWindows.has(windowKey) ||
-    state.failedApiWindows.has(windowKey)
-  ) {
-    return;
-  }
-  state.loadingApiWindows.add(windowKey);
-  render();
-  try {
-    const response = await fetch(`/api/llm-calls?window=${encodeURIComponent(windowKey)}&ts=${Date.now()}`, {
-      cache: 'no-store'
-    });
-    if (!response.ok) throw new Error(`llm calls request failed with status ${response.status}`);
-    const payload = await response.json();
-    state.apiCallsByWindow.set(windowKey, payload.calls || []);
-    state.failedApiWindows.delete(windowKey);
-  } catch (error) {
-    // Same loop as above, same reason for recording it.
-    state.failedApiWindows.add(windowKey);
-    state.connectionStatus = 'disconnected';
-  } finally {
-    state.loadingApiWindows.delete(windowKey);
-    state.detailsRenderSignature = null;
-    render();
-  }
-}
-
 function allApiCalls() {
-  return state.apiCallsByWindow.get(state.apiWindow) || [];
+  return allSessions()
+    .flatMap((session) =>
+      (session.traces || []).flatMap((trace) =>
+        (trace.spans || [])
+          .filter((span) => span.name === 'llm.call')
+          .map((span) => ({
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            sessionAgentId: session.agentId,
+            traceKey: trace.traceKey,
+            traceId: trace.traceId,
+            traceStartTime: trace.startTime,
+            traceEndTime: trace.endTime,
+            span
+          }))
+      )
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.span.startTime || b.traceStartTime || 0).getTime() -
+        new Date(a.span.startTime || a.traceStartTime || 0).getTime()
+    );
 }
 
 function filteredApiCalls() {
@@ -644,52 +622,8 @@ function groupApiByProviderModel(calls) {
   return [...groups.values()].sort((a, b) => b.total - a.total);
 }
 
-function sessionListRow(sessionId) {
-  return allSessions().find((session) => session.sessionId === sessionId) || null;
-}
-
-// The loaded session when there is one, otherwise the list row, which carries
-// every field except `traces`. Returning the row rather than null keeps the
-// header and the session card rendered while the traces are still in flight.
 function currentSession() {
-  if (!state.selectedSessionId) return null;
-  return state.sessionDetails.get(state.selectedSessionId) || sessionListRow(state.selectedSessionId);
-}
-
-function isSessionLoading(sessionId) {
-  return state.loadingSessions.has(sessionId);
-}
-
-async function ensureSessionLoaded(sessionId) {
-  if (!sessionId) return;
-  if (
-    state.sessionDetails.has(sessionId) ||
-    state.loadingSessions.has(sessionId) ||
-    state.failedSessions.has(sessionId)
-  ) {
-    return;
-  }
-  state.loadingSessions.add(sessionId);
-  render();
-  try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}?ts=${Date.now()}`, {
-      cache: 'no-store'
-    });
-    if (!response.ok) throw new Error(`session request failed with status ${response.status}`);
-    const payload = await response.json();
-    state.sessionDetails.set(sessionId, payload.session);
-    state.failedSessions.delete(sessionId);
-  } catch (error) {
-    // Recorded, not merely absent. The render below re-enters this loader, so an
-    // unrecorded failure becomes a fetch-render-fetch loop that only a
-    // deselection ends. A refresh clears the record and tries again.
-    state.failedSessions.add(sessionId);
-    state.connectionStatus = 'disconnected';
-  } finally {
-    state.loadingSessions.delete(sessionId);
-    state.detailsRenderSignature = null;
-    render();
-  }
+  return allSessions().find((session) => session.sessionId === state.selectedSessionId) || null;
 }
 
 function sortedTraces(session) {
@@ -706,12 +640,12 @@ function currentTrace() {
 }
 
 function jumpToTraceByTraceId(traceId, spanId) {
-  // Navigate to another trace (subagent run <-> parent turn) by its traceId.
+  // Navigate to another trace (subagent run ↔ parent turn) by its traceId.
   // The subagent trace lives in the same session, so search current session first.
   if (!traceId) return false;
-  const ordered = [...state.sessionDetails.values()];
-  const current = currentSession();
-  if (current?.traces) ordered.sort((a, b) => (a === current ? -1 : b === current ? 1 : 0));
+  const ordered = currentSession()
+    ? [currentSession(), ...allSessions().filter((s) => s !== currentSession())]
+    : allSessions();
   for (const session of ordered) {
     const trace = (session.traces || []).find((t) => t.traceId === traceId);
     if (!trace) continue;
@@ -722,62 +656,7 @@ function jumpToTraceByTraceId(traceId, spanId) {
     render();
     return true;
   }
-  // Not in a session that is loaded. Only the server knows which session holds
-  // this trace now that the page does not carry every session's traces.
-  resolveTraceOwner(traceId, spanId);
-  return true;
-}
-
-// A trace id in the sidebar box surfaces its session. Answered from the index,
-// so it costs one lookup rather than the corpus scan a content search would do
-// for a term this rare.
-async function resolveTraceOwnerHint(query) {
-  const traceId = String(query || '').trim();
-  // Stored lowercased because filteredSessions compares against a lowercased
-  // query; an upper-case trace id otherwise resolved and then failed to surface.
-  const key = traceId.toLowerCase();
-  if (!traceId || /\s/.test(traceId)) {
-    if (state.traceOwnerHint) {
-      state.traceOwnerHint = null;
-      render();
-    }
-    return;
-  }
-  try {
-    const response = await fetch(`/api/trace-owner?traceId=${encodeURIComponent(traceId)}`, { cache: 'no-store' });
-    const sessionId = response.ok ? (await response.json()).sessionId : null;
-    const next = sessionId ? { query: key, sessionId } : null;
-    if (JSON.stringify(next) === JSON.stringify(state.traceOwnerHint)) return;
-    state.traceOwnerHint = next;
-    render();
-  } catch {
-    // No hint is the same as no match.
-  }
-}
-
-async function resolveTraceOwner(traceId, spanId) {
-  try {
-    const response = await fetch(`/api/trace-owner?traceId=${encodeURIComponent(traceId)}`, { cache: 'no-store' });
-    if (!response.ok) return;
-    const { sessionId } = await response.json();
-    if (!sessionId) return;
-    state.selectedSessionId = sessionId;
-    state.selectedTraceKey = null;
-    state.pendingTraceJump = { traceId, spanId };
-    state.detailsRenderSignature = null;
-    await ensureSessionLoaded(sessionId);
-    const session = state.sessionDetails.get(sessionId);
-    const trace = (session?.traces || []).find((item) => item.traceId === traceId);
-    if (trace) {
-      state.selectedTraceKey = trace.traceKey;
-      state.selectedSpanId = spanId || trace.tree?.[0]?.spanId || trace.spans?.[0]?.spanId || null;
-    }
-    state.pendingTraceJump = null;
-    state.detailsRenderSignature = null;
-    render();
-  } catch {
-    // A failed lookup leaves the current view alone.
-  }
+  return false;
 }
 
 // ── Content search (fuzzy locate across node inputs/outputs) ────────────────
@@ -901,22 +780,12 @@ function currentApiCall() {
   );
 }
 
-// Callers here want a session's traces -- the dispatch card reads the child's
-// last output off them -- so a list row is not enough. Return the loaded detail
-// when there is one, and ask for it when there is not, which fills the card in
-// on the render that follows.
 function findSessionByIdentity(sessionId, sessionKey) {
-  const row =
-    allSessions().find((session) => {
-      if (sessionId && session.sessionId === sessionId) return true;
-      if (sessionKey && session.sessionKey === sessionKey) return true;
-      return false;
-    }) || null;
-  if (!row) return null;
-  const loaded = state.sessionDetails.get(row.sessionId);
-  if (loaded) return loaded;
-  ensureSessionLoaded(row.sessionId);
-  return row;
+  return allSessions().find((session) => {
+    if (sessionId && session.sessionId === sessionId) return true;
+    if (sessionKey && session.sessionKey === sessionKey) return true;
+    return false;
+  }) || null;
 }
 
 function currentSpan() {
@@ -1743,11 +1612,8 @@ function syncSelection() {
     return;
   }
 
-  const listed = sessions.find((item) => item.sessionId === state.selectedSessionId) || sessions[0];
-  state.selectedSessionId = listed.sessionId;
-  // May still be the list row: traces resolve to [] until the detail lands, and
-  // this runs again when it does.
-  const session = state.sessionDetails.get(listed.sessionId) || listed;
+  const session = sessions.find((item) => item.sessionId === state.selectedSessionId) || sessions[0];
+  state.selectedSessionId = session.sessionId;
   const traces = sortedTraces(session);
   const trace = traces.find((item) => item.traceKey === state.selectedTraceKey) || traces[0];
   state.selectedTraceKey = trace?.traceKey || null;
@@ -1776,7 +1642,7 @@ function renderSessionList() {
     card.innerHTML = `
       <div class="session-card-head">
         <span class="session-pill">${escapeHtml(session.agentId || 'agent')}</span>
-        <span class="session-badge">${session.traceCount ?? session.spanCount} ${session.traceCount === undefined ? 'spans' : 'traces'}</span>
+        <span class="session-badge">${session.traceCount} traces</span>
       </div>
       <div class="session-title-row">
         <div class="session-id">${escapeHtml(shortId(session.sessionId, 18))}</div>
@@ -1812,24 +1678,9 @@ function renderTraceList() {
   elements.traceTitle.textContent = `${session.agentId || 'agent'} / ${shortId(session.sessionId, 18)}`;
   elements.traceMeta.innerHTML = `
     ${session.workspaceDir ? `<div>${escapeHtml(session.workspaceDir)}</div>` : ''}
-    <div>${session.traceCount !== undefined ? `${session.traceCount} traces` : `${session.spanCount} spans`}</div>
+    <div>${session.traceCount} traces</div>
     ${sessionChainLabel(session) ? `<div>${escapeHtml(sessionChainLabel(session))}</div>` : ''}
   `;
-
-  // Traces arrive separately now. Show the shape of what is coming, sized by the
-  // count the list row already knows, rather than an empty state that reads as
-  // "this session has nothing in it".
-  if (!session.traces && isSessionLoading(session.sessionId)) {
-    // Sized from the span count, the only figure the list row has.
-    const placeholders = Math.max(1, Math.min(Math.ceil((session.spanCount || 1) / 8), 6));
-    for (let index = 0; index < placeholders; index += 1) {
-      const skeleton = document.createElement('section');
-      skeleton.className = 'trace-group is-loading';
-      skeleton.innerHTML = '<div class="trace-skeleton-line"></div><div class="trace-skeleton-line is-short"></div>';
-      elements.traceList.appendChild(skeleton);
-    }
-    return;
-  }
 
   sortedTraces(session).forEach((trace, index) => {
     const summary = traceSummary(trace);
@@ -2933,21 +2784,9 @@ function currentDetailsSignature() {
   return [state.appView, state.selectedTab, state.selectedSessionId, state.selectedTraceKey, state.selectedSpanId].join('::');
 }
 
-// Fire-and-forget: each loader returns immediately when its data is present or
-// already in flight, and calls render again when it lands. Placed after
-// syncSelection so it acts on the selection actually about to be drawn.
-function requestVisibleData() {
-  if (state.appView === 'api') {
-    ensureApiCallsLoaded(state.apiWindow);
-    return;
-  }
-  if (state.selectedSessionId) ensureSessionLoaded(state.selectedSessionId);
-}
-
 function render() {
   captureScrollState();
   syncSelection();
-  requestVisibleData();
   renderAgentFilter();
   renderApiFilters();
   if (elements.connectionStatus) {
@@ -3049,17 +2888,9 @@ async function loadData(options = {}) {
     elements.refreshButton.disabled = true;
   }
   try {
-    const response = await fetch(`/api/sessions?ts=${Date.now()}`, { cache: 'no-store' });
+    const response = await fetch(`/api/data?ts=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`API failed with status ${response.status}`);
     state.data = await response.json();
-    // A refresh re-reads what is on screen and forgets the rest, so a session
-    // opened an hour ago is not held for the life of the tab.
-    const open = state.selectedSessionId;
-    state.sessionDetails = new Map();
-    state.apiCallsByWindow = new Map();
-    state.failedSessions = new Set();
-    state.failedApiWindows = new Set();
-    if (open) ensureSessionLoaded(open);
     state.connectionStatus = 'connected';
     state.lastUpdated = new Date().toISOString();
     render();
@@ -3104,13 +2935,7 @@ elements.searchInput.addEventListener('input', (event) => {
     renderContentSearchResults();
     return;
   }
-  contentSearchTimer = setTimeout(() => {
-    // Index lookup first, deliberately. A content search holds the server for as
-    // long as it scans -- minutes, for a term too rare to trip its result cap --
-    // and a request issued behind it waits that out.
-    resolveTraceOwnerHint(query);
-    runContentSearch(query);
-  }, 250);
+  contentSearchTimer = setTimeout(() => runContentSearch(query), 250);
 });
 
 elements.contentSearchResults.addEventListener('click', (event) => {

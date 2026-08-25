@@ -198,7 +198,6 @@ module.exports = {
   getArchiveDir,
   ensureDir,
   readJsonl,
-  readJsonlFile,
   statLogFiles,
   appendJsonl,
   rotateIfNeeded,

@@ -88,12 +88,17 @@ class ToolSearchController:
         *,
         always_visible: set[str],
         search_result_limit: int = 10,
+        compaction_threshold: int = 50,
     ) -> None:
         self._registry = registry
         # The configured spellings, kept as configured. Resolved to registered
         # names on every read instead of once here -- see visible_names.
         self._configured_visible = set(always_visible)
         self.search_result_limit = search_result_limit
+        # The single home for the fold threshold: the strategy's per-turn
+        # filter and :meth:`tool_call_available` both read it from here, so an
+        # advertisement can never promise a route the fold is not shipping.
+        self.compaction_threshold = compaction_threshold
         self._index = ToolIndex()
 
     def _catalog_tools(self) -> list[Tool]:
@@ -107,7 +112,10 @@ class ToolSearchController:
         """
         out = []
         for name in self._registry.tool_names:
-            if name in META_TOOL_NAMES:
+            # Schema-hidden tools are advertised by their owning tool's result
+            # text, not by search; indexing them would give them a second,
+            # uninvited discovery path (tool_call still resolves them).
+            if name in META_TOOL_NAMES or name in self._registry.schema_hidden_names():
                 continue
             tool = self._registry.get(name)
             if tool is not None:
@@ -207,6 +215,23 @@ class ToolSearchController:
         if tool is None or not self._registry.offers(tool):
             return _Target(None, absent_tool_error(name, tail=" -- tool_search lists what is currently loaded"))
         return _Target(tool, None)
+
+    def tool_call_available(self) -> bool:
+        """Whether ``tool_call`` is in the model's per-turn tool list right now.
+
+        The predicate behind the DAG acceptance text's advertisement of the
+        schema-hidden control tools: it must agree with what
+        :class:`ToolSearchStrategy` actually ships, or the text promises a
+        route that does not exist. Both read the threshold from here, and both
+        test the same two things -- the meta-tool is registered and not
+        withheld, and the catalog sits above the fold.
+        """
+        if TOOL_CALL_NAME not in self._registry.tool_names:
+            return False
+        if TOOL_CALL_NAME in self._registry.withheld_names():
+            return False
+        catalog = sum(1 for t in self._registry.get_definitions() if t["function"]["name"] not in META_TOOL_NAMES)
+        return catalog > self.compaction_threshold
 
     def target_is_blocking(self, name: Any) -> bool:
         """Whether the tool ``tool_call`` would forward to is a blocking interaction.
@@ -335,9 +360,13 @@ class ToolSearchStrategy(TokenStrategy):
     request; the rest stay reachable via ``tool_search`` / ``tool_call``.
     """
 
-    def __init__(self, controller: ToolSearchController, *, compaction_threshold: int = 50) -> None:
+    def __init__(self, controller: ToolSearchController, *, compaction_threshold: int | None = None) -> None:
         self._ctrl = controller
-        self._compaction_threshold = compaction_threshold
+        # The controller's threshold unless a caller overrides it, so the fold
+        # and the controller's availability predicate share one source.
+        self._compaction_threshold = (
+            compaction_threshold if compaction_threshold is not None else controller.compaction_threshold
+        )
 
     @property
     def name(self) -> str:

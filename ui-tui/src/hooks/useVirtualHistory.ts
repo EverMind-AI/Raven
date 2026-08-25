@@ -11,7 +11,6 @@ import {
   useDeferredValue,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore
@@ -519,24 +518,14 @@ export function useVirtualHistory(
     }
   }, [effEnd, effStart, items, liveTailActive, measuredHeightVersion, n, offsets, scrollRef, sticky, total, vp])
 
-  const bottomSpacer = Math.max(0, total - (offsets[effEnd] ?? total))
-  const topSpacer = offsets[effStart] ?? 0
-
-  // Memoized because useMainApp passes this object into the appTranscript
-  // memo: a fresh identity on every render would re-render the transcript on
-  // every keystroke. offsets is a cached array and measureRef a stable
-  // callback, so the deps only move when the window actually moves.
-  return useMemo(
-    () => ({
-      bottomSpacer,
-      end: effEnd,
-      measureRef,
-      offsets,
-      start: effStart,
-      topSpacer
-    }),
-    [bottomSpacer, effEnd, effStart, measureRef, offsets, topSpacer]
-  )
+  return {
+    bottomSpacer: Math.max(0, total - (offsets[effEnd] ?? total)),
+    end: effEnd,
+    measureRef,
+    offsets,
+    start: effStart,
+    topSpacer: offsets[effStart] ?? 0
+  }
 }
 
 interface MeasuredNode {
