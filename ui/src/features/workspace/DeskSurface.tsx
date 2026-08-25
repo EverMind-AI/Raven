@@ -34,7 +34,7 @@ function Pane({ pane }: { pane: DeskPane }): JSX.Element {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
   const full = state.solo === pane.id
   const title = pane.kind === 'agent'
-    ? pane.row.nodeId || pane.row.handle
+    ? pane.row.title || pane.row.nodeId || pane.row.handle
     : pane.kind === 'agent-record'
       ? pane.row.node || pane.row.label || pane.row.id || t('gui.ws.agents')
       : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
@@ -48,7 +48,11 @@ function Pane({ pane }: { pane: DeskPane }): JSX.Element {
         <DeskIcon kind={pane.kind === 'agent' || pane.kind === 'agent-record' ? 'agents' : pane.kind} />
         <b title={title}>{title}</b>
         {pane.kind === 'agent' || pane.kind === 'agent-record'
-          ? <span className="pane-meta">{pane.row.agent}</span>
+          ? (
+            <span className="pane-meta">
+              {[pane.kind === 'agent' ? pane.row.runTitle : null, pane.row.agent].filter(Boolean).join(' \u00b7 ')}
+            </span>
+          )
           : null}
         <span className="pane-spacer" />
         <button

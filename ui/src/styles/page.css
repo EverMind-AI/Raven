@@ -925,6 +925,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dagc .rows { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
 .dagc .rows > .k { color: var(--faint); }
 .dagc .rows > .v { color: var(--text); min-width: 0; }
+/* The node id, which is a name the graph keys on rather than prose. */
+.dagc .rows > .v .nid { font: 11px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .dagc .hold { color: var(--faint); font-size: 10.5px; }
 /* A dependency is a way back up the graph, so it is a control rather than text. */
 .dagc .dep {
@@ -2422,6 +2424,12 @@ textarea:focus, textarea:focus-visible,
 /* Which graph a node came out of. Without it a run's six nodes are six
    unexplained rows named survey / read_a / merge. */
 .sarow .st .gr { color: var(--faint); opacity: .8; }
+/* Which graph this instance belongs to, beside who ran it. Quiet, and allowed
+   to give way first: it is the one part of the line the reader already knows if
+   they opened the list from that graph. */
+.sarow .st .from, .sahd .trow .from {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
+}
 /* Amber where the row's own text is faint: the glyph is the one thing on a
    working row that should carry the eye, and it takes the colour it is given. */
 .sarow > .wkg.sw, .sahd .trow .wkg.sw { color: var(--amber); }
@@ -3725,9 +3733,13 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   animation: sheetUp .2s ease; max-height: 420px; overflow-y: auto;
 }
 .dsheet .hd { display: flex; align-items: center; gap: 8px; }
-.dsheet .ttl { font-weight: 600; font-size: 13px; flex: none; }
+/* Takes the room and gives way last. It was `flex: none` while it held one
+   fixed word; it now holds the line the graph was dispatched with, which is a
+   sentence, and the tally beside it is the part a reader can spare. */
+.dsheet .ttl { font-weight: 600; font-size: 13px; flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The graph in one sentence, for a reader who does not want to read the graph. */
-.dsheet .gist { font-size: 12px; color: var(--muted); flex: 1; min-width: 0;
+.dsheet .gist { font-size: 12px; color: var(--muted); flex: 0 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsheet[data-fold="true"] .canvas { display: none; }
 .dsheet .canvas { margin-top: 10px; overflow-x: auto; }
@@ -3738,7 +3750,8 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    Scoped to .canvas -- the header's own buttons are svg too, and centring those
    moved the fold and close controls into the middle of the title row. */
 .dsheet .canvas > svg { display: block; margin: 0 auto; }
-.dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 1; min-width: 0; }
+.dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }
@@ -4088,8 +4101,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .agent-instances .desk-status > .dot { width: 6px; height: 6px; margin: 0; }
 .agent-instances .desk-status > .wkg { transform: scale(.72); }
 .agent-instances .sarow .nm { flex: 1; min-width: 0; font-size: 11.5px; }
+/* Prose, not an id. It used to carry the run id -- a timestamp, which mono at
+   9.5px is the right setting for -- and now carries the line the graph was
+   dispatched with, which is a sentence and often not latin. */
 .agent-instances .sarow .source { max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--faint); font: 9.5px/1.4 var(--mono); }
+  color: var(--faint); font: 10px/1.4 var(--sans); }
 
 .desk-grid { --desk-pad: 0px; --desk-gap: 6px; --desk-half-gap: 3px;
   position: absolute; inset: 0; display: grid; gap: var(--desk-gap); padding: 0;
@@ -4125,7 +4141,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
 .desk-pane > header button:hover { color: var(--text); background: var(--raised); }
 .pane-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
-  font: 10.5px var(--mono); }
+  font: 11px var(--sans); }
 .pane-spacer { flex: 1; }
 .desk-pane-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
 .desk-pane:has(.instance-conversation) .desk-pane-body { overflow: hidden; }

@@ -275,6 +275,10 @@ async def run_dag(
             "dag_run_started",
             {
                 "run_id": store.run_id,
+                # The line the whole graph was dispatched with. Per-node
+                # summaries ride below; this one has no other way to reach a
+                # reader, and the sheet above the composer is titled by it.
+                "task_summary": spec.task_summary,
                 "nodes": [
                     {
                         "id": node.id,
@@ -597,7 +601,12 @@ async def _add_node_to_instance_log(
 
         return add_turn_to_instance_log(
             Path(subagents_root).parent,
-            meta={"agent": node.subagent, "handle": handle, "session_key": session_key or ""},
+            meta={
+                "agent": node.subagent,
+                "handle": handle,
+                "session_key": session_key or "",
+                "node_summary": node.node_summary,
+            },
             # Read off the activity rather than from the caller's `prompt`, which
             # is unbound when rendering it raised. A turn with no question of its
             # own is not merely missing a row: `foldDirectTurns` starts a message

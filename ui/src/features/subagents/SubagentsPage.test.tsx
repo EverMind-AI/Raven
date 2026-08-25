@@ -3,7 +3,13 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as mount_ from './mount'
-import { AgentRecordConversation, InstanceConversation, orderAgentGroups, SubagentsApp } from './SubagentsPage'
+import {
+  AgentRecordConversation,
+  InstanceConversation,
+  InstanceRowView,
+  orderAgentGroups,
+  SubagentsApp,
+} from './SubagentsPage'
 import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
@@ -473,6 +479,30 @@ describe('subagents island, an instance detail', () => {
     })
     expect(document.querySelector('.sahd .trow b')?.textContent).toBe('synthesize')
     expect(document.querySelector('.sahd .trow .sp')).toBeNull()
+  })
+
+  it('still shows the handle when a titled row happens to be named after it', async () => {
+    /* The pair the test above is about, plus a title. Suppressing on `nodeId`
+       rather than on what is drawn hid the handle entirely here -- and this
+       header is the only place it appears, so the address a direct turn is sent
+       to was on screen nowhere. */
+    const same = inst({
+      handle: 'synthesize',
+      status: 'completed',
+      nodeId: 'synthesize',
+      runId: 'r9',
+      title: 'synthesize today findings',
+    })
+    instances([same], { instanceHistory: async () => ({ turns: [] }) })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('synthesize today findings')).closest('.sarow')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(document.querySelector('.sahd .trow b')?.textContent).toBe('synthesize today findings')
+    expect(document.querySelector('.sahd .trow .sp')?.textContent).toBe('synthesize')
   })
 
   it('still shows the handle when the node id differs from it', async () => {
@@ -1123,5 +1153,59 @@ describe('subagents island, an instance detail', () => {
 
     expect(paints).toHaveLength(2)
     expect((paints[1]!.ctx as { messages: unknown[] }).messages).toHaveLength(2)
+  })
+})
+
+/* The desk's list is what a reader watches while work runs, so what a row says
+   is the whole point of it. Both lines come from the server on the row itself
+   (`title`, `runTitle`) rather than being joined here out of `subagent.list`:
+   four surfaces draw this list, and a join each wrote separately is four
+   chances to join differently. */
+describe('subagents island, what a desk row is called', () => {
+  const draw = (row: InstanceRow): HTMLElement => {
+    instances([row], { instanceHistory: async () => ({ turns: [] }) })
+    render(<InstanceRowView it={row} compact />, { container: document.getElementById('wsBody')! })
+    return document.querySelector('.sarow.inst') as HTMLElement
+  }
+
+  it('says what the instance was asked, not what its handle is', () => {
+    const el = draw(inst({
+      handle: 'daily-ai-digest-36e275-scan-news-8edc65',
+      nodeId: 'daily-ai-digest-36e275-scan-news',
+      runId: '20260825T051102805861Z-871b6ab4',
+      title: 'scan today’s ai news',
+      runTitle: 'compile the daily ai digest',
+    }))
+
+    expect(el.querySelector('.nm')!.textContent).toBe('scan today’s ai news')
+    expect(el.querySelector('.source')!.textContent).toBe('compile the daily ai digest')
+  })
+
+  it('names the graph it came out of, never the run id', () => {
+    /* The id is a timestamp. It filled this slot before there was a line to put
+       there, and a reader could do nothing with it. */
+    const el = draw(inst({
+      handle: 'h', runId: '20260825T051102805861Z-871b6ab4', title: 'a step', runTitle: 'a graph',
+    }))
+
+    expect(el.querySelector('.source')!.textContent).not.toContain('20260825T')
+  })
+
+  it('draws no source at all for work that came from no graph', () => {
+    /* Absent rather than blank: a spawn has nothing to name there, and an empty
+       element still takes its share of the row's width. */
+    const el = draw(inst({ handle: 'release-notes-3b81ca', title: 'check the release notes' }))
+
+    expect(el.querySelector('.nm')!.textContent).toBe('check the release notes')
+    expect(el.querySelector('.source')).toBeNull()
+  })
+
+  it('falls back to the handle when nothing dispatched it', () => {
+    /* A hand-made instance, and every row written before the summaries existed.
+       The handle is a slug, but it is the only name such a row has. */
+    const el = draw(inst({ handle: 'made-by-hand' }))
+
+    expect(el.querySelector('.nm')!.textContent).toBe('made-by-hand')
+    expect(el.querySelector('.source')).toBeNull()
   })
 })

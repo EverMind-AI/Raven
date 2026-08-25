@@ -38,6 +38,7 @@ def fold_dag_run_entry(
         return {
             "run_id": value.get("run_id"),
             "created_at": created_at,
+            "task_summary": value.get("task_summary"),
             "nodes": nodes,
             "byNode": {n["id"]: "pending" for n in nodes},
         }

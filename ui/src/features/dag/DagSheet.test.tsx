@@ -294,3 +294,22 @@ describe('the dag sheet', () => {
       .toEqual(['Researcher', 'Coder'])
   })
 })
+
+/* The sheet is titled by what this run is for. It used to be titled by the word
+   for "orchestration", which said the same thing on every graph a reader had
+   ever watched, while the one line that distinguishes them went nowhere. */
+describe('the dag sheet title', () => {
+  it('is the line the graph was dispatched with', () => {
+    act(() => { start('a', graph('r1', { task_summary: 'AI news pipeline: scan, then merge' })) })
+
+    expect(sheets()[0]!.querySelector('.hd .ttl')!.textContent)
+      .toBe('AI news pipeline: scan, then merge')
+  })
+
+  it('names itself when the run carries no line', () => {
+    /* Every run recorded before the field existed. */
+    act(() => { start('a', graph('r1')) })
+
+    expect(sheets()[0]!.querySelector('.hd .ttl')!.textContent).toBe('gui.dag.title')
+  })
+})

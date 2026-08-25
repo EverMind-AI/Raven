@@ -1651,6 +1651,18 @@
       "en": "Waits for",
       "zh": "依赖"
     },
+    "gui.dag.node_id": {
+      "en": "Node id",
+      "zh": "节点 id"
+    },
+    "gui.dag.playbook": {
+      "en": "Playbook",
+      "zh": "剧本"
+    },
+    "gui.dag.run_id": {
+      "en": "Run id",
+      "zh": "运行 id"
+    },
     "gui.dag.deps_none": {
       "en": "nothing -- starts with the graph",
       "zh": "无 — 第一层，随图一起起跑"

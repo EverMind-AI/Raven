@@ -1197,3 +1197,184 @@ async def test_a_log_rows_clock_survives_the_read(tmp_path: Path) -> None:
     )
 
     assert [t["at_ms"] for t in answered["turns"]] == [1001]
+
+
+class TestWhatEachRowIsCalled:
+    """A row says what it was asked and what asked it, or says neither.
+
+    Both lines are written already -- the model is required to supply a node's
+    ``node_summary`` and a graph's ``task_summary`` -- so the question here is
+    only whether a row can reach them. It is answered on the server, like
+    ``resumable`` and for the same reason: four front ends draw this list, and a
+    join each of them wrote separately is four chances to join differently.
+    """
+
+    RUN = "20260825T051102805861Z-871b6ab4"
+
+    def _graph(self, session_dir: Path, run_id: str, graph: dict[str, Any]) -> Path:
+        from raven.agent.subagent_history import dag_root
+
+        path = dag_root(session_dir) / run_id / "graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _manager(self, session_dir: Path) -> "_FakeManager":
+        manager = _FakeManager()
+        manager.session_dirs["s1"] = session_dir
+        return manager
+
+    async def _rows(self, session_dir: Path) -> list[dict[str, Any]]:
+        out = await instances_list(
+            {"session_key": "s1"},
+            agent_loop_factory=_factory(_FakeLoop(self._manager(session_dir))),
+        )
+        return out["instances"]
+
+    async def test_a_graph_node_is_named_by_its_own_line_and_its_graphs(
+        self, _isolated_registry: Any, tmp_path: Path
+    ) -> None:
+        session_dir = tmp_path / "sessions" / "s1"
+        self._graph(
+            session_dir,
+            self.RUN,
+            {
+                "task_summary": "compile the daily ai digest",
+                "nodes": [{"id": "scan-news", "node_summary": "scan today's ai news"}],
+            },
+        )
+        await _isolated_registry.upsert_dag_node("s1", self.RUN, "scan-news", "Raven-Research", "completed")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert row["title"] == "scan today's ai news"
+        assert row["runTitle"] == "compile the daily ai digest"
+
+    async def test_a_spawn_is_named_by_the_line_its_dispatch_logged(
+        self, _isolated_registry: Any, tmp_path: Path
+    ) -> None:
+        """No graph to read, so the instance's own log header answers.
+
+        That file is addressed by ``(agent, handle)`` -- the same key the row is
+        -- which is what makes this a lookup rather than a scan of every spawn
+        record for one that names this handle.
+        """
+        from raven.agent.subagent.instance_log import append_turn
+
+        session_dir = tmp_path / "sessions" / "s1"
+        append_turn(
+            session_dir,
+            agent="Raven-Code",
+            handle="release-notes-3b81ca",
+            session_key="s1",
+            kind="spawn",
+            title="check the version in the release notes",
+            prompt="...",
+        )
+        await _isolated_registry.upsert_spawn("s1", "Raven-Code", "release-notes-3b81ca", "completed")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert row["title"] == "check the version in the release notes"
+
+    async def test_a_spawn_names_no_source_at_all(self, _isolated_registry: Any, tmp_path: Path) -> None:
+        """Absent, not empty. Its presence is what a reader tests to decide
+        whether to draw the source at all, so an empty string would put a blank
+        column on every row that came from no graph."""
+        from raven.agent.subagent.instance_log import append_turn
+
+        session_dir = tmp_path / "sessions" / "s1"
+        append_turn(
+            session_dir, agent="Raven-Code", handle="h", session_key="s1", kind="spawn", title="a line", prompt="..."
+        )
+        await _isolated_registry.upsert_spawn("s1", "Raven-Code", "h", "completed")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert "runTitle" not in row
+
+    async def test_an_instance_nobody_dispatched_carries_neither(self, _isolated_registry: Any, tmp_path: Path) -> None:
+        """A hand-made instance was asked nothing, so there is no line to show
+        and the reader falls back to the handle."""
+        session_dir = tmp_path / "sessions" / "s1"
+        await _isolated_registry.upsert_spawn("s1", "Raven-Code", "made-by-hand", "idle")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert "title" not in row
+        assert "runTitle" not in row
+
+    async def test_a_run_written_before_the_fields_existed_carries_neither(
+        self, _isolated_registry: Any, tmp_path: Path
+    ) -> None:
+        session_dir = tmp_path / "sessions" / "s1"
+        self._graph(session_dir, self.RUN, {"nodes": [{"id": "scan-news", "subagent": "Raven-Research"}]})
+        await _isolated_registry.upsert_dag_node("s1", self.RUN, "scan-news", "Raven-Research", "completed")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert "title" not in row
+        assert "runTitle" not in row
+
+    async def test_the_graph_is_read_once_per_run_and_not_once_per_row(
+        self, _isolated_registry: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Three nodes of one graph is one file. The list polls every two
+        seconds with the panel open, so a read per row is a read per row for as
+        long as the session is open."""
+        import raven.rpc.methods.instances as mod
+
+        session_dir = tmp_path / "sessions" / "s1"
+        self._graph(
+            session_dir,
+            self.RUN,
+            {
+                "task_summary": "compile the digest",
+                "nodes": [{"id": f"n{i}", "node_summary": f"step {i}"} for i in range(3)],
+            },
+        )
+        for i in range(3):
+            await _isolated_registry.upsert_dag_node("s1", self.RUN, f"n{i}", "Raven-Research", "completed")
+        mod._GRAPH_CACHE.clear()
+
+        reads = 0
+        real = Path.read_text
+
+        def counting(self: Path, *a: Any, **k: Any) -> str:
+            nonlocal reads
+            if self.name == "graph.json":
+                reads += 1
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", counting)
+        rows = await self._rows(session_dir)
+
+        assert sorted(r["title"] for r in rows) == ["step 0", "step 1", "step 2"]
+        assert reads == 1
+
+    async def test_a_run_id_that_is_not_one_is_never_joined_into_a_path(
+        self, _isolated_registry: Any, tmp_path: Path
+    ) -> None:
+        """A registry row is a file, and a run id off one reaches a path join.
+        The escape is refused by shape rather than by resolving and comparing.
+
+        One hop, onto a file that is really there: `..` from the run dir is the
+        `mas_dag` directory itself, so without the check this reads a graph.json
+        planted beside the runs and reports its line as this row's source.
+        """
+        from raven.agent.subagent_history import dag_root
+
+        session_dir = tmp_path / "sessions" / "s1"
+        planted = dag_root(session_dir) / "graph.json"
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text(
+            json.dumps({"task_summary": "leaked", "nodes": [{"id": "n", "node_summary": "leaked too"}]}),
+            encoding="utf-8",
+        )
+        assert (dag_root(session_dir) / ".." / "mas_dag" / "graph.json").exists()
+        await _isolated_registry.upsert_dag_node("s1", "../mas_dag", "n", "Raven-Research", "completed")
+
+        row = (await self._rows(session_dir))[0]
+
+        assert "runTitle" not in row
+        assert "title" not in row

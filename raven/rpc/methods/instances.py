@@ -26,13 +26,15 @@ with no turn to cancel.
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.direct_chat import direct_root
-from raven.agent.subagent.instance_log import message_rows
+from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent.tool_vocabulary import normalize_row
@@ -43,6 +45,12 @@ from raven.rpc.methods.session import _wire_tool_calls
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
+
+
+# The shape `DagRunStore` mints, matched rather than trusted: a run id off a
+# registry row is joined into a path here, and a row is a file anything with
+# write access to the home directory can put a segment into.
+_RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}(?:[0-9]{6})?Z-[0-9a-f]{8}$")
 
 
 def _loop(agent_loop_factory: "AgentLoopFactory | None") -> Any:
@@ -140,6 +148,81 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)
 
 
+_GRAPH_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
+def _graph_of(session_dir: Path, run_id: str) -> dict[str, Any]:
+    """One run's ``graph.json``, memoized on ``(mtime_ns, size)``.
+
+    Read rather than copied onto the registry row: the graph is where the two
+    lines were written, so a row cannot disagree with the run it belongs to, and
+    the three writers that rebuild a registry record wholesale cannot drop them.
+    A run's graph never changes after it is written, so the stamp check is what
+    makes a two-second poll cost one ``stat`` per run.
+
+    ``{}`` for a run whose dir is gone or whose id is not one -- a title is not
+    worth failing a list over, and the caller falls back to the handle.
+    """
+    if not _RUN_ID_RE.match(run_id):
+        return {}
+    path = dag_root(session_dir) / run_id / "graph.json"
+    try:
+        st = path.stat()
+    except OSError:
+        _GRAPH_CACHE.pop(path, None)
+        return {}
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _GRAPH_CACHE.get(path)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    try:
+        graph = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(graph, dict):
+        graph = {}
+    _GRAPH_CACHE[path] = (stamp, graph)
+    return graph
+
+
+def _mark_titles(rows: list[dict[str, Any]], session_dir: Path | None) -> list[dict[str, Any]]:
+    """Say what each row was dispatched for, and what dispatched it.
+
+    Answered here rather than left to each front end, for the reason
+    ``_mark_resumable`` is: four surfaces draw this list, and a join each of
+    them wrote separately is four chances to join differently. Both lines exist
+    already -- a node's ``node_summary`` and a graph's ``task_summary`` are
+    required of the model -- so nothing here invents a title; it carries one.
+
+    ``runTitle`` is absent rather than empty for a row that came from no graph,
+    which is what lets a reader use its presence as the test for "this row has a
+    source" instead of re-deriving that from ``runId``.
+    """
+    if session_dir is None:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        run_id, node_id = row.get("runId"), row.get("nodeId")
+        title, run_title = "", ""
+        if isinstance(run_id, str) and isinstance(node_id, str):
+            graph = _graph_of(session_dir, run_id)
+            run_title = str(graph.get("task_summary") or "")
+            for node in graph.get("nodes") or []:
+                if isinstance(node, dict) and node.get("id") == node_id:
+                    title = str(node.get("node_summary") or "")
+                    break
+        if not title:
+            # Not only the fallback for a spawn: a graph node whose own header
+            # holds the line still answers here when its graph.json predates the
+            # field or its run dir has been cleared.
+            try:
+                title = instance_title(session_dir, str(row.get("agent") or ""), str(row.get("handle") or ""))
+            except Exception:  # noqa: BLE001 - a missing title never fails a list
+                title = ""
+        out.append({**row, **({"title": title} if title else {}), **({"runTitle": run_title} if run_title else {})})
+    return out
+
+
 def _mark_resumable(rows: list[dict[str, Any]], manager: Any) -> list[dict[str, Any]]:
     """Say per row whether a conversation can be opened with it.
 
@@ -180,7 +263,10 @@ async def instances_list(
         active_run_ids=(lambda: live_run_ids(loop)),
     )
     return {
-        "instances": _mark_resumable(_collapse_dag_rows(reconciled), manager),
+        "instances": _mark_titles(
+            _mark_resumable(_collapse_dag_rows(reconciled), manager),
+            _session_dir(agent_loop_factory, session_key),
+        ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }
 

@@ -64,7 +64,7 @@ DS.transcript ??= {
       last: '从上一轮回复分叉', when: '刚刚', run: null };
     sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); toast('已分叉出新会话');
   },
-  /* dagRows, openDagNode and openSpawn are deliberately absent. The cards in
+  /* dagRun, openDagNode and openSpawn are deliberately absent. The cards in
      the trail open real things only with a host behind them, and the island
      already has the honest answer for each: no node states to read, nothing to
      open a node into, and the agents panel for a spawn row. Installing

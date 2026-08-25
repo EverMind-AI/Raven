@@ -16,6 +16,12 @@ export interface Hunk {
 
 export type CallKind = 'plain' | 'spawn' | 'dag'
 
+/* What `dag.get` answers, as much of it as the transcript reads. */
+export interface DagRunLike {
+  files?: SnapshotRow[]
+  task_summary?: string
+}
+
 export interface CallData {
   v: number
   id: number
@@ -37,6 +43,10 @@ export interface CallData {
   /* spawn / dag cards */
   t0: number
   runId: string | null
+  /* What the graph was dispatched for. On the arguments for a model-composed
+     graph, and only from `dag.get` for a playbook load, whose arguments name
+     the playbook and not the graph it assembles. */
+  runTitle: string
   /* The graph, in the shape features/dag holds it -- not a reduction of it. The
      card used to keep four fields per node (id, agent, handle, status) and there
      was nowhere for the rest to go: the dependencies that make it a graph, and
@@ -298,7 +308,10 @@ export interface TranscriptSource {
      four fields on the way in, which is why a restored card could never show a
      dependency or a prompt: the adapter (features/dag/nodes.ts) reads the wire
      shape, so this seam does not need to know which fields matter. */
-  dagRows?: (runId: string) => Promise<SnapshotRow[]>
+  /* The whole run, not its rows. It was `dagRows` and answered `run.files`,
+     which is why the card could name every node and never the graph: a field
+     this seam did not return was a field no card could draw. */
+  dagRun?: (runId: string) => Promise<DagRunLike>
   openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Open the delegated GRAPH a delivery came from. One verb rather than the

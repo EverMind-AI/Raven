@@ -208,6 +208,22 @@ class InstanceRow(_Strict):
     created_at_ms: int | None = Field(default=None, alias="createdAtMs")
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
     resumable: bool | None = None
+    title: str | None = Field(
+        default=None,
+        description=(
+            "What this instance was asked, in one line: a graph node's node_summary, or a spawn's "
+            "task_summary. Null for an instance nobody dispatched (one the user created by hand) and "
+            "for work that ran before those fields existed; a reader falls back to the handle."
+        ),
+    )
+    run_title: str | None = Field(
+        default=None,
+        alias="runTitle",
+        description=(
+            "What the graph this instance belongs to was dispatched for. Absent -- not empty -- for an "
+            "instance that came from no orchestration, so its presence is what says the row has a source."
+        ),
+    )
 
 
 class TranscriptToolCall(_Strict):
@@ -593,6 +609,13 @@ class DagRunStartedNode(_Strict):
 class DagRunStartedPayload(_Strict):
     run_id: str
     tool_call_id: str | None = None
+    task_summary: str | None = Field(
+        default=None,
+        description=(
+            "What the whole graph was dispatched for, in one line. Absent for a run started before "
+            "the field existed. Per-node the equivalent is DagRunStartedNode.node_summary."
+        ),
+    )
     nodes: list[DagRunStartedNode]
 
 
@@ -685,6 +708,13 @@ class DagRunSnapshot(_Strict):
     run_id: str
     dir: str
     finalized: bool
+    task_summary: str | None = Field(
+        default=None,
+        description=(
+            "What the whole graph was dispatched for, in one line. Null for a run written before the "
+            "field existed. Per-node the equivalent is DagSnapshotNode.node_summary."
+        ),
+    )
     files: list[DagSnapshotNode]
     terminal_outputs: list[DagTerminalOutput] | None = None
     summary: DagRunSummary

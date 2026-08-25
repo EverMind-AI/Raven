@@ -189,9 +189,10 @@ raven's own memory instead of the user's checkout, and says nothing about having
 the one line stating what is being dispatched, written before the prompt it summarises.
 Only `spawn`'s reaches the user, naming the dispatch in instance handles, sub-agent rows,
 spawn records and announcements, and never reaching the sub-agent's own input. The other
-two are captured, not shown: `run_subagent_dag`'s becomes `SubAgentDagSpec.task_summary`,
-persisted into `graph.json` and read by nobody, and a playbook's dead-ends into that same
-field once the playbook dispatches. On a playbook it still sits beside `description`,
+two reach the user through the Instance Title and the Run Title below:
+`run_subagent_dag`'s becomes `SubAgentDagSpec.task_summary`, persisted into `graph.json`,
+and a playbook's flows into that same field once the playbook dispatches. On a playbook it
+still sits beside `description`,
 which answers a different question: `description` is matched against to decide whether to
 run the playbook at all, `task_summary` says what running it dispatches.
 _Avoid_: `label` for this on the spawn path — the tool parameter is gone. The wire field
@@ -203,6 +204,21 @@ the same obligation for one node of a graph, and the node row's subject. Blank s
 parsing so a playbook can leave it for the model to fill, and `validate_and_order` refuses
 it before any node runs. It replaces the first-line-of-the-template guess a row used to
 make.
+
+**Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
+what one instance was asked, and what the graph it belongs to was asked. Computed by
+`subagents.instances` rather than stored, the way `resumable` is and for the same reason:
+four front ends draw this list, and a join each of them wrote separately is four chances to
+join differently. A node's title is read from its run's `graph.json` (one file per run, not
+per row); a spawn's from the Instance Log header, which is already addressed by
+`(agent, handle)`. Neither is on the Instance Registry: every writer there rebuilds a record
+wholesale, so a copy would be one dropped key away from vanishing. A run title is *absent*
+rather than empty when the instance came from no graph, so its presence is what a reader
+tests to decide whether to draw a source at all; a missing instance title falls back to the
+handle.
+_Avoid_: reading either as the node id or the handle - those are addresses. A playbook
+namespaces every node id with its own name and a run tag, which is exactly why they read
+badly as titles.
 
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async

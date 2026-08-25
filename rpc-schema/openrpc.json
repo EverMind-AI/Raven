@@ -6522,6 +6522,14 @@
           "resumable": {
             "type": "boolean",
             "description": "Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row."
+          },
+          "title": {
+            "type": "string",
+            "description": "What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle."
+          },
+          "runTitle": {
+            "type": "string",
+            "description": "What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source."
           }
         }
       },
@@ -7091,6 +7099,10 @@
           "run_id": { "type": "string" },
           "dir": { "type": "string" },
           "finalized": { "type": "boolean" },
+          "task_summary": {
+            "type": "string",
+            "description": "What the whole graph was dispatched for, in one line. Absent for a run written before the field existed. Per-node the equivalent is DagSnapshotNode.node_summary."
+          },
           "files": { "type": "array", "items": { "$ref": "#/components/schemas/DagSnapshotNode" } },
           "terminal_outputs": {
             "type": "array",
@@ -7160,6 +7172,10 @@
               "run_id": { "type": "string" },
               "tool_call_id": {
                 "description": "The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.",
+                "type": "string"
+              },
+              "task_summary": {
+                "description": "What the whole graph was dispatched for, in one line. Absent for a run started before the field existed. Per-node the equivalent is the node's node_summary.",
                 "type": "string"
               },
               "nodes": {
