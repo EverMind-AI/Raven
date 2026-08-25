@@ -327,9 +327,13 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // mouse tracking, so copy-on-select is what makes a transcript selection
   // copyable at all. That holds on every platform, not just macOS.
   //
-  // Nothing on screen changes when a drag ends, so the notice is the only
-  // confirmation the clipboard was written -- shown above the composer and
-  // dismissed, not written into the transcript.
+  // Nothing on screen changes when a drag ends, so the report is the only
+  // confirmation the clipboard was written. The first copy of a session
+  // carries the path caveat and stays in the transcript: it is the answer a
+  // user comes looking for after a paste comes up empty minutes later, and it
+  // cannot pile up because it is once per session by construction. The terse
+  // repeats, which are unbounded, show as a transient notice above the
+  // composer instead of stacking rows.
   //
   // The path caveat is per session while this hook outlives any one session:
   // `newSession()` and `resumeById()` replace `ui.sid` without remounting it,
@@ -344,10 +348,13 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       subscribeCopyOnSelect(selection, (text, path) => {
         const report = reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft')
 
-        // The first copy's caveat is longer than the terse line, so it stays up longer.
-        showCopyNotice(report.text, report.firstOfSession ? 5000 : 3000)
+        if (report.firstOfSession) {
+          sys(report.text)
+        } else {
+          showCopyNotice(report.text, 3000)
+        }
       }),
-    [selection]
+    [selection, sys]
   )
 
   const page = useCallback(
