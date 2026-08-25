@@ -127,11 +127,21 @@ export function openDeskDiff(change: WsChange): void {
    that turns out to BE that node can take its place. */
 const recordIdOfNode = (runId: string, node: string): string => `agent-record:${runId}:${node}`
 
-export function openDeskAgent(row: InstanceRow): void {
+export function openDeskAgent(row: InstanceRow, recordId?: string | null): void {
   /* A node opened before its instance row was known shows as the node's record;
      when the row arrives the panel promotes it, and the promoted view is the
-     same work -- so it replaces that pane instead of opening beside it. */
-  const supersedes = row.runId && row.nodeId ? recordIdOfNode(row.runId, row.nodeId) : null
+     same work -- so it replaces that pane instead of opening beside it.
+
+     A plain spawn gets the same promotion but cannot be derived here: its
+     record is identified by the call id, which `InstanceRow` has no field for
+     (`runId` and `nodeId` name a graph node, and a spawn has neither). The
+     promoting store knows it, so it hands it over. Without this the record
+     pane -- the composer-less one the reader was being moved off -- stayed on
+     the desk beside the instance pane, which is the whole thing this
+     promotion exists to avoid. */
+  const supersedes = recordId
+    ? `agent-record:${recordId}`
+    : (row.runId && row.nodeId ? recordIdOfNode(row.runId, row.nodeId) : null)
   addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row }, supersedes)
 }
 

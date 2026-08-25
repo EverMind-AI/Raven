@@ -14,6 +14,10 @@ export interface AgentRow {
   agent?: string | null
   label?: string
   status?: string
+  /* The addressable handle this run committed under, when it had one. On the
+     wire since `SubagentCall` carried it and unread here until now, which is
+     why a spawn row could only ever open its record. */
+  instance?: string | null
   started_at?: string
   ended_at?: string
   tokens?: number | null

@@ -218,6 +218,16 @@ export function refreshInstances(force = false): void {
         const row = instanceOf(open.run_id, open.node, next)
         if (row) openInstance(row)
       }
+      /* And the same for a spawn opened before its instance row was known,
+         which is the ordinary case from the transcript's own card: that path
+         has the run list but has never asked for instances. `spawnHandles`
+         remembers what each open record committed under, because the record
+         view itself does not carry it. */
+      if (open && open.kind === 'spawn') {
+        const held = spawnHandles.get(open.id)
+        const row = held ? instanceByHandle(held.agent, held.handle, next) : null
+        if (row) openInstance(row, open.id)
+      }
     })
     .catch(() => { /* same rule as the run list: keep what is drawn */ })
     .then(() => { instBusy = false; instAt = Date.now() })
@@ -236,6 +246,24 @@ function instanceOf(runId: string, nodeId: string, rows: InstanceRow[] = state.i
   return rows.find((x) => x.kind !== 'dag-node' && x.runId === runId && x.nodeId === nodeId) || null
 }
 
+/* What an open spawn record committed under, so a later instance list can
+   promote it. Keyed by the record id, which is what `open` carries: the record
+   view has no handle of its own to look one up with. */
+const spawnHandles = new Map<string, { agent: string | null; handle: string }>()
+
+/* The instance a spawned run committed under, by the handle its row carries.
+   The agent is matched too: a handle is unique per agent, not globally. */
+function instanceByHandle(
+  agent: string | null | undefined,
+  handle: string,
+  rows: InstanceRow[] = state.instances,
+): InstanceRow | null {
+  const want = agent || null
+  return rows.find(
+    (x) => x.kind !== 'dag-node' && x.handle === handle && (!want || x.agent === want),
+  ) || null
+}
+
 /* The same stage the runs use: an instance's direct chat is a transcript, and
    giving it a second renderer would be a second place for the transcript's
    rules to drift out of.
@@ -247,12 +275,17 @@ function instanceOf(runId: string, nodeId: string, rows: InstanceRow[] = state.i
    and every heartbeat after that: the desk reopened the pane, cleared the
    reader's fullscreen and stole the active pane, every couple of seconds, with
    nothing touched. */
-export function openInstance(it: InstanceRow): void {
+export function openInstance(it: InstanceRow, recordId?: string | null): void {
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
-  const workspace = window.RavenIslands?.workspace as { openAgent?: (row: InstanceRow) => void } | undefined
-  workspace?.openAgent?.(it)
+  const workspace = window.RavenIslands?.workspace as
+    { openAgent?: (row: InstanceRow, recordId?: string | null) => void } | undefined
+  /* The record this promotion is replacing, when it is a spawn's: the desk can
+     derive a graph node's record id from the row, but a spawn's is the call id
+     and the row does not carry one. Left off and the record pane stays open
+     beside the instance pane. */
+  workspace?.openAgent?.(it, recordId || null)
 }
 
 /* What a row in the list opens. Ordinarily the instance it names; for a
@@ -422,6 +455,23 @@ export function forgetInstance(it: InstanceRow): void {
 /* ── opening and closing ────────────────────────────────────────────── */
 
 export function openRow(it: AgentRow): void {
+  /* A run that committed under a handle opens as that instance -- the same
+     screen the instance's own row in this list opens. The rule is already
+     stated on `openDagNode` for a graph node, and it was never applied to a
+     spawn: one piece of work reached two ways has to land in one place, or the
+     two views drift and only one of them grows the next thing. Concretely, the
+     record view has no composer, so opening a resumable spawn from the
+     transcript's card gave the reader nothing to say back with.
+
+     The record stays the answer for a run with no handle, which is what a
+     stateless agent's spawn is: it has no conversation to continue. */
+  if (it.kind !== 'dag' && it.instance) {
+    const row = instanceByHandle(it.agent, it.instance)
+    if (row) {
+      openInstance(row, it.id || null)
+      return
+    }
+  }
   stageFresh = true
   paintedStatus = null
   if (it.kind === 'dag') {
@@ -430,7 +480,11 @@ export function openRow(it: AgentRow): void {
       who: null,
     })
   } else {
+    if (it.instance) spawnHandles.set(it.id || '', { agent: it.agent || null, handle: it.instance })
     set({ open: { kind: 'spawn', id: it.id || '' }, who: null })
+    /* Opened before this panel had ever asked for its rows: ask now, and the
+       promotion above swaps in the instance view when one turns up. */
+    if (it.instance) refreshInstances(true)
   }
   const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
   workspace?.openAgentRecord?.(it)
@@ -805,6 +859,10 @@ export function reset(): void {
   instDrawn = ''
   instAt = 0
   instBusy = false
+  /* And what each open spawn record committed under. Subagents belong to the
+     session that spawned them, so a handle remembered here must leave with it
+     or the next conversation promotes a record that never named one. */
+  spawnHandles.clear()
   stageFresh = true
   paintedStatus = null
   const dot = document.getElementById('wsAgentRun')

@@ -134,6 +134,27 @@ describe('desk store', () => {
     expect(desk.getState().active).toBe('agent:raven:brief-9f')
   })
 
+  it('promotes a spawn record into the pane it already occupies', () => {
+    /* The same promotion for a plain spawn, which the row cannot describe:
+       `runId` and `nodeId` name a graph node and a spawn has neither, so the
+       record id -- the call id -- has to be handed over by the caller that
+       knows it. Derived instead of passed, the composer-less record pane the
+       reader is being moved off stays open beside the instance pane. */
+    desk.openDeskAgentRecord(
+      { kind: 'spawn', id: '20260825T101500Z-ab12cd34', agent: 'hermes', label: 'quick survey' })
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['agent-record:20260825T101500Z-ab12cd34', 'file:/workspace/a.ts'])
+
+    desk.openDeskAgent(
+      { sessionKey: 's', agent: 'hermes', handle: 'survey-9ab2c6', kind: 'cli', resumable: true },
+      '20260825T101500Z-ab12cd34')
+
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['agent:hermes:survey-9ab2c6', 'file:/workspace/a.ts'])
+    expect(desk.getState().active).toBe('agent:hermes:survey-9ab2c6')
+  })
+
   it('keeps fullscreen through that promotion and drops it for a different pane', () => {
     desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
     desk.toggleSolo('agent-record:r1:brief')
