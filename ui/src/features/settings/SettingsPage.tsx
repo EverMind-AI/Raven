@@ -8,6 +8,7 @@ import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
+import { open as openConn } from '../connections/store'
 import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
@@ -1032,7 +1033,7 @@ function ProactPage(): JSX.Element {
           className="mini ghost"
           onClick={() => {
             sh.closeSet?.()
-            sh.openConn?.()
+            openConn()
           }}
         >
           {t('gui.set.chn.manage')}
@@ -1096,7 +1097,7 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
           className="mini ghost"
           onClick={() => {
             sh.closeSet?.()
-            sh.openConn?.()
+            openConn()
           }}
         >
           {t('gui.set.chn.manage')}

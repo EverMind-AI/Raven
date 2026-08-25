@@ -52,7 +52,6 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: id => calls.push(['showPage', id]),
-    openCron: () => calls.push(['openCron', null]),
     navState: () => ({ pages: [], btnOf: () => undefined })
   }
   window.RavenShell = fakeShell

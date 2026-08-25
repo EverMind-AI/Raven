@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 import { current, setCurrent } from '../../shell/session'
+import { open as openCron } from '../cron/store'
 import * as store from './store'
 import { plainTitle } from './title'
 
@@ -303,7 +304,7 @@ export function RailApp(): JSX.Element | null {
       <Group
         label={t('gui.rail.from_cron')}
         items={rows.filter(x => !x.pin && x.from === 'cron')}
-        action={() => shell().openCron?.()}
+        action={() => openCron()}
         cap={3}
         gid="cron"
         always

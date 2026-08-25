@@ -81,11 +81,11 @@ function closeDetail() { $('#detail').dataset.open = 'false'; }
 
 /* ══ module 2b: external agents ════════════════════════════════════
    The renderer is the xa island (ui/src/features/xa/); what remains here
-   is its shell face -- the names the More row, the Esc handler and the
-   live layer's redrawAll still call -- and the fixture source. The island
-   owns everything drawn inside the body and its sheet in the shared
-   detail drawer. */
-function openXa() { RavenIslands.xa.open(); }
+   is its shell face -- the names the Esc handler and the live layer's
+   redrawAll still call -- and the fixture source. The More row opens the
+   page by importing the island (shell/navfly.ts); it does not come through
+   here. The island owns everything drawn inside the body and its sheet in
+   the shared detail drawer. */
 function closeXa() { RavenIslands.xa.close(); }
 function drawXa() {
   /* A language flip re-renders #xaBody with the new catalogue. */

@@ -1,10 +1,17 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
 import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
 
 import type { Shell } from './bridge'
+
+/* The three openers are direct imports now, so the pages they open are observed
+   by standing in for those modules rather than for a shell verb. */
+const opens = vi.hoisted(() => ({ list: [] as string[] }))
+vi.mock('../features/connections/store', () => ({ open: () => opens.list.push('connPage') }))
+vi.mock('../features/cron/store', () => ({ open: () => opens.list.push('cronPage') }))
+vi.mock('../features/xa/store', () => ({ open: () => opens.list.push('xaPage') }))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
    The three rows all light up the group's own parent. */
@@ -24,14 +31,12 @@ interface Harness {
 /* `markNew` here is the legacy markNewCurrent(), which is the rail island's
    marker; the interplay tests below swap in the real one. */
 function install(over: Partial<Shell> = {}): Harness {
-  const seen: Harness = { opened: [], marks: 0 }
+  opens.list.length = 0
+  const seen: Harness = { opened: opens.list, marks: 0 }
   const fake: Shell = {
     T: (key) => key,
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    openXa: () => seen.opened.push('xaPage'),
-    openConn: () => seen.opened.push('connPage'),
-    openCron: () => seen.opened.push('cronPage'),
     markNew: () => {
       seen.marks += 1
     },
@@ -116,6 +121,17 @@ describe('the nav flyout', () => {
     rows()[2]!.click()
     expect(seen.opened).toEqual(['cronPage'])
     expect(seen.marks).toBe(1)
+  })
+
+  /* Every row, not just the one below: a row wired to the wrong opener, or to
+     none at all, is invisible to a test that picks a single row. */
+  it('each row opens the page it names', () => {
+    MORE_ROWS.forEach((row, i) => {
+      const seen = install()
+      draw()
+      rows()[i]!.click()
+      expect(seen.opened).toEqual([row.page])
+    })
   })
 
   it('stays open on a pick -- it is navigation, not a menu', () => {

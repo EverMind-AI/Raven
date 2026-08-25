@@ -38,23 +38,22 @@ export interface Shell {
   wsPick?(tab: string): void
   /* Transcript island verbs: the attachment marker the history reader needs. */
   attNotes?(): string[]
-  /* Rail island verbs that still belong to page chrome. */
-  openCron?(): void
   /* What markNew needs of the chrome's page registry: the NAV_OF keys and the
      button a page lights up. The More rows are not in here -- the nav flyout
      module marks its own (see shell/navfly.ts). */
   navState?(): { pages: string[]; btnOf(p: string): string | undefined }
-  /* Chrome verbs. The nav flyout reaches the other two module pages through
-     these, and re-decides the nav marks after a row navigates. */
   /* One verb for one action: the banner's only button opens the plugins page
      AND the websearch entry on it, and a reader who lands on the page without
      the entry open has to hunt for what the banner was talking about. */
   openWebsearch?(): void
-  openXa?(): void
-  openConn?(): void
+  /* Re-decides the nav marks after a row navigates. The flyout opens its three
+     pages by importing the owning islands (see shell/navfly.ts); this stays a
+     verb because rail/store imports that module, so calling rail's markNew
+     from it directly would close an import cycle. */
   markNew?(): void
-  /* Republishes the offset the docked composer stands at; a panel drag moves
-     the column the composer lives in. */
+  /* Redraws the capabilities page, but only while it is open on the plugin
+     tab: a plugin write that lands with the page shut, or on another tab, has
+     nothing to repaint. */
   plugRedraw?(): void
   /* Settings-island verbs. Each optional for the same reason, and each
      published by one guarded line in ui/src/demo/155-bridge.js. */

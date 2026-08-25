@@ -13,10 +13,16 @@
  * reads back whether the group stood open, instead of reaching into these rows
  * itself. One writer per element, named.
  *
- * The openers go out through the shell rather than being called directly: they
- * are legacy names that a layer above may still rebind, and a stored reference
- * would keep calling whichever one existed when this module evaluated.
+ * The three openers are imported from the islands that own those pages. They
+ * used to go out through the shell, on the grounds that a layer above might
+ * rebind them; none of the three ever was. markNew still goes out that way, and
+ * deliberately: rail/store already imports this module, so reaching its markNew
+ * directly would turn a dependency the shell keeps one-way into an import cycle.
  */
+
+import { open as openConn } from '../features/connections/store'
+import { open as openCron } from '../features/cron/store'
+import { open as openXa } from '../features/xa/store'
 
 import { shell, t } from './bridge'
 
@@ -32,19 +38,19 @@ export const MORE_ROWS: readonly NavRow[] = [
     page: 'xaPage',
     nameKey: 'gui.nav.agents',
     path: '<rect x="3.5" y="4" width="7" height="7" rx="1.6"/><rect x="13.5" y="13" width="7" height="7" rx="1.6"/><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5"/>',
-    go: () => shell().openXa?.(),
+    go: () => openXa(),
   },
   {
     page: 'connPage',
     nameKey: 'gui.nav.conn',
     path: '<path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6"/>',
-    go: () => shell().openConn?.(),
+    go: () => openConn(),
   },
   {
     page: 'cronPage',
     nameKey: 'gui.nav.cron',
     path: '<circle cx="12" cy="12.5" r="7.5"/><path d="M12 8.5v4.2l2.6 1.6M9 2.5h6"/>',
-    go: () => shell().openCron?.(),
+    go: () => openCron(),
   },
 ]
 

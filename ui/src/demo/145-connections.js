@@ -4,9 +4,10 @@
    entrance) and the two point in opposite directions.
 
    The renderer is the connections island (ui/src/features/connections/);
-   what remains here is its shell face -- the names the More flyout, the
-   Esc handler and the language flip still call -- and the fixture source. */
-function openConn() { RavenIslands.connections.open(); }
+   what remains here is its shell face -- the names the Esc handler and the
+   live layer's redrawAll still call -- and the fixture source. The More
+   flyout opens the page by importing the island (shell/navfly.ts); it does
+   not come through here. */
 function closeConn() { RavenIslands.connections.close(); }
 function drawConn() {
   /* A language flip re-renders #connBody with the new catalogue. */
