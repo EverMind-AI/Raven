@@ -12,8 +12,15 @@
    `absent` is what the island's empty state reads to tell the two apart. */
 let agentsWatch = null;
 DS.agents = {
+  /* Filtered on whether the agent can be dispatched, not on where it came
+     from. It filtered `vendored` -- which is true of every agent that ships
+     WITH raven -- so Raven-Code, Raven-PPT and Raven-Research were absent from
+     the roster while `enabled: false` rows (an uninstalled acp preset, a
+     disabled cli) were listed as if they were available. An agent that is off
+     but has instances still gets a group: `orderAgentGroups` unions these names
+     with the ones on the instance rows, so its history stays reachable. */
   roster: () => rpc.call('subagents.list', { probe: false })
-    .then(r => (r.rows || []).filter(row => !row.vendored)),
+    .then(r => (r.rows || []).filter(row => row.enabled)),
   list: (sessionId) => {
     if (!rpcHas('subagent')) return Promise.resolve([]);
     return rpc.call('subagent.list', { session_id: sessionId })
