@@ -934,6 +934,30 @@ class TestConfigOptions:
 
         assert rig.stack.params_for("config.set")["session_id"] == session_id
 
+    async def test_a_runtime_refusal_keeps_its_own_code(self, rig):
+        """A code a client can act on must not be flattened to an internal error.
+
+        Was written against -32009, the refusal for a switch attempted during a
+        turn. That code went with the per-session binding: a switch now lands on
+        the session's next turn, so nothing refuses it. The property is about the
+        boundary, not that one code, so it is asserted on an error the
+        `config.set model` path still raises -- -32011, which `_set_model` returns
+        for a value it will not write.
+        """
+        from raven.rpc.errors import ConfigValidationError
+
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.stack.config_set_result = ConfigValidationError("no provider names whose credential serves it")
+
+        response = await rig.call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"},
+        )
+
+        assert response["error"]["code"] == -32011
+        validate_outbound(response)
+
     async def test_an_unknown_option_names_what_is_supported(self, rig):
         await rig.handshake()
         session_id = await rig.new_session()

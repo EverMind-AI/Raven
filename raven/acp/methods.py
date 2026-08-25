@@ -529,10 +529,12 @@ class AcpMethods:
         the schema requires it -- and because applying one can change another's
         current value.
 
-        The runtime's own refusals travel out with their codes intact: -32009 for
-        a switch attempted during a turn is something a client can act on, and
-        flattening it to an internal error would leave a person retrying a thing
-        that will keep failing for a reason nobody told them.
+        The runtime's own refusals travel out with their codes intact -- a value
+        the runtime will not write comes back as -32011, not as an internal
+        error, because flattening it would leave a person retrying a thing that
+        will keep failing for a reason nobody told them. A switch attempted
+        during a turn is not among them any more: it lands on the session's next
+        turn rather than being refused.
         """
         session = self._session_for(params)
         config_id = params.get("configId")
