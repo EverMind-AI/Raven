@@ -16,6 +16,7 @@ import re
 import shlex
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePath
 
@@ -101,6 +102,27 @@ _SYSTEM_POWER_COMMANDS = frozenset({"halt", "poweroff", "reboot", "shutdown"})
 _POWER_MULTIPLEXERS = frozenset({"busybox", "init", "loginctl", "systemctl", "telinit"})
 _POWER_MULTIPLEXER_ACTIONS = _SYSTEM_POWER_COMMANDS | {"0", "6"}
 _MAX_EMBEDDED_SHELL_DEPTH = 4
+
+
+@dataclass(frozen=True)
+class PolicyOutcome:
+    """What the policy decided about one command, and which rule decided it.
+
+    The reason used to be discarded. Every hard deny reached the user as
+    "Command blocked by safety guard (policy evaluation failed)" whether it was
+    a denied pattern, a recursive delete, a power-off or a command that could
+    not be parsed -- which is what the session this came from asked about four
+    times, and what the model then guessed wrong about twice.
+
+    ``reason_code`` is a stable identifier rather than prose, because more than
+    one surface has to say the same thing about one refusal: the text handed to
+    the model, the approval prompt, and the trace. Empty when nothing was
+    refused; for an approval it is the family's name, which is what the prompt
+    describes.
+    """
+
+    decision: "CommandDecision"
+    reason_code: str = ""
 
 
 class CommandDecision(StrEnum):
@@ -945,30 +967,32 @@ class ShellCommandPolicy:
         Returns ``None`` when nothing requires approval, including for a
         hard-denied command: there is no prompt to explain.
         """
-
-        # The same lexical view ``evaluate`` decided on. Read from the raw text,
-        # a comment can erase the family -- the delete short-circuit stops
-        # matching -- or name the wrong one, and the prompt then describes an
-        # operation the command does not perform.
-        executable = executable_text(command)
-        if not sandboxed and any(pattern.search(executable) for pattern in self._deny_patterns):
-            return None
-        try:
-            if not sandboxed and (_matches_recursive_delete(executable) or _matches_system_power_command(executable)):
-                return None
-            for name, matcher, escapes in self._approval_matchers:
-                if sandboxed and not escapes:
-                    continue
-                if matcher(executable):
-                    return name
-        except Exception:
-            # Mirrors ``evaluate``'s fail-closed branch, which turns a faulty
-            # matcher into a hard deny -- and a hard deny has no reason to give.
-            return None
-        return None
+        outcome = self.classify(command, sandboxed=sandboxed)
+        return outcome.reason_code if outcome.decision is CommandDecision.REQUIRE_APPROVAL else None
 
     def evaluate(self, command: str, *, sandboxed: bool = False) -> CommandDecision:
         """Classify a command, reducing authority when a matcher cannot decide.
+
+        ``sandboxed`` drops the checks a sandbox makes unnecessary and keeps the
+        ones it does not. A microVM contains what a command does to the
+        filesystem, so the deny list and the contained families are skipped; it
+        does not contain a push, an install or a connection to another machine,
+        so those families still ask. Skipping them all -- which is what a plain
+        short-circuit on the sandbox flag does -- makes the safer configuration
+        prompt LESS than the unsandboxed one, for exactly the operations the
+        sandbox has no say over.
+        """
+        return self.classify(command, sandboxed=sandboxed).decision
+
+    def classify(self, command: str, *, sandboxed: bool = False) -> PolicyOutcome:
+        """Decide about a command and say which rule decided.
+
+        The one place the rules run. :meth:`evaluate` and
+        :meth:`approval_reason` read their answers off this, so the two cannot
+        disagree about one command -- which they could while each re-ran the
+        matchers itself, and did: a comment mentioning a recursive delete
+        tripped the short-circuit in ``approval_reason`` and erased the family
+        the prompt was going to name.
 
         ``sandboxed`` drops the checks a sandbox makes unnecessary and keeps the
         ones it does not. A microVM contains what a command does to the
@@ -983,35 +1007,36 @@ class ShellCommandPolicy:
         # Hard deny runs first so an approval matcher can never convert an
         # unconditionally forbidden command into an approvable operation.
         #
-        # Every refusal below is about damage a sandbox holds: a deny pattern, a
-        # tree walked away, the machine powered off. Inside a microVM the machine
-        # in question IS the sandbox, which is what the sandboxed path is allowed
-        # to skip -- and skipping it is the point of running one.
-        # One lexical view for every check below, including the matchers a
-        # surface registered: a comment that decides one of them and not the
-        # others is the same divergence in miniature.
+        # One lexical view for every check, including the matchers a surface
+        # registered: a comment that decides one of them and not the others is
+        # the same divergence this method exists to close.
         executable = executable_text(command)
-        if not sandboxed:
-            if any(pattern.search(executable) for pattern in self._deny_patterns):
-                return CommandDecision.HARD_DENY
+        if not sandboxed and any(pattern.search(executable) for pattern in self._deny_patterns):
+            return PolicyOutcome(CommandDecision.HARD_DENY, "deny_pattern")
         try:
-            if not sandboxed and (_matches_recursive_delete(executable) or _matches_system_power_command(executable)):
-                return CommandDecision.HARD_DENY
-            if any(
-                matcher(executable) for _name, matcher, escapes in self._approval_matchers if escapes or not sandboxed
-            ):
-                return CommandDecision.REQUIRE_APPROVAL
+            if not sandboxed:
+                if _matches_recursive_delete(executable):
+                    return PolicyOutcome(CommandDecision.HARD_DENY, "recursive_delete")
+                if _matches_system_power_command(executable):
+                    return PolicyOutcome(CommandDecision.HARD_DENY, "system_power")
+            for name, matcher, escapes in self._approval_matchers:
+                if sandboxed and not escapes:
+                    continue
+                if matcher(executable):
+                    return PolicyOutcome(CommandDecision.REQUIRE_APPROVAL, name)
         except Exception:
             # Matchers inspect untrusted command text and may be extended later.
-            # A faulty matcher must close the gate, not bypass it.
-            return CommandDecision.HARD_DENY
-        return CommandDecision.ALLOW
+            # A faulty matcher must close the gate, not bypass it. The reason
+            # names the parse rather than a rule, because no rule got to answer.
+            return PolicyOutcome(CommandDecision.HARD_DENY, "parse_error")
+        return PolicyOutcome(CommandDecision.ALLOW)
 
 
 __all__ = [
     "EXTERNAL_EFFECT_MATCHERS",
     "ApprovalMatcher",
     "CommandDecision",
+    "PolicyOutcome",
     "ShellCommandPolicy",
     "executable_text",
     "set_surface_approval_families",
