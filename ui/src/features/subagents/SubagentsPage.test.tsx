@@ -98,7 +98,9 @@ describe('subagents island, the list', () => {
     window.RavenIslands = { workspace: { openAgent } }
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
-    expect(openAgent).toHaveBeenCalledWith(row)
+    /* Second argument is the record this promotion replaces; a row opened
+       from the list is replacing nothing. */
+    expect(openAgent).toHaveBeenCalledWith(row, null)
     /* And records WHAT it opened. Leaving `open` on the node it was promoted
        from is what made the promotion below fire again on every heartbeat. */
     expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
@@ -1207,5 +1209,97 @@ describe('subagents island, what a desk row is called', () => {
 
     expect(el.querySelector('.nm')!.textContent).toBe('made-by-hand')
     expect(el.querySelector('.source')).toBeNull()
+  })
+})
+
+/* One piece of work reached two ways has to land in one place. A spawned run
+   that committed under a handle is an instance -- the same instance its own row
+   in this list opens -- and the record view has no composer, so opening it from
+   the transcript's card gave the reader nothing to say back with. */
+describe('subagents island, what a spawned run opens as', () => {
+  const run = (over: Partial<AgentRow> = {}): AgentRow =>
+    ({ kind: 'spawn', id: 'call-1', agent: 'hermes', label: 'quick survey', ...over })
+
+  it('opens the instance it committed under, not its record', async () => {
+    const row = inst({ handle: 'survey-9ab2c6', resumable: true })
+    instances([row], { instanceHistory: async () => ({ turns: [] }) })
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+
+    store.openRow(run({ instance: 'survey-9ab2c6' }))
+
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+  })
+
+  it('opens the record when the run committed under no handle', async () => {
+    /* A stateless agent's spawn has no conversation to continue, so its record
+       is not a fallback -- it is the whole of what there is. */
+    instances([], { instanceHistory: async () => ({ turns: [] }) })
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+
+    store.openRow(run())
+
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+  })
+
+  it('opens the record when the handle names no row, and swaps when one arrives', async () => {
+    /* The ordinary case from the transcript's card: that path holds the run
+       list and has never asked for instances. */
+    let rows: InstanceRow[] = []
+    instances([], { instances: async () => rows, instanceHistory: async () => ({ turns: [] }) })
+
+    store.openRow(run({ instance: 'survey-9ab2c6' }))
+    await act(async () => { await Promise.resolve() })
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+
+    rows = [inst({ handle: 'survey-9ab2c6', resumable: true })]
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+  })
+
+  it('does not take a handle of the same name under another agent', async () => {
+    /* A handle is unique per agent, not globally. */
+    instances([inst({ agent: 'openclaw', handle: 'survey-9ab2c6' })],
+      { instanceHistory: async () => ({ turns: [] }) })
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+
+    store.openRow(run({ instance: 'survey-9ab2c6' }))
+
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+  })
+
+  it("does not take another agent's handle when the list arrives later either", async () => {
+    /* The same rule on the async path, which is the ordinary one: the card
+       opens a record first and the list answers after. It used to be checked
+       by a second copy of the predicate that no test reached. */
+    let rows: InstanceRow[] = []
+    instances([], { instances: async () => rows, instanceHistory: async () => ({ turns: [] }) })
+
+    store.openRow(run({ instance: 'survey-9ab2c6' }))
+    await act(async () => { await Promise.resolve() })
+
+    rows = [inst({ agent: 'openclaw', handle: 'survey-9ab2c6', resumable: true })]
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+  })
+
+  it('a handle-less spawn stays on its record even after an instance list arrives', async () => {
+    /* Every id in this file is a reused literal, so a handle remembered by an
+       earlier test outlives its conversation and promotes a run that never
+       named one. In production the ids are stamped and unique, which is why
+       nobody sees it -- but the trap is inherited by the next test added here. */
+    instances([inst({ handle: 'survey-9ab2c6', resumable: true })],
+      { instanceHistory: async () => ({ turns: [] }) })
+
+    store.openRow(run())
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+
+    await act(async () => { store.refreshInstances(true); await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 })
