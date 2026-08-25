@@ -1303,3 +1303,118 @@ describe('subagents island, what a spawned run opens as', () => {
     expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 })
+
+/* The read in flight is shared with whoever asks for the same list while it is
+   still going (shell/resume.ts waits on it to put a window back). Shared state
+   has to be dropped when the conversation changes, or the next one waits on an
+   answer that was thrown away. */
+describe('the list reads', () => {
+  it('hand a second caller the answer the first is waiting for', async () => {
+    /* Waiting on the SECOND call alone is the whole point: a caller told
+       "nothing in flight" carries on before the list is there, and the window it
+       was going to reopen is not found. */
+    let asks = 0
+    instances([], {
+      instances: async () => {
+        asks += 1
+        await Promise.resolve()
+        return [inst({ handle: 'h7', resumable: true })]
+      },
+    })
+
+    store.refreshInstances(true)
+    const second = store.refreshInstances(true)
+    await second
+
+    expect(asks).toBe(1)
+    expect(store.getState().instances.map((row) => row.handle)).toEqual(['h7'])
+  })
+
+  it('hand a second caller the run list the first is waiting for', async () => {
+    /* The same rule on the other list: a spawn's record is reopened from it. */
+    let asks = 0
+    rows([], {
+      list: async () => {
+        asks += 1
+        await Promise.resolve()
+        return [{ kind: 'spawn', id: 'call-1', label: 'research' }]
+      },
+    })
+
+    store.refresh(true)
+    const second = store.refresh(true)
+    await second
+
+    expect(asks).toBe(1)
+    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-1'])
+  })
+
+  it('are shared only while they are in flight', async () => {
+    /* A finished read is not a read in flight. Holding its handle would make
+       every later refresh hand back the same settled promise, and the list
+       would never be asked for again -- the panel would go stale for the life of
+       the conversation. */
+    const asked: string[] = []
+    instances([], {
+      instances: async () => {
+        asked.push('instances')
+        await Promise.resolve()
+        return []
+      },
+      list: async () => {
+        asked.push('list')
+        await Promise.resolve()
+        return []
+      },
+    })
+
+    await store.refreshInstances(true)
+    await store.refreshInstances(true)
+    await store.refresh(true)
+    await store.refresh(true)
+
+    expect(asked).toEqual(['instances', 'instances', 'list', 'list'])
+  })
+
+  it('drop the instance read when the conversation changes under it', async () => {
+    /* The answer to the old conversation's read is discarded by the guard
+       inside it, so a next conversation that waited on that same read would
+       wait for an answer nobody keeps -- and its own list would stay empty
+       until something asked again. */
+    const asked: string[] = []
+    instances([], {
+      instances: async (sessionId: string) => {
+        asked.push(sessionId)
+        await Promise.resolve()
+        return [inst({ sessionKey: sessionId, handle: `for-${sessionId}`, resumable: true })]
+      },
+    })
+
+    store.refreshInstances(true)
+    act(() => { store.reset() })
+    setCurrent('s2')
+    await store.refreshInstances(true)
+
+    expect(asked).toEqual(['s1', 's2'])
+    expect(store.getState().instances.map((row) => row.handle)).toEqual(['for-s2'])
+  })
+
+  it('drop the run read when the conversation changes under it', async () => {
+    const asked: string[] = []
+    rows([], {
+      list: async (sessionId: string) => {
+        asked.push(sessionId)
+        await Promise.resolve()
+        return [{ kind: 'spawn', id: `call-${sessionId}`, label: sessionId }]
+      },
+    })
+
+    store.refresh(true)
+    act(() => { store.reset() })
+    setCurrent('s2')
+    await store.refresh(true)
+
+    expect(asked).toEqual(['s1', 's2'])
+    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-s2'])
+  })
+})

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { _resetForTests as rackReset, sync as rackSync } from '../composer/sheets'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
-import { forget, run, start, sync, touch, _resetForTests } from './mount'
+import { forget, resume, run, start, sync, touch, _resetForTests } from './mount'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
@@ -311,5 +311,104 @@ describe('the dag sheet title', () => {
     act(() => { start('a', graph('r1')) })
 
     expect(sheets()[0]!.querySelector('.hd .ttl')!.textContent).toBe('gui.dag.title')
+  })
+})
+
+/* A reload replaces the page while the run keeps going on the gateway. What the
+   page kept is which run and whether it was folded; `dag.get` supplies the rest,
+   which is the only way a resumed sheet can show a node that finished while the
+   page was away. */
+describe('the dag sheet after a reload', () => {
+  const answer = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    run_id: 'r1',
+    finalized: false,
+    task_summary: 'AI news pipeline',
+    files: [
+      { node: 'one', subagent: 'Researcher', depends_on: [], status: 'completed', ended_at: 1000 },
+      { node: 'two', subagent: 'Coder', depends_on: ['one'], status: 'running', started_at: 2000 },
+    ],
+    summary: { total: 2, completed: 1 },
+    ...over,
+  })
+
+  /* The page being replaced: a sheet was up, the stores and the DOM go, the
+     note the store wrote on the way survives. Kept and put back verbatim rather
+     than hand-written, so this exercises the real writer's own output. */
+  function left(over: Partial<DagRun> = {}): void {
+    act(() => { start('a', graph('r1', over)) })
+    const note = sessionStorage.getItem('raven.gui.view.dag')
+    act(() => { _resetForTests() })
+    rackReset()
+    wire()
+    if (note) sessionStorage.setItem('raven.gui.view.dag', note)
+  }
+
+  it('draws the run the note names, with the statuses the read carries', () => {
+    left()
+
+    let put = false
+    act(() => { put = resume('a', answer()) })
+
+    expect(put).toBe(true)
+    const d = run('a')!
+    expect(d.run_id).toBe('r1')
+    expect(d.task_summary).toBe('AI news pipeline')
+    expect([...d.nodes.values()].map((n) => n.status)).toEqual(['completed', 'running'])
+    /* Still going, so the sheet comes back with its gist and its clock rather
+       than with the summary line a finished run gets. */
+    expect(d.done).toBe(false)
+    expect(sheets()).toHaveLength(1)
+  })
+
+  it('comes back folded when it was folded', () => {
+    left({ folded: true })
+
+    act(() => { resume('a', answer()) })
+
+    expect(run('a')!.folded).toBe(true)
+    expect(sheets()[0]!.dataset.fold).toBe('true')
+  })
+
+  it('is over only when the gateway says the run finalized', () => {
+    /* Not inferred from the node statuses: an interrupted run leaves nodes that
+       never finished, and reading that as "still going" would tick a clock over
+       a run nothing is executing. */
+    left()
+
+    act(() => { resume('a', answer({ finalized: true })) })
+
+    expect(run('a')!.done).toBe(true)
+  })
+
+  it('leaves a sheet that the live events already raised alone', () => {
+    left()
+    act(() => { start('a', graph('r2')) })
+
+    let put = false
+    act(() => { put = resume('a', answer()) })
+
+    expect(put).toBe(false)
+    expect(run('a')!.run_id).toBe('r2')
+    expect(sheets()).toHaveLength(1)
+  })
+
+  it('raises nothing for a conversation that had no sheet', () => {
+    let put = false
+    act(() => { put = resume('a', answer()) })
+
+    expect(put).toBe(false)
+    expect(sheets()).toHaveLength(0)
+  })
+
+  it('raises nothing when the run cannot be read back', () => {
+    /* A run whose directory has been cleaned answers without rows. An empty
+       sheet is worse than none: it says the graph had no nodes. */
+    left()
+
+    let put = false
+    act(() => { put = resume('a', answer({ files: [] })) })
+
+    expect(put).toBe(false)
+    expect(sheets()).toHaveLength(0)
   })
 })

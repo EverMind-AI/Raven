@@ -14,9 +14,10 @@ import { createRoot } from 'react-dom/client'
 import { t } from '../../shell/bridge'
 import { add as sheetAdd, remove as sheetRemove } from '../composer/sheets'
 import { Sheet } from './DagSheet'
+import { fromSnapshot } from './nodes'
 import * as store from './store'
 
-import type { DagRun } from './types'
+import type { DagRun, DagSummary } from './types'
 import type { Root } from 'react-dom/client'
 
 const HOSTS = new Map<string, { el: HTMLElement; root: Root }>()
@@ -64,6 +65,57 @@ export function start(key: string, run: DagRun): void {
   host(key)
 }
 
+/* What `dag.get` answers, as much of it as a resumed sheet reads. Loose in the
+   same way the adapters are: this crosses the wire, so every field is a claim.
+ */
+interface RunWire {
+  run_id?: unknown
+  dir?: unknown
+  finalized?: unknown
+  task_summary?: unknown
+  files?: unknown
+  summary?: unknown
+}
+
+const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/* Put a sheet back after the page was replaced.
+ *
+ * The reader had one open on this conversation and `dag.get` has just said what
+ * the run looks like now, so `wire` decides every node's status and the stored
+ * note decides only the fold. That asymmetry is the reason this exists at all:
+ * a resumed graph that trusted a stored copy would show the run frozen at the
+ * moment of the reload, and the nodes that finished while the page was away
+ * would sit at `running` for good.
+ *
+ * False when there is nothing to put back -- no note, a sheet already up (the
+ * live events won the race), or a read that came back without nodes. */
+export function resume(key: string, wire: unknown): boolean {
+  const kept = store.saved(key)
+  if (!kept || store.run(key)) return false
+  const run = (wire || {}) as RunWire
+  const nodes = fromSnapshot(run.files)
+  if (!nodes.length) return false
+  start(key, {
+    /* The read's own id, falling back to the note's: the two agree, and asking
+       the answer rather than the request is what keeps a run that was resumed
+       under a canonical id from being drawn under the one we asked with. */
+    run_id: text(run.run_id) || kept.run,
+    session: key,
+    order: nodes.map((n) => n.id),
+    nodes: new Map(nodes.map((n) => [n.id, n])),
+    summary: (run.summary || null) as DagSummary | null,
+    /* The manifest is written when the run finalizes, so this is the gateway's
+       own answer to "is it over" -- not something the page can infer from node
+       statuses, which an interrupted run leaves looking unfinished forever. */
+    done: !!run.finalized,
+    folded: kept.folded,
+    dir: text(run.dir) || null,
+    task_summary: text(run.task_summary) || null,
+  })
+  return true
+}
+
 /* The caller mutated the run it holds -- a node's status, a time, the summary --
    and wants the sheet to say so. */
 export const touch = (): void => store.touch()
@@ -78,6 +130,10 @@ export const sync = (): void => store.touch()
 export const forget = (key: string): void => drop(key)
 
 export const run = (key: string): DagRun | null => store.run(key)
+
+/* What this conversation had open before the page was replaced. Read by
+   shell/resume.ts, which is what turns it back into a sheet. */
+export const saved = store.saved
 
 /* Test seam. */
 export function _resetForTests(): void {

@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import * as desk from './deskStore'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -23,6 +24,9 @@ function wire(): void {
   }
   window.RavenShell = fakeShell
   localStorage.clear()
+  sessionStorage.clear()
+  sessionReset()
+  setCurrent('s1')
   document.body.innerHTML = '<div id="split" data-open="false"></div>'
   desk._resetForTests()
 }
@@ -33,8 +37,10 @@ beforeEach(wire)
 
 afterEach(() => {
   desk._resetForTests()
+  sessionReset()
   window.RavenShell = undefined
   localStorage.clear()
+  sessionStorage.clear()
 })
 
 describe('desk store', () => {
@@ -198,5 +204,134 @@ describe('desk store', () => {
     desk.openDeskFile('/workspace/b.ts')
     expect(updates).toBe(2)
     unsubscribe()
+  })
+})
+
+/* A reload replaces the page and takes the desk with it. What is kept is what
+   the reader OPENED -- a path, an (agent, handle) -- and where the frame put it;
+   resuming replays those opens, so a restored window goes through the same verb
+   a clicked one does and reads its own body back from the gateway. */
+describe('what a reload finds on the desk', () => {
+  it('records the file windows, by path, in the order they were opened', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts', '/dl/b.ts')
+
+    expect(desk.saved('s1')!.open).toEqual([
+      { k: 'file', path: '/workspace/a.ts' },
+      { k: 'file', path: '/workspace/b.ts', dl: '/dl/b.ts' },
+    ])
+  })
+
+  it('records the file itself nowhere', () => {
+    /* The pane reads its own body when it opens. A stored copy would come back
+       as a file the agent has since rewritten, which is the failure this whole
+       design is shaped to avoid. */
+    desk.openDeskFile('/workspace/a.ts')
+
+    expect(sessionStorage.getItem('raven.gui.view.desk')).not.toContain('"seq"')
+  })
+
+  it('records an instance by the pair the panel can reopen it from', () => {
+    desk.openDeskAgent({
+      sessionKey: 's1', agent: 'raven', handle: 'brief-9f', kind: 'dag',
+      runId: 'r1', nodeId: 'brief', resumable: true,
+    })
+
+    expect(desk.saved('s1')!.open)
+      .toEqual([{ k: 'agent', agent: 'raven', handle: 'brief-9f', run: 'r1', node: 'brief' }])
+  })
+
+  it('records a graph node record by run and node', () => {
+    desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'record', run: 'r1', node: 'brief' }])
+  })
+
+  it('records a spawn record by its call id', () => {
+    desk.openDeskAgentRecord({ kind: 'spawn', id: 'call-7', agent: 'raven', label: 'research' })
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'record', id: 'call-7' }])
+  })
+
+  it('records no diff window', () => {
+    /* Its hunks are the turn's own live tool events and the gateway cannot
+       answer for them afterwards, so there is no open to replay -- and storing
+       the hunks would be the one place this kept content instead of a pointer. */
+    desk.openDeskDiff({ key: '/workspace/a.ts', turn: 3 } as never)
+    desk.openDeskFile('/workspace/a.ts')
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/a.ts' }])
+  })
+
+  it('drops a window the reader closed', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+
+    desk.closePane('file:/workspace/a.ts')
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/b.ts' }])
+  })
+
+  it('follows a pane that navigated to another file', () => {
+    desk.openDeskFile('/workspace/a.ts')
+
+    desk.replacePaneFile('file:/workspace/a.ts', '/workspace/b.ts')
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/b.ts' }])
+  })
+
+  it('keeps the record through the session switch that clears the desk', () => {
+    /* `reset` runs on every session switch, and it runs BEFORE the session
+       pointer moves -- so a record written from the teardown would erase the
+       desk of the conversation being left, at the moment of leaving it. */
+    desk.openDeskFile('/workspace/a.ts')
+
+    desk.reset()
+
+    expect(desk.getState().panes).toEqual([])
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/a.ts' }])
+  })
+
+  it('records nothing for a draft', () => {
+    /* A draft has no id to file under and cannot be reopened; a record for it
+       would be a layout with no way back. */
+    setCurrent(null)
+
+    desk.openDeskFile('/workspace/a.ts')
+
+    expect(sessionStorage.getItem('raven.gui.view.desk')).toBeNull()
+  })
+
+  it('puts the front pane and the fullscreen back', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+    const kept = { ...desk.saved('s1')!, active: 'file:/workspace/a.ts', solo: 'file:/workspace/a.ts' }
+
+    desk.applyLayout(kept)
+
+    expect(desk.getState().active).toBe('file:/workspace/a.ts')
+    expect(desk.getState().solo).toBe('file:/workspace/a.ts')
+  })
+
+  it('refuses a fullscreen on a pane that did not come back', () => {
+    /* `DeskSurface` draws the soloed pane and only it, so a solo naming a
+       window whose open could not be replayed is a blank desk with no way out. */
+    desk.openDeskFile('/workspace/a.ts')
+    const kept = { ...desk.saved('s1')!, active: 'file:/gone.ts', solo: 'file:/gone.ts' }
+
+    desk.applyLayout(kept)
+
+    expect(desk.getState().solo).toBeNull()
+    expect(desk.getState().active).toBe('file:/workspace/a.ts')
+  })
+
+  it('refuses a split that is not a percentage', () => {
+    /* The surface hands these straight to a CSS grid template. */
+    desk.openDeskFile('/workspace/a.ts')
+    const kept = { ...desk.saved('s1')!, splits: { column: 0, left: NaN, right: 70 } }
+
+    desk.applyLayout(kept)
+
+    expect(desk.getState().splits).toEqual({ column: 50, left: 50, right: 70 })
   })
 })
