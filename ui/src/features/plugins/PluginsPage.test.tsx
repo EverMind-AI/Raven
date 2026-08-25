@@ -81,7 +81,9 @@ function install(
     auth: async () => null,
     manual: async () => {},
     rows: () => rowsArr,
-    reload: async () => {},
+    /* Recorded: after a connect settles, the shelf has to be re-read or it
+       keeps showing the state from before the install. */
+    reload: async () => { calls.push('reload') },
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
@@ -91,8 +93,11 @@ function install(
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),
-    /* The chrome resync is legacy DOM work; the tests only need the island. */
-    plugRedraw: () => {},
+    /* Recorded rather than ignored: the call is this island's contract with
+       the legacy caps-page chrome, which owns the tab title, the hero and the
+       installed button. It used to be a no-op here, so all five call sites
+       could be cut with the suite green. */
+    plugRedraw: () => shellCalls.push(['plugRedraw', null]),
   }
   window.RavenShell = fakeShell
   window.DS = { plugins: source }
@@ -166,6 +171,33 @@ describe('plugins island', () => {
     expect(await screen.findByText('gui.filter.all')).toBeTruthy()
   })
 
+  /* The island sets its own state and then tells the chrome, because the tab
+     title, hero and installed button live outside any root it owns. Nothing
+     asserted the second half. */
+  it('asks the caps chrome to redraw on both view transitions', async () => {
+    const { shellCalls } = install([item()], [{ id: 'sheets', name: 'sheets', src: 'raven-sheets', ver: '0.9.0', state: 'on' }])
+    await mount()
+    const redraws = () => shellCalls.filter((c) => c[0] === 'plugRedraw').length
+    const before = redraws()
+    act(() => {
+      store.toggleView()
+    })
+    expect(await screen.findByText('gui.plug.grp_builtin')).toBeTruthy()
+    expect(redraws()).toBe(before + 1)
+    await act(async () => {
+      screen.getByText('\u2190 gui.plug.back').click()
+    })
+    expect(redraws()).toBe(before + 2)
+    /* A search redraws twice: once when it goes to loading, once on the
+       answer. The chrome shows market state, so a search that only told it at
+       the end would leave the old count standing for the length of the call. */
+    const beforeSearch = redraws()
+    await act(async () => {
+      await store.search()
+    })
+    expect(redraws()).toBe(beforeSearch + 2)
+  })
+
   it('opens the detail drawer from a card and closes with the legacy close path', async () => {
     install([item()])
     await mount()
@@ -231,7 +263,7 @@ describe('plugins island', () => {
   })
 
   it('drives a no-auth install through the progress sheet to done', async () => {
-    install([item()])
+    const { calls } = install([item()])
     await mount()
     await act(async () => {
       ;(await screen.findByText('gui.plug.install')).click()
@@ -239,5 +271,11 @@ describe('plugins island', () => {
     expect(await screen.findByText('gui.plug.prog_cap')).toBeTruthy()
     expect(await screen.findByText('gui.plug.prog_ok {"n":2}')).toBeTruthy()
     expect(screen.getByText('gui.close')).toBeTruthy()
+    /* The install is only half done when the sheet says so: the shelf behind
+       it still holds the pre-install answer until the source is re-read, which
+       lands a microtask after the progress line the assertions above wait on. */
+    await vi.waitFor(() => {
+      expect(calls).toContain('reload')
+    })
   })
 })

@@ -1006,8 +1006,12 @@ describe('subagents island, an instance detail', () => {
     expect((paints[0]!.ctx as { status?: string }).status).toBe('run')
     const stage = document.querySelector('.satx')
     snapshot = 2
+    /* Asserted before it is used: `poll?.()` no-ops when the source was never
+       asked to watch, and the failure then surfaces three assertions later as a
+       missing repaint. This names it where it happens. */
+    expect(poll).toBeTypeOf('function')
     await act(async () => {
-      poll?.()
+      poll!()
       await Promise.resolve()
     })
     await act(async () => {
@@ -1046,8 +1050,12 @@ describe('subagents island, an instance detail', () => {
     expect(paints).toHaveLength(1)
 
     snapshot = 2
+    /* Asserted before it is used: `poll?.()` no-ops when the source was never
+       asked to watch, and the failure then surfaces three assertions later as a
+       missing repaint. This names it where it happens. */
+    expect(poll).toBeTypeOf('function')
     await act(async () => {
-      poll?.()
+      poll!()
       await Promise.resolve()
     })
     await act(async () => { await Promise.resolve() })
@@ -1103,8 +1111,12 @@ describe('subagents island, an instance detail', () => {
     expect(paints).toHaveLength(1)
 
     snapshot = 2
+    /* Asserted before it is used: `poll?.()` no-ops when the source was never
+       asked to watch, and the failure then surfaces three assertions later as a
+       missing repaint. This names it where it happens. */
+    expect(poll).toBeTypeOf('function')
     await act(async () => {
-      poll?.()
+      poll!()
       await Promise.resolve()
     })
     await act(async () => { await Promise.resolve() })

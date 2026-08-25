@@ -103,6 +103,62 @@ describe('transcript island, history', () => {
     expect($('.ask .achip')).toBeNull()
   })
 
+  /* Whether a tool result counts as a failure is the source's call, not this
+     island's: the two modes classify differently. Nothing asserted that the row
+     reflects the answer, so okOf could return anything and stay green. */
+  it('marks a tool row bad only when the source calls its result a failure', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'read both' },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/b.log"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'Error: no such file' },
+        { role: 'assistant', text: 'one of them is missing' },
+      ])
+    })
+    const rows = [...document.querySelectorAll('.wkin .wrow')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.className).not.toContain('bad')
+    expect(rows[1]!.className).toContain('bad')
+  })
+
+  /* Branching a conversation is the source's to offer -- the offline page has
+     nowhere to branch to -- so the island shows the action only when the source
+     hands one over. The fixture had no branch at all, so the button never
+     rendered under test and neither half was pinned. */
+  it('offers the branch action only when the source hands one over', () => {
+    const turn = [
+      { role: 'user' as const, text: 'why did it fail' },
+      { role: 'assistant' as const, text: 'the token had expired' },
+    ]
+    const branchButtons = (): HTMLButtonElement[] =>
+      [...document.querySelectorAll<HTMLButtonElement>('.ansfoot .acts button')]
+        .filter((b) => b.getAttribute('aria-label') === 'en:gui.answer.branch')
+
+    act(() => {
+      mount.history(turn)
+    })
+    expect(branchButtons()).toHaveLength(0)
+
+    const branched: string[] = []
+    wire({ branch: (text: string) => branched.push(text) })
+    act(() => {
+      mount.history(turn)
+    })
+    const offered = branchButtons()
+    expect(offered.length).toBeGreaterThan(0)
+    act(() => {
+      offered[0]!.click()
+    })
+    expect(branched).toEqual(['the token had expired'])
+  })
+
   it('reads a stored turn as segments: ask, folded step with thought and call, answer', () => {
     const t0 = Date.now() - 60000
     act(() => {
