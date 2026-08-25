@@ -249,7 +249,7 @@ describe('what a replay may not erase', () => {
     const row: InstanceRow = { sessionKey: 's1', agent: 'hermes', handle: 'h7', kind: 'cli', resumable: true }
     openDeskFile('/workspace/a.ts')
     openDeskAgent(row)
-    openDeskTab('file')
+    openDeskTab('deliverables')
     updateSplits({ column: 80 })
     reload()
     listed = [row]

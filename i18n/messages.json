@@ -4903,17 +4903,9 @@
       "en": "Copy link",
       "zh": "复制链接"
     },
-    "gui.ws.dir_collapse": {
-      "en": "Collapse",
-      "zh": "收起"
-    },
-    "gui.ws.dir_empty": {
-      "en": "Empty directory",
-      "zh": "空目录"
-    },
-    "gui.ws.dir_expand": {
-      "en": "Expand",
-      "zh": "展开"
+    "gui.ws.file_unreadable": {
+      "en": "This view cannot read files here",
+      "zh": "这里没法读取文件"
     },
     "gui.ws.download": {
       "en": "Download",
@@ -4967,9 +4959,25 @@
       "en": "source",
       "zh": "源码"
     },
-    "gui.ws.files": {
-      "en": "Files",
-      "zh": "文件"
+    "gui.ws.deliverables": {
+      "en": "Deliverables",
+      "zh": "产物"
+    },
+    "gui.ws.dlv_none": {
+      "en": "Nothing delivered yet",
+      "zh": "这个会话还没有交付产物"
+    },
+    "gui.ws.dlv_none_sub": {
+      "en": "Files Raven hands over show up here",
+      "zh": "Raven 交付的文件会出现在这里"
+    },
+    "gui.ws.dlv_turn": {
+      "en": "turn {n}",
+      "zh": "第 {n} 轮"
+    },
+    "gui.ws.dlv_here": {
+      "en": "delivered this turn",
+      "zh": "本轮交付"
     },
     "gui.ws.lines": {
       "en": "{n} lines",
@@ -4978,10 +4986,6 @@
     "gui.ws.no_changes": {
       "en": "No changes yet",
       "zh": "还没有变更"
-    },
-    "gui.ws.no_match": {
-      "en": "Nothing matches",
-      "zh": "没有匹配的文件"
     },
     "gui.ws.no_web": {
       "en": "No pages yet",
@@ -5007,10 +5011,6 @@
       "en": "read",
       "zh": "已读取"
     },
-    "gui.ws.read_fail": {
-      "en": "Could not read: {err}",
-      "zh": "读取失败：{err}"
-    },
     "gui.ws.readonly": {
       "en": "read-only",
       "zh": "只读"
@@ -5018,10 +5018,6 @@
     "gui.ws.restore_panel": {
       "en": "Exit full window",
       "zh": "退出全屏"
-    },
-    "gui.ws.reveal": {
-      "en": "Reveal in tree",
-      "zh": "在目录树中显示"
     },
     "gui.ws.reveal_finder": {
       "en": "Reveal in Finder",
@@ -5047,22 +5043,6 @@
       "en": "… the rest is only in the source view",
       "zh": "… 其余内容请切换到源码视图"
     },
-    "gui.ws.search": {
-      "en": "Search files...",
-      "zh": "搜索文件…"
-    },
-    "gui.ws.search_capped": {
-      "en": "Workspace too large to search fully",
-      "zh": "目录太多，部分未搜索"
-    },
-    "gui.ws.search_more": {
-      "en": "{n} more matches hidden - narrow the search",
-      "zh": "还有 {n} 个匹配未显示，换个更准的词"
-    },
-    "gui.ws.searching": {
-      "en": "Searching...",
-      "zh": "正在搜索…"
-    },
     "gui.ws.sub.browser": {
       "en": "Pages and searches it went through",
       "zh": "它抓过的网页与搜索"
@@ -5070,22 +5050,6 @@
     "gui.ws.sub.changes": {
       "en": "Files it wrote, with line diffs",
       "zh": "它写过的文件与行内 diff"
-    },
-    "gui.ws.sub.files": {
-      "en": "Browse the working directory",
-      "zh": "浏览工作目录"
-    },
-    "gui.ws.tree_hide": {
-      "en": "Hide the tree",
-      "zh": "收起目录"
-    },
-    "gui.ws.tree_resize": {
-      "en": "Resize the tree",
-      "zh": "调整目录宽度"
-    },
-    "gui.ws.tree_show": {
-      "en": "Show the tree",
-      "zh": "展开目录"
     },
     "gui.ws.truncated": {
       "en": "read-only - truncated",

@@ -2,11 +2,12 @@ import * as dagNodes from '../dag/nodes'
 import { ds, shell, t, verb } from '../../shell/bridge'
 import { formatDuration } from '../../shell/duration'
 import { md } from '../../shell/prose'
+import * as deliveries from '../workspace/deliveries'
 import * as hunks from '../workspace/hunks'
 
-import type { WsChange } from '../workspace/types'
+import type { DeliveryRow, WsChange } from '../workspace/types'
 import type {
-  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle, DeliveryRow,
+  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   StatusData, StepData, StepHandle, TranscriptSource,
 } from './types'
@@ -78,49 +79,14 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
   })
 }
 
-const deliveriesByLane = new WeakMap<Lane, Map<number, DeliveryRow[]>>()
-
-const deliveryMap = (lane: Lane): Map<number, DeliveryRow[]> => {
-  let found = deliveriesByLane.get(lane)
-  if (!found) {
-    found = new Map()
-    deliveriesByLane.set(lane, found)
-  }
-  return found
+/* Not held here: the desk's shelf lists the same rows for the whole session, so
+   the registry they live in is shared ground (workspace/deliveries.ts). The lane
+   is not a parameter of it -- only the main lane ever delivered. */
+export function recordDelivery(_lane: Lane, turn: number, metadata: unknown): void {
+  deliveries.record(turn, metadata)
 }
 
-export function recordDelivery(lane: Lane, turn: number, metadata: unknown): void {
-  const root = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null
-  const raw = root && root.raven_delivery && typeof root.raven_delivery === 'object'
-    ? root.raven_delivery as Record<string, unknown> : null
-  const files = raw && Array.isArray(raw.files) ? raw.files : []
-  if (!files.length) return
-  const rows = deliveryMap(lane).get(turn) || []
-  const byPath = new Map(rows.map((row) => [row.path, row]))
-  files.forEach((entry) => {
-    if (!entry || typeof entry !== 'object') return
-    const item = entry as Record<string, unknown>
-    const path = String(item.path || '')
-    if (!path) return
-    const name = String(item.name || path.split('/').pop() || path)
-    const dot = name.lastIndexOf('.')
-    byPath.set(path, {
-      path,
-      name,
-      title: String(item.title || name),
-      description: String(item.description || ''),
-      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
-      size: Number(item.size) || 0,
-      mediaType: String(item.media_type || ''),
-      downloadPath: String(item.download_path || ''),
-      missing: item.missing === true,
-    })
-  })
-  deliveryMap(lane).set(turn, [...byPath.values()])
-}
-
-export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
-  deliveryMap(lane).get(turn) || []
+export const deliveriesOf = (_lane: Lane, turn: number): DeliveryRow[] => deliveries.ofTurn(turn)
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
@@ -1130,7 +1096,7 @@ export const callParts = (raw: unknown): { name: string; display: string } => {
 
 export function history(lane: Lane, messages: HistoryMessage[]): void {
   const src = source()
-  deliveriesByLane.set(lane, new Map())
+  deliveries.reset()
   let toolRun: StepHandle | null = null
   const sealTools = (): void => { if (toolRun) { toolRun.seal(); toolRun = null } }
   const calls = callIndex(messages)

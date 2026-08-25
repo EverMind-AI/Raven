@@ -30,6 +30,7 @@ import asyncio
 import json
 import os
 import re
+from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -147,6 +148,27 @@ async def _baseline_usage(
     }
 
 
+def _session_cwd(agent_loop: "AgentLoop | None", session_key: str | None) -> str:
+    """Where this session's turns actually run.
+
+    The resolver's answer, not one of its three inputs. ``WorkdirResolver``
+    reads ``explicit_workdir or persisted override or policy default``, and the
+    gateway builds it with ``PER_CHANNEL`` -- so a ``tui:`` session with nothing
+    pinned does not run in the launch directory at all, and a run started with
+    ``-w`` outranks whatever that session has stored. Reading the metadata alone
+    got two of those three wrong.
+
+    This is the value the page shortens every path it shows against, and it is
+    how the file panel used to root itself (``console._workspace_root``).
+    ``os.getcwd()`` stays the answer for a caller with no loop to ask.
+    """
+    peek = getattr(agent_loop, "peek_session_workdir", None) if agent_loop is not None else None
+    if peek is not None and session_key:
+        with suppress(ValueError):
+            return str(peek(session_key))
+    return os.getcwd()
+
+
 async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
@@ -179,7 +201,7 @@ async def _default_session_info(
         "tools": _enumerate_tools(agent_loop),
         "usage": usage,
         "version": _RAVEN_VERSION,
-        "cwd": os.getcwd(),
+        "cwd": _session_cwd(agent_loop, session_key),
         "mcp_servers": [],
         # Which of a multi-endpoint provider's endpoints this session is on.
         # None for every single-endpoint provider -- there is one address and it
@@ -384,7 +406,11 @@ async def session_create(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     session_id = f"tui:{new_chat_id()}"
+    # Passed the minted key so ``cwd`` names where THIS session's turns will
+    # run rather than the gateway's launch directory; the model stays the
+    # configured default, which is what a new session starts on.
     info = await _default_session_info(agent_loop, config)
+    info["cwd"] = _session_cwd(agent_loop, session_id)
     workdir = params.get("workdir")
     if workdir:
         from raven.agent.workdir import validate_override
@@ -926,13 +952,19 @@ async def session_compress(
         # still showing what was compacted -- the same three fields
         # ``session.resume`` hands back, produced the same way.
         #
+        # Which means handing over the key, as resume does: without it the
+        # bundle answers for no session in particular -- the configured default
+        # model rather than this session's, and the launch directory rather than
+        # where its turns run. The TUI adopts this bundle wholesale, so that
+        # reads as `/compress` moving the session to another directory.
+        #
         # Best-effort on purpose: the archive is the operation and it has already
         # committed. Failing the whole call because a redraw aid could not be
         # assembled would report failure for work that succeeded, and would leave
         # the caller with neither the new transcript nor the knowledge that its
         # old one is stale.
         try:
-            info = await _default_session_info(agent_loop, config)
+            info = await _default_session_info(agent_loop, config, session_key)
             _fill_resumed_context(info, session)
             result["info"] = info
             result["messages"] = _map_to_wire(survivors, session_key)

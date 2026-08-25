@@ -2507,10 +2507,6 @@ textarea:focus, textarea:focus-visible,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fbar .nm b { font-weight: 500; color: var(--text); }
 .fbar .nm i { font-style: normal; color: var(--faint); }
-/* The folder is the tree's switch: it sits where the path begins, which is the
-   one place in the view that is about where the file lives. */
-.fbar .ftog { flex: none; }
-.fbar .ftog[aria-pressed="false"] { color: var(--faint); }
 .fbar .fcopy { flex: none; width: 22px; height: 22px; color: var(--faint); }
 .fbar .fcopy:hover { color: var(--text); }
 .fbar .fcopy svg { width: 12px; height: 12px; }
@@ -2569,72 +2565,11 @@ textarea:focus, textarea:focus-visible,
    The workspace as one tree, with the file open beside it rather than instead
    of it: reading a file is the moment you most want to see where it sits. */
 .ws-body[data-view="file"] { overflow: hidden; display: flex; }
-/* Two panes, always: the reading side exists before there is anything in it, so
-   opening a file changes what one pane holds and never the shape of the view.
-   One bar spans both of them -- what is open is a property of the view, not of
-   its right half, and a bar that stopped at the seam cut the header in two. The
-   tree starts under it; the seam only divides the halves below. */
+/* One pane. The viewer used to carry a tree of the working directory beside
+   it; what it opens now comes from the transcript, the diff list or the
+   deliverables shelf, and nothing navigates from inside it. */
 .fwrap { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
-.frow { position: relative; flex: 1; display: grid; min-height: 0;
-  grid-template-columns: var(--ftw, 208px) 1fr; }
-.fwrap[data-tree="off"] .frow { grid-template-columns: 0 1fr; }
-.fwrap[data-tree="off"] .ftree { display: none; }
-.fwrap[data-tree="off"] .grip { left: 0; margin-left: 0; }
-/* Pinned to its own column: taking the tree out of the flow would otherwise
-   slide the file into the zero-width one and leave the pane blank. */
-.frow > .fpane { grid-column: 2; }
-.frow > .grip { left: var(--ftw, 208px); margin-left: -3px; }
-.ftree { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  border-right: 1px solid var(--line-soft); background: var(--surface); }
-/* The field carries its own glass: icon inside, hairline box, quiet until
-   focused. It searches the workspace, so it reads as a search field, not a
-   strainer bolted to the top of a list. */
-.ftq { flex: none; position: relative; padding: 9px 10px 7px; }
-.ftq svg { position: absolute; left: 19px; top: 50%; margin-top: -5.5px; width: 13px; height: 13px;
-  color: var(--faint); pointer-events: none; }
-.ftq input {
-  display: block; width: 100%; font: inherit; font-size: 12px; color: var(--text);
-  background: var(--ink); border: 1px solid var(--line); border-radius: 8px;
-  padding: 5px 8px 5px 27px;
-}
-.ftq input:focus { outline: 0; border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); }
-.ftq input::-webkit-search-cancel-button { -webkit-appearance: none; }
-.ftlist { flex: 1; overflow: auto; min-height: 0; padding-bottom: 12px; }
-.ftrow {
-  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
-  padding: 4px 10px 4px 0; border: 0; background: none; font: inherit; font-size: 12.5px;
-  color: var(--text); cursor: pointer;
-}
-/* -color, not the shorthand: rows carry their indent guides as an inline
-   background-image, and the shorthand would wipe them on every hover. */
-.ftrow:hover { background-color: var(--raised); }
-.ftrow.on { background-color: var(--amber-dp); }
-.ftrow .sp { width: 11px; flex: none; }
-.ftrow[aria-expanded="true"] > .cv { transform: rotate(90deg); }
-/* The glyph is tinted by what the file is -- the one cue that survives at 13px,
-   where the shapes of a .md and a .json icon are the same handful of pixels. */
-.ftrow .fi { width: 13px; height: 13px; flex: none; color: var(--faint); }
-.ftrow .fi.k-md { color: var(--moss); }
-.ftrow .fi.k-cfg { color: var(--gold); }
-.ftrow .fi.k-code { color: var(--sky); }
-.ftrow .fi.k-img { color: var(--clay); }
-.ftrow[aria-expanded="true"] .fi.k-dir { color: var(--muted); }
-.ftrow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Search hit inside a name: a chip of the selection colour, not bold alone --
-   at 12.5px bold barely reads, and the chip survives on a hovered row. */
-.ftrow .hl { background: var(--amber-dp); border-radius: 3px; font-weight: 500; }
-/* Result rows: where it lives, right-aligned, eating its own start when it is
-   too long -- the name and the tail of the path are the parts that matter. */
-.ftrow .pth { flex: 1; min-width: 0; padding-left: 10px; text-align: right;
-  font-family: var(--mono); font-size: 10px; color: var(--faint);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
-.ftrow:has(.pth) .nm { flex: none; max-width: 62%; }
-.ftrow .sz {
-  flex: none; margin-left: auto; padding-left: 8px; font-family: var(--mono);
-  font-size: 10px; color: var(--faint);
-}
-.ftrow:not(:hover) .sz { visibility: hidden; }
-.ftleaf { padding: 5px 10px; font-size: 11.5px; color: var(--faint); }
+.fwrap > .fpane { flex: 1; min-height: 0; }
 .fpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .fpane .fbody { flex: 1; overflow: auto; min-height: 0; }
 /* Nothing open: say so quietly and keep the pane's own furniture, so the empty
@@ -4102,14 +4037,40 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   border-radius: 6px; font: 10px/1 var(--mono); }
 .desk-diff-row .desk-name { font: 11px/1.4 var(--mono); }
 .desk-diff-row .chgs { font-size: 10.5px; }
-.desk-row.file-row { height: 31px; gap: 7px; border-radius: 7px; }
-.desk-search { height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; margin: 2px 7px 6px;
-  border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--faint); font-size: 11.5px; }
-.desk-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--text);
-  font: inherit; }
-.desk-search input::placeholder { color: var(--faint); }
-.tree-chev { width: 10px; color: var(--faint); flex: none; text-align: center; }
 .desk-empty { padding: 24px 12px; text-align: center; color: var(--faint); font-size: 12px; }
+
+/* The deliverables shelf. Two lines per row, because one product out of a turn
+   reads as a human title and the file it landed as, and at this width they do
+   not fit on one line. */
+.desk-count { min-width: 15px; height: 15px; flex: none; padding: 0 4px; border-radius: 999px;
+  background: var(--text); color: var(--ink); font: 9.5px/15px var(--mono); font-style: normal; text-align: center; }
+.desk-tabs button:not([aria-selected="true"]) .desk-count { margin: -10px 0 0 -6px; }
+.desk-grp { padding: 8px 11px 4px; color: var(--faint); font: 9.5px/1.4 var(--mono); letter-spacing: .06em;
+  text-transform: uppercase; }
+.desk-dlv-row { height: auto; min-height: 44px; gap: 9px; padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft); }
+.desk-dlv-row .dlv-kind { width: 27px; height: 27px; display: grid; place-items: center; flex: none;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted);
+  font: 8.5px/1 var(--mono); }
+.desk-dlv-row .dlv-kind[data-kind="md"] { color: var(--sky); }
+.desk-dlv-row .dlv-kind[data-kind="img"],
+.desk-dlv-row .dlv-kind[data-kind="svg"],
+.desk-dlv-row .dlv-kind[data-kind="pdf"] { color: var(--clay); }
+.desk-dlv-row .dlv-kind[data-kind="csv"],
+.desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
+.desk-dlv-row .desk-name { display: grid; gap: 1px; }
+.desk-dlv-row .desk-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 500 11.5px/1.45 var(--sans); }
+.desk-dlv-row .desk-name s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--faint); font: 9.5px/1.5 var(--mono); text-decoration: none; }
+.desk-dlv-row.gone { opacity: .55; }
+.desk-dlv-row .dlv-gone { flex: none; padding: 0 5px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--clay); font: 9px/1.6 var(--mono); font-style: normal; }
+.desk-dlv-empty { display: grid; align-content: center; justify-items: center; gap: 5px; height: 100%;
+  padding: 12px 22px; }
+.desk-dlv-empty svg { width: 30px; height: 30px; color: var(--line); stroke-linecap: round; }
+.desk-dlv-empty b { color: var(--text); font: 600 12px var(--sans); }
+.desk-dlv-empty span { font-size: 11px; }
 
 .agent-roster { padding: 0; gap: 0; }
 .agent-group { min-width: 0; }
@@ -4178,12 +4139,20 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   font: 11px var(--sans); }
 .pane-spacer { flex: 1; }
 .desk-pane-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+/* A delivered file says what it is before it says what it contains. Fixed at
+   the top of the pane rather than scrolling with the body: it is the identity
+   of what is open, the way the pane header is. */
+.desk-pane > .dlv-strip { flex: none; padding: 9px 12px 10px; border-bottom: 1px solid var(--line-soft);
+  background: var(--surface); }
+.dlv-strip b { display: block; font: 600 12.5px/1.4 var(--sans); }
+.dlv-strip p { margin: 2px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.dlv-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.dlv-meta i { padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--ink);
+  color: var(--faint); font: 9.5px/1.7 var(--mono); font-style: normal; }
+.dlv-meta i.bad { color: var(--clay); }
 .desk-pane:has(.instance-conversation) .desk-pane-body { overflow: hidden; }
 .desk-pane-body > .diff { min-height: 100%; }
 .desk-pane-body > .fwrap { height: 100%; }
-.desk-grid.n3 .fwrap .frow, .desk-grid.n4 .fwrap .frow { grid-template-columns: 0 minmax(0, 1fr); }
-.desk-grid.n3 .fwrap .ftree, .desk-grid.n4 .fwrap .ftree,
-.desk-grid.n3 .fwrap .frow > .grip, .desk-grid.n4 .fwrap .frow > .grip { display: none; }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
 /* Room for the composer, and the glass the transcript scrolls under -- but only

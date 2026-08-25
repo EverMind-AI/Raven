@@ -1,18 +1,17 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
 import { show as menuAt } from '../../shell/menu'
 import { show as toast } from '../../shell/toast'
 import {
-  FT, FT_SHOW_MAX, FTW_KEY, RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
-  ftAbs, ftJoin, ftKindOf, ftLoad, ftLoadVisible, ftMatches, ftOpenTo, ftQuery, ftReveal,
-  hostPlatform, isErr, mdHtml, openInApp, relToRoot, relToWorkspace, setAppFor,
+  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
+  hostPlatform, mdHtml, openInApp, setAppFor,
 } from './store'
 import * as store from './store'
 
 import type { MenuItem } from '../../shell/menu'
 import type { WsChange, WsFile, WsShared } from './types'
-import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent, RefObject } from 'react'
+import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 /* Copies of the icon paths the legacy renderers drew with (ICO in
    demo/100-workspace.js, ACT_ICO.chev in demo/070-transcript.js): those
@@ -32,16 +31,9 @@ const ICO = {
 }
 
 const FT_ICO = {
-  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"'
-    + ' stroke-linejoin="round" aria-hidden="true"><path d="M3 6.6a2 2 0 0 1 2-2h3.6l1.8 2.2H19a2 2 0 0 1 2 2v8.6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   page: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"'
     + ' aria-hidden="true"><path d="M7 2.8h7L19 8v13.2H7z"/><path d="M13.5 2.8V8H19"/></svg>',
 }
-
-/* The attachments part's byte formatter, verbatim -- it lives inside the
-   live layer's IIFE where the island cannot reach it. */
-const fmtSize = (n?: number): string => (n !== undefined && n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
-  : n !== undefined && n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`)
 
 function Ico({ d, cls }: { d: string; cls?: string }): JSX.Element {
   return (
@@ -69,7 +61,6 @@ export function WsApp(): JSX.Element {
 
 const LAUNCH_CARDS: Array<[string, string, string, string]> = [
   ['diff', ICO.diff, 'gui.ws.changes', 'gui.ws.sub.changes'],
-  ['file', ICO.file, 'gui.ws.files', 'gui.ws.sub.files'],
   ['browser', ICO.web, 'gui.ws.browser', 'gui.ws.sub.browser'],
 ]
 
@@ -294,48 +285,32 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
   )
 }
 
-export function FileView({
-  ws,
-  file = ws.file,
-  onOpen = store.showFile,
-}: {
-  ws: WsShared
-  file?: WsFile | null
-  onOpen?: (path: string) => void
-}): JSX.Element {
-  const wrapRef = useRef<HTMLDivElement>(null)
-  if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.dir_empty')}</div>
+/* One file, no tree beside it. What the viewer opens comes from the transcript,
+   the diff list or the deliverables shelf -- nothing navigates from inside it,
+   which is why there is nothing left here to navigate with. */
+export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile | null }): JSX.Element {
+  if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
   const f = file
   return (
-    <div
-      className="fwrap"
-      ref={wrapRef}
-      data-tree={FT.hide ? 'off' : 'on'}
-      style={{ '--ftw': FT.w + 'px' } as CSSProperties}
-    >
+    <div className="fwrap">
       <Fbar f={f} />
-      <div className="frow">
-        <FtPane selectedPath={f?.path || ''} onOpen={onOpen} />
-        <Grip wrapRef={wrapRef} />
-        <div className="fpane">
-          {!f ? (
-            <div className="fempty">
-              <div dangerouslySetInnerHTML={{ __html: FT_ICO.page }} />
-              <div className="t">{t('gui.ws.file_none')}</div>
-            </div>
-          ) : (
-            <div className="fbody">
-              <FileBody key={f.seq ?? f.path} f={f} />
-            </div>
-          )}
-        </div>
+      <div className="fpane">
+        {!f ? (
+          <div className="fempty">
+            <div dangerouslySetInnerHTML={{ __html: FT_ICO.page }} />
+            <div className="t">{t('gui.ws.file_none')}</div>
+          </div>
+        ) : (
+          <div className="fbody">
+            <FileBody key={f.seq ?? f.path} f={f} />
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
 function Fbar({ f }: { f: WsFile | null }): JSX.Element {
-  const treeTip = t(FT.hide ? 'gui.ws.tree_show' : 'gui.ws.tree_hide')
   const platform = hostPlatform()
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
@@ -343,17 +318,6 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
   const cut = rel.lastIndexOf('/')
   return (
     <div className="fbar">
-      <button
-        className="ghost-ic ftog tipdn"
-        data-tip={treeTip}
-        aria-label={treeTip}
-        aria-pressed={!FT.hide}
-        onClick={() => {
-          FT.hide = !FT.hide
-          store.redraw()
-        }}
-        dangerouslySetInnerHTML={{ __html: FT_ICO.folder }}
-      />
       {f ? (
         <>
           <span
@@ -361,7 +325,6 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
             title={f.path}
             ref={ctxRef(() => [
               { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(f.path, t('gui.ws.copy_path')) },
-              { label: t('gui.ws.reveal'), fn: () => ftReveal(relToRoot(f.path) || relToWorkspace(f.path) || f.path, false) },
             ])}
           >
             {cut > 0 ? <i>{rel.slice(0, cut + 1)}</i> : null}
@@ -433,264 +396,6 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
   )
 }
 
-function FtPane({ selectedPath, onOpen }: { selectedPath: string; onOpen: (path: string) => void }): JSX.Element {
-  const list = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ftLoadVisible()
-  }, [])
-  useEffect(() => {
-    if (!selectedPath) return
-    const full = relToRoot(selectedPath) || relToWorkspace(selectedPath) || selectedPath
-    ftOpenTo(full)
-  }, [selectedPath])
-  useEffect(() => {
-    if (!selectedPath) return
-    const full = relToRoot(selectedPath) || relToWorkspace(selectedPath) || selectedPath
-    requestAnimationFrame(() => {
-      const row = list.current?.querySelector<HTMLElement>(`.ftrow[data-p="${CSS.escape(full)}"]`)
-      row?.scrollIntoView({ block: 'nearest' })
-    })
-  })
-  return (
-    <div className="ftree">
-      <div className="ftq">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="M16 16l4.5 4.5" />
-        </svg>
-        <input
-          type="search"
-          placeholder={t('gui.ws.search')}
-          aria-label={t('gui.ws.search')}
-          defaultValue={FT.q}
-          onInput={(e) => ftQuery(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape' && e.currentTarget.value) {
-              e.stopPropagation()
-              e.currentTarget.value = ''
-              ftQuery('')
-            }
-          }}
-        />
-      </div>
-      <div className="ftlist" ref={list}>
-        {FT.q ? <FtResults onOpen={onOpen} /> : <FtRows dir="" depth={0} selectedPath={selectedPath} onOpen={onOpen} />}
-      </div>
-    </div>
-  )
-}
-
-function FtLeaf({ text, depth }: { text: string; depth: number }): JSX.Element {
-  return <div className="ftleaf" style={{ paddingLeft: `${23 + depth * 13}px` }}>{text}</div>
-}
-
-function FtResults({ onOpen }: { onOpen: (path: string) => void }): JSX.Element {
-  const hits = ftMatches()
-  return (
-    <>
-      {hits.slice(0, FT_SHOW_MAX).map(({ e, full, at }) => {
-        const open = (): void => {
-          if (e.dir) {
-            ftReveal(full, true)
-            return
-          }
-          ftOpenTo(full)
-          onOpen(ftAbs(full))
-        }
-        const items = (): MenuItem[] => (e.dir ? [] : [{ label: t('gui.ws.open'), fn: open }]).concat([
-          { label: t('gui.ws.reveal'), fn: () => ftReveal(full, Boolean(e.dir)) },
-          { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(ftAbs(full), t('gui.ws.copy_path')) },
-          { label: t('gui.ws.copy_name'), fn: () => copyToClip(e.name, t('gui.ws.copied_name')) },
-        ])
-        const cut = full.lastIndexOf('/')
-        return (
-          <button key={full} className="ftrow" style={{ paddingLeft: '10px' }} onClick={open} ref={ctxRef(items)}>
-            <Ico d={e.dir ? ICO.file : ICO.doc} cls={'fi ' + (e.dir ? 'k-dir' : 'k-' + ftKindOf(e.name))} />
-            <span className="nm">
-              {e.name.slice(0, at)}
-              <b className="hl">{e.name.slice(at, at + FT.q.length)}</b>
-              {e.name.slice(at + FT.q.length)}
-            </span>
-            {cut > 0 ? <span className="pth" title={full}>{full.slice(0, cut)}</span> : null}
-          </button>
-        )
-      })}
-      {!hits.length && !FT.crawling ? <FtLeaf text={t('gui.ws.no_match')} depth={0} /> : null}
-      {hits.length > FT_SHOW_MAX ? <FtLeaf text={t('gui.ws.search_more', { n: hits.length - FT_SHOW_MAX })} depth={0} /> : null}
-      {FT.crawling ? <FtLeaf text={t('gui.ws.searching')} depth={0} />
-        : FT.capped ? <FtLeaf text={t('gui.ws.search_capped')} depth={0} /> : null}
-    </>
-  )
-}
-
-function FtRows({ dir, depth, selectedPath, onOpen }: {
-  dir: string
-  depth: number
-  selectedPath: string
-  onOpen: (path: string) => void
-}): JSX.Element {
-  const kids = FT.kids.get(dir)
-  if (kids === undefined) return <FtLeaf text={t('gui.ws.file_loading')} depth={depth} />
-  if (isErr(kids)) return <FtLeaf text={t('gui.ws.read_fail', { err: kids.err })} depth={depth} />
-  if (!kids.length) return <FtLeaf text={t('gui.ws.dir_empty')} depth={depth} />
-  return (
-    <>
-      {kids.map((e) => {
-        const full = ftJoin(dir, e.name)
-        const open = Boolean(e.dir) && FT.open.has(full)
-        const on = !e.dir && selectedPath === ftAbs(full)
-        /* Guide lines, one per level, each under its ancestor's chevron.
-           Inline because the count is the row's depth; hover keeps working
-           because the states set background-color, never the shorthand. */
-        const guides = depth
-          ? {
-              backgroundImage: 'repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 13px)',
-              backgroundSize: `${depth * 13}px 100%`,
-              backgroundPosition: '16px 0',
-              backgroundRepeat: 'no-repeat',
-            }
-          : null
-        const flip = (): void => {
-          if (FT.open.has(full)) FT.open.delete(full)
-          else {
-            FT.open.add(full)
-            ftLoad(full)
-          }
-          store.redraw()
-        }
-        const items = (): MenuItem[] => (e.dir
-          ? [{ label: t(open ? 'gui.ws.dir_collapse' : 'gui.ws.dir_expand'), fn: flip }]
-          : [{ label: t('gui.ws.open'), fn: () => onOpen(ftAbs(full)) }]
-        ).concat([
-          { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(ftAbs(full), t('gui.ws.copy_path')) },
-          { label: t('gui.ws.copy_name'), fn: () => copyToClip(e.name, t('gui.ws.copied_name')) },
-        ])
-        return (
-          <Fragment key={full}>
-            <button
-              className={'ftrow' + (on ? ' on' : '')}
-              data-p={full}
-              style={{ paddingLeft: `${10 + depth * 13}px`, ...(guides || {}) }}
-              aria-expanded={e.dir ? open : undefined}
-              onClick={() => {
-                if (e.dir) flip()
-                else onOpen(ftAbs(full))
-              }}
-              ref={ctxRef(items)}
-            >
-              {e.dir ? (
-                <>
-                  <Ico d={ICO.chev} cls="cv" />
-                  <Ico d={ICO.file} cls="fi k-dir" />
-                </>
-              ) : (
-                <>
-                  <span className="sp" />
-                  <Ico d={ICO.doc} cls={'fi k-' + ftKindOf(e.name)} />
-                </>
-              )}
-              <span className="nm">{e.name}</span>
-              {!e.dir ? <span className="sz">{fmtSize(e.size)}</span> : null}
-            </button>
-            {e.dir && open
-              ? <FtRows dir={full} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} />
-              : null}
-          </Fragment>
-        )
-      })}
-    </>
-  )
-}
-
-/* The seam between tree and file. It writes the width straight onto the wrap
-   rather than through a redraw: a drag repaints on every pointer move, and
-   rebuilding the tree at that rate would drop frames on a deep folder. */
-function Grip({ wrapRef }: { wrapRef: RefObject<HTMLDivElement | null> }): JSX.Element {
-  const put = (px: number, persist: boolean): void => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const max = Math.max(150, (wrap.offsetWidth || 600) - 220)
-    FT.w = Math.round(Math.max(150, Math.min(max, px)))
-    wrap.style.setProperty('--ftw', FT.w + 'px')
-    if (persist) {
-      try { localStorage.setItem(FTW_KEY, String(FT.w)) } catch { /* storage denied */ }
-    }
-  }
-  const down = (e: ReactPointerEvent<HTMLButtonElement>): void => {
-    e.preventDefault()
-    const g = e.currentTarget
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const x0 = e.clientX
-    const w0 = FT.hide ? 0 : FT.w
-    let opened = false
-    /* Where the pointer got to, for the release to read. The legacy handler
-       asked its own pointerdown event for this, so the distance it compared
-       was always zero and the shove-it-shut gesture below never fired. */
-    let lastX = x0
-    g.dataset.drag = 'true'
-    g.setPointerCapture(e.pointerId)
-    document.body.style.userSelect = 'none'
-    const move = (ev: globalThis.PointerEvent): void => {
-      lastX = ev.clientX
-      const d = ev.clientX - x0
-      /* Dragging the shut seam to the right is how the tree comes back,
-         without going up to the folder for it. */
-      if (FT.hide) {
-        if (d < 60) return
-        FT.hide = false
-        opened = true
-        wrap.dataset.tree = 'on'
-      }
-      put(w0 + d, false)
-    }
-    const up = (): void => {
-      g.removeEventListener('pointermove', move)
-      g.removeEventListener('pointerup', up)
-      g.removeEventListener('pointercancel', up)
-      delete g.dataset.drag
-      document.body.style.userSelect = ''
-      if (opened) {
-        store.redraw()
-        return
-      }
-      /* Shoved against its own floor: the intent was to get rid of it. */
-      if (!FT.hide && FT.w <= 150 && lastX - x0 < -40) {
-        FT.hide = true
-        store.redraw()
-        return
-      }
-      put(FT.w, true)
-    }
-    g.addEventListener('pointermove', move)
-    g.addEventListener('pointerup', up)
-    g.addEventListener('pointercancel', up)
-  }
-  return (
-    <button
-      type="button"
-      className="grip"
-      role="separator"
-      aria-orientation="vertical"
-      title={t('gui.ws.tree_resize')}
-      aria-label={t('gui.ws.tree_resize')}
-      onPointerDown={down}
-      onKeyDown={(e) => {
-        const step = e.shiftKey ? 40 : 10
-        if (FT.hide) return
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault()
-          put(FT.w - step, true)
-        }
-        if (e.key === 'ArrowRight') {
-          e.preventDefault()
-          put(FT.w + step, true)
-        }
-      }}
-    />
-  )
-}
-
 /* ── the file body ─────────────────────────────────────────────────── */
 
 /* A patch is one of the few formats whose lines carry their meaning in the
@@ -721,7 +426,11 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
       <div className="shot">
         {broken
           ? <div className="verr">{t('gui.ws.file_gone')}</div>
-          : <img src={fileURL(f.path)} alt={f.path} onError={() => setBroken(true)} />}
+          : <img src={fileURL(f.path)} alt={f.path}
+            /* The picture kinds never read text, so this is the only place they
+               can find out the file is gone -- but the error itself does not say
+               that, which is why the probe asks for a status first. */
+            onError={() => { setBroken(true); void store.probeDeliveryMissing(f.path) }} />}
       </div>
     )
   } else if (asFrame) {

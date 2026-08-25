@@ -109,19 +109,6 @@ describe('desk store', () => {
     expect(panelCalls).toEqual([true])
   })
 
-  it('updates pane identity and selection when navigating to another file', () => {
-    desk.openDeskFile('/workspace/a.ts')
-    desk.toggleSolo('file:/workspace/a.ts')
-
-    desk.replacePaneFile('file:/workspace/a.ts', '/workspace/b.ts')
-
-    expect(desk.getState().panes.map((pane) => pane.id)).toEqual(['file:/workspace/b.ts'])
-    expect(desk.getState().active).toBe('file:/workspace/b.ts')
-    expect(desk.getState().solo).toBe('file:/workspace/b.ts')
-    desk.openDeskFile('/workspace/b.ts')
-    expect(desk.getState().panes).toHaveLength(1)
-  })
-
   it('promotes a graph node record into the pane it already occupies', () => {
     desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
     desk.openDeskFile('/workspace/a.ts')
@@ -272,14 +259,6 @@ describe('what a reload finds on the desk', () => {
     expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/b.ts' }])
   })
 
-  it('follows a pane that navigated to another file', () => {
-    desk.openDeskFile('/workspace/a.ts')
-
-    desk.replacePaneFile('file:/workspace/a.ts', '/workspace/b.ts')
-
-    expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/b.ts' }])
-  })
-
   it('keeps the record through the session switch that clears the desk', () => {
     /* `reset` runs on every session switch, and it runs BEFORE the session
        pointer moves -- so a record written from the teardown would erase the
@@ -290,6 +269,38 @@ describe('what a reload finds on the desk', () => {
 
     expect(desk.getState().panes).toEqual([])
     expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/a.ts' }])
+  })
+
+  /* The note is `sessionStorage`, so it outlives the bundle that wrote it: the
+     reader's tab is replaced by a new build and the old note is still there.
+     One of the tabs it could name is retired, and `applyLayout` is the one door
+     into `state.tab` that does not go through `openDeskTab`'s guard. */
+  it('ignores a note from a bundle whose tabs were different', () => {
+    sessionStorage.setItem('raven.gui.view.desk', JSON.stringify({
+      v: 1,
+      s: {
+        s1: {
+          at: Date.now(),
+          d: { tab: 'file', open: [], solo: null, active: null, splits: { column: 50, left: 50, right: 50 } },
+        },
+      },
+    }))
+
+    expect(desk.saved('s1')).toBeNull()
+  })
+
+  it('keeps the tab it has when a note names one it does not', () => {
+    desk.openDeskTab('deliverables')
+
+    desk.applyLayout({
+      tab: 'file' as 'diff',
+      open: [],
+      solo: null,
+      active: null,
+      splits: { column: 50, left: 50, right: 50 },
+    })
+
+    expect(desk.getState().tab).toBe('deliverables')
   })
 
   it('records nothing for a draft', () => {

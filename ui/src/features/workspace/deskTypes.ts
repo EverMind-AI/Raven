@@ -3,7 +3,7 @@
 import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { WsChange, WsFile } from './types'
 
-export type DeskTab = 'diff' | 'file' | 'agents'
+export type DeskTab = 'diff' | 'deliverables' | 'agents'
 
 export type DeskPane =
   | { id: string; kind: 'diff'; change: WsChange }

@@ -46,10 +46,24 @@ export interface WsFile {
   seq?: number
 }
 
-/* The workspace state parked with an in-flight conversation. Arrays stay
-   shared with the detached turn while it is away; restore replaces the five
-   fields on the store's stable record. */
-export interface WorkspaceSnapshot {
+/* One file this session handed over through `deliver_files`. `missing` is the
+   runtime's answer on a replay (it stats each path) and the viewer's on an open
+   that found nothing; `turn` is which turn delivered it. */
+export interface DeliveryRow {
+  path: string
+  name: string
+  title: string
+  description: string
+  ext: string
+  size: number
+  mediaType: string
+  downloadPath: string
+  missing: boolean
+  turn: number
+}
+
+/* The stable workspace record owned by the island store. */
+export interface WsShared {
   changes: WsChange[]
   urls: WsUrl[]
   file: WsFile | null
@@ -57,27 +71,25 @@ export interface WorkspaceSnapshot {
   unseen: number
 }
 
-/* The stable workspace record owned by the island store. */
-export type WsShared = WorkspaceSnapshot
-
-export interface FtEntry {
-  name: string
-  dir?: boolean
-  size?: number
+/* The workspace state parked with an in-flight conversation. Arrays stay
+   shared with the detached turn while it is away; restore replaces the five
+   fields on the store's stable record. Deliveries ride along because a parked
+   conversation is restored without replaying its history, which is the only
+   other place they come from. */
+export interface WorkspaceSnapshot extends WsShared {
+  deliveries: DeliveryRow[]
 }
-
-export type FtKids = FtEntry[] | { err: string }
 
 /* The DS.workspace contract. The fixture source (demo shell) offers only
    shortPath and the demo toast; the rpc source (live layer) adds the fs.*
    surface and flags it with canBrowse -- which is how the island knows to
-   draw the real file view instead of the demo's empty note. */
+   draw the real file view instead of the demo's note. */
 export interface WorkspaceSource {
   shortPath(p: string): string
   /* The gateway host, not the browser: reveal and open-in-app run there. */
   hostPlatform(): string
+  /* Whether this source can read a file for the viewer to render. */
   canBrowse?: boolean
-  list?(dir: string): Promise<{ root?: string; entries: FtEntry[] }>
   reveal?(path: string): Promise<unknown>
   /* Hand the file to an application on the gateway's host. `app` is an
      application NAME the reader chose, or absent for the host default. */

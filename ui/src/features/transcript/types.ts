@@ -176,18 +176,6 @@ export interface ArtifactRow {
   change: 'new' | 'edit'
 }
 
-export interface DeliveryRow {
-  path: string
-  name: string
-  title: string
-  description: string
-  ext: string
-  size: number
-  mediaType: string
-  downloadPath: string
-  missing: boolean
-}
-
 export interface ArtsData {
   v: number
   id: number

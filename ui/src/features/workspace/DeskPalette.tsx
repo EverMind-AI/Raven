@@ -1,6 +1,6 @@
 /** Draggable floating navigation palette for workspace content. */
 
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentList } from '../subagents/SubagentsPage'
 import * as agents from '../subagents/store'
@@ -13,22 +13,29 @@ import {
   DESK_GEOMETRY_KEY,
   magnetGeometry,
 } from './deskGeometry'
+import * as deliveries from './deliveries'
 import * as desk from './deskStore'
+import { fileKind } from './store'
 import * as workspace from './store'
 
 import type { DeskGeometry, DeskTab } from './deskTypes'
-import type { FtEntry } from './types'
+import type { DeliveryRow } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
+  const delivered = deliveries.count()
   return (
     <div className="desk-tabs" role="tablist">
-      {(['diff', 'file', 'agents'] as DeskTab[]).map((tab) => {
-        const label = tab === 'diff' ? 'Diff' : tab === 'file' ? t('gui.ws.files') : t('gui.ws.agents')
+      {(['diff', 'deliverables', 'agents'] as DeskTab[]).map((tab) => {
+        const label = tab === 'diff' ? 'Diff'
+          : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.agents')
         return (
           <button key={tab} role="tab" aria-label={label} aria-selected={value === tab} onClick={() => onChange(tab)}>
             <DeskIcon kind={tab} />
             <span>{label}</span>
+            {/* The one count worth carrying on a collapsed tab: a shelf with
+                something on it is the reason to go and look. */}
+            {tab === 'deliverables' && delivered ? <i className="desk-count">{delivered}</i> : null}
           </button>
         )
       })}
@@ -55,80 +62,60 @@ function DiffNav(): JSX.Element {
   )
 }
 
-function DeskTree({ dir = '', depth = 0 }: { dir?: string; depth?: number }): JSX.Element | null {
-  const kids = workspace.FT.kids.get(dir)
-  if (!Array.isArray(kids)) return null
+function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX.Element {
+  const size = deliveries.humanSize(row.size)
+  const meta = [row.name, size, here ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })]
+    .filter(Boolean).join(' \u00b7 ')
   return (
-    <>
-      {(kids as FtEntry[]).map((entry) => {
-        const full = workspace.ftJoin(dir, entry.name)
-        const open = Boolean(entry.dir) && workspace.FT.open.has(full)
-        return (
-          <Fragment key={full}>
-            <button
-              className="desk-row file-row"
-              style={{ paddingLeft: `${10 + depth * 14}px` }}
-              onClick={() => {
-                if (entry.dir) {
-                  if (open) workspace.FT.open.delete(full)
-                  else {
-                    workspace.FT.open.add(full)
-                    workspace.ftLoad(full)
-                  }
-                  workspace.redraw()
-                  desk.notifyDesk()
-                } else desk.openDeskFile(workspace.ftAbs(full))
-              }}
-            >
-              <span className="tree-chev">{entry.dir ? (open ? '⌄' : '›') : ''}</span>
-              <span aria-hidden="true">{entry.dir ? '□' : '▯'}</span>
-              <span className="desk-name" title={entry.name}>{entry.name}</span>
-            </button>
-            {entry.dir && open ? <DeskTree dir={full} depth={depth + 1} /> : null}
-          </Fragment>
-        )
-      })}
-    </>
+    <button
+      className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
+      title={row.description || row.path}
+      /* Through the workspace's own opener, not straight at the desk: that is
+         the door the transcript's delivery card uses, and it is what keeps a
+         source that cannot read files (the demo shell) answering with its own
+         note instead of a viewer that has nothing to show.
+         Left clickable on purpose when the file is gone: the viewer says so in
+         words, which is more than a dead row does. */
+      onClick={() => workspace.openDelivery(row.path, row.downloadPath)}
+    >
+      <span className="dlv-kind" data-kind={fileKind(row.name)}>
+        {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
+      </span>
+      <span className="desk-name">
+        <b>{row.title}</b>
+        <s>{meta}</s>
+      </span>
+      {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
+    </button>
   )
 }
 
-function FileNav(): JSX.Element {
-  useEffect(() => {
-    workspace.ftLoad('')
-    workspace.ftLoadVisible()
-  }, [])
-  return (
-    <div className="desk-list">
-      <label className="desk-search">
-        <span aria-hidden="true">⌕</span>
-        <input
-          type="search"
-          value={workspace.FT.q}
-          placeholder={t('gui.ws.search')}
-          onChange={(event) => workspace.ftQuery(event.currentTarget.value)}
-        />
-      </label>
-      {workspace.FT.q
-        ? workspace.ftMatches().slice(0, 80).map(({ e, full }) => (
-          <button
-            key={full}
-            className="desk-row file-row"
-            onClick={() => {
-              if (e.dir) workspace.ftReveal(full, true)
-              else {
-                workspace.ftOpenTo(full)
-                desk.openDeskFile(workspace.ftAbs(full))
-              }
-            }}
-          >
-            <span className="tree-chev" />
-            <span aria-hidden="true">{e.dir ? '□' : '▯'}</span>
-            <span className="desk-name" title={full}>{e.name}</span>
-          </button>
-        ))
-        : <DeskTree />}
+/* Everything this session handed over, newest turn first. Not the working
+   directory: a file only reaches this list by being delivered, which is the
+   difference between what Raven wrote and what it gave you. */
+function DeliverablesNav(): JSX.Element {
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
+  const rows = deliveries.list()
+  if (!rows.length) return (
+    <div className="desk-empty desk-dlv-empty">
+      <DeskIcon kind="deliverables" />
+      <b>{t('gui.ws.dlv_none')}</b>
+      <span>{t('gui.ws.dlv_none_sub')}</span>
     </div>
   )
+  const now = workspace.currentTurn()
+  const out: JSX.Element[] = []
+  let group: string | null = null
+  rows.forEach((row) => {
+    const here = row.turn === now
+    const key = here ? 'gui.ws.turn_now' : 'gui.ws.turn_earlier'
+    if (key !== group) {
+      group = key
+      out.push(<div key={`grp:${key}:${row.path}`} className="desk-grp">{t(key)}</div>)
+    }
+    out.push(<DeliverableRow key={row.path} row={row} here={here} />)
+  })
+  return <div className="desk-list">{out}</div>
 }
 
 function AgentsNav(): JSX.Element {
@@ -154,6 +141,11 @@ function storedGeometry(): DeskGeometry {
 
 export function DeskPalette(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  /* On the root, not on the shelf: the tab strip reads the registry for its
+     count and is drawn whichever tab is showing, so subscribing only where the
+     shelf mounts left the badge out of the one case it exists for -- a delivery
+     landing while the reader is on another tab. */
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const pointerCleanup = useRef<(() => void) | null>(null)
   const [geom, setGeom] = useState(storedGeometry)
   useEffect(() => {
@@ -251,7 +243,7 @@ export function DeskPalette(): JSX.Element | null {
         <DeskTabs value={state.tab} onChange={(tab) => desk.update({ tab })} />
       </div>
       <div className="desk-body">
-        {state.tab === 'diff' ? <DiffNav /> : state.tab === 'file' ? <FileNav /> : <AgentsNav />}
+        {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <AgentsNav />}
       </div>
       <div className="desk-resize" onPointerDown={resize} />
     </div>

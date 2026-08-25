@@ -6,7 +6,7 @@ import { WsApp } from './WorkspacePage'
 import * as store from './store'
 
 import type { Shell } from '../../shell/bridge'
-import type { WorkspaceSource, WsChange, WsShared } from './types'
+import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -35,15 +35,15 @@ function change(over: Partial<WsChange> = {}): WsChange {
   }
 }
 
-function emptyWs(over: Partial<WsShared> = {}): WsShared {
-  return { changes: [], urls: [], file: null, turn: 1, unseen: 0, ...over }
+function emptyWs(over: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
+  return { changes: [], urls: [], file: null, turn: 1, unseen: 0, deliveries: [], ...over }
 }
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key) and a source on
    window.DS.workspace -- the fixture shape for demo behaviour, a list/reveal
    shape for live behaviour. */
-function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
+function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
   store.restore(ws)
   const shellCalls: Array<[string, unknown]> = []
   writers.calls = shellCalls
@@ -90,12 +90,6 @@ afterEach(() => {
   act(() => {
     store.reset()
   })
-  /* reset() is the session-switch reset, and the tree's width and folded
-     state deliberately survive that -- so a test that drove them has to hand
-     them back itself, or it sets the starting conditions of everything
-     declared after it. */
-  store.FT.hide = false
-  store.FT.w = 208
   localStorage.clear()
   store._resetAppsForTests()
   cleanup()
@@ -117,15 +111,16 @@ describe('workspace island', () => {
     expect(store.shared()).toBe(stable)
     expect(store.currentTurn()).toBe(3)
     expect(store.urls()).toEqual(first.urls)
-    expect(Object.keys(parked).sort()).toEqual(['changes', 'file', 'turn', 'unseen', 'urls'])
+    expect(Object.keys(parked).sort()).toEqual(['changes', 'deliveries', 'file', 'turn', 'unseen', 'urls'])
   })
 
   it('shows the launcher while nothing happened and no view was picked', async () => {
     const { shellCalls } = install(emptyWs(), {}, { tab: 'diff', open: true, picked: false })
     await mount()
     expect(await screen.findByText('gui.ws.changes')).toBeTruthy()
-    expect(screen.getByText('gui.ws.files')).toBeTruthy()
     expect(screen.getByText('gui.ws.browser')).toBeTruthy()
+    /* Browsing the working directory is not one of the things this offers. */
+    expect(screen.queryByText('gui.ws.files')).toBeNull()
     await act(async () => {
       screen.getByText('gui.ws.browser').closest('button')!.click()
     })
@@ -192,7 +187,6 @@ describe('workspace island', () => {
   it('opens the real viewer for a change when the source can browse', async () => {
     const state = install(emptyWs({ changes: [change()] }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       reveal: async () => ({}),
     })
     await mount()
@@ -206,7 +200,6 @@ describe('workspace island', () => {
   it('carries a delivered file download into the real viewer', async () => {
     const state = install(emptyWs(), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
     })
     await mount()
     await act(async () => {
@@ -228,7 +221,6 @@ describe('workspace island', () => {
       file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
@@ -246,7 +238,6 @@ describe('workspace island', () => {
       file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
@@ -272,7 +263,6 @@ describe('workspace island', () => {
       file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
@@ -310,7 +300,6 @@ describe('workspace island', () => {
       },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       openIn: async () => ({}),
       hostIsLocal: () => false,
     }, { tab: 'file', open: true, picked: true })
@@ -328,7 +317,6 @@ describe('workspace island', () => {
       file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
     await mount()
@@ -341,7 +329,6 @@ describe('workspace island', () => {
       file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       openIn: async () => { throw new Error('open failed: no such application') },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
@@ -364,75 +351,10 @@ describe('workspace island', () => {
     expect(store.appFor('/x/a.xlsx')).toBeNull()
   })
 
-  it('keeps the demo file tab an empty note without a browsable source', async () => {
+  it('says so rather than drawing a viewer when the source cannot read files', async () => {
     install(emptyWs(), {}, { tab: 'file', open: true, picked: true })
     await mount()
-    expect(await screen.findByText('gui.ws.dir_empty')).toBeTruthy()
-  })
-
-  it('draws the tree from the source, folders first, and opens a file', async () => {
-    const state = install(emptyWs(), {
-      canBrowse: true,
-      list: async (dir: string) => ({
-        root: '/repo',
-        entries: dir === ''
-          ? [{ name: 'zeta.py', size: 10 }, { name: 'docs', dir: true }]
-          : [],
-      }),
-      reveal: async () => ({}),
-    }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      await Promise.resolve()
-    })
-    const rows = [...document.querySelectorAll('.ftrow .nm')].map((n) => n.textContent)
-    expect(rows).toEqual(['docs', 'zeta.py'])
-    await act(async () => {
-      ;(screen.getByText('zeta.py').closest('button') as HTMLButtonElement).click()
-    })
-    expect(state.ws.file?.path).toBe('/repo/zeta.py')
-  })
-
-  it('hides the tree when the grip is shoved past its floor and released', async () => {
-    install(emptyWs(), {
-      canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [{ name: 'zeta.py', size: 10 }] }),
-    }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      await Promise.resolve()
-    })
-    const wrap = document.querySelector('.fwrap') as HTMLElement
-    const grip = wrap.querySelector('button.grip') as HTMLButtonElement
-    grip.setPointerCapture = () => {}
-    grip.releasePointerCapture = () => {}
-    const at = (type: string, x: number): PointerEvent =>
-      new PointerEvent(type, { clientX: x, bubbles: true, pointerId: 1 })
-    expect(wrap.dataset.tree).toBe('on')
-    await act(async () => {
-      grip.dispatchEvent(at('pointerdown', 300))
-      /* Down to the floor, then a good shove past it: the release reads how
-         far the pointer actually got, not where it started. */
-      grip.dispatchEvent(at('pointermove', 120))
-      grip.dispatchEvent(at('pointermove', 200))
-      grip.dispatchEvent(at('pointermove', 100))
-      grip.dispatchEvent(at('pointerup', 100))
-    })
-    expect(wrap.dataset.tree).toBe('off')
-  })
-
-  it('shows the read failure in the tree when the source refuses', async () => {
-    install(emptyWs(), {
-      canBrowse: true,
-      list: async () => {
-        throw new Error('denied')
-      },
-    }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(await screen.findByText('gui.ws.read_fail {"err":"denied"}')).toBeTruthy()
+    expect(await screen.findByText('gui.ws.file_unreadable')).toBeTruthy()
   })
 
   it('renders a loaded text file as numbered lines and reveals on request', async () => {
@@ -441,7 +363,6 @@ describe('workspace island', () => {
       file: { path: '/repo/src/app.py', kind: 'code', raw: false, text: 'x = 1\ny = 2', err: null, size: null, loading: false, seq: 1 },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
       reveal,
     }, { tab: 'file', open: true, picked: true })
     await mount()
@@ -464,7 +385,6 @@ describe('workspace island', () => {
       },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
     }, { tab: 'file', open: true, picked: true })
     await mount()
     const prose = document.querySelector('.prose')!
@@ -480,7 +400,6 @@ describe('workspace island', () => {
       file: { path: '/repo/a.py', kind: 'code', raw: false, text: null, err: 'gone for good', size: null, loading: false, seq: 2 },
     }), {
       canBrowse: true,
-      list: async () => ({ root: '/repo', entries: [] }),
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gone for good')).toBeTruthy()

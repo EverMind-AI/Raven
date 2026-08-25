@@ -108,6 +108,10 @@ async function openLiveSession(s) {
        id no longer matches the current pointer -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
     sessionDraw();
+    /* The session's working directory, for the path shortener. It rides on
+       every init bundle and used to be learned from a directory listing, which
+       is a call the page no longer makes. */
+    wsSetRoot(r.info && r.info.cwd);
     const u = (r.info && r.info.usage) || {};
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
@@ -183,6 +187,7 @@ function liveSend(text) {
   // The draft becomes a real session here, on its first message.
   (async () => {
     const r = await rpc.call('session.create', {});
+    wsSetRoot(r.info && r.info.cwd);
     const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
       when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
     sessionRows().unshift(s); sessionSet(s.id); draft = false;

@@ -396,7 +396,6 @@ window.RavenIslands = {
     changes: workspace.changes,
     urls: workspace.urls,
     showFile: workspace.showFile,
-    openDir: workspace.openDir,
     hunkFromEdit: workspaceHunks.fromEdit,
     hunkFromWrite: workspaceHunks.fromWrite,
     hunkFromUnified: workspaceHunks.fromUnified,

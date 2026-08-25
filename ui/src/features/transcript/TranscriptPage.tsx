@@ -7,6 +7,7 @@ import * as attachmentCache from '../../shell/attachment-cache'
 import { shell, t } from '../../shell/bridge'
 import { copy } from '../../shell/clipboard'
 import { open as openChip } from '../../shell/chips'
+import { humanSize } from '../workspace/deliveries'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
@@ -14,8 +15,9 @@ import * as store from './store'
 import * as tail from './tail'
 
 import type { DagNode } from '../dag/types'
+import type { DeliveryRow } from '../workspace/types'
 import type {
-  AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, DeliveryRow, FoldData, Lane,
+  AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, FoldData, Lane,
   NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
@@ -992,15 +994,6 @@ const ArtMini = memo(function ArtMini({ name, head }: { name: string; head: stri
   }
   return <span className="pic doc"><span className="amini"><span className="raw">{text}</span></span></span>
 })
-
-const humanSize = (bytes: number): string => {
-  if (!bytes) return ''
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1 }
-  return `${unit ? value.toFixed(value < 10 ? 1 : 0) : Math.round(value)} ${units[unit]}`
-}
 
 const DeliveryShot = memo(function DeliveryShot({ row, missing }: {
   row: DeliveryRow; missing: () => void
