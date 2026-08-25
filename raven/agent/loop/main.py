@@ -848,7 +848,18 @@ class AgentLoop:
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
             )
         )
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        # web_search needs a Serper key it does not have by default, and offering
+        # it anyway is worse than withholding it: the model reaches for it, the
+        # call fails, and the error text -- naming a config file and an env var --
+        # gets relayed to whoever is on the other end of the channel. Ask the tool
+        # rather than the config, because it resolves the key at call time from
+        # either source; gating on `brave_api_key` alone would withdraw the tool
+        # from a deploy that only exports SERPER_API_KEY.
+        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        if web_search.api_key:
+            self.tools.register(web_search)
+        # web_fetch is unconditional by contrast: it works without a key, and the
+        # Jina one only upgrades the extraction.
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),

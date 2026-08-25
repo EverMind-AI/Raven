@@ -35,12 +35,30 @@ class WebSearchTool(Tool):
         """Resolve API key at call time so env/config changes are picked up."""
         return self._init_api_key or os.environ.get("SERPER_API_KEY", "")
 
+    @classmethod
+    def is_configured(cls, config_key: str | None) -> bool:
+        """Whether a search key resolves, from the config value or the
+        environment.
+
+        Asked of the tool rather than of the config because those are two
+        sources and only the tool consults both: a deployment that exports
+        ``SERPER_API_KEY`` and configures nothing is configured, and a caller
+        reading ``tools.web.search.apiKey`` alone would say otherwise.
+        """
+        return bool(cls(api_key=config_key or None).api_key)
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         if not self.api_key:
+            # Reachable only if the key goes away after registration, since the
+            # loops withhold this tool when there is none. Name the file actually
+            # in force: hard-coding ~/.raven/config.json sent anyone running with
+            # --config to edit a file the process never reads.
+            from raven.config.loader import get_config_path
+
             return (
-                "Error: Serper API key not configured. Set it in "
-                "~/.raven/config.json under tools.web.search.apiKey "
-                "(or export SERPER_API_KEY), then restart the gateway."
+                f"Error: Serper API key not configured. Set it in {get_config_path()} "
+                "under tools.web.search.apiKey (or export SERPER_API_KEY), "
+                "then restart the gateway."
             )
 
         try:
