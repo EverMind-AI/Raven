@@ -238,6 +238,9 @@ export interface SessionInfo {
   service_tier?: string
   skills: Record<string, string[]>
   system_prompt?: string
+  // The resumed session's name. Absent on a fresh one, which has nothing to
+  // name yet, so the panel simply has no line for it.
+  title?: string | null
   tools: Record<string, string[]>
   update_available?: boolean | null
   update_command?: string

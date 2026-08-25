@@ -949,3 +949,74 @@ def test_resolve_key_not_found(tmp_path: Path):
     res = mgr.resolve_key("nope000")
     assert res.status == "not_found"
     assert res.key is None
+
+
+def test_set_title_collapses_a_multi_line_name(tmp_path: Path):
+    """A pasted name arrives as one line.
+
+    A metadata record is one JSON line and every surface draws a title on one
+    row, so an embedded newline has nowhere to render.
+    """
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("cli:title1")
+
+    session.set_title("  Ship\nthe   fix  ")
+
+    assert session.metadata["title"] == "Ship the fix"
+
+
+def test_set_title_refuses_a_name_past_the_storage_ceiling(tmp_path: Path):
+    """Refused, not truncated: a person typed this.
+
+    Quietly storing the first 200 characters hands back a fragment they never
+    wrote, with nothing saying why -- so the write fails and the caller reports.
+    """
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("cli:title2")
+
+    with pytest.raises(ValueError, match="201 characters"):
+        session.set_title("x" * 201)
+
+    assert session.metadata.get("title") is None
+
+
+def test_generated_title_replaces_an_auto_named_one(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "cli:title3", ("user", "please cut a release for the desktop build"))
+    assert session.metadata.get("title_auto") is True
+
+    assert session.set_generated_title("Cut a desktop release") is True
+    assert session.metadata["title"] == "Cut a desktop release"
+
+
+def test_generated_title_is_declined_once_a_person_named_the_session(tmp_path: Path):
+    """The naming call ran alongside the turn, so a rename typed while it was in
+    flight is the newer intent and wins."""
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "cli:title4", ("user", "please cut a release"))
+    session.set_title("Release checklist")
+
+    assert session.set_generated_title("Cut a release") is False
+    assert session.metadata["title"] == "Release checklist"
+
+
+def test_generated_title_keeps_the_marker_so_forks_do_not_inherit_it(tmp_path: Path):
+    """A generated title is 'not human' for fork inheritance exactly as the
+    mechanical one is -- the whole reason no third marker state was added."""
+    mgr = SessionManager(tmp_path)
+    source = _seed(mgr, "cli:title5", ("user", "plan the trip in detail"))
+    source.set_generated_title("Plan the trip")
+    mgr.save(source)
+
+    child = mgr.fork("cli:title5")
+
+    assert source.metadata.get("title_auto") is True
+    assert child.metadata.get("title") is None
+
+
+def test_generated_title_is_declined_when_it_is_past_the_storage_ceiling(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "cli:title6", ("user", "some opening message"))
+
+    assert session.set_generated_title("y" * 201) is False
+    assert session.metadata["title"] == "some opening message"

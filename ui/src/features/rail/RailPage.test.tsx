@@ -253,6 +253,27 @@ describe('rail island', () => {
     expect(screen.getByText('GTM research')).toBeTruthy()
   })
 
+  it('shows a placeholder instead of a title while the name is being generated', () => {
+    /* The row is not loading -- the list is here. Only its name is coming, so
+       the bar stands where the title goes and the timestamp keeps its slot. */
+    install({ rows: [row({ naming: true, title: 'gui.new_task' })] })
+    const host = mount()
+
+    const bars = host.querySelectorAll('.sess .t .sk')
+    expect(bars.length).toBe(1)
+    expect(bars[0]!.getAttribute('aria-label')).toBe('gui.sess.naming')
+    expect(screen.queryByText('gui.new_task')).toBeNull()
+    expect(screen.getByText('11:24')).toBeTruthy()
+  })
+
+  it('draws the title once the name has landed', () => {
+    install({ rows: [row({ naming: false, title: 'Cut a desktop release' })] })
+    const host = mount()
+
+    expect(host.querySelector('.sess .t .sk')).toBeNull()
+    expect(screen.getByText('Cut a desktop release')).toBeTruthy()
+  })
+
   it('keeps the last rows when the source cannot answer a draw', () => {
     install()
     const host = mount()

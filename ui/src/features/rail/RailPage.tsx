@@ -140,6 +140,15 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
               }
             }}
           />
+        ) : s.naming ? (
+          /* The title is being generated. A fixed width, not a per-row one:
+             there is a single bar here and a varying width would make it jump
+             sideways as the real title replaces it. The shimmer is the rail's
+             own loading primitive, which already stands still under
+             prefers-reduced-motion. */
+          <span className="skel">
+            <span className="sk" style={{ width: '40%', height: '11px' }} aria-label={t('gui.sess.naming')} />
+          </span>
         ) : (
           <span>{plainTitle(s.title)}</span>
         )}

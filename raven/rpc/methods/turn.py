@@ -37,6 +37,7 @@ from raven.spine.scheduler import Scheduler, SchedulerDrainingError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.session import AgentLoopFactory
 
 _TURN_FAILED_CODE = -32099
 
@@ -190,6 +191,44 @@ async def _emit_start_then_error(
     )
 
 
+def _name_session(
+    parsed: TurnSendParams,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None",
+    emitter: SubscriptionEmitter | None,
+) -> None:
+    """Hand this turn's opening line to the session namer, if it is one.
+
+    Wrapped in its own try/except for the reason the loop factory is invoked
+    defensively everywhere else in this module: naming is a side errand, and no
+    failure in it may reach a client that asked for a turn.
+    """
+    try:
+        from raven.config import load_config
+        from raven.rpc.methods.session import _manager_for, _safe_invoke_factory
+        from raven.rpc.session_naming import name_session_alongside_turn
+
+        agent_loop = _safe_invoke_factory(agent_loop_factory)
+        if agent_loop is None:
+            return
+        config = load_config()
+        settings = config.raven.session_title
+        name_session_alongside_turn(
+            session_key=parsed.session_key,
+            text=parsed.content or "",
+            mgr=_manager_for(agent_loop, config),
+            provider=getattr(agent_loop, "provider", None),
+            emitter=emitter,
+            enabled=settings.enabled,
+            model=settings.model,
+            budget=settings.budget,
+            min_input_chars=settings.min_input_chars,
+            timeout_seconds=settings.timeout_seconds,
+        )
+    except Exception as exc:
+        logger.debug("turn.send: session naming not started ({})", exc)
+
+
 async def turn_send(
     params: dict[str, Any],
     *,
@@ -199,6 +238,7 @@ async def turn_send(
     direct_targets: dict[str, dict[str, str]] | None = None,
     build_error: RpcError | None = None,
     default_channel: str = "tui",
+    agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -323,6 +363,13 @@ async def turn_send(
             parsed.session_key,
             {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
         )
+
+    # After the submit, so a turn that was never accepted does not name a session
+    # that has nothing in it; and only for the main conversation, since a direct
+    # chat's opening line names its instance's lane, not this session. Returns
+    # immediately -- the call it may start runs on its own task.
+    if parsed.target is None:
+        _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
 
     return {"turn_id": turn_id, "accepted": True}
 
@@ -477,6 +524,7 @@ def register_turn_methods(
     direct_targets: dict[str, dict[str, str]] | None = None,
     build_error: RpcError | None = None,
     default_channel: str = "tui",
+    agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -499,6 +547,7 @@ def register_turn_methods(
             turn_ids=turn_ids,
             direct_targets=direct_targets,
             build_error=build_error,
+            agent_loop_factory=agent_loop_factory,
             default_channel=default_channel,
         )
 

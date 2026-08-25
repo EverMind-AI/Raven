@@ -38,11 +38,12 @@ from loguru import logger
 from raven.cli.update_notice import update_notice
 from raven.config.loader import drain_migration_notices, load_config
 from raven.providers.rates import resolve_context_window
-from raven.rpc.errors import ConfigValidationError, TurnInProgressError
+from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
+from raven.session.title import TITLE_STORAGE_MAX
 from raven.utils.helpers import estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -445,6 +446,12 @@ async def session_resume(
             raw = mgr.peek(session_key)
             if raw is not None:
                 _fill_resumed_context(info, raw)
+                # The banner names what is being resumed. Read from the stored
+                # metadata rather than derived here: whoever named this session
+                # -- a person, `save`, or the naming call -- put the name there.
+                title = (raw.metadata or {}).get("title")
+                if isinstance(title, str) and title:
+                    info["title"] = title
                 return {
                     "session_id": session_key,
                     "info": info,
@@ -656,7 +663,18 @@ async def session_title(
 
     if title is not None:
         session = mgr.get_or_create(session_key)
-        session.set_title(title)
+        try:
+            session.set_title(title)
+        except ValueError as exc:
+            # A name too long for the metadata record is ordinary user input, not
+            # a bug: letting the ValueError reach the dispatcher answers -32603
+            # with a traceback in the log and the word "internal_error" in the
+            # user's toast, which says nothing about what they typed.
+            raise SessionTitleTooLongError(str(exc), data={"limit": TITLE_STORAGE_MAX}) from exc
+        # The stored form, not the argument: `set_title` collapses whitespace, and
+        # answering with the raw text would have the caller draw a name that is
+        # not the one on disk.
+        title = session.metadata["title"]
         if mgr.exists(session_key):
             try:
                 mgr.save(session)

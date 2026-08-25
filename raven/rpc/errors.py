@@ -140,6 +140,11 @@ class NotDispatchCompatibleError(RpcError):
 # Follow-up extension range (-32016..-32049). -32016 is subscription
 # overflow; was incorrectly aliased to -32010 in early drafts — -32010 is
 # already ConfigFieldReadonlyError.
+class SessionTitleTooLongError(RpcError):
+    CODE = -32018
+    MESSAGE = "session_title_too_long"
+
+
 class SubscriptionCapacityExceededError(RpcError):
     CODE = -32016
     MESSAGE = "subscription_capacity_exceeded"
