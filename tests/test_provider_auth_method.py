@@ -436,6 +436,12 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
         "raven/agent/loop/main.py",
+        # The sub-agent surface asks the same question the main loop does, about
+        # the same tool: whether web_search resolved a Serper key, so an unusable
+        # search is withheld rather than offered and failed. It asks the built
+        # tool rather than the config because the tool resolves from either the
+        # constructor value or SERPER_API_KEY.
+        "raven/agent/subagent/manager.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
@@ -450,6 +456,14 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # for display, rotate it -- rather than to rule on whether a provider is
         # set up.
         "raven/config/schema.py",
+        # Reports which source supplied a tool's key, and whether one is there
+        # to reuse, so a deployer is told "reusing the OpenRouter key you
+        # already have" rather than "needs a key" and does not go and create an
+        # account twice -- or, when nothing is there, is not told to reuse a
+        # credential that does not exist. It rules on nothing: `is_configured`
+        # and `has_credential` both ask the tools, which is where each family's
+        # rule already lives, so this file cannot become a second opinion.
+        "raven/agent/tools/capabilities.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
         "raven/cli/_helpers.py",

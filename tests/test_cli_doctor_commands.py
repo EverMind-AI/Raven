@@ -919,3 +919,205 @@ def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "fixed" in out
     assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"
+
+
+# ------------------------------------------------------- tool capabilities
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These credentials resolve from the environment too, so a developer who
+    exported one would see these assert the wrong branch.
+
+    ``OPENROUTER_API_KEY`` counts as much as the search key: it is what the
+    media family falls back to, so exporting it turns the "nothing to borrow"
+    rows into "borrowing from the environment" rows.
+    """
+    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) -> None:
+    """The reason this section exists: an unconfigured tool is not registered,
+    so without it nothing in the running system says the capability is there."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Tool capabilities" in result.stdout
+    assert "web_search" in result.stdout
+    assert "serper.dev" in result.stdout, "a deployer cannot act without being told where to go"
+    assert "tools.web.search.apiKey" in result.stdout
+
+
+def test_doctor_says_a_paid_capability_bills_before_it_is_switched_on(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Billed per image." in result.stdout
+    assert "prepaid OpenRouter credit" in result.stdout, "video cannot run at all without it"
+
+
+def test_doctor_reports_a_configured_capability_and_where_its_key_came_from(tmp_config: Path, tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.providers.openrouter.api_key = "sk-or-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrowed" in result.stdout, "the deployer should see it reused a key, not that it needs one"
+
+
+def test_doctor_does_not_offer_a_borrow_it_cannot_make(healthy_config: Path) -> None:
+    """This config has no OpenRouter key, so "reuse the one you have" is false.
+
+    It is false in the expensive direction: acting on it means setting a model,
+    getting a registered tool -- a model alone counts -- and every call failing
+    on a credential the deployer was told they already had.
+    """
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrow" not in result.stdout, "claimed a reuse with nothing to reuse"
+    assert "tools.media.image.apiKey" in result.stdout, "must name the key it actually needs"
+    assert "OPENROUTER_API_KEY" in result.stdout
+
+
+def test_doctor_flags_a_capability_registered_without_a_key(tmp_config: Path, tmp_path: Path) -> None:
+    """A media model with no key from any source is offered to the model and
+    fails on every call. A satisfied row is the one thing that must not say."""
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "no key resolves" in result.stdout
+    assert "tools.media.image.apiKey" in result.stdout
+    # Warned, not failed. Unlike a memory role the server could not build, this
+    # failure is loud where it happens -- the tool returns its missing-key error
+    # to the model -- so the section stays advisory, as the rest of it is.
+    assert result.exit_code == 0
+
+    # Two fields rather than one, because collapsing them is what hid this
+    # state: registered *and* unusable is not reachable through either alone.
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    image = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "image_generate")
+    assert image["configured"] is True and image["has_credential"] is False
+
+
+def test_an_unconfigured_capability_is_not_a_failure(healthy_config: Path) -> None:
+    """An install without image generation is a choice, not a fault."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+
+
+def test_tool_capabilities_reach_the_json_output(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    payload = json.loads(result.stdout)
+    tools = payload["tools"]["capabilities"]
+    by_name = {c["tool"]: c for c in tools}
+    assert "web_search" in by_name and "web_fetch" in by_name
+    assert by_name["web_search"]["configured"] is False
+    assert by_name["web_search"]["obtain_from"] == "https://serper.dev"
+    assert by_name["web_fetch"]["configured"] is True
+    assert by_name["image_generate"]["key_path"] == "tools.media.image.apiKey", (
+        "the key path is not the model path this row switches on"
+    )
+
+
+def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None:
+    """These rows exist to be copied. A key wrapped mid-path is unusable, which
+    is why each fact is printed on its own line rather than in a sentence."""
+    result = runner.invoke(app, ["doctor"])
+
+    for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
+        assert path in result.stdout, f"{path} was broken across a line wrap"
+
+
+def _search_config(tmp_path: Path, *, key: bool, off: bool) -> None:
+    """One cell of the web_search state matrix, persisted.
+
+    ``key`` and ``off`` are independent in production -- a deployment can set
+    neither, either, or both -- so they are independent here.
+    """
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    if key:
+        cfg.tools.web.search.api_key = "sk-serper"
+    if off:
+        cfg.tools.disabled_tools = ["web_search"]
+    save_config(cfg)
+
+
+def _switched_off_search(tmp_path: Path) -> None:
+    """A credentialed web_search that the deployment has switched off by name."""
+    _search_config(tmp_path, key=True, off=True)
+
+
+def test_doctor_says_a_capability_is_switched_off_rather_than_ticking_it(tmp_config: Path, tmp_path: Path) -> None:
+    """A key plus `disabledTools` used to print a green tick for a tool the
+    agent does not hold -- the report claiming a capability is on offer when
+    Raven has removed it."""
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+    # Not the unconfigured path: the key is set, and telling them to set it
+    # again is how a report sends someone in a circle.
+    assert "switch on:" not in result.stdout.split("web_search")[-1][:200]
+
+
+def test_the_switched_off_state_reaches_the_json_output(tmp_config: Path, tmp_path: Path) -> None:
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(result.stdout)
+
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+    assert row["configured"] is True, "the key is set; calling it unconfigured is the wrong repair"
+    assert row["disabled"] is True
+
+
+@pytest.mark.parametrize("key", [True, False], ids=["keyed", "keyless"])
+def test_the_off_switch_is_named_whether_or_not_a_key_is_set(key: bool, tmp_config: Path, tmp_path: Path) -> None:
+    """The cell the first version of this rendering got wrong.
+
+    With no key, the row used to print only the credential advice -- so a
+    deployer could set `tools.web.search.apiKey`, restart, and still not have
+    search, because `_apply_disabled_tools` removes it either way.
+    """
+    _search_config(tmp_path, key=key, off=True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("key", "off", "configured", "disabled"),
+    [(True, True, True, True), (True, False, True, False), (False, True, False, True), (False, False, False, False)],
+    ids=["keyed-off", "keyed-on", "keyless-off", "keyless-on"],
+)
+def test_the_json_row_reports_the_two_states_independently(
+    key: bool, off: bool, configured: bool, disabled: bool, tmp_config: Path, tmp_path: Path
+) -> None:
+    """Both flags, all four combinations. Collapsing either into the other is
+    what made the report tell a deployer to set a key that was already set."""
+    _search_config(tmp_path, key=key, off=off)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["configured"] is configured
+    assert row["disabled"] is disabled

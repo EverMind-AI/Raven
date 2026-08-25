@@ -85,10 +85,51 @@ class _OpenRouterMediaTool(Tool):
 
     # ── config resolution (at call time, so env/config edits are picked up) ──
 
+    @staticmethod
+    def _resolve_key(config: "MediaToolConfig | None") -> str:
+        """The credential chain in one place: this tool's section, then the
+        shared environment variable.
+
+        A static method so :meth:`has_key` can ask it without an instance --
+        this base is abstract, and the callers deciding whether a capability
+        works hold a config and no tool.
+        """
+        cfg_key = getattr(config, "api_key", "") if config else ""
+        return cfg_key or os.environ.get("OPENROUTER_API_KEY", "")
+
     @property
     def api_key(self) -> str:
-        cfg_key = getattr(self._config, "api_key", "") if self._config else ""
-        return cfg_key or os.environ.get("OPENROUTER_API_KEY", "")
+        return self._resolve_key(self._config)
+
+    @classmethod
+    def is_configured(cls, config: "MediaToolConfig | None") -> bool:
+        """Whether this deployment asked for the tool at all.
+
+        A model *or* a key, matching what ``AgentLoop`` registers on: the key
+        alone would let an OpenRouter credential set for chat quietly switch on
+        three tools that bill per call, and the model alone would miss the
+        deployment that names no model and relies on ``default_model``.
+
+        A classmethod because the caller deciding whether to offer the tool has
+        a config and no instance, and because the answer has to be askable
+        without building one.
+        """
+        if config is None:
+            return False
+        return bool(config.api_key or config.model)
+
+    @classmethod
+    def has_key(cls, config: "MediaToolConfig | None") -> bool:
+        """Whether a credential resolves for this tool.
+
+        A different question from :meth:`is_configured`, which answers whether
+        the deployment asked for the tool at all: a section naming only a model
+        is registered and offered to the model, and then every call returns
+        :meth:`_no_key_error`. Asked of the tool because only the tool consults
+        both the section and ``OPENROUTER_API_KEY``, so a caller reading the
+        config alone answers wrong for every deployment that exports it.
+        """
+        return bool(cls._resolve_key(config))
 
     @property
     def api_base(self) -> str:
