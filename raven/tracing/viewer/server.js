@@ -7,7 +7,7 @@ const os = require('os');
 const { URL } = require('url');
 const { applyStateDirArg } = require('./state-dir');
 applyStateDirArg();
-const { readJsonl, getLogsDir } = require('./log-store');
+const { readJsonl, statLogFiles, getLogsDir } = require('./log-store');
 const everosDeposits = require('./everos-deposits');
 
 const PORT = Number(process.env.TRACE_UI_PORT || process.env.TRACING_UI_PORT || 4318);
@@ -35,6 +35,14 @@ function sendJson(res, statusCode, payload) {
     'Cache-Control': 'no-store'
   });
   res.end(JSON.stringify(payload));
+}
+
+function sendJsonBody(res, statusCode, body) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store'
+  });
+  res.end(body);
 }
 
 function sendText(res, statusCode, text, contentType = 'text/plain; charset=utf-8') {
@@ -398,9 +406,12 @@ function buildTraceTree(spans) {
     byParent.set(key, dedupeSiblingSpans(children));
   }
 
+  // Identity and shape only. Every field a reader needs is on the span itself,
+  // which already travels once in `trace.spans`; nesting a copy of each span
+  // here made the payload carry the whole history twice.
   function visit(node, depth) {
     return {
-      ...node,
+      spanId: node.spanId,
       depth,
       children: (byParent.get(node.spanId) || []).map((child) => visit(child, depth + 1))
     };
@@ -823,6 +834,75 @@ function buildSessions() {
   };
 }
 
+// Identity of everything buildSessions reads: both log kinds, and the everos
+// deposit tree it joins store spans against. Deposits belong in here because a
+// deposit landing flips a span from pending to distilled without any log
+// changing.
+function snapshotFingerprint() {
+  const parts = [];
+  for (const kind of ['spans', 'events']) {
+    for (const entry of statLogFiles(kind)) {
+      parts.push(`${kind}:${entry.path}:${entry.size}:${entry.mtimeMs}`);
+    }
+  }
+  let deposits = '';
+  try {
+    deposits = everosDeposits.depositsFingerprint(everosDeposits.resolveEverosRoot('raven'));
+  } catch {
+    // an unreadable deposit tree is the same as none, as it is for the build
+  }
+  parts.push(`deposits:${deposits}`);
+  return parts.join('|');
+}
+
+// A rebuild reads every retained span and then serializes a payload that grows
+// with the whole history, so the UI's few-second refresh must not pay for it.
+// Only the serialized body is held, not the object graph it came from: the graph
+// outweighs the body several times over and nothing outside this function needs
+// it, so retaining it would trade a bounded cache for one that grows with the
+// whole history.
+let snapshotCache = null;
+let rebuildPending = false;
+
+function rebuildSnapshot() {
+  // Stamped with the inputs read *before* the build, so inputs that move while
+  // it runs leave the result stale rather than falsely current.
+  const fingerprint = snapshotFingerprint();
+  snapshotCache = { fingerprint, body: JSON.stringify(buildSessions()) };
+  return snapshotCache.body;
+}
+
+// Returns the body to answer with, and whether it is behind the inputs. A stale
+// answer beats a fresh one here: any raven that is running appends spans
+// continuously, so a reader that waits for the rebuild waits on every single
+// poll, which is what makes the panel unusable while work is happening. The
+// caller refreshes afterwards instead, so the reader is at most one rebuild
+// behind -- inside the interval it already polls on.
+function getSnapshotBody() {
+  if (!snapshotCache) return { body: rebuildSnapshot(), stale: false };
+  if (snapshotCache.fingerprint === snapshotFingerprint()) return { body: snapshotCache.body, stale: false };
+  return { body: snapshotCache.body, stale: true };
+}
+
+// Deferred to after the response is off the socket, not merely to a later tick.
+// The rebuild is synchronous and holds the event loop for as long as it runs, so
+// starting it while a body this size is still being written stalls that write and
+// charges the reader for the rebuild it was meant to skip.
+function scheduleSnapshotRebuild(res) {
+  if (rebuildPending) return;
+  rebuildPending = true;
+  res.on('close', () => {
+    setTimeout(() => {
+      rebuildPending = false;
+      try {
+        rebuildSnapshot();
+      } catch {
+        // keep serving the last good body rather than dropping the cache
+      }
+    }, 0);
+  });
+}
+
 function isSafeArtifactPath(filePath) {
   const resolved = path.resolve(filePath);
   return resolved.startsWith(path.resolve(ARTIFACTS_DIR) + path.sep) || resolved === path.resolve(ARTIFACTS_DIR);
@@ -872,16 +952,67 @@ function serveStatic(reqPath, res) {
 // Fuzzy = case-insensitive, whitespace-split terms, all must match (AND).
 const MAX_SEARCH_RESULTS = 50;
 const MAX_ARTIFACT_SEARCH_BYTES = 512 * 1024;
+const DEFAULT_ARTIFACT_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+// Charged on top of an entry's text so that an entry always costs something.
+// An artifact past MAX_ARTIFACT_SEARCH_BYTES, or a missing one, is cached as the
+// empty string; billed at its own length it would cost nothing, the ceiling
+// below could never evict it, and the entry count would grow without bound.
+const ARTIFACT_CACHE_ENTRY_OVERHEAD = 512;
+
+// Text held per artifact path, including the empty answer a missing or
+// oversized one gives. A query touches every artifact path on every span it
+// scans -- tens of thousands of reads that between them return a few megabytes,
+// so the cost is the syscalls, not the bytes -- and the reader re-queries on
+// every keystroke. Validated against size + mtime rather than trusted outright,
+// even though an artifact is content-addressed and effectively immutable.
+const artifactSearchCache = new Map();
+let artifactSearchCacheBytes = 0;
+
+function getArtifactCacheMaxBytes() {
+  const raw = Number(process.env.TRACE_ARTIFACT_CACHE_MAX_BYTES || DEFAULT_ARTIFACT_CACHE_MAX_BYTES);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_ARTIFACT_CACHE_MAX_BYTES;
+}
+
+function entryCost(entry) {
+  return entry.text.length + ARTIFACT_CACHE_ENTRY_OVERHEAD;
+}
 
 function artifactTextForSearch(filePath) {
   if (!filePath || !isSafeArtifactPath(filePath)) return '';
+  let stat;
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > MAX_ARTIFACT_SEARCH_BYTES) return '';
-    return fs.readFileSync(filePath, 'utf8');
+    stat = fs.statSync(filePath);
   } catch {
     return '';
   }
+  const cached = artifactSearchCache.get(filePath);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    // Map iterates in insertion order, so re-inserting keeps the front of it the
+    // least recently used entry for eviction below.
+    artifactSearchCache.delete(filePath);
+    artifactSearchCache.set(filePath, cached);
+    return cached.text;
+  }
+  let text = '';
+  if (stat.isFile() && stat.size <= MAX_ARTIFACT_SEARCH_BYTES) {
+    try {
+      text = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      text = '';
+    }
+  }
+  if (cached) artifactSearchCacheBytes -= entryCost(cached);
+  artifactSearchCache.delete(filePath);
+  const entry = { size: stat.size, mtimeMs: stat.mtimeMs, text };
+  artifactSearchCache.set(filePath, entry);
+  artifactSearchCacheBytes += entryCost(entry);
+  const maxBytes = getArtifactCacheMaxBytes();
+  for (const [key, held] of artifactSearchCache) {
+    if (artifactSearchCacheBytes <= maxBytes) break;
+    artifactSearchCache.delete(key);
+    artifactSearchCacheBytes -= entryCost(held);
+  }
+  return text;
 }
 
 function makeSnippet(text, term, radius = 60) {
@@ -899,7 +1030,11 @@ function searchSpans(query) {
   if (!terms.length) return [];
   const results = [];
   const data = buildSessions();
-  for (const session of data.sessions) {
+  // Labelled so the cap below ends the whole scan. An unlabelled break leaves
+  // the outer loops running, which caps nothing once there is more than one
+  // trace: a broad term then matches tens of thousands of spans and reads an
+  // artifact off disk for each, which is where a search spends its time.
+  scan: for (const session of data.sessions) {
     for (const trace of session.traces || []) {
       for (const span of trace.spans || []) {
         const attrs = span.attributes || {};
@@ -938,10 +1073,12 @@ function searchSpans(query) {
           field,
           snippet
         });
-        if (results.length >= MAX_SEARCH_RESULTS * 4) break;
+        if (results.length >= MAX_SEARCH_RESULTS * 4) break scan;
       }
     }
   }
+  // Newest first. Sessions arrive newest-first and their traces likewise, so a
+  // capped scan collects the newest candidates before the cap stops it.
   results.sort((a, b) => parseTime(b.startTime) - parseTime(a.startTime));
   return results.slice(0, MAX_SEARCH_RESULTS);
 }
@@ -1012,7 +1149,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/data') {
-    sendJson(res, 200, buildSessions());
+    const snapshot = getSnapshotBody();
+    if (snapshot.stale) scheduleSnapshotRebuild(res);
+    sendJsonBody(res, 200, snapshot.body);
     return;
   }
 
