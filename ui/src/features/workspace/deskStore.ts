@@ -40,7 +40,15 @@ export function update(patch: Partial<DeskState>): void {
   listeners.forEach((listener) => listener())
 }
 
+/* Only when it is not already showing. Opening the workspace is not a cheap
+   setter: it runs a full workspace draw, which unmounts and rebuilds the legacy
+   panel's islands. Every pane opened, and every click on a row whose pane was
+   already up, paid for that -- invisibly, since in desk mode the panel it
+   rebuilds is display:none. The split's own flag is the honest answer to "is it
+   open", the same way the rail reads the app's page flag. */
 function revealWorkspace(): void {
+  const split = document.getElementById('split')
+  if (split && split.dataset.open === 'true') return
   shell().workspaceSetOpen?.(true)
 }
 
@@ -49,6 +57,31 @@ function revealWorkspace(): void {
    ends up with two panes showing one node. */
 function addPane(pane: DeskPane, supersedes?: string | null): void {
   const same = state.panes.findIndex((item) => item.id === pane.id)
+  /* Already on the desk, and holding nothing a replacement could refresh: bring
+     it forward and stop. Re-opening it replaced the pane object and re-tiled the
+     grid to arrive at exactly the screen that was already there, remounting the
+     pane body on the way -- a click that looked inert but was not.
+
+     Narrowed to these two kinds because only their payload is re-read: an
+     `agent` pane re-finds its row in `state.instances` on every render and an
+     `agent-record` pane in `state.rows` (SubagentsPage.tsx), so the object held
+     here is never staler than the one that would replace it. A `file` pane is
+     the opposite -- `FileView` renders `workspace.makeFile(...)` directly, so
+     the replacement is how a re-open picks up a download path the first caller
+     did not pass and how the body re-reads a file the agent has since rewritten
+     (`FileBody` is keyed on `seq` and fetches only while `text` is null). A
+     `diff` pane likewise holds its own change. Both fall through. */
+  if (same >= 0 && !supersedes && (pane.kind === 'agent' || pane.kind === 'agent-record')) {
+    /* The fullscreen still has to give way when it is showing a DIFFERENT pane,
+       or the one just asked for stays hidden behind it with no way out but the
+       toggle -- `DeskSurface` draws only the soloed pane while solo is set.
+       Same rule the full path applies below, and it has to be applied here too:
+       returning before it is what made the click genuinely inert. */
+    const solo = state.solo === pane.id ? state.solo : null
+    if (state.active !== pane.id || solo !== state.solo) update({ active: pane.id, solo })
+    revealWorkspace()
+    return
+  }
   const slot = same >= 0
     ? same
     : supersedes ? state.panes.findIndex((item) => item.id === supersedes) : -1

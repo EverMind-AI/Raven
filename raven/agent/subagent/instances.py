@@ -78,9 +78,33 @@ class InstanceRegistry:
         self._path = path or default_registry_path()
         self._lock = asyncio.Lock()
         self._records: dict[_Key, dict[str, Any]] | None = None
+        self._stamp: tuple[int, int] | None = None
+
+    def _file_stamp(self) -> tuple[int, int] | None:
+        """What the file looked like when we last read or wrote it."""
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _load(self) -> dict[_Key, dict[str, Any]]:
-        if self._records is not None:
+        """Records as they are on disk, re-read whenever the file has moved on.
+
+        This store is shared by processes, not owned by one: a sub-agent spawn
+        is its own ``cli`` process and registers itself there, while the gateway
+        serving the UI is a different process entirely. Caching the file for the
+        lifetime of a process meant the gateway answered every later question
+        from the snapshot it happened to load at startup -- so a session's own
+        sub-agents were invisible to the panel that exists to list them, and
+        stayed invisible until the gateway was restarted.
+
+        It also bounds the damage a concurrent writer can do: ``_flush`` writes
+        the whole cached map back, so flushing from a stale cache would drop
+        every record another process had added in the meantime.
+        """
+        stamp = self._file_stamp()
+        if self._records is not None and stamp == self._stamp:
             return self._records
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -97,6 +121,10 @@ class InstanceRegistry:
                 rec["kind"] = "cli"
             records[key] = rec  # type: ignore[index]
         self._records = records
+        # Stamped from the stat taken BEFORE the read: a writer that lands
+        # between the two is then seen as a change on the next call rather than
+        # being stamped as already-loaded and skipped forever.
+        self._stamp = stamp
         return records
 
     def _flush(self) -> None:
@@ -106,6 +134,8 @@ class InstanceRegistry:
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._path)
+        # Our own write is not a reason to re-read on the next call.
+        self._stamp = self._file_stamp()
 
     async def lookup(self, session_key: str, agent: str, handle: str, *, kind: str = "cli") -> str | None:
         """The transport session id bound to this handle, or ``None``.
