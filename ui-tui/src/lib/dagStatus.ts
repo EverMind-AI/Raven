@@ -85,11 +85,7 @@ export const dagNodeSummary = (
 }
 
 /**
- * The two trailing parts of a node's row, as the exact strings it renders.
- *
- * Returned together with the row's own arithmetic in mind: the summary gets
- * whatever cells these leave, so a caller measuring them separately from what it
- * draws would clip against the wrong budget.
+ * The dependencies a node's row still has to name, as the exact string it draws.
  *
  * `drawn` holds the `${dep}>${node}` keys the picture above the rows already
  * drew as edges, and naming those again here would say twice what the graph
@@ -97,21 +93,44 @@ export const dagNodeSummary = (
  * naming a node an earlier run of the session completed, which has no box. A
  * `null` means no picture was drawn at all -- too narrow a terminal -- and then
  * the row is the only place the topology exists, so every dependency is named.
- *
- * The agent name is dropped from `parens` for the same reason: the row already
- * opens with it and the picture's box repeats it. Only an instance handle, which
- * appears nowhere else, keeps the parenthetical alive.
  */
-export const dagNodeNames = (
-  node: Pick<DagRunNode, 'dependsOn' | 'id' | 'instance' | 'subagent'>,
-  drawn: ReadonlySet<string> | null
-) => {
+export const dagNodeDeps = (node: Pick<DagRunNode, 'dependsOn' | 'id'>, drawn: ReadonlySet<string> | null): string => {
   const named = drawn ? node.dependsOn.filter(dep => !drawn.has(`${dep}>${node.id}`)) : node.dependsOn
 
-  return {
-    deps: named.length > 0 ? ` \u2190 ${named.join(', ')}` : '',
-    parens: node.instance ? `(${node.subagent}@${node.instance})` : ''
+  return named.length > 0 ? ` \u2190 ${named.join(', ')}` : ''
+}
+
+/**
+ * The stateful handle a node ran on: `<subagent>@<instance>`, or empty.
+ *
+ * Detail, not a row: the subagent half repeats what the row already opens with
+ * and the picture's box repeats again, and the instance half is a generated
+ * suffix. Forty cells of it crowded out the words a reader is scanning for and
+ * wrapped the row anyway, so it belongs in the expanded block beside the node
+ * id -- the other thing a reader opens a node to find.
+ */
+export const dagNodeHandle = (node: Pick<DagRunNode, 'instance' | 'subagent'>): string =>
+  node.instance ? `${node.subagent}@${node.instance}` : ''
+
+/**
+ * The instance handles more than one node in the run shares.
+ *
+ * Sharing one is the run's only piece of topology the graph does not draw:
+ * those nodes ran in sequence on the same stateful agent whether or not an
+ * edge says so. So the rows holding a shared handle -- and only those -- carry
+ * a short tag of it, enough to tell two shared handles apart. A handle used
+ * once constrains nothing and stays in the expanded block.
+ */
+export const dagSharedInstances = (nodes: readonly Pick<DagRunNode, 'instance'>[]): ReadonlySet<string> => {
+  const counts = new Map<string, number>()
+
+  for (const node of nodes) {
+    if (node.instance) {
+      counts.set(node.instance, (counts.get(node.instance) ?? 0) + 1)
+    }
   }
+
+  return new Set([...counts].filter(([, n]) => n > 1).map(([id]) => id))
 }
 
 /**

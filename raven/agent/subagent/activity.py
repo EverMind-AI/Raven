@@ -15,9 +15,9 @@ This module is the one seam that carries it to the record on disk.
 A contextvar rather than a parameter on ``SubagentBackend.run``: that protocol has
 four implementations here plus whatever a third party wrote, and widening it
 would break every one of them for a field most cannot fill. A backend with
-nothing to report simply never publishes, and its record looks exactly as it did
--- which is the honest answer for the cli lane, whose whole limitation is that it
-has no per-step visibility at all.
+nothing to report simply never publishes, and its record looks exactly as it did.
+The cli lane has no *structured* per-step account -- no tool calls, no usage --
+but it does publish its console tail, which is everything that lane can see.
 
 Nothing here may fail a run. An audit trail that takes down the work it is
 describing is worse than no audit trail, so ``publish`` swallows a bad shape
@@ -89,6 +89,10 @@ class RunActivity:
     # one -- the transcript rows a transport publishes carry no clock of their
     # own, and the record's timestamps do not exist until the turn lands.
     started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    # The tail of the run's raw console output, for the lane whose only
+    # in-flight signal IS its console (a cli agent that streams no transcript).
+    # Live-only, like transcript: the finished record keeps the full output.
+    console: str = ""
 
     @property
     def tokens(self) -> int | None:
@@ -252,6 +256,19 @@ def note_thoughts(chars: int) -> None:
         activity.thought_chars += chars
 
 
+_MAX_CONSOLE_CHARS = 8000
+"""The console keeps a tail, not a log: a panel polling a live run redraws the
+last screenful, and the finished record already keeps the whole output."""
+
+
+def note_console(text: str) -> None:
+    """Append a chunk of the run's console output, keeping only the tail."""
+    activity = _current.get()
+    if activity is None or not isinstance(text, str) or not text:
+        return
+    activity.console = (activity.console + text)[-_MAX_CONSOLE_CHARS:]
+
+
 _MAX_TRANSCRIPT_MESSAGES = 400
 
 
@@ -313,6 +330,7 @@ __all__ = [
     "live",
     "live_instance",
     "note_closing",
+    "note_console",
     "note_frames",
     "note_steps",
     "note_thoughts",

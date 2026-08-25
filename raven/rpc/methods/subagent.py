@@ -422,6 +422,12 @@ async def subagent_context(
         stored.extend(
             normalize_row(entry) for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role")
         )
+    # The console tail, for the lane whose only in-flight account is its own
+    # output (a cli agent streams no transcript). Gone once the run finishes:
+    # the live index empties with the collecting block, and the record's answer
+    # takes over.
+    if (live_run := run_activity.live(directory.name)) is not None and live_run.console:
+        stored.append({"role": "console", "content": live_run.console})
     if answer is not None:
         answer_msg: dict[str, Any] = {"role": "assistant", "content": answer}
         if (ended := _iso(meta.get("ended_at_ms"))) is not None:

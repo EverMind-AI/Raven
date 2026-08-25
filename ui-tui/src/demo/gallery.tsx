@@ -19,7 +19,7 @@ import { useState } from 'react'
 
 import type { ApprovalReq, ClarifyReq, ConfirmReq, PanelSection, SessionInfo, Usage } from '../types.js'
 
-import { FloatBox, StatusRule } from '../components/appChrome.js'
+import { FloatBox, StatusRule, WorkingIndicator } from '../components/appChrome.js'
 import { Banner, Panel, SessionPanel } from '../components/branding.js'
 import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from '../components/prompts.js'
 import { DEFAULT_THEME } from '../theme.js'
@@ -162,7 +162,6 @@ function AppChromePage() {
       <Demo title="StatusRule — idle">
         <StatusRule
           bgCount={1}
-          busy={false}
           cols={cols}
           cwdLabel="~/raven"
           model="anthropic/claude-opus-4-8"
@@ -172,14 +171,12 @@ function AppChromePage() {
           status="ready"
           statusColor={t.color.statusGood}
           t={t}
-          turnStartedAt={null}
           usage={usage}
         />
       </Demo>
-      <Demo title="StatusRule — busy (animated)">
+      <Demo title="StatusRule — busy">
         <StatusRule
           bgCount={0}
-          busy
           cols={cols}
           cwdLabel="~/raven"
           model="anthropic/claude-opus-4-8"
@@ -188,14 +185,15 @@ function AppChromePage() {
           status="working"
           statusColor={t.color.statusWarn}
           t={t}
-          turnStartedAt={now - 5_000}
           usage={usage}
         />
+      </Demo>
+      <Demo title="WorkingIndicator — transcript tail (animated)">
+        <WorkingIndicator busy color={t.color.statusWarn} startedAt={now - 5_000} />
       </Demo>
       <Demo title="StatusRule — update available (right slot takes over)">
         <StatusRule
           bgCount={0}
-          busy={false}
           cols={cols}
           cwdLabel="~/raven"
           model="anthropic/claude-opus-4-8"
@@ -204,7 +202,6 @@ function AppChromePage() {
           status="ready"
           statusColor={t.color.statusGood}
           t={t}
-          turnStartedAt={null}
           updateAvailable
           updateCommand="raven upgrade"
           usage={usage}

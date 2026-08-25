@@ -1,12 +1,18 @@
+import { renderSync } from '@hermes/ink'
+import React from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
 import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { EpisodeTool, Msg } from '../types.js'
 
+import { MessageLine } from '../components/messageLine.js'
 import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
 import { layoutDagGraph } from '../lib/dagGraphLayout.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
 import { estimatedMsgHeight, messageHeightKey, wrappedLines } from '../lib/virtualHeights.js'
+import { DEFAULT_THEME } from '../theme.js'
+import { TerminalScreen } from './support/terminalScreen.js'
 
 const node = (id: string, status: DagRunNodeStatus = 'pending') => ({ dependsOn: [], id, status, subagent: 'echo' })
 
@@ -18,7 +24,9 @@ const dagRun = (nodeCount: number, extra: Partial<DagRunState> = {}): DagRunStat
 })
 
 const withDagTool = (dag: DagRunState | undefined, ...extraTools: EpisodeTool[]): Msg => ({
-  episodes: [{ index: 0, tools: [{ dag, id: 't0', name: 'run_subagent_dag', ok: true, summary: 'dag' }, ...extraTools] }],
+  episodes: [
+    { index: 0, tools: [{ dag, id: 't0', name: 'run_subagent_dag', ok: true, summary: 'dag' }, ...extraTools] }
+  ],
   kind: 'episodes',
   role: 'assistant',
   text: ''
@@ -47,6 +55,12 @@ describe('virtual height estimates', () => {
 
     expect(wrappedLines(msg.text, 30)).toBe(5)
     expect(estimatedMsgHeight(msg, 35, { compact: false, details: false })).toBeGreaterThan(5)
+  })
+
+  it('wraps by terminal cell width instead of UTF-16 code units', () => {
+    expect(wrappedLines('你好世界', 4)).toBe(2)
+    expect(wrappedLines('e\u0301e\u0301', 1)).toBe(2)
+    expect(wrappedLines('🙂🙂', 2)).toBe(2)
   })
 
   it('uses compound user prompt width when estimating user message wrapping', () => {
@@ -84,8 +98,10 @@ describe('virtual height estimates', () => {
 
     const dagWidth = Math.max(20, 80 - 4)
     const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, dagWidth - 4) })
-    // 1 call row, plus DagPanel's own: header + picture + one row per node + outputs line.
-    const expected = 1 + (1 + (picture?.height ?? 0) + dag.nodes.length + 1)
+    // 1 call row, plus DagPanel's own: header + picture + a row per node +
+    // outputs line.
+    const rows = dag.nodes.length
+    const expected = 1 + (1 + (picture?.height ?? 0) + rows + 1)
 
     expect(estimatedMsgHeight(msg, 80, { compact: false, details: false })).toBe(expected)
   })
@@ -97,7 +113,8 @@ describe('virtual height estimates', () => {
     const dagWidth = Math.max(20, 80 - 4)
     const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, dagWidth - 6) })
     // Summary row + one row per call (both calls, open by default), plus one DagPanel.
-    const expected = 1 + 2 + (1 + (picture?.height ?? 0) + dag.nodes.length)
+    const rows = dag.nodes.length
+    const expected = 1 + 2 + (1 + (picture?.height ?? 0) + rows)
 
     expect(estimatedMsgHeight(msg, 80, { compact: false, details: false })).toBe(expected)
   })
@@ -115,19 +132,45 @@ describe('virtual height estimates', () => {
 })
 
 describe('dag panel height', () => {
-  it('counts a stream line for each running node', () => {
-    const idle = msgWithDag(runWith([node('a', 'completed')]))
-    const busy = msgWithDag(runWith([node('a', 'running')]))
+  // The slots live under the node rows, so they exist only in the layout that
+  // draws rows. At 32 columns this two-node chain lays out compact -- boxes of
+  // bare ordinals, naming nothing -- which is the case where the panel still
+  // prints the rows, and the slots with them.
+  const NARROW_COLS = 32
+  const chain = (head: DagRunNodeStatus) =>
+    runWith([
+      { dependsOn: [], id: 'a', status: head, subagent: 'echo' },
+      { dependsOn: ['a'], id: 'b', status: 'pending', subagent: 'echo' }
+    ])
 
-    expect(estimatedMsgHeight(busy, 100, BASE)).toBe(estimatedMsgHeight(idle, 100, BASE) + 1)
+  it('counts a stream line for each running node', () => {
+    const idle = msgWithDag(chain('completed'))
+    const busy = msgWithDag(chain('running'))
+
+    expect(estimatedMsgHeight(busy, NARROW_COLS, BASE)).toBe(estimatedMsgHeight(idle, NARROW_COLS, BASE) + 1)
   })
 
   it('counts the box for an expanded node instead of the line', () => {
-    const msg = msgWithDag(runWith([node('a', 'running')]))
+    const msg = msgWithDag(chain('running'))
     const open = new Set([dagNodeKey('r1', 'a')])
 
-    expect(estimatedMsgHeight(msg, 100, { ...BASE, dagOpen: open })).toBe(
-      estimatedMsgHeight(msg, 100, BASE) - 1 + DAG_TRACE_BOX_ROWS
+    expect(estimatedMsgHeight(msg, NARROW_COLS, { ...BASE, dagOpen: open })).toBe(
+      estimatedMsgHeight(msg, NARROW_COLS, BASE) - 1 + DAG_TRACE_BOX_ROWS
+    )
+  })
+
+  it('counts the slots under a labelled picture too, because the rows are drawn there', () => {
+    // The rows were dropped under a labelled picture for a while, and the slots
+    // went with them. They are back -- a box cannot hold the summary a node was
+    // dispatched with -- so a running node costs its live line again and an open
+    // one costs its box, exactly as under a compact picture.
+    const idle = msgWithDag(chain('completed'))
+    const busy = msgWithDag(chain('running'))
+    const open = new Set([dagNodeKey('r1', 'a')])
+
+    expect(estimatedMsgHeight(busy, 100, BASE)).toBe(estimatedMsgHeight(idle, 100, BASE) + 1)
+    expect(estimatedMsgHeight(busy, 100, { ...BASE, dagOpen: open })).toBe(
+      estimatedMsgHeight(busy, 100, BASE) - 1 + DAG_TRACE_BOX_ROWS
     )
   })
 
@@ -146,10 +189,83 @@ describe('dag panel height', () => {
     expect(messageHeightKey(busy)).not.toBe(messageHeightKey(idle))
   })
 
-  it('does not count a box for a pending node with no template, even with its bare key open', () => {
+  it('counts a box for a pending node with no template, which is now openable', () => {
+    // `dagNodeToggleKey` used to answer `null` without a template, which left a
+    // node's own id unreachable. It answers a key for every node now, so the
+    // estimate has to reserve the box a click will open.
     const msg = msgWithDag(runWith([node('a', 'pending')]))
     const open = new Set([dagNodeKey('r1', 'a')])
 
-    expect(estimatedMsgHeight(msg, 100, { ...BASE, dagOpen: open })).toBe(estimatedMsgHeight(msg, 100, BASE))
+    expect(estimatedMsgHeight(msg, 100, { ...BASE, dagOpen: open })).toBe(
+      estimatedMsgHeight(msg, 100, BASE) + DAG_TRACE_BOX_ROWS
+    )
+  })
+})
+
+// The estimate feeds the virtual window's row reservation, so it may sit above
+// the real height but never below it: too few rows reserved is what leaves the
+// previous message's cells on screen under the next one.
+//
+// Counted off a screen model rather than the raw stream: the renderer's cursor
+// moves make a stream line and a screen row different things, and only the row
+// count is what the reservation has to cover.
+const renderedRows = async (msg: Msg, cols: number) => {
+  const stdout = new PassThrough()
+  const stdin = new PassThrough()
+  const stderr = new PassThrough()
+  const screen = new TerminalScreen(cols, 120)
+
+  Object.assign(stdout, { columns: cols, isTTY: true, rows: 120 })
+  Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
+  Object.assign(stderr, { isTTY: true })
+  stdout.on('data', chunk => {
+    screen.write(chunk.toString())
+  })
+
+  const instance = renderSync(React.createElement(MessageLine, { cols, msg, t: DEFAULT_THEME }), {
+    patchConsole: false,
+    stderr: stderr as NodeJS.WriteStream,
+    stdin: stdin as NodeJS.ReadStream,
+    stdout: stdout as NodeJS.WriteStream
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 40))
+  const rows = screen.text().split('\n')
+  let last = -1
+
+  rows.forEach((row, index) => {
+    if (row.trim()) {
+      last = index
+    }
+  })
+
+  instance.unmount()
+  instance.cleanup()
+
+  return last + 1
+}
+
+describe('estimatedMsgHeight covers quoted prose', () => {
+  const estimate = (msg: Msg, cols: number) =>
+    estimatedMsgHeight(msg, cols, { compact: false, details: false, userPrompt: '>' })
+
+  it('reserves enough rows for a quote that wraps', async () => {
+    const msg: Msg = { role: 'assistant', text: `> ${'word '.repeat(60)}` }
+
+    expect(estimate(msg, 80)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+  })
+
+  it('reserves enough rows for a nested quote, whose rule indents twice', async () => {
+    const msg: Msg = { role: 'assistant', text: `>>> ${'word '.repeat(60)}` }
+
+    expect(estimate(msg, 80)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+  })
+
+  it('counts the rule, not the markers: a quote costs more rows than the same prose', () => {
+    const prose = 'word '.repeat(60)
+
+    expect(estimate({ role: 'assistant', text: `> ${prose}` }, 80)).toBeGreaterThan(
+      estimate({ role: 'assistant', text: prose }, 80)
+    )
   })
 })

@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { forceRedraw } from '@hermes/ink'
+import { dumpScreen, forceRedraw } from '@hermes/ink'
 
 import type {
   ConfigGetValueResponse,
@@ -26,14 +26,9 @@ import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from 
 import { getLocale, isLocale, setLocale } from '../../../i18n/index.js'
 import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
+import { writePaintDump } from '../../../lib/perfPane.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
-import {
-  enterDirect,
-  getDirectChat,
-  isDirectTarget,
-  leaveDirect,
-  rememberInstance
-} from '../../directChatStore.js'
+import { enterDirect, getDirectChat, isDirectTarget, leaveDirect, rememberInstance } from '../../directChatStore.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 
@@ -201,6 +196,21 @@ export const coreCommands: SlashCommand[] = [
     run: (_arg, ctx) => {
       forceRedraw(process.stdout)
       ctx.transcript.sys('ui redrawn')
+    }
+  },
+
+  {
+    help: 'dump the renderer view of the screen to a file (paint diagnosis)',
+    name: 'paintdump',
+    supported: false,
+    run: (_arg, ctx) => {
+      const path = writePaintDump(dumpScreen(process.stdout))
+
+      ctx.transcript.sys(
+        path === null
+          ? 'paintdump: nothing mounted to dump'
+          : `paintdump: wrote ${path}\nRun /paintdump now, then /redraw, then /paintdump again: same rows and styles across the two means the buffer was right and the write lost something; different means the buffer itself was wrong.`
+      )
     }
   },
 

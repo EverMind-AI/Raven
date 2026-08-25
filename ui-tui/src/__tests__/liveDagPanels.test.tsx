@@ -23,7 +23,9 @@ const frame = (node: React.ReactElement) => stripAnsi(render(node).lastFrame() ?
 const run = (runId: string, nodeId: string): DagRunState => ({
   runId,
   done: false,
-  nodes: [{ id: nodeId, subagent: 'echo', dependsOn: [], status: 'running' }]
+  // The graph labels its boxes with the sub-agent, so that is what identifies a
+  // run on screen; the node id only appears once a node is opened.
+  nodes: [{ id: nodeId, subagent: nodeId, dependsOn: [], status: 'running' }]
 })
 
 describe('LiveDagPanels', () => {

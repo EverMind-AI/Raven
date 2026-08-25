@@ -95,6 +95,8 @@ export interface GatewayProviderProps {
 
 export interface OverlayState {
   agents: boolean
+  /** A row id the overlay should open straight into detail on; consumed once. */
+  agentsFocusId: null | string
   agentsInitialHistoryIndex: number
   approval: ApprovalReq | null
   clarify: ClarifyReq | null

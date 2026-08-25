@@ -363,8 +363,9 @@ ensure_deps() {
 # authenticate with the same secret.
 sync_gateway_web_config() {
   local out
-  out="$(RAVEN_CONFIG="$RAVEN_CONFIG" WEB_HOST="$GATEWAY_WS_HOST" WEB_PORT="$GATEWAY_WS_PORT" \
-    python3 - <<'PY'
+  out=$(
+    RAVEN_CONFIG="$RAVEN_CONFIG" WEB_HOST="$GATEWAY_WS_HOST" WEB_PORT="$GATEWAY_WS_PORT" \
+      python3 - <<'PY'
 import json, os, shutil, sys
 from pathlib import Path
 
@@ -396,7 +397,7 @@ else:
     print("changed=0")
 print("token=" + (web.get("authToken") or web.get("auth_token") or ""))
 PY
-  )" || { echo "[gateway] FATAL: could not update $RAVEN_CONFIG" >&2; return 1; }
+  ) || { echo "[gateway] FATAL: could not update $RAVEN_CONFIG" >&2; return 1; }
   while IFS= read -r line; do
     case "$line" in
       changed=1*) echo "[gateway] ${line#changed=1 detail=} (in $RAVEN_CONFIG, backup .bak)" ;;

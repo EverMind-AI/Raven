@@ -492,7 +492,9 @@ def main() -> int:
     # was plumbed by hand for the container, and here it simply arrives.
     # The CLI renders through a console that wraps at the terminal width, which
     # breaks long paths across lines in both the log and anything reading it.
-    child_env = dict(os.environ, COLUMNS="400", TERM="dumb")
+    # PYTHONUNBUFFERED so the piped child does not block-buffer its stdout --
+    # the live mirror below is only live if lines arrive as they are printed.
+    child_env = dict(os.environ, COLUMNS="400", TERM="dumb", PYTHONUNBUFFERED="1")
     try:
         proc = subprocess.Popen(
             argv, cwd=str(CHECKOUT), stdout=subprocess.PIPE,
@@ -519,6 +521,12 @@ def main() -> int:
         for line in proc.stdout:
             line = line.rstrip("\n")
             log(line)
+            # Mirrored to stderr as it happens: raven's cli backend streams
+            # stderr to the live console beside the run without folding it
+            # into the reply. Skipped under --verbose, where log() already
+            # writes the same line there.
+            if not _VERBOSE:
+                print(line, file=sys.stderr, flush=True)
             tail.append(line)
         rc = proc.wait()
     except KeyboardInterrupt:

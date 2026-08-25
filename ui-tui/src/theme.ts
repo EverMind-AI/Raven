@@ -105,7 +105,7 @@ const BRAND: ThemeBrand = {
   prompt: '❯',
   welcome: 'Type your message or /help for commands.',
   goodbye: 'Goodbye! 🐦‍⬛',
-  tool: '┊',
+  tool: '●',
   helpHeader: '(^_^)? Commands'
 }
 

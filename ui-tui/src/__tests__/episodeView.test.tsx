@@ -361,3 +361,116 @@ describe('a solo dag call', () => {
     expect(f).toContain('ran a then b')
   })
 })
+
+describe('an open reasoning block', () => {
+  const REASONING =
+    'The user asks me to deeply think about a question: how to explain the Riemann ' +
+    'Hypothesis to a person. This is a conceptual question, not a research task ' +
+    'requiring web search. I should give a well-structured answer.'
+
+  const thinkingTurn = () =>
+    render(
+      <EpisodeView
+        cols={80}
+        episodes={[{ index: 0, narration: '', reasoning: REASONING, tools: [], startedAt: 1 }]}
+        live
+        scope="s"
+        t={DEFAULT_THEME}
+        text=""
+      />
+    ).lastFrame() ?? ''
+
+  it('carries its rule down every wrapped row', () => {
+    const ruled = stripAnsi(thinkingTurn())
+      .split('\n')
+      .filter(line => line.includes('\u258f'))
+
+    expect(ruled.length).toBeGreaterThan(2)
+    expect(ruled.at(-1)).toContain('answer.')
+  })
+
+  it('puts its body on the prose column, with the rule out in the margin', () => {
+    // The reasoning and the answer under it are the same column of text; only
+    // the margin glyph differs. Indenting the block past the answer left two
+    // ragged left edges, which is what made the aside look bolted on.
+    const rows = stripAnsi(
+      frame(
+        <EpisodeView
+          cols={80}
+          episodes={[{ index: 0, narration: 'so here is the shape of it', reasoning: REASONING, tools: [] }]}
+          openKeys={['rsn:0']}
+          scope="s"
+          t={DEFAULT_THEME}
+        />
+      )
+    ).split('\n')
+
+    const bodyColumn = (line: string) => line.length - line.trimStart().length
+
+    for (const line of rows.filter(l => l.includes('\u258f'))) {
+      expect(line.indexOf('\u258f')).toBe(0)
+      expect(bodyColumn(line.slice(1))).toBe(1)
+    }
+
+    const answer = rows.find(l => l.includes('so here is the shape of it'))!
+
+    expect(answer.indexOf('so here')).toBe(2)
+  })
+
+  it('is an aside, not a tool payload, so it has no filled ground', () => {
+    // `detailBg` means "tool output" everywhere else in the transcript. Prose on
+    // that ground outweighs the answer it was only leading up to, so this block
+    // earns its separation from the rule alone.
+    expect(thinkingTurn()).not.toContain('\u001b[48;')
+  })
+})
+
+describe('the reasoning row while the model is still reasoning', () => {
+  // The margin column: the spinner here, the rule under it, the reply marker
+  // on the answer. Text starts after it, on one shared column.
+  const MARGIN = 2
+
+  const REASONING =
+    'The user asks how to explain the Riemann Hypothesis to a person. This is a ' +
+    'conceptual question, not a research task. Let me structure a layered answer.'
+
+  const turn = (extra: Record<string, unknown>) =>
+    stripAnsi(
+      frame(
+        <EpisodeView
+          cols={80}
+          episodes={[{ index: 0, narration: '', reasoning: REASONING, reasoningMs: 9000, tools: [], startedAt: 1 }]}
+          live
+          t={DEFAULT_THEME}
+          text=""
+          {...extra}
+        />
+      )
+    ).split('\n')
+
+  it('spends the margin column on the spinner, so the label keeps the prose column', () => {
+    const row = turn({ scope: 'spin' }).find(line => line.includes('reasoning ('))!
+
+    expect(row.indexOf('reasoning')).toBe(MARGIN)
+    expect(row[0]).not.toBe(' ')
+  })
+
+  it('scrolls a live tail of the reasoning when the block is closed', () => {
+    const row = turn({ closedKeys: ['rsn:0'], scope: 'closed' }).find(line => line.includes('reasoning ('))!
+
+    // Closed, the row is the only view of the reasoning there is: a label and a
+    // ticking clock say nothing about whether the model is getting anywhere.
+    expect(row).toContain('structure a layered answer.')
+    expect(row).toContain('\u2026')
+  })
+
+  it('drops the tail once the block is open, which already shows all of it', () => {
+    const rows = turn({ scope: 'open' })
+    const row = rows.find(line => line.includes('reasoning ('))!
+
+    // The spinner still turns in the margin; what the open row drops is the
+    // tail, because the block under it is already showing the whole thing.
+    expect(row.slice(MARGIN).trimEnd()).toMatch(/^reasoning \([^)]+\)$/)
+    expect(rows.some(line => line.includes('\u258f'))).toBe(true)
+  })
+})

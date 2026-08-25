@@ -9,6 +9,10 @@ from typing import Any
 from raven.agent.tools.base import Tool
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
+_DEVICE_FILES = frozenset(
+    {"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/urandom", "/dev/random"}
+)
+
 
 class ExecTool(Tool):
     """Tool to execute shell commands."""
@@ -157,6 +161,11 @@ class ExecTool(Tool):
         for raw in self._extract_absolute_paths(cmd):
             try:
                 expanded = os.path.expandvars(raw.strip())
+                # The null-device family is how a shell mutes a stream, not an
+                # escape from the workspace: `2>/dev/null` names a path only to
+                # the guard's regex.
+                if expanded in _DEVICE_FILES:
+                    continue
                 p = Path(expanded).expanduser().resolve()
             except Exception:
                 continue

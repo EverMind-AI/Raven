@@ -39,6 +39,13 @@ _STDERR_LINES = 200
 _REFUSAL_MEMORY = 64
 _STDERR_LINE_CAP = 500
 
+# Line budget for both child pipes. asyncio's default is 64 KiB, which is 128x
+# smaller than the frame size `raven.acp.stdio.MAX_FRAME_BYTES` lets an agent
+# send: a single frame past 64 KiB made `readline` raise and took the read loop
+# down with it, and on stderr the same raise stopped the drain and deadlocked the
+# child. Matched to that cap so the transport can carry what the protocol allows.
+_READER_LIMIT = 8 * 1024 * 1024
+
 _CANCEL_SETTLE_S = 5.0
 """How long a cancelled turn is given to settle with ``stopReason: cancelled``.
 
@@ -192,6 +199,7 @@ class AcpClient:
                 cwd=cwd,
                 env=child_env,
                 start_new_session=True,
+                limit=_READER_LIMIT,
             )
         except (OSError, ValueError) as exc:
             raise AcpConnectionError(f"acp agent {name!r}: cannot start {argv[0]!r}: {exc}") from exc
@@ -499,12 +507,31 @@ class AcpClient:
             )
 
     async def _read_stderr(self) -> None:
+        """Drain the child's stderr for as long as the child is alive.
+
+        Draining is not optional and not merely diagnostic: this is a pipe, and a
+        reader that stops emptying it blocks the child at its next write once the
+        kernel buffer fills. That write is usually inside
+        ``logging.StreamHandler.emit``, which holds the handler lock, so every
+        other thread that logs blocks behind it and the child deadlocks with no
+        error anywhere. Measured on a stuck sub-agent: litellm's DEBUG request
+        dumps reached 146 KiB on a single line, ``readline`` raised past its
+        limit, this loop exited, and the agent loop died holding a lock it never
+        saw. So the only exits are EOF and cancellation.
+        """
         stderr = self._proc.stderr
         if stderr is None:  # pragma: no cover - PIPE is always requested
             return
         try:
             while True:
-                raw = await stderr.readline()
+                try:
+                    raw = await stderr.readline()
+                except ValueError as exc:
+                    # A line past the reader's limit. It has already cleared its
+                    # buffer and resumed the transport, so the oversized line is
+                    # all that is lost and draining continues.
+                    logger.debug("acp agent {!r}: dropped an oversized stderr line: {}", self.name, exc)
+                    continue
                 if not raw:
                     break
                 text = raw.decode("utf-8", "replace").rstrip()[:_STDERR_LINE_CAP]

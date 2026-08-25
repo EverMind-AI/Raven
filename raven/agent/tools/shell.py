@@ -351,6 +351,24 @@ class ExecTool(Tool):
 
         return None
 
+    # The null-device family is how a shell mutes or feeds a stream, not an
+    # escape from the workspace: `2>/dev/null` names a path only to the
+    # guard's regex, and blocking it turns every quiet read-only probe into a
+    # terminal safety refusal. Matched on the written form, before resolve(),
+    # which on macOS follows /dev/stdout into /dev/fd and out of this set.
+    _DEVICE_FILES = frozenset(
+        {
+            "/dev/null",
+            "/dev/stdin",
+            "/dev/stdout",
+            "/dev/stderr",
+            "/dev/tty",
+            "/dev/zero",
+            "/dev/urandom",
+            "/dev/random",
+        }
+    )
+
     def _check_workspace_restriction(self, command: str, cwd: str) -> str | None:
         """Check only the workspace boundary constraints (no deny/allow-list).
 
@@ -373,6 +391,8 @@ class ExecTool(Tool):
         for raw in self._extract_absolute_paths(cmd):
             try:
                 expanded = os.path.expandvars(raw.strip())
+                if expanded in self._DEVICE_FILES:
+                    continue
                 p = Path(expanded).expanduser().resolve()
             except Exception:
                 continue

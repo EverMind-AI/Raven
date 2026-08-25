@@ -24,6 +24,9 @@ export interface ActivityItem {
   tone: 'error' | 'info' | 'warn'
 }
 
+/** Where a live delegated run's transcript can be read back from, while it runs. */
+export type SubagentLiveRef = { callId?: string; kind: 'spawn' } | { kind: 'dag'; nodeId: string; runId: string }
+
 export interface SubagentProgress {
   apiCalls?: number
   costUsd?: number
@@ -36,6 +39,7 @@ export interface SubagentProgress {
   index: number
   inputTokens?: number
   iteration?: number
+  liveRef?: SubagentLiveRef
   model?: string
   notes: string[]
   outputTail?: SubagentOutputEntry[]

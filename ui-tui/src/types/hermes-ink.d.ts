@@ -147,6 +147,7 @@ declare module '@hermes/ink' {
   export function evictInkCaches(level?: EvictLevel): InkCacheSizes
 
   export function forceRedraw(stdout?: NodeJS.WriteStream): boolean
+  export function dumpScreen(stdout?: NodeJS.WriteStream): null | string
   export function render(node: React.ReactNode, options?: NodeJS.WriteStream | RenderOptions): Instance
 
   export function useApp(): { readonly exit: (error?: Error) => void }

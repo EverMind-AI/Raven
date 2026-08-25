@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 132 methods, 78 component schemas.
+// 132 methods, 79 component schemas.
 
 /* eslint-disable */
 /**
@@ -36,6 +36,7 @@ export type TurnEvent =
   | ErrorEvent
   | CronDeliveredEvent
   | SubagentDeliveredEvent
+  | SubagentStatusEvent
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
   | DagRunCompletedEvent
@@ -1033,6 +1034,31 @@ export interface SubagentDeliveredEvent {
      * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
+  };
+}
+/**
+ * One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the conversation; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.
+ */
+export interface SubagentStatusEvent {
+  type: 'subagent.status';
+  payload: {
+    /**
+     * The manager's short id for this run, stable across its lifecycle.
+     */
+    task_id: string;
+    agent: string;
+    label: string;
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+    /**
+     * The spawn record id subagent.context reads. Known from 'running' onward; a 'pending' run has not opened its record yet, so there is nothing to read.
+     */
+    call_id?: string;
+    /**
+     * The addressable handle, when the caller named or minted one.
+     */
+    instance?: string;
+    started_at?: number;
+    ended_at?: number;
   };
 }
 export interface DagSnapshotNode {

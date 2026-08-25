@@ -91,6 +91,11 @@ export const forceRedraw = (stdout: NodeJS.WriteStream = process.stdout): boolea
   return true
 }
 
+/** The renderer's own view of the screen, for diagnosing a wrong-looking paint.
+ *  See `Ink.dumpScreen`. `null` when nothing is mounted on this stream. */
+export const dumpScreen = (stdout: NodeJS.WriteStream = process.stdout): null | string =>
+  instances.get(stdout)?.dumpScreen() ?? null
+
 /**
  * Mount a component and render the output.
  */
