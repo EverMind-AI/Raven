@@ -5,7 +5,15 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { isUsableClipboardText, readClipboardText, writeClipboardText } from '../lib/clipboard.js'
+import {
+  copyOnSelectNotice,
+  createCopyOnSelectReporter,
+  graphemeCount,
+  copyResultNotice,
+  isUsableClipboardText,
+  readClipboardText,
+  writeClipboardText
+} from '../lib/clipboard.js'
 
 describe('readClipboardText', () => {
   it('reads text from pbpaste on macOS', async () => {
@@ -322,5 +330,115 @@ describe('writeClipboardText', () => {
       expect.arrayContaining(['-NoProfile', '-NonInteractive']),
       expect.anything()
     )
+  })
+})
+
+describe('copyResultNotice', () => {
+  it('says the copy only left as an escape sequence', () => {
+    // The defect this closes: over SSH with no native clipboard tool, a copy
+    // that never reached the user's terminal still reported a flat "copied 42
+    // characters". The one case where the user has something to fix is the
+    // one case the message has to name.
+    const notice = copyResultNotice(42, 'osc52')
+
+    expect(notice).toContain('42')
+    expect(notice).toContain('OSC 52')
+    expect(notice.toLowerCase()).toContain('terminal')
+  })
+
+  it('reports a native copy without a caveat', () => {
+    // pbcopy/wl-copy actually wrote the clipboard, so hedging here would
+    // train the user to ignore the wording in the case that matters.
+    const notice = copyResultNotice(7, 'native')
+
+    expect(notice).toBe('copied 7 characters')
+  })
+
+  it('names the tmux buffer as the thing that was written', () => {
+    // tmux load-buffer succeeded; whether that reaches the system clipboard
+    // is the user's set-clipboard setting, not something we can claim.
+    const notice = copyResultNotice(9, 'tmux-buffer')
+
+    expect(notice).toContain('9')
+    expect(notice).toContain('tmux')
+  })
+
+  it('counts one character as one, not as a plural', () => {
+    expect(copyResultNotice(1, 'native')).toBe('copied 1 character')
+  })
+})
+
+describe('copyOnSelectNotice', () => {
+  it('carries the path caveat on the first copy of a session', () => {
+    // The user has to learn once that OSC 52 is best-effort and where the
+    // switch lives. The first drag is the only moment that lands.
+    expect(copyOnSelectNotice(42, 'osc52', true)).toBe(copyResultNotice(42, 'osc52'))
+  })
+
+  it('goes terse after that', () => {
+    // This fires on every drag. Repeating a full sentence about terminal
+    // settings would bury the transcript the feature exists to let you read.
+    expect(copyOnSelectNotice(42, 'osc52', false)).toBe('sent 42 characters')
+    expect(copyOnSelectNotice(1, 'tmux-buffer', false)).toBe('copied 1 character')
+  })
+})
+
+describe('createCopyOnSelectReporter', () => {
+  it('spends the caveat once per session, not once per process', () => {
+    // A new or resumed session replaces the sid under a component that stays
+    // mounted. Carrying one flag across that boundary loses the caveat for
+    // every session after the first, which is where a user meets an OSC 52
+    // paste that silently came up empty.
+    const report = createCopyOnSelectReporter()
+
+    expect(report(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
+    expect(report(42, 'osc52', 's2')).toBe(copyResultNotice(42, 'osc52'))
+  })
+
+  it('does not repeat the caveat when a session is returned to', () => {
+    // The caveat is about this session having been told, so resuming one that
+    // already heard it has nothing to add.
+    const report = createCopyOnSelectReporter()
+
+    report(42, 'osc52', 's1')
+    report(42, 'osc52', 's2')
+
+    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
+  })
+
+  it('keeps its own tally per reporter', () => {
+    // Two TUI processes must not share the fact that one of them has reported.
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+  })
+})
+
+describe('copyResultNotice honesty', () => {
+  it('does not claim a copy on the one path whose outcome it cannot see', () => {
+    // OSC 52 writes bytes to the terminal and the terminal decides whether to
+    // honour them -- and silently drops an oversized sequence. A 2000-row
+    // drag-scroll selection is a single half-megabyte escape sequence that no
+    // terminal accepts, and setClipboard() still reports success because bytes
+    // were written. "copied" is a claim about the outcome; "sent" is what we
+    // actually know.
+    expect(copyResultNotice(42, 'osc52')).toContain('sent 42 characters')
+    expect(copyResultNotice(42, 'osc52')).not.toContain('copied')
+  })
+
+  it('still says copied where a native tool really wrote the clipboard', () => {
+    expect(copyResultNotice(42, 'native')).toBe('copied 42 characters')
+  })
+
+  it('counts what a reader would call a character, not utf-16 code units', () => {
+    // Three emoji are six code units. Reporting "6 characters" for a
+    // three-character selection is a small lie in the one line whose whole
+    // job is telling the truth about the copy.
+    expect(copyResultNotice([...'\u{1f389}\u{1f389}\u{1f389}'].length, 'native')).toBe('copied 3 characters')
+    expect(graphemeCount('\u{1f389}\u{1f389}\u{1f389}')).toBe(3)
+    expect(graphemeCount('\u4f60\u597d\u4e16\u754c')).toBe(4)
+    expect(graphemeCount('hello')).toBe(5)
+    // e + combining acute is one character on screen and two code points.
+    expect(graphemeCount('e\u0301cole')).toBe(5)
   })
 })

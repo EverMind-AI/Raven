@@ -446,6 +446,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.agent.tools._deliverables import DeliverableStore
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._cron_handler import chain_cron_activity_reset
         from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
@@ -454,7 +455,6 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             build_plugin_tools,
             maybe_build_memory_backend,
         )
-        from raven.agent.tools._deliverables import DeliverableStore
         from raven.config.paths import get_cron_dir, get_deliverables_path
         from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
@@ -503,7 +503,10 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             registry=plugin_registry,
         )
 
+        from raven.providers.pool import ProviderPool
+
         agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             workspace=config.workspace_path,
             model=config.agents.defaults.model,
@@ -519,6 +522,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,

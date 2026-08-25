@@ -1001,6 +1001,24 @@
           "name": "value",
           "required": true,
           "schema": { "$ref": "#/components/schemas/JsonValue" }
+        },
+        {
+          "name": "session_id",
+          "summary": "Scopes a model switch to one conversation.",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "provider",
+          "summary": "Vendor for a model switch; derived from the id when absent.",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "scope",
+          "summary": "How far a model switch reaches: this conversation, or what new ones start on.",
+          "required": false,
+          "schema": { "type": "string", "enum": ["session", "default"] }
         }
       ],
       "result": {
@@ -1016,7 +1034,11 @@
                 { "$ref": "#/components/schemas/JsonValue" },
                 { "type": "null" }
               ]
-            }
+            },
+            "value": { "type": "string" },
+            "scope": { "type": "string", "enum": ["session", "default"] },
+            "session_id": { "type": "string" },
+            "applies_to_session": { "type": "boolean" }
           }
         }
       },
@@ -1941,10 +1963,6 @@
       "ModelNotAvailable": {
         "code": -32008,
         "message": "model_not_available"
-      },
-      "ModelSwitchInTurn": {
-        "code": -32009,
-        "message": "model_switch_in_turn"
       },
       "ConfigFieldReadonly": {
         "code": -32010,

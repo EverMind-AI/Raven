@@ -537,9 +537,7 @@ class _FakeManager:
 
 
 class TestAutomaticSnapshotVerification:
-    async def test_only_missing_or_stale_rows_are_verified(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_only_missing_or_stale_rows_are_verified(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from dataclasses import dataclass
 
         from raven.agent.subagent.probe import schedule_snapshot_verification
@@ -553,9 +551,7 @@ class TestAutomaticSnapshotVerification:
         recorded: list[str] = []
 
         def fake_snapshot_for(cfg: object) -> Snap | None:
-            return {id(fresh.config): Snap(), id(missing.config): None, id(stale.config): Snap(stale=True)}[
-                id(cfg)
-            ]
+            return {id(fresh.config): Snap(), id(missing.config): None, id(stale.config): Snap(stale=True)}[id(cfg)]
 
         async def fake_verify(cfg: object) -> Snap:
             return Snap()
@@ -578,9 +574,7 @@ class TestAutomaticSnapshotVerification:
         assert len(recorded) == 2  # both missing and stale round-tripped to a fresh snapshot
         assert manager.refresh_calls == 1, "the materialized rows must be rebuilt after recording"
 
-    async def test_failed_verification_does_not_stop_the_rest(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
         calls: list[str] = []
@@ -592,8 +586,9 @@ class TestAutomaticSnapshotVerification:
             return type("S", (), {"status": "ready"})()
 
         def make(tag: str) -> object:
-            return type("Row", (), {"name": tag, "kind": "acp", "enabled": True,
-                                    "config": type("C", (), {"tag": tag})()})()
+            return type(
+                "Row", (), {"name": tag, "kind": "acp", "enabled": True, "config": type("C", (), {"tag": tag})()}
+            )()
 
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
         monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
@@ -616,7 +611,8 @@ class TestAutomaticSnapshotVerification:
 
         called: list[str] = []
         monkeypatch.setattr(
-            probe_mod, "acp_snapshot_for",
+            probe_mod,
+            "acp_snapshot_for",
             lambda cfg: None,
         )
 
@@ -641,7 +637,8 @@ class TestAutomaticSnapshotVerification:
 
         called: list[str] = []
         monkeypatch.setattr(
-            probe_mod, "acp_snapshot_for",
+            probe_mod,
+            "acp_snapshot_for",
             lambda cfg: None,
         )
 
