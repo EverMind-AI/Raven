@@ -167,6 +167,7 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
 # Full set of top-level commands + subcommand groups registered on the root
 # app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
 REGISTERED_COMMAND_NAMES = {
+    "acp",
     "agent",
     "channels",
     "cron",

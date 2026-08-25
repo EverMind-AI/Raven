@@ -7,6 +7,25 @@ from typing import Any
 from raven.utils.helpers import ContentPart
 
 
+@dataclass(frozen=True)
+class FileChange:
+    """One file's whole content before and after a write.
+
+    Whole contents rather than a rendered diff, because a surface that draws its
+    own -- an editor with a diff view -- needs the two versions, and cannot
+    recover them from a unified diff whose context is limited and which is
+    dropped entirely past a few hundred lines.
+
+    ``before`` is ``None`` when the file did not exist. That is a distinction, not
+    a missing value: a client shows a new file differently from a rewritten one,
+    and collapsing the two makes every creation look like a full replacement.
+    """
+
+    path: str
+    after: str
+    before: str | None = None
+
+
 @dataclass
 class ToolResult:
     """A tool's output split into the model-facing text and an optional
@@ -30,6 +49,14 @@ class ToolResult:
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
+
+    ``metadata`` and ``diff`` are the two client-only fields: neither is ever
+    shown to the model, and both ride out on the ``tool.complete`` lifecycle
+    event for an outlet to render. ``metadata`` is a structured payload the tool
+    chose to publish (a file manifest, say) that an outlet which does not
+    understand a key simply ignores; ``diff`` is a unified diff of what the call
+    changed on disk. A tool that leaves them ``None`` -- most of them -- costs
+    the wire two nulls.
     """
 
     model_text: str
@@ -37,6 +64,12 @@ class ToolResult:
     retryable: bool = True
     abort_action: bool = False
     blocks: list[ContentPart] | None = None
+    metadata: dict[str, Any] | None = None
+    diff: str | None = None
+    # The same change unrendered. A surface that draws its own diff needs the two
+    # versions, and cannot recover them from the unified form. Set beside
+    # ``diff`` by the same tools, from the same two strings they already hold.
+    file_change: "FileChange | None" = None
 
 
 class ToolOutput(str):
@@ -49,14 +82,18 @@ class ToolOutput(str):
     artifact, so the boundary has to return something that *is* a str; handing
     them a :class:`ToolResult` would format its repr into model context and
     user-facing replies. The agent loop reads ``display_text`` off it to render
-    the transcript row, ``blocks`` to build a multimodal tool result, and the
-    control flags to enforce terminal tool decisions.
+    the transcript row, ``blocks`` to build a multimodal tool result, the
+    control flags to enforce terminal tool decisions, and ``metadata``/``diff``
+    to fill the client-facing fields of the ``tool.complete`` event.
     """
 
     display_text: str | None
     retryable: bool
     abort_action: bool
     blocks: list[ContentPart] | None
+    metadata: dict[str, Any] | None
+    diff: str | None
+    file_change: "FileChange | None"
 
     def __new__(
         cls,
@@ -66,12 +103,18 @@ class ToolOutput(str):
         retryable: bool = True,
         abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
+        metadata: dict[str, Any] | None = None,
+        diff: str | None = None,
+        file_change: "FileChange | None" = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
         out.abort_action = abort_action
         out.blocks = blocks
+        out.metadata = metadata
+        out.diff = diff
+        out.file_change = file_change
         return out
 
 

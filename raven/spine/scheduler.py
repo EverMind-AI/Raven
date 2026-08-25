@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import get_args
+from uuid import uuid4
 
 from loguru import logger
 
@@ -78,6 +79,12 @@ class Lane:
         self._inject_mailbox: deque[tuple[TurnRequest, asyncio.Future]] = deque()
 
     def submit(self, req: TurnRequest, policy: BusyPolicy = BusyPolicy.APPEND) -> asyncio.Future:
+        # Identity is resolved on the way in, not at run time: a turn can end
+        # WITHOUT ever running (cancelled while queued) and still has to name
+        # itself on its terminal event, or the consumer holding its slots has
+        # nothing to match and never releases them.
+        if not req.turn_id:
+            req = replace(req, turn_id=uuid4().hex)
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._idle_since = None  # active again: reset the reaper's silence clock
@@ -252,6 +259,20 @@ class Lane:
         return emit
 
     async def _run_turn(self, req: TurnRequest) -> TurnOutcome | None:
+        # Resolve the turn's identity here, once, and put it back on the request so
+        # the runner and the lifecycle events agree on one value. Minted when the
+        # submitter supplied none: a turn the runtime submits onto a busy lane (a
+        # sub-agent announce, a deep-research delivery) must still be
+        # distinguishable from the client turn queued behind it, or a consumer keyed
+        # on a per-lane slot ends the wrong turn.
+        # Falsy, not just None: turn_id is a public field and an empty string
+        # would otherwise pass through to be stamped, which makes the turn a
+        # permanent non-owner of its own slots -- the exact shape the identity
+        # carried here exists to rule out. Normally already resolved by submit;
+        # this covers a runner driven directly.
+        if not req.turn_id:
+            req = replace(req, turn_id=uuid4().hex)
+        turn_id = req.turn_id
         chained: list[asyncio.Future] = []
 
         def drain() -> list[TurnRequest]:
@@ -267,17 +288,31 @@ class Lane:
         started = False
         try:
             async with self._pools.for_origin(req.origin):
-                await self._sink(TurnStarted(conversation_id=self._conversation_id))
+                await self._sink(TurnStarted(conversation_id=self._conversation_id, turn_id=turn_id))
                 started = True
                 run_start = time.monotonic()
                 outcome = await self._runner.run(req, self._make_emit(req), drain)
         except asyncio.CancelledError:
             if started:  # only pair a TurnStarted; a pre-start cancel emits nothing
-                await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
+                await self._sink(
+                    TurnFailed(
+                        error="cancelled",
+                        cancelled=True,
+                        conversation_id=self._conversation_id,
+                        turn_id=turn_id,
+                    )
+                )
             raise
         except Exception as exc:
             if started:
-                await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
+                await self._sink(
+                    TurnFailed(
+                        error=str(exc),
+                        cancelled=False,
+                        conversation_id=self._conversation_id,
+                        turn_id=turn_id,
+                    )
+                )
             return None
         finally:
             # A drained inject shares this turn's outcome (None on cancel/failure);
@@ -291,6 +326,7 @@ class Lane:
                 latency_ms=latency_ms,
                 explicit_reply=outcome.explicit_reply,
                 conversation_id=self._conversation_id,
+                turn_id=turn_id,
             )
         )
         return outcome

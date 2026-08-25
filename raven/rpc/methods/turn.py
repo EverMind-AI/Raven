@@ -142,7 +142,12 @@ async def _emit_start_then_error(
     await emitter.emit(session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
     await emitter.emit(
         session_key,
-        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal"}},
+        {
+            "type": "error",
+            # Carries the turn it belongs to: this failure answers a request, and
+            # a consumer with no id cannot tell it from a foreign turn's.
+            "payload": {"code": code, "message": message, "reason": "internal", "turn_id": turn_id},
+        },
     )
 
 
@@ -153,6 +158,7 @@ async def turn_send(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -196,7 +202,7 @@ async def turn_send(
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel=parsed.channel or "tui",
+            channel=parsed.channel or default_channel,
             chat_id=parsed.chat_id or "default",
             sender_id=parsed.sender_id or "user",
             chat_type=ChatType.DM,
@@ -206,6 +212,12 @@ async def turn_send(
         # conversation == the front-end subscription key, so the runner's stream
         # and the sink's message.complete reach the right subscription.
         conversation=parsed.session_key,
+        # The id this call returns and puts on message.start, so the lane stamps
+        # THIS value on the turn's lifecycle events and the client's correlation
+        # key survives end to end. Without it the lane mints its own, the sink's
+        # ownership check never matches what this bound, and the active-turn slot
+        # is never released -- every later send is refused.
+        turn_id=turn_id,
     )
     try:
         handle = scheduler.submit(req)
@@ -260,10 +272,30 @@ async def turn_unsubscribe(
     return {"unsubscribed": unsubscribed}
 
 
+def _cancel_payload(turn_id: str) -> dict[str, Any]:
+    """The cancelled-turn error's payload, carrying its turn when one is bound.
+
+    The lane's bound turn is the right source here and only here: the client
+    cancels its own session, so the turn ``turn.send`` bound to this lane is the
+    turn being cancelled. The key is omitted rather than sent empty, so that
+    "absent" has one representation on the wire -- a consumer that correlates a
+    request to a turn treats both the same way, as not its own.
+    """
+    payload: dict[str, Any] = {
+        "code": _TURN_FAILED_CODE,
+        "message": "turn_cancelled",
+        "reason": "cancelled_by_client",
+    }
+    if turn_id:
+        payload["turn_id"] = turn_id
+    return payload
+
+
 async def turn_cancel(
     params: dict[str, Any],
     *,
     emitter: SubscriptionEmitter | None = None,
+    turn_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -297,11 +329,7 @@ async def turn_cancel(
             parsed.session_key,
             {
                 "type": "error",
-                "payload": {
-                    "code": _TURN_FAILED_CODE,
-                    "message": "turn_cancelled",
-                    "reason": "cancelled_by_client",
-                },
+                "payload": _cancel_payload((turn_ids or {}).get(parsed.session_key, "")),
             },
         )
 
@@ -324,6 +352,7 @@ def register_turn_methods(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -331,6 +360,12 @@ def register_turn_methods(
     pre-bind the ``emitter`` and the build_tui spine bundle (``scheduler`` /
     ``turn_ids``) plus the latched ``build_error``, per the dispatcher's
     single-argument handler contract.
+
+    ``default_channel`` is the ``source.channel`` stamped on a turn when the
+    client omits one, and it MUST match the channel the delivery outlet was
+    registered under: the hub routes a deliverable by ``source.channel``, so a
+    mismatch drops the whole reply with no error anywhere. Defaults to ``"tui"``,
+    which is what this handler used to hardcode.
     """
 
     async def _send(params: dict[str, Any]) -> dict[str, Any]:
@@ -340,6 +375,7 @@ def register_turn_methods(
             scheduler=scheduler,
             turn_ids=turn_ids,
             build_error=build_error,
+            default_channel=default_channel,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:
@@ -349,7 +385,7 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter)
+        return await turn_cancel(params, emitter=emitter, turn_ids=turn_ids)
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)

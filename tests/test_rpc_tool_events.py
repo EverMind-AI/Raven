@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.message import MessageTool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -220,3 +220,90 @@ async def test_message_tool_skipped_by_general_path(workspace) -> None:
     # turn.py owns the message tool's tool.complete; the general path skips it
     # to avoid a double-emit.
     assert events == [], f"message tool must not emit general tool events; got {events}"
+
+
+# ---------------------------------------------------------------------------
+# Fidelity at the producer. These fields were declared on the event and read
+# with ``info.get`` at the run_turn boundary, so they were reachable only from a
+# hand-built dictionary: the real loop never wrote them, and every client saw
+# blocking=False, metadata=None, diff=None on every turn. The assertions below
+# go through ``_run_agent_loop``, which is the only writer that matters.
+# ---------------------------------------------------------------------------
+
+
+class _BlockingTool(_FakeTool):
+    """A tool that waits on a person. The registry already reads this flag to
+    skip its timeout; a client that clocks the event stream needs it too."""
+
+    blocking_interaction = True
+
+
+class _PublishingTool(_FakeTool):
+    """A tool that publishes the two client-only fields."""
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        return ToolResult(
+            model_text="edited",
+            metadata={"files": ["a.txt"]},
+            diff="--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+
+
+async def test_a_blocking_tool_says_so_on_its_start_event(workspace) -> None:
+    tool = _BlockingTool("ask_user")
+    agent = _make_agent(workspace, _tool_then_final("ask_user"), tool)
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "ask"}], on_tool_event=on_tool_event)
+
+    assert events[0][1]["blocking"] is True
+
+
+async def test_a_tool_that_does_not_wait_on_a_person_is_not_blocking(workspace) -> None:
+    """The other half: the flag has to discriminate, or a client would suspend
+    its liveness clock for every call and never notice a dead one."""
+    tool = _FakeTool("exec")
+    agent = _make_agent(workspace, _tool_then_final("exec"), tool)
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "ls"}], on_tool_event=on_tool_event)
+
+    assert events[0][1]["blocking"] is False
+
+
+async def test_metadata_and_diff_reach_the_complete_event(workspace) -> None:
+    tool = _PublishingTool("edit_file")
+    agent = _make_agent(workspace, _tool_then_final("edit_file"), tool)
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "edit"}], on_tool_event=on_tool_event)
+
+    complete = events[1][1]
+    assert complete["metadata"] == {"files": ["a.txt"]}
+    assert complete["diff"] is not None and "+new" in complete["diff"]
+
+
+async def test_a_tool_returning_bare_text_publishes_neither_field(workspace) -> None:
+    """Most tools return a str, which the registry wraps without either field.
+    The producer reads them off the result, so it must survive their absence."""
+    tool = _FakeTool("exec")
+    agent = _make_agent(workspace, _tool_then_final("exec"), tool)
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "ls"}], on_tool_event=on_tool_event)
+
+    complete = events[1][1]
+    assert complete["metadata"] is None
+    assert complete["diff"] is None

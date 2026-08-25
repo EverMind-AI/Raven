@@ -171,4 +171,34 @@ async def test_cancel_error_event_payload_shape() -> None:
     payload = cancels[0]["payload"]
     assert set(payload) <= {"code", "message", "reason"}
     assert "detail" not in payload
+    assert "turn_id" not in payload, "nothing was bound to this lane, so there is no turn to name"
+    _assert_event_validates(cancels[0])
+
+
+async def test_cancel_error_names_the_turn_it_cancelled() -> None:
+    """The other half of the shape, and the reason the field exists: a consumer
+    that answers a request off this event cannot tell a foreign turn's
+    cancellation from its own without it. Absent above, present here, and the
+    difference is only whether the lane had a turn bound."""
+    send_frame = AsyncMock(return_value=None)
+    emitter = SubscriptionEmitter(send_frame=send_frame)
+    turn_ids: dict[str, str] = {}
+
+    await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+    await turn_send(
+        {"session_key": "tui:default", "content": "hi"},
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids=turn_ids,
+    )
+    await turn_cancel({"session_key": "tui:default"}, emitter=emitter, turn_ids=turn_ids)
+    await asyncio.sleep(0.1)
+
+    cancels = [
+        e
+        for e in _collect_events(send_frame)
+        if e.get("type") == "error" and e.get("payload", {}).get("reason") == "cancelled_by_client"
+    ]
+    assert len(cancels) >= 1
+    assert cancels[0]["payload"].get("turn_id"), "the lane had a turn bound, so the error has to name it"
     _assert_event_validates(cancels[0])

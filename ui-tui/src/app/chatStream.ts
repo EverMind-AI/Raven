@@ -77,6 +77,15 @@ export interface ChatStreamOptions {
   watchdogMs?: number
 }
 
+/**
+ * What each runtime notice says to a reader. Keyed by the event's `kind` so a
+ * new kind shows up as its own name until a sentence is written for it.
+ */
+const NOTICE_TEXT: Record<string, string> = {
+  action_blocked:
+    'A safety rule stopped this operation, so the turn ended here. Say the word and I will carry on with the parts that do not need it.'
+}
+
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
 
@@ -175,6 +184,35 @@ const dispatch = (
       }
       return
     }
+    case 'notice': {
+      // Runtime prose, not the model's, so it must never be merged into the
+      // streamed answer: that buffer is the model's voice, and text pushed into
+      // it renders as the answer -- glued to whatever was narrated just before
+      // and dressed in the answer's own affordances.
+      //
+      // Rendering it is not optional. Before this event existed the runtime
+      // pushed the same sentence down the token stream, so a blocked action was
+      // at least visible; a client that received the notice and drew nothing
+      // would leave the turn ending in silence.
+      //
+      // The sentence is written here rather than looked up: this repo has no
+      // i18n layer, so it is English. An unknown kind falls back to its own
+      // name, which is worse to read than a sentence and better than nothing.
+      if (sys) {
+        const said = NOTICE_TEXT[event.payload.kind] ?? event.payload.kind
+        const detail = event.payload.detail
+        sys(detail ? `${said}\n${detail}` : said)
+      }
+      return
+    }
+    case 'media':
+      // Deliberate no-op, and the reason is not that the event is unimportant:
+      // the terminal has no viewer to open a file in, and the reply text that
+      // follows names what the turn produced. The event exists for a client that
+      // can act on a path -- an editor over the protocol turns each item into a
+      // link the reader can click. Rendering the paths here as well is a product
+      // call for this surface, not a consequence of the wire event.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -212,6 +250,21 @@ const onMessageComplete = (
   ev: MessageCompleteEvent,
   appendMessage?: (msg: Msg) => void
 ): void => {
+  // A lane is serial but its slots are per-lane, so a turn the runtime
+  // submitted itself can end while this client's turn is still queued behind
+  // it on the same lane -- the observed order is message.start(client),
+  // message.complete(runtime), message.complete(client). Ungated, the runtime
+  // turn's completion clears the queued client's guard and finalizes a buffer
+  // that is not its own, so the client's real ending has nothing left to
+  // report against. Usage is session-cumulative and belongs to neither turn,
+  // so it is still applied; the runtime turn's own text stays in the buffer
+  // and is committed by the completion of the turn that owns it.
+  if (state.turnId && ev.payload.turn_id && ev.payload.turn_id !== state.turnId) {
+    if (ev.payload.usage) {
+      patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
+    }
+    return
+  }
   state.turnId = null
   // The typed message.complete carries `{turn_id, usage}` per CAP-CHAT-1
   // wire shape (B1 fix); the assistant content is reconstructed from the
@@ -237,6 +290,25 @@ const onError = (
   appendMessage?: (msg: Msg) => void
 ): void => {
   const { reason, message, code, detail } = ev.payload
+  // Same correlation the completion path needs, for the same reason: a turn the
+  // runtime submitted can fail while this client's turn is queued behind it on
+  // the same lane, and an ungated failure clears the queued turn's guard and
+  // idles an input the user is still waiting on. A failure with no turn_id --
+  // a connection-level one, or the cancellation this client asked for -- is
+  // this client's business by construction, so it falls through.
+  //
+  // Said, not swallowed. Correlating it is about not terminating the watched
+  // turn, and dropping it instead would make the terminal event silence: a
+  // runtime turn can stream deltas into this buffer and *then* throw, and the
+  // watched turn's own completion commits those bytes -- so this note is the
+  // only sign that part of what is on screen came from a turn that died.
+  if (state.turnId && ev.payload.turn_id && ev.payload.turn_id !== state.turnId) {
+    if (sys) {
+      const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
+      sys(`error in another turn on this session: ${message} (code=${code})${extra}`)
+    }
+    return
+  }
   state.turnId = null
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)

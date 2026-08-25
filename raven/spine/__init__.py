@@ -26,7 +26,7 @@ from raven.spine.events import (
 from raven.spine.message import ChatType, Media, Source
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.scheduler import OriginPools, Scheduler, TurnHandle
-from raven.spine.turn import BusyPolicy, Origin, TurnRequest
+from raven.spine.turn import BusyPolicy, Origin, TurnRequest, session_of
 
 __all__ = [
     "BusyPolicy",
@@ -54,6 +54,7 @@ __all__ = [
     "TurnHandle",
     "TurnOutcome",
     "TurnRequest",
+    "session_of",
     "TurnRunner",
     "TurnStarted",
     "Usage",
