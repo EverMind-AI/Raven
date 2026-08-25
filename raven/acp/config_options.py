@@ -11,14 +11,20 @@ Two facts about raven shape what is offered here, and both are stated in the
 option's own ``description`` rather than only in a document, because the schema
 declares that field as text for the client to display:
 
-* **The switch is process-wide.** ``config.set`` writes
-  ``agents.defaults.model`` and reassigns the live loop's provider. There is no
-  per-session model, so a connection with two sessions open changes both. The
-  protocol's shape says otherwise and honesty about it belongs where a person
-  will read it.
-* **It is refused during a turn.** ``config.set`` guards on ``is_session_busy``
-  and raises, rather than swapping the provider under a running request. That
-  refusal is passed through with its own code instead of being flattened.
+* **The switch is scoped to the calling session.** ``set_model`` sends the
+  session id and no ``scope``, so ``config.set`` binds that session and leaves
+  ``agents.defaults`` alone; a connection with two sessions open no longer
+  changes both. The protocol's shape says otherwise, which is why it is said
+  where a person will read it.
+* **A running turn is not interrupted.** It keeps the binding it entered with,
+  so the change takes effect on that session's next turn. Nothing refuses the
+  call. A refusal the runtime does still make -- a value it will not write --
+  travels out with its own code instead of being flattened.
+
+Both read the other way round before v0.1.13 moved the model onto a per-session
+binding, and the description outlived the behaviour it described for a while
+afterwards. Whatever this file says here has to match ``MODEL_DESCRIPTION``,
+because that string is the copy a person actually sees.
 
 Only ``category: "model"`` is exposed. Raven has other hot-changeable config, but
 a selector for each would put a settings panel in an editor's session menu, and
@@ -31,8 +37,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
-
-from raven.providers.wire import stored_model_id
 
 MODEL_OPTION_ID = "model"
 
@@ -176,17 +180,25 @@ def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]
 def _qualified(provider: str, model: str) -> str:
     """A model id with the slug of the credential that serves it in front.
 
-    ``stored_model_id`` is the same spelling every other surface stores, and it
-    prefixes unconditionally on purpose. Skipping the prefix for an id that
-    already held a slash -- which is what this did -- collapsed two different
-    choices onto one string: ``openrouter`` serving ``anthropic/claude-haiku-4-5``
-    and ``anthropic`` serving ``claude-haiku-4-5`` both came out as the latter,
-    and the two bill different accounts. Nothing downstream could recover which
-    one a person picked, so the prefix is the only thing carrying it.
+    Unconditional, and deliberately not ``stored_model_id``. That function is
+    for what gets *persisted*, so it declines to prefix an id already carrying a
+    prefix the provider accepts (``skip_prefixes``) and rewrites a slug to its
+    canonical spelling. Both are right for storage and lossy here, because this
+    string is the only thing carrying the choice back: ten (provider, prefix)
+    pairs in the registry leave a leading segment that is not the slug --
+    ``zai`` reached through ``openrouter/`` keeps ``openrouter``, and
+    ``ollama_chat`` becomes ``ollama-chat`` -- so ``set_model`` would send the
+    wrong provider or one that does not exist. Billing the wrong account is the
+    failure ``config.set model``'s required-provider rule exists to prevent.
+
+    The doubled-looking value that follows for an already-qualified id is
+    cosmetic: the protocol treats it as opaque, the displayed name is the bare
+    tail, and ``_set_model`` runs it through ``stored_model_id`` anyway, which
+    lands on the identical id every other surface stores.
     """
     if not provider:
         return model
-    return stored_model_id(provider, model)
+    return f"{provider}/{model}"
 
 
 def _option(slug: str, model: str, label: Any) -> dict[str, Any]:
