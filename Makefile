@@ -42,7 +42,7 @@ install: install-deps
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
-lint: lint-python lint-ui lint-tui lint-bridge
+lint: lint-python lint-ui lint-tui lint-bridge check-vendored-subagents
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
@@ -124,3 +124,6 @@ clean:
 	rm -rf bridge/dist
 	rm -rf ui/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
+
+check-vendored-subagents:
+	@python3 scripts/check_vendored_subagents.py
