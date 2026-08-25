@@ -716,3 +716,75 @@ def test_a_lazy_provider_answers_with_its_inner_s_wire_id() -> None:
 
     assert lazy.wire_model_id("openai/gpt-4o") == inner.wire_model_id("openai/gpt-4o")
     assert lazy.wire_model_id("openai/gpt-4o") == "openrouter/openai/gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# The pair rule, enforced across every writer rather than at the one that broke
+# ---------------------------------------------------------------------------
+
+
+def test_no_surface_writes_the_default_model_without_naming_its_provider():
+    """The model and the provider serving it are written together, everywhere.
+
+    This guard used to live in ``tests/test_provider_pin.py`` and was deleted
+    with that file when ``providers/pin.py`` went away. Only half of its message
+    was obsolete -- "decide the pin with ``pin.resolve``" -- while the rule it
+    enforces became *more* central, not less: a provider is now a word the user
+    says, and this is the only place a machine checks that no surface writes the
+    model while leaving the provider to whatever it was.
+
+    That hole was real. It was fixed at one call site and stayed open at four
+    others: ``raven provider use`` was taught to write the provider, and the
+    warning about a stale one was deleted as impossible, while onboarding still
+    wrote the model through its own helper and left the provider alone -- so
+    finishing the wizard on Anthropic with DeepSeek configured sent Anthropic's
+    model to DeepSeek, with DeepSeek's key.
+
+    Scanned rather than asserted per call site, because the next writer is the
+    one nobody thought of -- and **both spellings count**. An earlier version
+    looked only for ``set_default_model`` and was therefore blind to
+    ``tui_rpc/methods/config.py``, which writes the same field through
+    ``_set_nested`` and happens to be correct.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "raven"
+    definition = root / "config" / "update.py"
+    offenders: list[str] = []
+
+    for path in sorted(root.rglob("*.py")):
+        if path == definition:
+            continue  # the function itself
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # A *write* of the provider, not a mention of it. Keying on the string
+        # alone was satisfied by the ``_get_nested(payload,
+        # "agents.defaults.provider")`` read two lines above the write, so it
+        # exempted the very file its docstring names -- deleting both writes
+        # there left it green.
+        writes_provider = any(
+            isinstance(call, ast.Call)
+            and any(isinstance(a, ast.Constant) and a.value == "agents.defaults.provider" for a in call.args)
+            and (call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", ""))
+            in {"_set_nested", "set_nested"}
+            for call in ast.walk(tree)
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+
+            if name == "set_default_model":
+                if not any(kw.arg == "provider" for kw in node.keywords):
+                    offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (set_default_model)")
+                continue
+
+            targets = [a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if "agents.defaults.model" in targets and not writes_provider:
+                offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (raw key write)")
+
+    assert not offenders, (
+        "these write the model and leave the provider to whatever it was. A model id does not "
+        "name whose credential serves it, so write both -- pass provider= to set_default_model, "
+        "or write agents.defaults.provider alongside the raw key:\n" + "\n".join(offenders)
+    )

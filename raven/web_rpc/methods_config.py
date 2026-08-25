@@ -327,10 +327,13 @@ def register_config_methods(
             # would send the picked model to the pinned vendor -- and for a
             # gateway provider, prefix it onto that endpoint. Refuse rather
             # than store a choice that reads as applied but silently is not.
+            # Unset, not "auto": the pin sentinel went with providers/pin.py in
+            # v0.1.13, so an empty provider is now what "nothing is pinned"
+            # looks like. Read as pinned, it refused every per-session model.
             pinned = config.agents.defaults.provider
-            if pinned != "auto":
+            if pinned not in ("", "auto"):
                 raise ValueError(
-                    f"per-session models need agents.defaults.provider='auto'; it is pinned to {pinned!r}, "
+                    f"per-session models need agents.defaults.provider unset; it is pinned to {pinned!r}, "
                     "which routes every model to that one provider"
                 )
             if config.serving_provider_for_model(model) is None:

@@ -503,7 +503,10 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             registry=plugin_registry,
         )
 
+        from raven.providers.pool import ProviderPool
+
         agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             workspace=config.workspace_path,
             model=config.agents.defaults.model,
@@ -519,6 +522,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
