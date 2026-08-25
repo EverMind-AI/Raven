@@ -18,10 +18,19 @@ if TYPE_CHECKING:
 
 # The sentence for the one notice kind a channel has to render. Written here
 # rather than looked up, the same way the terminal writes its own copy: this repo
-# has no i18n layer, and the wording belongs to the surface that renders it. Used
-# only when the notice arrives with no detail -- a tool can abort with no readable
-# line at all, and silence is the failure this exists to prevent.
-_BLOCKED_FALLBACK = "The runtime blocked this action."
+# has no i18n layer, and the wording belongs to the surface that renders it.
+#
+# It is the response, not a fallback for a missing detail. ``detail`` is the
+# blocking tool's first error line -- it says *which* operation was stopped, and
+# nothing else. Sent on its own it reduces the turn to
+# "Error: User denied this command or the approval request expired", so the
+# person never learns that no alternative will be attempted, and never gets the
+# offer to continue with the parts that do not need it. Both are the runtime's
+# controlled answer to a blocked turn, and both have to survive the trip.
+_BLOCKED_SENTENCE = (
+    "A safety rule stopped this operation, so the turn ended here. "
+    "Say the word and I will carry on with the parts that do not need it."
+)
 
 
 class ChannelOutletAdapter:
@@ -54,7 +63,12 @@ class ChannelOutletAdapter:
         elif isinstance(out, MediaOut):
             await self._channel.send(out.source.chat_id, "", media=[m.path for m in out.media])
         elif isinstance(out, Notice) and out.kind is NoticeKind.ACTION_BLOCKED:
+            # Composed the way the terminal composes it: the sentence, then the
+            # line naming what was stopped. A tool can abort with nothing
+            # readable to say, and an empty second half would put whitespace in
+            # front of a person as though it were an explanation.
             detail = (out.detail or "").strip()
-            await self._channel.send(out.source.chat_id, detail or _BLOCKED_FALLBACK)
+            body = f"{_BLOCKED_SENTENCE}\n{detail}" if detail else _BLOCKED_SENTENCE
+            await self._channel.send(out.source.chat_id, body)
         # StreamDelta / Reasoning / ToolEvent / other Notice kinds: eaten —
         # render-can't path.

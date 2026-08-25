@@ -288,7 +288,17 @@ const onError = (
   // idles an input the user is still waiting on. A failure with no turn_id --
   // a connection-level one, or the cancellation this client asked for -- is
   // this client's business by construction, so it falls through.
+  //
+  // Said, not swallowed. Correlating it is about not terminating the watched
+  // turn, and dropping it instead would make the terminal event silence: a
+  // runtime turn can stream deltas into this buffer and *then* throw, and the
+  // watched turn's own completion commits those bytes -- so this note is the
+  // only sign that part of what is on screen came from a turn that died.
   if (state.turnId && ev.payload.turn_id && ev.payload.turn_id !== state.turnId) {
+    if (sys) {
+      const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
+      sys(`error in another turn on this session: ${message} (code=${code})${extra}`)
+    }
     return
   }
   state.turnId = null

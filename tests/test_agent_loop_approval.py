@@ -491,3 +491,12 @@ async def test_a_denied_action_still_reaches_a_channel_that_cannot_draw_notices(
 
     assert channel.sent, "a denied action must not leave the channel with nothing to show"
     assert len(channel.sent) == 1, f"and must not say it twice: {channel.sent}"
+    # The content, not just the count. The tool's error line says which operation
+    # was stopped and nothing else; sent on its own it leaves the turn as
+    # "Error: User denied this command...", with no word that no alternative will
+    # be attempted and no offer to continue with the safe remainder -- which is
+    # the runtime's controlled answer to a blocked turn, and the thing the person
+    # actually needs.
+    said = channel.sent[0]
+    assert "carry on with the parts that do not need it" in said, said
+    assert "denied" in said or "approval" in said, f"and it must still name what was stopped: {said}"

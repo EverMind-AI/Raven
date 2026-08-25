@@ -14,6 +14,11 @@ from raven.spine import (
 from raven.spine.delivery import Outlet
 from raven.spine.message import Media
 
+_SAID = (
+    "A safety rule stopped this operation, so the turn ended here. "
+    "Say the word and I will carry on with the parts that do not need it."
+)
+
 
 def _src(channel="telegram", chat_id="c1") -> Source:
     return Source(channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM)
@@ -87,7 +92,10 @@ async def test_a_blocked_action_is_not_eaten() -> None:
     assert len(ch.sent) == 1
     chat_id, content, media = ch.sent[0]
     assert chat_id == "c3" and media is None
-    assert "requires approval" in content
+    # Both halves. The detail alone reduces the turn to the tool's error line, so
+    # the person never learns that no alternative will be attempted and never
+    # gets the offer to continue with the parts that do not need it.
+    assert content == _SAID + "\nError: command requires approval"
 
 
 async def test_a_blocked_action_with_no_detail_still_says_something() -> None:
@@ -101,7 +109,5 @@ async def test_a_blocked_action_with_no_detail_still_says_something() -> None:
     await adapter.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail=None, source=_src()))
     await adapter.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail="   \n ", source=_src()))
 
-    assert [content for _chat, content, _media in ch.sent] == [
-        "The runtime blocked this action.",
-        "The runtime blocked this action.",
-    ]
+    assert [content for _chat, content, _media in ch.sent] == [_SAID, _SAID]
+    assert not any(c.endswith("\n") for _chat, c, _media in ch.sent), "no dangling second half"

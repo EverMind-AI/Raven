@@ -558,8 +558,13 @@ describe('createChatStream — one turn cannot terminate another', () => {
       payload: { code: -32099, message: 'turn_failed', reason: 'internal', turn_id: 'runtime-turn' }
     })
 
+    // Correlated, not hidden: the watched turn keeps its guard and its input,
+    // and the failure is still said. A runtime turn can stream deltas into this
+    // buffer and then throw, and the watched turn's own completion commits those
+    // bytes -- so dropping this event would leave that the only unexplained
+    // thing on screen.
     expect(getUiState().busy).toBe(true)
-    expect(sysCalls.some(m => /turn_failed/.test(m))).toBe(false)
+    expect(sysCalls.some(m => /another turn/.test(m) && /turn_failed/.test(m))).toBe(true)
   })
 
   it('still surfaces a failure that names no turn', async () => {
