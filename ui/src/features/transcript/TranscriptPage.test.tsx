@@ -159,6 +159,32 @@ describe('transcript island, history', () => {
     expect(branched).toEqual(['the token had expired'])
   })
 
+  /* An edit's detail header names the file through the workspace source's
+     shortener, reached as window.DS.workspace rather than through ds(). The
+     fixture answers shortPath with the identity, so bypassing the call is
+     invisible: this test gives it something to actually shorten. */
+  it('names an edit through the workspace shortener, not the raw path', () => {
+    ;(window.DS as { workspace: { shortPath: (p: string) => string } }).workspace.shortPath =
+      (raw) => raw.replace('/home/me/project/', '')
+    act(() => {
+      mount.history([
+        { role: 'user' as const, text: 'fix the timeout' },
+        {
+          role: 'assistant' as const, text: '',
+          tool_calls: [{ id: 'c1', name: 'edit_file', arguments: '{"path":"/home/me/project/src/app.ts"}' }],
+        },
+        {
+          role: 'tool' as const, tool_call_id: 'c1', name: 'edit_file', text: 'ok',
+          diff: '@@ -1 +1 @@\n-old\n+new\n',
+        },
+        { role: 'assistant' as const, text: 'done' },
+      ])
+    })
+    const name = document.querySelector('.dhd .nm')
+    expect(name).toBeTruthy()
+    expect(name!.textContent).toBe('src/app.ts')
+  })
+
   it('reads a stored turn as segments: ask, folded step with thought and call, answer', () => {
     const t0 = Date.now() - 60000
     act(() => {
