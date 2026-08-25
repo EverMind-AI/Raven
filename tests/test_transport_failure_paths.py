@@ -9,8 +9,11 @@ the field and keeps no copy). Raven's retry ladder gates on
 classification, no model fallback. A backend blip that one retry would have
 healed became a hard failure, and the error pointed at the model.
 
-The original value is unrecoverable, so these pin a decision made from local
-evidence instead. Both paths ask the same question, for the reason
+Where the response was assembled through `Choices.__init__` the library keeps
+the value it renamed, so the upstream's own word is readable and these pin that
+reading; where a vendor overwrote the reason on an already-built choice nothing
+was kept, and they pin the decision made from local evidence instead. Both paths
+ask the same question, for the reason
 `truncation.py` gives for asking its own on both: a verdict reached on one
 and not the other means the same fault reads differently in the TUI than
 outside it.
@@ -40,6 +43,10 @@ class _Msg:
 class _Choice:
     message: _Msg
     finish_reason: str = "stop"
+    #: What the library records when its mapping renamed the upstream's value.
+    #: Absent, not empty, on a response it did not rename -- so the default
+    #: stands for "no rename happened", not for "the field was empty".
+    provider_specific_fields: dict[str, Any] | None = None
 
 
 @dataclass
@@ -365,6 +372,71 @@ def test_a_laundered_failure_that_still_answered_is_delivered() -> None:
     assert len(response.tool_calls) == 1
 
 
+def test_the_upstreams_own_word_is_read_where_the_library_kept_it() -> None:
+    """The case the accounting evidence cannot reach.
+
+    A prompt billed truthfully and an empty reply is a silent model, which is
+    why the accounting verdict refuses it. But an upstream that said
+    `finish_reason=error` did not stay silent -- it reported a failure, and the
+    library filed the original beside the value it rewrote. Read there, the
+    verdict needs no corroboration and no threshold.
+    """
+    laundered_but_billed_honestly = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(),
+                provider_specific_fields={"native_finish_reason": "error"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
+    )
+
+    response = _provider()._parse_response(laundered_but_billed_honestly, sent_chars=SENT)
+
+    assert response.finish_reason == "error"
+    assert "error" in (response.content or "")
+    assert response.error_classification is not None
+    assert response.error_classification.retryable
+
+
+def test_a_renamed_normal_end_is_not_a_failure() -> None:
+    """`end_turn` is what Anthropic calls a normal end, and the library renames
+    every one of them. Reading any rename as a failure would report a fault on
+    every healthy Anthropic turn that happened to say nothing."""
+    renamed = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(),
+                provider_specific_fields={"native_finish_reason": "end_turn"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
+    )
+
+    assert _provider()._parse_response(renamed, sent_chars=SENT).finish_reason == "stop"
+
+
+def test_a_rename_nobody_classified_is_read_as_a_failure() -> None:
+    """The direction the allow list buys.
+
+    `network_error` reaches `stop` through the same table as `error`, and no
+    list of failure spellings written before it appeared would have held it.
+    An unrecognised rename has to land on the side that keeps the failure
+    visible, because the alternative is the fault this module exists for.
+    """
+    unknown = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(),
+                provider_specific_fields={"native_finish_reason": "network_error"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
+    )
+
+    assert _provider()._parse_response(unknown, sent_chars=SENT).finish_reason == "error"
+
+
 def test_a_cache_hit_bills_a_fraction_of_the_prompt_and_is_not_a_failure() -> None:
     """The trap in reading `prompt_tokens` alone.
 
@@ -477,6 +549,67 @@ def test_the_client_library_really_does_launder_the_failure() -> None:
     from litellm.litellm_core_utils.core_helpers import map_finish_reason
 
     assert map_finish_reason("error") == "stop"
+
+
+def test_the_library_files_the_original_beside_the_value_it_rewrote() -> None:
+    """The other half of the premise, on the real transformation.
+
+    Asserted through `_transform_choices` rather than the constructor, because
+    that function builds the choice and then assigns the mapped reason over the
+    top -- if that assignment ever grew to clear the recorded copy as well, a
+    constructor-level test would stay green while the verdict went blind.
+    """
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    from raven.providers.transport_failure import native_finish_reason
+
+    failed, healthy = (
+        OpenAIGPTConfig()._transform_choices(
+            [{"index": 0, "finish_reason": reason, "message": {"role": "assistant", "content": None}}]
+        )[0]
+        for reason in ("error", "stop")
+    )
+
+    assert failed.finish_reason == "stop"
+    assert native_finish_reason(failed) == "error"
+    # Nothing was renamed, so there is no copy and no attribute holding one --
+    # the reader has to survive that, since it is the ordinary case.
+    assert native_finish_reason(healthy) is None
+
+
+def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
+    """The allow list's safety net.
+
+    An unrecognised rename is read as a failure, which is the safe direction
+    for a dialect we have never seen -- and the wrong one for a *normal* end
+    the library learns to rename later. This walks its table so that arrives as
+    a red test with a name to classify, rather than as healthy turns being
+    reported as upstream failures.
+    """
+    from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
+
+    from raven.providers.transport_failure import _NORMAL_STOP_ALIASES
+
+    #: Renames to `stop` that are known to report a failure, not a normal end.
+    #: Listed here rather than in the module: the verdict needs no list of
+    #: these, only this test needs to say which names it has already seen.
+    known_failures = {
+        "error",
+        "ERROR",
+        "network_error",
+        "MALFORMED_RESPONSE",
+        "MALFORMED_FUNCTION_CALL",
+        "TOO_MANY_TOOL_CALLS",
+    }
+
+    renamed_to_stop = {name for name, mapped in _FINISH_REASON_MAP.items() if mapped == "stop" and name != "stop"}
+    unclassified = renamed_to_stop - _NORMAL_STOP_ALIASES - known_failures
+
+    assert not unclassified, (
+        f"litellm renames {sorted(unclassified)} to 'stop' and this repo has not said which they are. "
+        "A normal end belongs in _NORMAL_STOP_ALIASES; a failure needs no entry, but add it to "
+        "known_failures here so the next addition is the only thing this test reports."
+    )
 
 
 async def test_a_real_model_response_is_judged_and_retried() -> None:

@@ -14,11 +14,16 @@ read the call as healthy and neither retried, classified nor fell back. In the
 control experiment the same request succeeded on the next backend, so this was
 a blip one retry would have healed.
 
-**The original value cannot be recovered**, so the verdict is built from local
-evidence instead. That bounds what this can see: a laundered failure that
-carried a usable answer is indistinguishable from a healthy one here, and is
-deliberately delivered as the answer it looks like -- the invariant is that a
-failure must be *visible*, not that such a response be thrown away.
+Two verdicts, asked in that order. The client library keeps a copy of the value
+it renamed (``provider_specific_fields["native_finish_reason"]``, written in
+``Choices.__init__``), so wherever a response was assembled through that
+constructor the upstream's own word is still readable and nothing has to be
+inferred. Where it was not -- several vendors map the reason and assign it to an
+already-built choice, destroying the original -- the accounting evidence is all
+there is.
+
+Either way a response that delivered something is left alone: the invariant is
+that a failure must be *visible*, not that a usable answer be thrown away.
 
 Both response paths ask this, for the reason ``truncation`` gives for its own
 question: a verdict reached on one path and not the other makes the same fault
@@ -36,6 +41,24 @@ if TYPE_CHECKING:
 #: nothing was said, so they are folded into the emptiness test rather than
 #: given a branch of their own.
 _UPSTREAM_SENTINELS = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>")
+
+#: Upstream spellings of a normal end that the client library renames to
+#: ``stop``. Any *other* value it renamed to ``stop`` did not say this call
+#: ended normally. An allow list rather than a list of failures, because the
+#: spellings of "finished" are finite and stable across vendors while the
+#: dialects for "failed" are invented per gateway -- so an unrecognised value
+#: has to land on the side that keeps the failure visible.
+_NORMAL_STOP_ALIASES = frozenset(
+    {
+        "stop_sequence",
+        "end_turn",
+        "COMPLETE",
+        "STOP",
+        "eos",
+        "eos_token",
+        "FINISH_REASON_UNSPECIFIED",
+    }
+)
 
 #: Below this, an accounted prompt is not evidence of anything -- a short
 #: request really can cost a handful of tokens.
@@ -79,6 +102,18 @@ def prompt_chars(messages: list[dict[str, Any]]) -> int:
                 if isinstance(part, dict):
                     total += len(str(part.get("text") or ""))
     return total
+
+
+def native_finish_reason(choice: Any) -> str | None:
+    """The finish reason the upstream sent, where the library kept a copy of it.
+
+    Read defensively on purpose: the field is written only when the mapping
+    actually renamed something, so on an ordinary ``stop`` the attribute is
+    absent from the choice altogether and reaching for it raises.
+    """
+    fields = getattr(choice, "provider_specific_fields", None) or {}
+    value = fields.get("native_finish_reason") if isinstance(fields, dict) else None
+    return str(value) if value else None
 
 
 def _stripped(text: str | None) -> str:
@@ -152,6 +187,7 @@ def flag_transport_failure(
     finish_reason: str | None,
     content: str | None,
     tool_calls: list["ToolCallRequest"],
+    native_finish_reason: str | None = None,
     #: Accepted and not weighed. Kept in the signature so both call sites keep
     #: reading it off the response, and so the reason it does not decide has
     #: somewhere to be stated rather than being invisible at the boundary.
@@ -161,10 +197,17 @@ def flag_transport_failure(
 ) -> str | None:
     """The evidence that this call failed in transport, or ``None``.
 
-    Two things must hold together. Nothing was delivered -- a normal end, no
-    content, no tool call -- **and** the prompt was billed at a size the
-    request cannot have been. Both, because either one alone is a different
-    fault with a different owner:
+    Nothing may have been delivered -- a normal end, no content, no tool call --
+    for either verdict to be reached. Given that, two things end the call:
+
+    ``native_finish_reason`` outside :data:`_NORMAL_STOP_ALIASES` settles it on
+    its own. It is the value the upstream actually sent, kept by the library
+    beside the one it rewrote, so there is nothing to corroborate.
+
+    Failing that -- the vendors that overwrite the reason on an already-built
+    choice keep no copy -- the prompt must have been billed at a size the
+    request cannot have been. That second signal needs the emptiness beside it,
+    because either one alone is a different fault with a different owner:
 
     * Silence with honest usage is a model that said nothing. The agent loop
       recovers that by changing the request (a prefill, a post-tool nudge) or
@@ -196,6 +239,12 @@ def flag_transport_failure(
         return None
     if not _said_nothing(content, tool_calls):
         return None
+    if native_finish_reason and native_finish_reason not in _NORMAL_STOP_ALIASES:
+        # No corroboration asked for, and none needed: this is not an inference
+        # about what the upstream meant, it is what the upstream said. The
+        # accounting below exists to tell a failed request apart from a silent
+        # model, and a model that stayed silent does not send one of these.
+        return f"the upstream reported finish_reason={native_finish_reason!r}, renamed to 'stop' in transit"
     accounting = _accounting_is_absurd(usage, sent_chars)
     if not accounting:
         return None
