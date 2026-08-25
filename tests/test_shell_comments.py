@@ -11,9 +11,11 @@ Fail-closed is right and stays: an executable region nobody can parse is still
 refused. What changes is that the region the shell would ignore stops being
 read as if it would run.
 
-The two gates are tested together on purpose. `ExecTool._guard_command` runs
-the deny list a second time against the raw text, so a fix applied only to
-`ShellCommandPolicy` leaves the same command refused by the other one.
+Both gates are tested here, but they no longer answer the same question. The
+deny list has one owner now; what `ExecTool._guard_command` still decides on
+its own is the allowlist and the workspace boundary. A comment could reach
+both -- so those are what it is asked about here, rather than a second deny
+read that no longer exists.
 """
 
 from __future__ import annotations
@@ -35,6 +37,18 @@ def tool(tmp_path) -> ExecTool:
     return ExecTool(
         working_dir=str(tmp_path),
         deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="],
+        restrict_to_workspace=False,
+    )
+
+
+@pytest.fixture
+def allowlisted(tmp_path) -> ExecTool:
+    """The other one. `\\bls\\b` matches inside English prose on purpose: that is
+    the whole question -- whether a command can be talked onto the allowlist by
+    text the shell will not run."""
+    return ExecTool(
+        working_dir=str(tmp_path),
+        allow_patterns=[r"\bls\b"],
         restrict_to_workspace=False,
     )
 
@@ -69,13 +83,6 @@ def test_a_read_only_command_survives_its_own_comment(name: str, command: str, p
     assert policy.evaluate(command.split("\n", 1)[1]) is CommandDecision.ALLOW
 
 
-@pytest.mark.parametrize(("name", "command"), INTERCEPTED, ids=[n for n, _ in INTERCEPTED])
-def test_the_other_gate_lets_them_through_too(name: str, command: str, tool: ExecTool) -> None:
-    """`ExecTool` runs the deny list again on the raw text. Fixing one gate and
-    not the other leaves the command refused, by a different message."""
-    assert tool._guard_command(command, cwd=".") is None
-
-
 # ---------- what a comment must not be able to do ----------------------------
 
 
@@ -85,15 +92,18 @@ def test_a_comment_cannot_smuggle_a_denied_pattern_into_a_refusal(policy: ShellC
     assert policy.evaluate("ls -la  # unlike dd if=/dev/zero, this one only lists") is CommandDecision.ALLOW
 
 
-def test_the_other_gate_does_not_read_the_comment_either(tool: ExecTool) -> None:
-    """`_guard_command` searches the raw text, so this is the case where the
-    two gates come apart: the parse never fails here, but a denied pattern
-    written inside a comment blocks the command anyway."""
-    assert tool._guard_command("ls -la  # unlike dd if=/dev/zero, this one only lists", cwd=".") is None
+async def test_the_real_thing_is_still_denied(tool: ExecTool) -> None:
+    """Asserted through `execute` rather than at a named gate.
 
+    The deny list used to be read twice -- once in `_guard_command`, once in the
+    policy -- and this pinned the first. It now has one owner, so the question
+    worth asking is whether the command is refused, not which of two places
+    refused it.
+    """
+    result = await tool.execute(command="dd if=/dev/zero of=/tmp/x")
 
-def test_the_other_gate_still_denies_the_real_thing(tool: ExecTool) -> None:
-    assert tool._guard_command("dd if=/dev/zero of=/tmp/x", cwd=".") is not None
+    assert not result.ok
+    assert "blocked by safety guard" in result.model_text
 
 
 def test_a_denied_pattern_outside_the_comment_still_denies(policy: ShellCommandPolicy) -> None:
@@ -209,7 +219,7 @@ def test_the_approval_prompt_describes_the_command_not_the_comment(policy: Shell
     assert policy.approval_reason(commented) == policy.approval_reason("rm /tmp/x") == "delete_command"
 
 
-# ---------- the workspace scan reads the same view ---------------------------
+# ---------- what the guard still decides on its own -------------------------
 
 
 @pytest.mark.parametrize(
@@ -234,3 +244,17 @@ def test_a_real_path_outside_the_workspace_is_still_refused(command: str, tmp_pa
     fenced = ExecTool(working_dir=str(tmp_path), deny_patterns=[], restrict_to_workspace=True)
 
     assert fenced._guard_command(command, cwd=str(tmp_path)) is not None
+
+
+def test_a_comment_cannot_talk_a_command_onto_the_allowlist(allowlisted: ExecTool, tmp_path) -> None:
+    """The guard's other half, and the one that costs something if it is wrong.
+
+    A surface with an allowlist runs only what it named, so text the shell
+    discards satisfying that list is a command running which was never allowed
+    -- the opposite direction from the incident, and the reason this gate reads
+    the executable view rather than being handed a stripped string.
+    """
+    refusal = allowlisted._guard_command("cat /etc/passwd  # this is basically ls", cwd=str(tmp_path))
+
+    assert "not in allowlist" in (refusal or "")
+    assert allowlisted._guard_command("ls -la  # unlike cat, this only lists", cwd=str(tmp_path)) is None

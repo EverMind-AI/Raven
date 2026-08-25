@@ -45,11 +45,27 @@ class _ApprovalTurn:
     denied_digests: frozenset[str] = frozenset()
 
 
+# Why a command was refused, in the words the reader needs. The old message
+# said "policy evaluation failed" for all four causes, which is what the session
+# this work came from asked about four times -- and what the model, given
+# nothing to go on, then guessed wrong about twice.
+#
+# Each line names the rule and where it lives, because these refusals are
+# acted on: a deny pattern is the operator's list to edit, a parse error is the
+# command's own to fix. Absent from this map, the generic text stands: a
+# message that names the wrong rule is worse than one that names none.
+_DENY_REASONS: dict[str, str] = {
+    "deny_pattern": "matches a denied pattern (tools.exec.extraDenyPatterns, plus the built-in list)",
+    "recursive_delete": "deletes a directory tree recursively",
+    "system_power": "powers the machine off or reboots it",
+    "parse_error": "could not be parsed as a shell command; an unbalanced quote is the usual cause",
+}
+
 # What the reader is being asked about, per family. A constant string was here
-# before -- "Delete files using a shell command" -- which was accurate only while
-# deletion was the one family registered, and became wrong the moment a surface
-# registered more. The fallback is deliberately vague rather than a guess: a
-# prompt that names the wrong reason is worse than one that names none.
+# before -- "Delete files using a shell command" -- which was accurate only
+# while deletion was the one family registered, and became wrong the moment a
+# surface registered more. An unlisted family falls back to deliberately vague
+# text rather than a guess, for the reason the map above gives.
 _APPROVAL_DESCRIPTIONS: dict[str, str] = {
     "delete_command": "Delete files using a shell command",
     "publish_command": "Publish or push work to a remote",
@@ -247,10 +263,13 @@ class ExecTool(Tool):
         # Short-circuiting the whole check on the flag made the SAFER
         # configuration prompt less than the plain one, for exactly the
         # operations the sandbox has no say over.
-        decision = self._policy.evaluate(command, sandboxed=sandboxed)
-        if decision is CommandDecision.HARD_DENY:
-            return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
-        if decision is CommandDecision.REQUIRE_APPROVAL:
+        outcome = self._policy.classify(command, sandboxed=sandboxed)
+        if outcome.decision is CommandDecision.HARD_DENY:
+            why = _DENY_REASONS.get(outcome.reason_code, "")
+            return self._terminal_error(
+                f"Error: Command blocked by safety guard: it {why}" if why else "Error: Command blocked by safety guard"
+            )
+        if outcome.decision is CommandDecision.REQUIRE_APPROVAL:
             approval_error = await self._request_approval(command, sandboxed=sandboxed)
             if approval_error:
                 return approval_error
@@ -328,19 +347,22 @@ class ExecTool(Tool):
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands.
 
-        Reads the same lexical view the policy does. This gate searches raw
-        text, so it never hit the parse failure that sent the policy
-        fail-closed -- but a denied pattern written inside a comment blocked
-        the command here just the same, and a fix applied to one gate only
-        moves which message the user gets.
+        Reads the same lexical view the policy does, but only ever with regex --
+        no shlex pass, so no fail-closed branch to reach. With the deny list
+        moved to its one owner, what this gate still decides by itself is the
+        allowlist and the workspace boundary -- and a comment could reach both:
+        `allow_patterns` was matched against text the shell discards, so a
+        command could be talked onto the allowlist, and a path named in a
+        comment was scanned as a path the command touches.
         """
         cmd = executable_text(command).strip()
         lower = cmd.lower()
 
-        for pattern in self.deny_patterns:
-            if re.search(pattern, lower):
-                return "Error: Command blocked by safety guard (dangerous pattern detected)"
-
+        # The deny list is not read here. `ShellCommandPolicy` was constructed
+        # with this same list and classifies against it a few lines later, so
+        # running it twice bought nothing and cost a second message for one
+        # cause -- "dangerous pattern detected" here, and whatever the policy
+        # said there. One owner, one sentence.
         if self.allow_patterns:
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
