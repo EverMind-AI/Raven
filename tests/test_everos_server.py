@@ -654,7 +654,7 @@ class TestEnsureEverosServer:
         def probe_side_effect(*_args, **_kwargs):
             nonlocal call_count
             call_count += 1
-            return call_count >= 3
+            return call_count >= 2
 
         with (
             patch(

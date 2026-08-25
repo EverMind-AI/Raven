@@ -313,7 +313,7 @@ class TestBackpressureCannotStallATurn:
                 await asyncio.sleep(30)
 
         agent = _make_loop(tmp_path, backend=_Slow())
-        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.2)
+        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.05)
 
         elapsed = []
         for _ in range(loop_main._STORE_MAX_INFLIGHT + 2):

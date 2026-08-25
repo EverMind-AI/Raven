@@ -12,6 +12,7 @@ from raven.memory_engine.skill_local.local_pool import (
 )
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.utils.bm25 import tokenize
 
 
 def _meta(
@@ -49,24 +50,10 @@ class _StubRegistry:
 # ----------------------------------------------------------------------
 
 
-def test_tokenize_alphanumeric_lowercased() -> None:
-    assert _tokenize("Generate PDF Report") == ["generate", "pdf", "report"]
-
-
-def test_tokenize_drops_one_char_words() -> None:
-    # "a" filtered; "ai" kept; "OK" kept.
-    assert _tokenize("a ai OK x y") == ["ai", "ok"]
-
-
-def test_tokenize_handles_chinese_per_char() -> None:
-    out = _tokenize("天气查询 weather")
-    assert "天" in out and "气" in out and "查" in out and "询" in out
-    assert "weather" in out
-
-
-def test_tokenize_empty_returns_empty() -> None:
-    assert _tokenize("") == []
-    assert _tokenize("   ") == []
+def test_the_pool_tokenizes_with_the_bm25_tokenizer() -> None:
+    # The behaviour itself is covered in test_bm25.py; the pool only needs to
+    # pin which tokenizer it wired in.
+    assert _tokenize is tokenize
 
 
 # ----------------------------------------------------------------------
