@@ -24,28 +24,14 @@ import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 
-// A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
+// v1 model switch is global-scope only. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
 // structured config.set params {key:'model', value, provider?}.
-// A model id never names its own credential: `openrouter` serving
-// `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5` are
-// both real, cost different money, and look the same on the wire. So the
-// provider is a word the user says, not something inferred -- including from a
-// prefix, which is LiteLLM routing syntax and not our credential.
-//
-// Accepted: `<provider> <id>`, or `<id> --provider <name>` for the flag form
-// the picker and older muscle memory use. An id on its own is refused.
 const parseModelArg = (arg: string): { provider?: string; value: string } => {
-  const flagged = arg.trim().match(/^(.*?)\s+--provider\s+(\S+)\s*$/)
+  const m = arg.trim().match(/^(.*?)\s+--provider\s+(\S+)\s*$/)
 
-  if (flagged) {
-    return { provider: flagged[2], value: flagged[1]!.trim() }
-  }
-
-  const words = arg.trim().split(/\s+/).filter(Boolean)
-
-  if (words.length === 2) {
-    return { provider: words[0], value: words[1]! }
+  if (m) {
+    return { provider: m[2], value: m[1]!.trim() }
   }
 
   return { value: arg.trim() }
@@ -66,96 +52,55 @@ export const sessionCommands: SlashCommand[] = [
         return ctx.transcript.sys('/background <prompt>')
       }
 
-      ctx.gateway
-        .rpc<BackgroundStartResponse>('prompt.background', { session_id: ctx.sid, text: arg })
-        .then(
-          ctx.guarded<BackgroundStartResponse>(r => {
-            if (!r.task_id) {
-              return
-            }
+      ctx.gateway.rpc<BackgroundStartResponse>('prompt.background', { session_id: ctx.sid, text: arg }).then(
+        ctx.guarded<BackgroundStartResponse>(r => {
+          if (!r.task_id) {
+            return
+          }
 
-            patchUiState(state => ({ ...state, bgTasks: new Set(state.bgTasks).add(r.task_id!) }))
-            ctx.transcript.sys(`bg ${r.task_id} started`)
-          })
-        )
-        .catch(ctx.guardedErr)
+          patchUiState(state => ({ ...state, bgTasks: new Set(state.bgTasks).add(r.task_id!) }))
+          ctx.transcript.sys(`bg ${r.task_id} started`)
+        })
+      )
     }
   },
 
   {
-    help: 'change model: <provider> <id>, or nothing to pick; --default sets new sessions',
+    help: 'change or show model',
     name: 'model',
     run: (arg, ctx) => {
-      // No busy guard: the server captures the binding at turn entry, so a
-      // switch asked for mid-answer lands on the next turn instead of being
-      // refused.
-      // `--default` changes what new sessions start on; without it the switch
-      // is this conversation's alone. Stripped before parsing, in any
-      // position and however many times, so it never lands in the model id.
-      const raw = arg.trim()
-      const asDefault = /(^|\s)--default(\s|$)/.test(raw)
-      const rest = raw.replace(/(^|\s)--default(?=\s|$)/g, '').trim()
-      if (!rest) {
-        // `/model` and `/model --default` both mean "show me the choices" --
-        // but not the same choices, so the flag rides into the overlay state
-        // rather than being dropped here. Selecting a row used to send a
-        // session-scoped switch either way, which looked like it had worked.
-        return patchOverlayState({ modelPicker: asDefault ? 'default' : true })
+      if (ctx.session.guardBusySessionSwitch('change models')) {
+        return
       }
 
-      const { provider, value } = parseModelArg(rest)
-
-      if (!provider) {
-        // Not a picker with the id pre-filled, and not a "there is only one
-        // candidate so I picked it": both are the guess this refuses to make.
-        // The flag rides into the suggestion. Without it the user follows our
-        // own advice, lands a session-scoped switch, and is told `model → x`
-        // for a default they asked to change and did not.
-        return ctx.transcript.sys(
-          `/model needs a provider. Run /model${asDefault ? ' --default' : ''} to pick one, ` +
-            `or: /model <provider> ${value}${asDefault ? ' --default' : ''}`
-        )
+      if (!arg.trim()) {
+        return patchOverlayState({ modelPicker: true })
       }
+
+      const { provider, value } = parseModelArg(arg)
 
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', {
           key: 'model',
           session_id: ctx.sid,
-          scope: asDefault ? 'default' : 'session',
           value,
-          provider
+          ...(provider ? { provider } : {})
         })
         .then(
           ctx.guarded<ConfigSetResponse>(r => {
             if (!r.value) {
               return ctx.transcript.sys('error: invalid response: model switch')
             }
-            if (!r.applied) {
-              // Nothing was built, so nothing was validated -- reporting a
-              // switch here would leave the bar on a model no turn will use.
-              return ctx.transcript.sys(`error: model switch was not applied: ${r.value}`)
-            }
 
-            ctx.transcript.sys(asDefault ? `default model → ${r.value}` : `model → ${r.value}`)
+            ctx.transcript.sys(`model → ${r.value}`)
             ctx.local.maybeWarn(r)
 
-            // Whether this conversation now runs the model is the server's
-            // answer, not something the scope implies: a default-scoped switch
-            // does move a session that never chose its own model, and that is
-            // the common case for `--default`.
-            if (r.applies_to_session !== false) {
-              patchUiState(state => ({
-                ...state,
-                info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }
-              }))
-            }
+            patchUiState(state => ({
+              ...state,
+              info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }
+            }))
           })
         )
-        // Without this the rejection is unhandled, and setupGracefulExit writes
-        // it raw to stderr over the Ink render: `/model` typed before the first
-        // session.create resolves is refused by the server (session scope with
-        // no session), and the transcript would show nothing at all.
-        .catch(ctx.guardedErr)
     }
   },
 
@@ -240,18 +185,15 @@ export const sessionCommands: SlashCommand[] = [
     name: 'image',
     supported: false,
     run: (arg, ctx) => {
-      ctx.gateway
-        .rpc<ImageAttachResponse>('image.attach', { path: arg, session_id: ctx.sid })
-        .then(
-          ctx.guarded<ImageAttachResponse>(r => {
-            ctx.transcript.sys(attachedImageNotice(r))
+      ctx.gateway.rpc<ImageAttachResponse>('image.attach', { path: arg, session_id: ctx.sid }).then(
+        ctx.guarded<ImageAttachResponse>(r => {
+          ctx.transcript.sys(attachedImageNotice(r))
 
-            if (r.remainder) {
-              ctx.composer.setInput(r.remainder)
-            }
-          })
-        )
-        .catch(ctx.guardedErr)
+          if (r.remainder) {
+            ctx.composer.setInput(r.remainder)
+          }
+        })
+      )
     }
   },
 
@@ -264,19 +206,16 @@ export const sessionCommands: SlashCommand[] = [
         return
       }
 
-      ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', { key: 'personality', session_id: ctx.sid, value: arg })
-        .then(
-          ctx.guarded<ConfigSetResponse>(r => {
-            if (r.history_reset) {
-              ctx.session.resetVisibleHistory(r.info ?? null)
-            }
+      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'personality', session_id: ctx.sid, value: arg }).then(
+        ctx.guarded<ConfigSetResponse>(r => {
+          if (r.history_reset) {
+            ctx.session.resetVisibleHistory(r.info ?? null)
+          }
 
-            ctx.transcript.sys(`personality: ${r.value || 'default'}${r.history_reset ? ' · transcript cleared' : ''}`)
-            ctx.local.maybeWarn(r)
-          })
-        )
-        .catch(ctx.guardedErr)
+          ctx.transcript.sys(`personality: ${r.value || 'default'}${r.history_reset ? ' · transcript cleared' : ''}`)
+          ctx.local.maybeWarn(r)
+        })
+      )
     }
   },
 
@@ -355,28 +294,25 @@ export const sessionCommands: SlashCommand[] = [
     run: (arg, ctx) => {
       const prevSid = ctx.sid
 
-      ctx.gateway
-        .rpc<SessionBranchResponse>('session.branch', { name: arg, session_id: ctx.sid })
-        .then(
-          ctx.guarded<SessionBranchResponse>(r => {
-            if (!r.session_id) {
-              return
-            }
+      ctx.gateway.rpc<SessionBranchResponse>('session.branch', { name: arg, session_id: ctx.sid }).then(
+        ctx.guarded<SessionBranchResponse>(r => {
+          if (!r.session_id) {
+            return
+          }
 
-            void ctx.session.closeSession(prevSid)
-            patchUiState({ sid: r.session_id })
-            ctx.session.setSessionStartedAt(Date.now())
-            // Keep the on-screen history: the forked child is a full copy of the
-            // displayed session, so what's already shown is correct for the child.
-            const bareSessionId = (k: string) => (k.includes(':') ? k.slice(k.indexOf(':') + 1) : k)
-            const messageCount = r.message_count ?? 0
-            const title = r.title || '(untitled)'
-            ctx.transcript.sys(`⑂ Forked "${title}" · ${messageCount} message${messageCount === 1 ? '' : 's'} carried`)
-            ctx.transcript.sys(`   parent  ${prevSid ? bareSessionId(prevSid) : '(none)'}`)
-            ctx.transcript.sys(`   forked  ${bareSessionId(r.session_id)}`)
-          })
-        )
-        .catch(ctx.guardedErr)
+          void ctx.session.closeSession(prevSid)
+          patchUiState({ sid: r.session_id })
+          ctx.session.setSessionStartedAt(Date.now())
+          // Keep the on-screen history: the forked child is a full copy of the
+          // displayed session, so what's already shown is correct for the child.
+          const bareSessionId = (k: string) => (k.includes(':') ? k.slice(k.indexOf(':') + 1) : k)
+          const messageCount = r.message_count ?? 0
+          const title = r.title || '(untitled)'
+          ctx.transcript.sys(`⑂ Forked "${title}" · ${messageCount} message${messageCount === 1 ? '' : 's'} carried`)
+          ctx.transcript.sys(`   parent  ${prevSid ? bareSessionId(prevSid) : '(none)'}`)
+          ctx.transcript.sys(`   forked  ${bareSessionId(r.session_id)}`)
+        })
+      )
     }
   },
 
@@ -393,26 +329,23 @@ export const sessionCommands: SlashCommand[] = [
         return ctx.transcript.sys('no active session to export')
       }
 
-      ctx.gateway
-        .rpc<SessionExportResponse>('session.export', { session_id: target })
-        .then(
-          ctx.guarded<SessionExportResponse>(r => {
-            if (r.exported && r.path) {
-              return ctx.transcript.sys(`✓ exported to ${r.path}`)
-            }
+      ctx.gateway.rpc<SessionExportResponse>('session.export', { session_id: target }).then(
+        ctx.guarded<SessionExportResponse>(r => {
+          if (r.exported && r.path) {
+            return ctx.transcript.sys(`✓ exported to ${r.path}`)
+          }
 
-            if (r.reason === 'ambiguous') {
-              return ctx.transcript.sys(`ambiguous session id — candidates: ${(r.candidates ?? []).join(', ')}`)
-            }
+          if (r.reason === 'ambiguous') {
+            return ctx.transcript.sys(`ambiguous session id — candidates: ${(r.candidates ?? []).join(', ')}`)
+          }
 
-            if (r.reason === 'write_failed') {
-              return ctx.transcript.sys('error: failed to write export file')
-            }
+          if (r.reason === 'write_failed') {
+            return ctx.transcript.sys('error: failed to write export file')
+          }
 
-            return ctx.transcript.sys(`no such session: ${arg.trim() || target}`)
-          })
-        )
-        .catch(ctx.guardedErr)
+          return ctx.transcript.sys(`no such session: ${arg.trim() || target}`)
+        })
+      )
     }
   },
 
@@ -428,83 +361,80 @@ export const sessionCommands: SlashCommand[] = [
           ? normalized
           : 'status'
 
-      ctx.gateway
-        .rpc<VoiceToggleResponse>('voice.toggle', { action })
-        .then(
-          ctx.guarded<VoiceToggleResponse>(r => {
-            ctx.voice.setVoiceEnabled(!!r.enabled)
+      ctx.gateway.rpc<VoiceToggleResponse>('voice.toggle', { action }).then(
+        ctx.guarded<VoiceToggleResponse>(r => {
+          ctx.voice.setVoiceEnabled(!!r.enabled)
 
-            // Render the configured record key (config.yaml ``voice.record_key``)
-            // instead of hardcoded "Ctrl+B" — the gateway response carries the
-            // current value so /voice status and /voice on stay in sync with
-            // both the CLI and the TUI's actual binding.
-            //
-            // Rendering from the fresh backend response WITHOUT updating the
-            // frontend ``voice.recordKey`` state would skew display and binding
-            // between config-edit and the next ``mtime`` poll (~5s). Parse once,
-            // push into state so ``useInputHandlers()`` picks up the new binding
-            // immediately.
-            //
-            // Only push state when the response actually carries
-            // ``record_key`` — otherwise an older gateway (or a future branch
-            // that forgets to include it) would clobber a custom user binding
-            // back to the default on every /voice invocation. The label still
-            // falls back to the documented default for display.
-            const parsed = r.record_key ? parseVoiceRecordKey(r.record_key) : undefined
+          // Render the configured record key (config.yaml ``voice.record_key``)
+          // instead of hardcoded "Ctrl+B" — the gateway response carries the
+          // current value so /voice status and /voice on stay in sync with
+          // both the CLI and the TUI's actual binding.
+          //
+          // Rendering from the fresh backend response WITHOUT updating the
+          // frontend ``voice.recordKey`` state would skew display and binding
+          // between config-edit and the next ``mtime`` poll (~5s). Parse once,
+          // push into state so ``useInputHandlers()`` picks up the new binding
+          // immediately.
+          //
+          // Only push state when the response actually carries
+          // ``record_key`` — otherwise an older gateway (or a future branch
+          // that forgets to include it) would clobber a custom user binding
+          // back to the default on every /voice invocation. The label still
+          // falls back to the documented default for display.
+          const parsed = r.record_key ? parseVoiceRecordKey(r.record_key) : undefined
 
-            if (parsed) {
-              ctx.voice.setVoiceRecordKey(parsed)
-            }
+          if (parsed) {
+            ctx.voice.setVoiceRecordKey(parsed)
+          }
 
-            const recordKeyLabel = formatVoiceRecordKey(parsed ?? parseVoiceRecordKey('ctrl+b'))
+          const recordKeyLabel = formatVoiceRecordKey(parsed ?? parseVoiceRecordKey('ctrl+b'))
 
-            // Match CLI's _show_voice_status / _enable_voice_mode /
-            // _toggle_voice_tts output shape so users don't have to learn
-            // two vocabularies.
-            if (action === 'status') {
-              const mode = r.enabled ? 'ON' : 'OFF'
-              const tts = r.tts ? 'ON' : 'OFF'
-              ctx.transcript.sys('Voice Mode Status')
-              ctx.transcript.sys(`  Mode:       ${mode}`)
-              ctx.transcript.sys(`  TTS:        ${tts}`)
-              ctx.transcript.sys(`  Record key: ${recordKeyLabel}`)
+          // Match CLI's _show_voice_status / _enable_voice_mode /
+          // _toggle_voice_tts output shape so users don't have to learn
+          // two vocabularies.
+          if (action === 'status') {
+            const mode = r.enabled ? 'ON' : 'OFF'
+            const tts = r.tts ? 'ON' : 'OFF'
+            ctx.transcript.sys('Voice Mode Status')
+            ctx.transcript.sys(`  Mode:       ${mode}`)
+            ctx.transcript.sys(`  TTS:        ${tts}`)
+            ctx.transcript.sys(`  Record key: ${recordKeyLabel}`)
 
-              // CLI's "Requirements:" block — surfaces STT/audio setup issues
-              // so the user sees "STT provider: MISSING ..." instead of
-              // silently failing on every record-key press.
-              if (r.details) {
-                ctx.transcript.sys('')
-                ctx.transcript.sys('  Requirements:')
+            // CLI's "Requirements:" block — surfaces STT/audio setup issues
+            // so the user sees "STT provider: MISSING ..." instead of
+            // silently failing on every record-key press.
+            if (r.details) {
+              ctx.transcript.sys('')
+              ctx.transcript.sys('  Requirements:')
 
-                for (const line of r.details.split('\n')) {
-                  if (line.trim()) {
-                    ctx.transcript.sys(`    ${line}`)
-                  }
+              for (const line of r.details.split('\n')) {
+                if (line.trim()) {
+                  ctx.transcript.sys(`    ${line}`)
                 }
               }
-
-              return
             }
 
-            if (action === 'tts') {
-              ctx.transcript.sys(`Voice TTS ${r.tts ? 'enabled' : 'disabled'}.`)
+            return
+          }
 
-              return
-            }
+          if (action === 'tts') {
+            ctx.transcript.sys(`Voice TTS ${r.tts ? 'enabled' : 'disabled'}.`)
 
-            // on/off — mirror cli.py:_enable_voice_mode's 3-line output
-            if (r.enabled) {
-              const tts = r.tts ? ' (TTS enabled)' : ''
-              ctx.transcript.sys(`Voice mode enabled${tts}`)
-              ctx.transcript.sys(`  ${recordKeyLabel} to start/stop recording`)
-              ctx.transcript.sys('  /voice tts  to toggle speech output')
-              ctx.transcript.sys('  /voice off  to disable voice mode')
-            } else {
-              ctx.transcript.sys('Voice mode disabled.')
-            }
-          })
-        )
-        .catch(ctx.guardedErr)
+            return
+          }
+
+          // on/off — mirror cli.py:_enable_voice_mode's 3-line output
+          if (r.enabled) {
+            const tts = r.tts ? ' (TTS enabled)' : ''
+            ctx.transcript.sys(`Voice mode enabled${tts}`)
+            ctx.transcript.sys(`  ${recordKeyLabel} to start/stop recording`)
+            ctx.transcript.sys('  /voice tts  to toggle speech output')
+            ctx.transcript.sys('  /voice off  to disable voice mode')
+          } else {
+            ctx.transcript.sys('Voice mode disabled.')
+          }
+        })
+      )
     }
   },
 
@@ -517,13 +447,11 @@ export const sessionCommands: SlashCommand[] = [
         return ctx.gateway
           .rpc<ConfigGetValueResponse>('config.get', { key: 'skin' })
           .then(ctx.guarded<ConfigGetValueResponse>(r => ctx.transcript.sys(`skin: ${r.value || 'default'}`)))
-          .catch(ctx.guardedErr)
       }
 
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', { key: 'skin', value: arg })
         .then(ctx.guarded<ConfigSetResponse>(r => r.value && ctx.transcript.sys(`skin → ${r.value}`)))
-        .catch(ctx.guardedErr)
     }
   },
 
@@ -543,29 +471,25 @@ export const sessionCommands: SlashCommand[] = [
               ctx.transcript.sys(`indicator: ${r.value || DEFAULT_INDICATOR_STYLE}`)
             )
           )
-          .catch(ctx.guardedErr)
       }
 
       if (!(INDICATOR_STYLES as readonly string[]).includes(value)) {
         return ctx.transcript.sys(`usage: /indicator [${INDICATOR_STYLES.join('|')}]`)
       }
 
-      ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', { key: 'indicator', value })
-        .then(
-          ctx.guarded<ConfigSetResponse>(r => {
-            if (!r.value) {
-              return
-            }
+      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'indicator', value }).then(
+        ctx.guarded<ConfigSetResponse>(r => {
+          if (!r.value) {
+            return
+          }
 
-            // Hot-swap the running TUI immediately so the next render
-            // uses the new style without waiting for the 5s mtime poll
-            // to re-apply config.full.
-            patchUiState({ indicatorStyle: value as IndicatorStyle })
-            ctx.transcript.sys(`indicator → ${r.value}`)
-          })
-        )
-        .catch(ctx.guardedErr)
+          // Hot-swap the running TUI immediately so the next render
+          // uses the new style without waiting for the 5s mtime poll
+          // to re-apply config.full.
+          patchUiState({ indicatorStyle: value as IndicatorStyle })
+          ctx.transcript.sys(`indicator → ${r.value}`)
+        })
+      )
     }
   },
 
@@ -577,7 +501,6 @@ export const sessionCommands: SlashCommand[] = [
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', { key: 'yolo', session_id: ctx.sid })
         .then(ctx.guarded<ConfigSetResponse>(r => ctx.transcript.sys(`yolo ${r.value === '1' ? 'on' : 'off'}`)))
-        .catch(ctx.guardedErr)
     }
   },
 
@@ -594,35 +517,31 @@ export const sessionCommands: SlashCommand[] = [
               r => r.value && ctx.transcript.sys(`reasoning: ${r.value} · display ${r.display || 'hide'}`)
             )
           )
-          .catch(ctx.guardedErr)
       }
 
-      ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', { key: 'reasoning', session_id: ctx.sid, value: arg })
-        .then(
-          ctx.guarded<ConfigSetResponse>(r => {
-            if (!r.value) {
-              return
-            }
+      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'reasoning', session_id: ctx.sid, value: arg }).then(
+        ctx.guarded<ConfigSetResponse>(r => {
+          if (!r.value) {
+            return
+          }
 
-            if (r.value === 'hide') {
-              patchUiState(state => ({
-                ...state,
-                sections: { ...state.sections, thinking: 'hidden' },
-                showReasoning: false
-              }))
-            } else if (r.value === 'show') {
-              patchUiState(state => ({
-                ...state,
-                sections: { ...state.sections, thinking: 'expanded' },
-                showReasoning: true
-              }))
-            }
+          if (r.value === 'hide') {
+            patchUiState(state => ({
+              ...state,
+              sections: { ...state.sections, thinking: 'hidden' },
+              showReasoning: false
+            }))
+          } else if (r.value === 'show') {
+            patchUiState(state => ({
+              ...state,
+              sections: { ...state.sections, thinking: 'expanded' },
+              showReasoning: true
+            }))
+          }
 
-            ctx.transcript.sys(`reasoning: ${r.value}`)
-          })
-        )
-        .catch(ctx.guardedErr)
+          ctx.transcript.sys(`reasoning: ${r.value}`)
+        })
+      )
     }
   },
 
@@ -715,7 +634,6 @@ export const sessionCommands: SlashCommand[] = [
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', { key: 'verbose', session_id: ctx.sid, value: arg || 'cycle' })
         .then(ctx.guarded<ConfigSetResponse>(r => r.value && ctx.transcript.sys(`verbose: ${r.value}`)))
-        .catch(ctx.guardedErr)
     }
   },
 
@@ -724,54 +642,50 @@ export const sessionCommands: SlashCommand[] = [
     name: 'usage',
     supported: false,
     run: (_arg, ctx) => {
-      ctx.gateway
-        .rpc<SessionUsageResponse>('session.usage', { session_id: ctx.sid })
-        .then(r => {
-          if (ctx.stale()) {
-            return
-          }
+      ctx.gateway.rpc<SessionUsageResponse>('session.usage', { session_id: ctx.sid }).then(r => {
+        if (ctx.stale()) {
+          return
+        }
 
-          if (r) {
-            patchUiState({
-              usage: { calls: r.calls ?? 0, input: r.input ?? 0, output: r.output ?? 0, total: r.total ?? 0 }
-            })
-          }
+        if (r) {
+          patchUiState({
+            usage: { calls: r.calls ?? 0, input: r.input ?? 0, output: r.output ?? 0, total: r.total ?? 0 }
+          })
+        }
 
-          if (!r?.calls) {
-            return ctx.transcript.sys('no API calls yet')
-          }
+        if (!r?.calls) {
+          return ctx.transcript.sys('no API calls yet')
+        }
 
-          const f = (v: number | undefined) => (v ?? 0).toLocaleString()
-          const cost =
-            r.cost_usd != null ? `${r.cost_status === 'estimated' ? '~' : ''}$${r.cost_usd.toFixed(4)}` : null
+        const f = (v: number | undefined) => (v ?? 0).toLocaleString()
+        const cost = r.cost_usd != null ? `${r.cost_status === 'estimated' ? '~' : ''}$${r.cost_usd.toFixed(4)}` : null
 
-          const rows: [string, string][] = [
-            ['Model', r.model ?? ''],
-            ['Input tokens', f(r.input)],
-            ['Cache read tokens', f(r.cache_read)],
-            ['Cache write tokens', f(r.cache_write)],
-            ['Output tokens', f(r.output)],
-            ['Total tokens', f(r.total)],
-            ['API calls', f(r.calls)]
-          ]
+        const rows: [string, string][] = [
+          ['Model', r.model ?? ''],
+          ['Input tokens', f(r.input)],
+          ['Cache read tokens', f(r.cache_read)],
+          ['Cache write tokens', f(r.cache_write)],
+          ['Output tokens', f(r.output)],
+          ['Total tokens', f(r.total)],
+          ['API calls', f(r.calls)]
+        ]
 
-          if (cost) {
-            rows.push(['Cost', cost])
-          }
+        if (cost) {
+          rows.push(['Cost', cost])
+        }
 
-          const sections: PanelSection[] = [{ rows }]
+        const sections: PanelSection[] = [{ rows }]
 
-          if (r.context_max) {
-            sections.push({ text: `Context: ${f(r.context_used)} / ${f(r.context_max)} (${r.context_percent}%)` })
-          }
+        if (r.context_max) {
+          sections.push({ text: `Context: ${f(r.context_used)} / ${f(r.context_max)} (${r.context_percent}%)` })
+        }
 
-          if (r.compressions) {
-            sections.push({ text: `Compressions: ${r.compressions}` })
-          }
+        if (r.compressions) {
+          sections.push({ text: `Compressions: ${r.compressions}` })
+        }
 
-          ctx.transcript.panel('Usage', sections)
-        })
-        .catch(ctx.guardedErr)
+        ctx.transcript.panel('Usage', sections)
+      })
     }
   }
 ]

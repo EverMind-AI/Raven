@@ -481,6 +481,9 @@ _SEEDED_DIRECT_PROVIDERS = [
     ("zai", "zai/"),
     ("groq", "groq/"),
     ("dashscope", "dashscope/"),
+    ("moonshot", "moonshot/"),
+    ("minimax", "minimax/"),
+    ("volcengine", "volcengine/"),
 ]
 
 
@@ -530,16 +533,17 @@ async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> No
 
 
 @pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
-def test_litellm_catalogue_fills_providers_with_no_curated_shortlist(slug: str) -> None:
-    """The catalogue tier has to answer for a provider the shortlist does not.
+def test_litellm_catalogue_resolves_for_the_providers_it_used_to_carry_alone(slug: str) -> None:
+    """These five were the catalogue tier's whole reason to exist, so it breaks here first.
 
     Ollama is the case that proves the lookup has to go through every name the
     provider answers to: LiteLLM files its models under "ollama" while the
     section is "ollama_chat", so a lookup by section name alone finds none.
 
-    Upstream guarded this with ``not common_models_for(slug)``; this trunk
-    curates a shortlist for all five, so the premise is gone while the lookup it
-    was protecting is not. The catalogue tier is asked directly instead.
+    It no longer *fills* an empty shortlist for anyone -- each of these five was
+    curated once the WebUI needed them, because that service runs without LiteLLM
+    installed and so cannot reach this tier at all. What is left is widening a
+    curated head, which is why the shortlist is no longer asserted empty here.
     """
     from raven.providers.common_models import litellm_models_for
 
@@ -780,171 +784,6 @@ def test_every_provider_stores_a_model_id_that_finds_it_again(spec) -> None:
     resolved = find_by_model(stored)
 
     assert resolved is not None and resolved.name == spec.name, f"{stored} resolves to {resolved and resolved.name}"
-
-
-async def test_options_reports_the_session_model_when_that_session_switched() -> None:
-    """The picker sits under the status bar; reading the global default here is
-    how they end up showing two models for one conversation.
-    """
-    from types import SimpleNamespace
-
-    from raven.rpc.methods.model import model_options
-
-    loop = SimpleNamespace(
-        has_session_binding=lambda key: key == "tui:a",
-        session_model=lambda key: "anthropic/claude-opus-4-8",
-    )
-
-    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
-
-    assert result["model"] == "anthropic/claude-opus-4-8"
-    assert result["provider"] == "anthropic"
-
-
-async def test_options_reports_a_passthrough_vendor_from_the_id_it_stored(fake_home: Path) -> None:
-    """``find_by_model`` has no spec for a passthrough vendor, so falling through
-    to the configured default stars another vendor's row for a session running on
-    this one's key -- and the marked row is exactly what a user reads to answer
-    "whose key is paying for this". The id names its provider, because every
-    switch writes it there through ``stored_model_id``, so read it.
-    """
-    from types import SimpleNamespace
-
-    from raven.providers.registry import find_by_model
-    from raven.rpc.methods.model import model_options
-
-    assert find_by_model("mistral/mistral-large-latest") is None, "fixture must be a vendor we have no spec for"
-
-    _write_config(
-        fake_home,
-        {
-            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
-            "providers": {"anthropic": {"apiKey": "sk-a"}, "mistral": {"apiKey": "sk-m"}},
-        },
-    )
-    loop = SimpleNamespace(
-        has_session_binding=lambda key: key == "tui:a",
-        session_model=lambda key: "mistral/mistral-large-latest",
-    )
-
-    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
-
-    assert result["model"] == "mistral/mistral-large-latest"
-    assert result["provider"] == "mistral"
-    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == ["mistral"]
-
-
-async def test_options_stars_nothing_rather_than_the_wrong_row_for_an_unknown_head(fake_home: Path) -> None:
-    """A head naming no configured provider leaves nothing to mark. Marking a
-    vendor picked to fill the blank is the habit this PR retires everywhere else.
-    """
-    from types import SimpleNamespace
-
-    from raven.rpc.methods.model import model_options
-
-    _write_config(
-        fake_home,
-        {
-            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
-            "providers": {"anthropic": {"apiKey": "sk-a"}},
-        },
-    )
-    loop = SimpleNamespace(
-        has_session_binding=lambda key: key == "tui:a",
-        session_model=lambda key: "notavendor/some-model",
-    )
-
-    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
-
-    assert result["model"] == "notavendor/some-model"
-    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == []
-
-
-async def test_options_leaves_an_unswitched_session_on_the_configured_answer() -> None:
-    """``session_model`` falls back to the default, so asking it alone would
-    override a forced ``agents.defaults.provider`` for every session.
-    """
-    from types import SimpleNamespace
-
-    from raven.rpc.methods.model import _current_selection, model_options
-
-    configured_model, configured_provider = _current_selection()
-    loop = SimpleNamespace(
-        has_session_binding=lambda key: False,
-        session_model=lambda key: "anthropic/claude-opus-4-8",
-    )
-
-    result = await model_options({"session_id": "tui:b"}, agent_loop_factory=lambda: loop)
-
-    assert result["model"] == configured_model
-    assert result["provider"] == (configured_provider or "")
-
-
-async def test_the_production_registration_makes_model_options_session_aware(fake_home: Path) -> None:
-    """The picker asks ``model.options`` which model to show as current, and the
-    answer is per session.
-
-    Registered through the umbrella the production path uses, not by calling
-    the handler with a factory by hand: without the factory threaded here the
-    picker reports the configured default to every session, and calling
-    ``model_options`` directly would never notice.
-    """
-    from raven.rpc.dispatcher import Dispatcher
-    from raven.rpc.methods import register_aligned_methods_except_system
-
-    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
-
-    class _Loop:
-        def has_session_binding(self, session_id: str) -> bool:
-            return session_id == "tui:switched"
-
-        def session_model(self, session_id: str) -> str:
-            return "anthropic/claude-opus-4-8"
-
-    d = Dispatcher()
-    register_aligned_methods_except_system(d, agent_loop_factory=lambda: _Loop())
-
-    switched = await d.dispatch(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "model.options",
-            "params": {"session_id": "tui:switched"},
-        }
-    )
-    assert switched["result"]["model"] == "anthropic/claude-opus-4-8"
-
-    untouched = await d.dispatch(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "model.options",
-            "params": {"session_id": "tui:never-switched"},
-        }
-    )
-    assert untouched["result"]["model"] == "anthropic/claude-sonnet-4-5", (
-        "a session that never switched still reports the configured default"
-    )
-
-
-@pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
-def test_litellm_catalogue_resolves_for_the_providers_it_used_to_carry_alone(slug: str) -> None:
-    """These five were the catalogue tier's whole reason to exist, so it breaks here first.
-
-    Ollama is the case that proves the lookup has to go through every name the
-    provider answers to: LiteLLM files its models under "ollama" while the
-    section is "ollama_chat", so a lookup by section name alone finds none.
-
-    It no longer *fills* an empty shortlist for anyone -- each of these five was
-    curated once the WebUI needed them, because that service runs without LiteLLM
-    installed and so cannot reach this tier at all. What is left is widening a
-    curated head, which is why the shortlist is no longer asserted empty here.
-    """
-    from raven.providers.common_models import litellm_models_for
-
-    models = litellm_models_for(slug)
-    assert models, f"{slug}: the catalogue tier found nothing"
-    assert all("/" in m for m in models), models[:3]
 
 
 async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> None:

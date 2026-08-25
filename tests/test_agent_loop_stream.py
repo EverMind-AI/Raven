@@ -86,9 +86,7 @@ async def test_llm_call_stream_accumulates_content_and_triggers_callback() -> No
 
     assert deltas_received == ["Hello", " ", "world", "!"]
     assert response.content == "Hello world!"
-    # No terminal finish_reason arrived, so none may be fabricated: "unknown"
-    # keeps a died-mid-stream reply distinguishable from a completed one.
-    assert response.finish_reason == "unknown"
+    assert response.finish_reason == "stop"
     assert response.tool_calls == []
 
 
@@ -207,9 +205,7 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
     tc = response.tool_calls[0]
     assert tc.name == "fs.read"
     assert tc.arguments == {"path": "/tmp/x"}
-    # The fragments never carried a terminal finish_reason; the aggregate must
-    # not claim "tool_calls" on the upstream's behalf.
-    assert response.finish_reason == "unknown"
+    assert response.finish_reason == "tool_calls"
 
 
 # ---------------------------------------------------------------------------
@@ -373,9 +369,7 @@ async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
     response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
     assert provider.calls == 2
-    # The reconnected stream carried no terminal reason either, and none is
-    # invented now; what this states is that the reconnect happened.
-    assert response.finish_reason == "unknown"
+    assert response.finish_reason == "stop"
     assert response.content == "recovered"
     assert seen == ["recovered"]
 
@@ -463,11 +457,7 @@ async def test_llm_call_stream_timeout_does_not_reconnect() -> None:
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
-    """Provider yields zero chunks → response.content == '' + finish_reason='unknown'.
-
-    A zero-chunk stream said nothing about why it ended; reporting "stop" would
-    make it indistinguishable from a normal finish in recorded trajectories.
-    """
+    """Provider yields zero chunks → response.content == '' + finish_reason='stop'."""
     provider = _FakeProvider([])
     call = _bind_helper(provider)
 
@@ -479,7 +469,7 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     assert isinstance(response, LLMResponse)
     assert response.content == ""
     assert response.tool_calls == []
-    assert response.finish_reason == "unknown"
+    assert response.finish_reason == "stop"
 
 
 # ---------------------------------------------------------------------------

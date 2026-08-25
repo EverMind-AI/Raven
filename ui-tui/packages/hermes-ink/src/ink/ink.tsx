@@ -109,8 +109,6 @@ import {
 import {
   CLEAR_ITERM2_PROGRESS,
   CLEAR_TAB_STATUS,
-  clipboardDebugEnabled,
-  type ClipboardPath,
   setClipboard,
   supportsTabStatus,
   wrapForMultiplexer
@@ -149,21 +147,6 @@ function makeAltScreenParkPatch(terminalRows: number) {
     content: cursorPosition(terminalRows, 1)
   })
 }
-
-/**
- * The outcome of a selection copy: the text that was copied and the path that
- * took it, or '' and null when no path did.
- *
- * The path travels with the text because only `setClipboard()` can see which
- * path ran -- inside tmux a failed load-buffer falls through to raw OSC 52 and
- * leaves the environment looking exactly like the case that worked.
- */
-export type SelectionCopy = {
-  text: string
-  path: ClipboardPath | null
-}
-
-const NOTHING_COPIED: SelectionCopy = { text: '', path: null }
 
 export type Options = {
   stdout: NodeJS.WriteStream
@@ -1452,64 +1435,60 @@ export default class Ink {
 
   /**
    * Copy the current text selection to the system clipboard without clearing the
-   * selection. Returns the copied text plus the path that took it when a
-   * clipboard path succeeded (native tool fired, tmux buffer loaded, or OSC 52
-   * emitted), or an empty text and a null path when none did (e.g. headless
-   * Linux without tmux). The path comes from what `setClipboard()` observed --
-   * callers report it to the user, and it cannot be re-derived from the
-   * environment afterwards. Matches iTerm2's copy-on-select behavior where the
-   * selected region stays visible after the automatic copy.
+   * selection. Returns the copied text when a clipboard path succeeded (native
+   * tool fired, tmux buffer loaded, or OSC 52 emitted), or '' when no path was
+   * taken (e.g. headless Linux without tmux). Matches iTerm2's copy-on-select
+   * behavior where the selected region stays visible after the automatic copy.
    */
-  async copySelectionNoClear(): Promise<SelectionCopy> {
+  async copySelectionNoClear(): Promise<string> {
     if (!hasSelection(this.selection)) {
-      return NOTHING_COPIED
+      return ''
     }
 
     const text = getSelectedText(this.selection, this.frontFrame.screen)
 
     if (text) {
       try {
-        const { sequence, success, path } = await setClipboard(text)
+        const { sequence, success } = await setClipboard(text)
 
         if (sequence) {
           this.options.stdout.write(sequence)
         }
 
-        if (success && path) {
-          return { text, path }
+        if (success) {
+          return text
         }
 
-        if (clipboardDebugEnabled()) {
+        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
           console.error(
-            '[clipboard] no path reached the clipboard (headless + no tmux?) — set RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence'
+            '[clipboard] no path reached the clipboard (headless + no tmux?) — set HERMES_TUI_FORCE_OSC52=1 to force the escape sequence'
           )
         }
       } catch (err) {
-        if (clipboardDebugEnabled()) {
+        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
           console.error('[clipboard] error:', err)
         }
       }
     }
 
-    return NOTHING_COPIED
+    return ''
   }
 
   /**
    * Copy the current text selection to the system clipboard via OSC 52
-   * and clear the selection. Returns what `copySelectionNoClear()` reports:
-   * the copied text and the path that took it, or an empty text and a null
-   * path when no selection existed or no path took it.
+   * and clear the selection. Returns the copied text (empty if no selection
+   * or clipboard operation failed).
    */
-  async copySelection(): Promise<SelectionCopy> {
+  async copySelection(): Promise<string> {
     if (!hasSelection(this.selection)) {
-      return NOTHING_COPIED
+      return ''
     }
 
-    const copied = await this.copySelectionNoClear()
+    const text = await this.copySelectionNoClear()
     clearSelection(this.selection)
     this.notifySelectionChange()
 
-    return copied
+    return text
   }
 
   /** Clear the current text selection without copying. */
