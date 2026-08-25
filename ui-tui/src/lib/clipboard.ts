@@ -239,6 +239,13 @@ export function copyOnSelectNotice(charCount: number, path: ClipboardPath, first
   return firstOfSession ? copyResultNotice(charCount, path) : counted(verbFor(path), charCount)
 }
 
+/** The notice for one copy-on-select write, plus whether it carried the path
+ *  caveat -- the caveat takes longer to read, so the caller shows it longer. */
+export type CopyOnSelectReport = {
+  firstOfSession: boolean
+  text: string
+}
+
 /**
  * Report copies for a TUI process, spending the path caveat once per session.
  *
@@ -248,7 +255,11 @@ export function copyOnSelectNotice(charCount: number, path: ClipboardPath, first
  * is whatever identifies the current session to the caller; a resumed session
  * reaching the same key has already had its caveat and does not repeat it.
  */
-export function createCopyOnSelectReporter(): (charCount: number, path: ClipboardPath, sessionKey: string) => string {
+export function createCopyOnSelectReporter(): (
+  charCount: number,
+  path: ClipboardPath,
+  sessionKey: string
+) => CopyOnSelectReport {
   const told = new Set<string>()
 
   return (charCount, path, sessionKey) => {
@@ -256,6 +267,6 @@ export function createCopyOnSelectReporter(): (charCount: number, path: Clipboar
 
     told.add(sessionKey)
 
-    return copyOnSelectNotice(charCount, path, firstOfSession)
+    return { text: copyOnSelectNotice(charCount, path, firstOfSession), firstOfSession }
   }
 }
