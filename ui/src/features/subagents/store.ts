@@ -128,7 +128,11 @@ export const plainTitle = stripTitle
    Refreshing is three separate judgements, all about what is on screen:
    whether to ask at all, whether the answer still belongs to the conversation
    the reader is in, and whether anything changed enough to repaint. */
-let busy = false
+/* The read in flight, not a flag saying there is one: a caller that has to
+   know when the list has answered -- restoring a window the reader had open
+   (shell/resume.ts) -- can only wait on the same read the panel is already
+   doing. Held rather than started again, so two callers share one answer. */
+let flight: Promise<void> | null = null
 let at = 0
 /* One fingerprint per drawn list, keyed by conversation as well as content,
    so switching between two sessions that listed the same thing still
@@ -137,13 +141,14 @@ let drawn = ''
 
 const sessionKey = (): string => currentSession() || ''
 
-export function refresh(force = false): void {
+export function refresh(force = false): Promise<void> {
   /* The list asks on each draw and a fresh answer causes one; the floor keeps
      that from spinning, and doubles as the watch's rate limit. */
   const asked = sessionKey()
-  if (!asked || busy || (!force && Date.now() - at < 2500)) return
-  busy = true
-  source().list(asked)
+  if (!asked) return Promise.resolve()
+  if (flight) return flight
+  if (!force && Date.now() - at < 2500) return Promise.resolve()
+  flight = source().list(asked)
     .then((rows) => {
       /* An answer for a conversation the reader already left: dropping it is
          the difference between a stale list and somebody else's list. */
@@ -161,9 +166,10 @@ export function refresh(force = false): void {
     })
     .catch(() => { /* an empty list is not a broken one: keep what is drawn */ })
     .then(() => {
-      busy = false
+      flight = null
       at = Date.now()
     })
+  return flight
 }
 
 export const rows = (): AgentRow[] => state.rows
@@ -190,18 +196,19 @@ export function refreshRoster(force = false): void {
 
 export const instances = (): InstanceRow[] => state.instances
 
-let instBusy = false
+let instFlight: Promise<void> | null = null
 let instAt = 0
 let instDrawn = ''
 
-export function refreshInstances(force = false): void {
-  /* Its own floor and its own in-flight flag: the two lists answer at different
+export function refreshInstances(force = false): Promise<void> {
+  /* Its own floor and its own read in flight: the two lists answer at different
      speeds, and one slow answer must not hold the other's refresh back. */
   const asked = sessionKey()
   const src = source()
-  if (!asked || instBusy || !src.instances || (!force && Date.now() - instAt < 2500)) return
-  instBusy = true
-  src.instances(asked)
+  if (!asked || !src.instances) return Promise.resolve()
+  if (instFlight) return instFlight
+  if (!force && Date.now() - instAt < 2500) return Promise.resolve()
+  instFlight = src.instances(asked)
     .then((rows) => {
       if (asked !== sessionKey()) return
       const next = rows || []
@@ -230,7 +237,8 @@ export function refreshInstances(force = false): void {
       }
     })
     .catch(() => { /* same rule as the run list: keep what is drawn */ })
-    .then(() => { instBusy = false; instAt = Date.now() })
+    .then(() => { instFlight = null; instAt = Date.now() })
+  return instFlight
 }
 
 /* The row a graph node ran on, if it ran on one. A stateless node has no
@@ -853,12 +861,15 @@ export function reset(): void {
   rosterBusy = false
   drawn = ''
   at = 0
-  busy = false
+  /* Dropped, not awaited: an answer for the conversation being left is
+     discarded by the guard inside the read anyway, and holding the handle
+     would make the next conversation share that dead read instead of asking. */
+  flight = null
   /* The instance list's own three, or the next conversation waits out this
      one's refresh floor before it may ask for anything. */
   instDrawn = ''
   instAt = 0
-  instBusy = false
+  instFlight = null
   /* And what each open spawn record committed under. Subagents belong to the
      session that spawned them, so a handle remembered here must leave with it
      or the next conversation promotes a record that never named one. */

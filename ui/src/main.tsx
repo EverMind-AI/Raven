@@ -55,6 +55,7 @@ import * as urlAction from './shell/open-url'
 import * as panes from './shell/panes'
 import * as perm from './shell/perm'
 import { md } from './shell/prose'
+import * as resume from './shell/resume'
 import * as scrollbars from './shell/scrollbars'
 import * as session from './shell/session'
 import { toggle as toggleTheme } from './shell/theme'
@@ -273,6 +274,13 @@ window.RavenIslands = {
     sync: dagSheet.sync,
     forget: dagSheet.forget,
     run: dagSheet.run,
+  },
+  /* Not an island either: one verb, spent when a conversation is opened, that
+     puts back the sheet and the desk that conversation had before the page was
+     replaced (see shell/resume.ts). It reaches across three stores and the
+     transcript's own `dag.get` seam, which is why it is not any of theirs. */
+  view: {
+    resume: resume.resume,
   },
   /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
      rides the same bag because the bag is simply what the legacy shell reaches

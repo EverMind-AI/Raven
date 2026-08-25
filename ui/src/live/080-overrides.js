@@ -121,6 +121,15 @@ async function openLiveSession(s) {
       wsOnHistory(r.messages);
     } else pitch();
     await subscribe(s.id);
+    /* Last, and only on this path. The reader may be arriving here after a
+       reload -- or after an upgrade replaced the page under them -- in which
+       case the graph they were watching and the windows they had open are
+       recorded but not on screen. The parked path above returns instead: its
+       conversation never left this page, so its sheet and its desk are still in
+       the stores and putting a second copy back would replace them.
+       Not awaited: it reads the run and the panes back from the gateway, and
+       the transcript is already up. */
+    RavenIslands.view.resume(s.id);
   } catch (e) {
     pitch();
     toast(`打开会话失败：${e.message || e}`);
