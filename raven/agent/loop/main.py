@@ -32,6 +32,7 @@ from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.base import Continuation
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -3176,7 +3177,14 @@ class AgentLoop:
                     continue
 
             if response.has_tool_calls:
-                abort_action = False
+                # Blocking a call is handled where the call is: the
+                # branch below refuses it and cancels the siblings the
+                # model wrote beside it. The only answer that has to
+                # leave that branch is the one about the turn, and this
+                # is it. Every refusal asks for ABORT_TURN today; the
+                # point of naming it separately is that the one which
+                # should not can say so without touching this loop.
+                continuation = Continuation.CONTINUE
                 abort_reason = ""
                 if on_progress:
                     thought = self._strip_think(response.content)
@@ -3313,8 +3321,8 @@ class AgentLoop:
                         messages[-1]["_diff"] = tool_diff
                     if attach_blocks:
                         pending_images.extend(attach_blocks)
-                    if getattr(result, "abort_action", False):
-                        abort_action = True
+                    if getattr(result, "blocks_call", False):
+                        continuation = getattr(result, "continuation", Continuation.ABORT_TURN)
                         # The blocking tool's own words, kept for the reader: the
                         # canned reply below says an operation stopped but never
                         # which one, so without this the user is told a thing
@@ -3349,7 +3357,7 @@ class AgentLoop:
                     else:
                         loop_fail_key, loop_fail_streak = None, 0
 
-                if abort_action:
+                if continuation is Continuation.ABORT_TURN:
                     # A normal tool result starts another model iteration. That
                     # is specifically unsafe here: the next plan can translate
                     # the rejected operation into an equivalent interpreter,
@@ -3401,7 +3409,7 @@ class AgentLoop:
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be
-                # the tool result it appends to. Also after the abort_action
+                # the tool result it appends to. Also after the blocked-call
                 # branch, which ends the turn in runtime code -- there is no
                 # further model call to show a picture to, so an aborted action
                 # deliberately drops it rather than leaving it dangling.
