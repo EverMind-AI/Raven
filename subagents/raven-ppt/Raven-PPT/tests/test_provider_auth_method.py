@@ -438,6 +438,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/loop/main.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
+        "raven/ppt/tools/generate_image.py",
         "raven/agent/tools/web.py",
         "raven/cli/agent_commands.py",
         "raven/cli/deep_research_commands.py",

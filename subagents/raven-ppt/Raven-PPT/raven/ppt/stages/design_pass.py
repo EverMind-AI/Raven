@@ -23,6 +23,8 @@ hands it to someone who did not write it.
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +50,8 @@ from raven.ppt.contracts import (
     StageResult,
     brief_path,
     load_brief,
+    load_outline,
+    outline_path,
 )
 from raven.ppt.services.template import bound
 from raven.ppt.stages._briefs import deck_brief, page_brief
@@ -93,19 +97,48 @@ class DesignPass:
     concurrency: int = 6
     max_tokens: int = 16_000
 
-    async def run(self, project: Project, outcome: BuildOutcome) -> StageResult:
+    async def run(
+        self,
+        project: Project,
+        outcome: BuildOutcome,
+        *,
+        pages: Sequence[int] | None = None,
+        setup: bool = False,
+    ) -> StageResult:
         if not outcome.ok or outcome.pptx_path is None:
-            return StageResult(ok=False, note="no deck to look at")
+            return StageResult(ok=False, data={"status": "skipped"}, note="no deck to look at")
         source = script_path(project)
+        selected = None if pages is None else sorted(set(pages))
+        copy_baseline = self._copy_baseline(project, source, targeted=selected is not None)
+        prior_failures = self._prior_failures(project) if selected is not None else {}
         history: list[dict[str, Any]] = []
         vocabulary: list[str] = []
         current = outcome
+        artifacts: dict[str, str] = {}
+        artifacts["before"] = str(await self._snapshot(project, current, "before"))
+        self._write_report(project, "running", history, vocabulary, artifacts)
 
+        # What the last round wrote and could not run, by page. A page whose edit
+        # was dropped is looked at again next round, and without this it is looked
+        # at by someone who does not know what happened last time -- so the same
+        # call to the same helper with the same wrong arity comes back.
+        broke: dict[int, str] = prior_failures
         for index in range(self.rounds):
             before = source.read_text(encoding="utf-8")
-            record, current, vocabulary = await self._round(project, current, before, vocabulary)
+            record, current, vocabulary = await self._round(
+                project,
+                current,
+                before,
+                vocabulary,
+                broke,
+                selected=selected,
+                copy_baseline=copy_baseline,
+                allow_deck_stage=index == 0 and (selected is None or setup),
+            )
+            broke = dict(record.get("would_not_run") or {})
             record["round"] = index + 1
             history.append(record)
+            self._write_report(project, "running", history, vocabulary, artifacts)
             if not current.ok:
                 # The round left the program broken. Put back the text that built,
                 # and say which page it died in -- the next actor needs a deck to
@@ -113,49 +146,192 @@ class DesignPass:
                 source.write_text(before, encoding="utf-8")
                 rebuilt = await self.build(project)
                 record["reverted"] = True
+                if rebuilt.ok and rebuilt.pptx_path is not None:
+                    artifacts["after"] = str(await self._snapshot(project, rebuilt, "after"))
+                self._write_report(project, "reverted", history, vocabulary, artifacts)
                 return StageResult(
                     ok=False,
                     findings=(_broken(record.get("broken_page"), record.get("stderr", "")),),
-                    data={"rounds": history, "outcome": rebuilt},
+                    data={"status": "reverted", "rounds": history, "outcome": rebuilt, "artifacts": artifacts},
                     note="the round was reverted; the deck that built is back in place",
                 )
-            if not record.get("edited"):
+            if not record.get("edited") and not broke:
                 record["stopped"] = "nothing left to change"
                 break
+            # A round whose only edit was dropped for not running changed nothing,
+            # and has converged on nothing: the page it wanted to fix is still the
+            # page it wanted to fix. Reading that as "nothing left to change" ended
+            # the pass on the first page that would not build.
 
-        return StageResult(ok=True, data={"rounds": history, "outcome": current, "vocabulary": vocabulary})
+        if current.ok and current.pptx_path is not None:
+            artifacts["after"] = str(await self._snapshot(project, current, "after"))
+        changed = any(entry.get("rewrote") or entry.get("rewrote_setup") for entry in history)
+        self._write_report(project, "completed", history, vocabulary, artifacts, changed=changed)
+        return StageResult(
+            ok=True,
+            data={
+                "status": "completed",
+                "changed": changed,
+                "rounds": history,
+                "outcome": current,
+                "vocabulary": vocabulary,
+                "artifacts": artifacts,
+            },
+        )
+
+    def _prior_failures(self, project: Project) -> dict[int, str]:
+        path = project.review_dir / "design_pass" / "report.json"
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        for record in reversed(report.get("rounds") or []):
+            failed = record.get("would_not_run") or {}
+            if isinstance(failed, dict) and failed:
+                return {int(page): str(reason) for page, reason in failed.items()}
+        return {}
+
+    def _copy_baseline(self, project: Project, source: Path, *, targeted: bool) -> dict[int, str]:
+        path = project.review_dir / "design_pass" / "baseline" / "build.py"
+        if targeted and path.is_file():
+            text = path.read_text(encoding="utf-8")
+        else:
+            text = source.read_text(encoding="utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        return {number: "".join(lines[start:end]) for number, (start, end) in page_blocks(lines).items()}
+
+    def _write_report(
+        self,
+        project: Project,
+        status: str,
+        history: list[dict[str, Any]],
+        vocabulary: list[str],
+        artifacts: dict[str, str],
+        *,
+        changed: bool | None = None,
+    ) -> Path:
+        path = project.review_dir / "design_pass" / "report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        artifacts["report"] = str(path)
+        payload: dict[str, Any] = {
+            "status": status,
+            "rounds": history,
+            "vocabulary": vocabulary,
+            "artifacts": artifacts,
+        }
+        if changed is not None:
+            payload["changed"] = changed
+        spent = getattr(self.composer, "spent", None)
+        if isinstance(spent, dict):
+            payload["usage"] = dict(spent)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    async def _snapshot(self, project: Project, outcome: BuildOutcome, label: str) -> Path:
+        """Persist a comparable deck and its rendered evidence for this pass."""
+        destination = project.review_dir / "design_pass" / label
+        destination.mkdir(parents=True, exist_ok=True)
+        source = outcome.pptx_path
+        if source is None or not source.is_file():
+            return destination
+        target = destination / "deck.pptx"
+        shutil.copy2(source, target)
+        program = script_path(project)
+        if program.is_file():
+            shutil.copy2(program, destination / "build.py")
+        renders = await self.renderer.pages(
+            source,
+            destination,
+            list(range(1, outcome.pages + 1)) if outcome.pages else None,
+        )
+        if renders:
+            self.renderer.contact_sheet(
+                [renders[number] for number in sorted(renders)],
+                destination / "contact.png",
+            )
+        (destination / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "label": label,
+                    "pages": outcome.pages,
+                    "deck": str(target),
+                    "rendered_pages": sorted(renders),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return destination
 
     async def _round(
-        self, project: Project, outcome: BuildOutcome, script: str, vocabulary: list[str]
+        self,
+        project: Project,
+        outcome: BuildOutcome,
+        script: str,
+        vocabulary: list[str],
+        broke: dict[int, str] | None = None,
+        *,
+        selected: Sequence[int] | None = None,
+        copy_baseline: dict[int, str] | None = None,
+        allow_deck_stage: bool = True,
     ) -> tuple[dict[str, Any], BuildOutcome, list[str]]:
         record: dict[str, Any] = {"deck": None, "pages": {}, "refused": {}}
         lines = script.splitlines(keepends=True)
-        blocks, derived = _blocks(outcome, lines)
-        rejection = blocks_rejection(lines, blocks, outcome.pages, derived) if blocks else None
-        if not blocks or rejection:
+        all_blocks, derived = _blocks(outcome, lines)
+        rejection = blocks_rejection(lines, all_blocks, outcome.pages, derived) if all_blocks else None
+        if not all_blocks or rejection:
             record["refused"]["blocks"] = rejection or "no page blocks could be found in the program"
+            return record, outcome, vocabulary
+        wanted = sorted(all_blocks) if selected is None else [number for number in selected if number in all_blocks]
+        blocks = {number: all_blocks[number] for number in wanted}
+        record["selected"] = wanted
+        missing = sorted(set(selected or ()) - set(wanted))
+        if missing:
+            record["refused"]["selection"] = f"no mapped page block for: {', '.join(map(str, missing))}"
+        if not blocks:
             return record, outcome, vocabulary
 
         renders = await self.renderer.pages(outcome.pptx_path, project.review_dir, sorted(blocks))
         findings = await self.measure(project, outcome.pptx_path, outcome)
-        prelude_end = min(span[0] for span in blocks.values())
+        prelude_end = min(span[0] for span in all_blocks.values())
         prelude = "".join(lines[:prelude_end])
 
         template = bound(project)
         house_style = template is not None
         house = _house_numbers(project, template) if template is not None else ""
-        deck_note, new_prelude, vocabulary = await self._deck_stage(
-            project, renders, prelude, lines, blocks, house_style, house
-        )
+        outline = load_outline(outline_path(project))
+        planned = {page.page: page.as_dict() for page in outline.pages} if outline is not None else {}
+        if allow_deck_stage:
+            deck_note, new_prelude, vocabulary = await self._deck_stage(
+                project, renders, prelude, lines, all_blocks, house_style, house
+            )
+        else:
+            deck_note, new_prelude = {"skipped": "targeted replay keeps the shared setup"}, None
         record["deck"] = deck_note
         if new_prelude is not None:
             lines = new_prelude.splitlines(keepends=True) + lines[prelude_end:]
-            blocks, derived = page_blocks(lines), "comments"
+            all_blocks = page_blocks(lines)
+            blocks = {number: all_blocks[number] for number in wanted if number in all_blocks}
             prelude = new_prelude
 
         prototypes = await self._prototypes(project, sorted(blocks))
         replacements, notes, refused = await self._page_stage(
-            lines, blocks, renders, findings, prelude, vocabulary, house_style, prototypes, house
+            lines,
+            blocks,
+            renders,
+            findings,
+            prelude,
+            vocabulary,
+            house_style,
+            prototypes,
+            house,
+            broke or {},
+            planned,
+            copy_baseline or {},
         )
         record["pages"] = notes
         record["refused"].update(refused)
@@ -183,9 +359,58 @@ class DesignPass:
 
         rebuilt = await self.build(project)
         if not rebuilt.ok:
+            written, rebuilt = await self._salvage(project, lines, blocks, kept, written, rebuilt, record)
+        if not rebuilt.ok:
             record["stderr"] = rebuilt.stderr
             record["broken_page"] = broken_page("".join(written), rebuilt.stderr)
         return record, rebuilt, vocabulary
+
+    async def _salvage(
+        self,
+        project: Project,
+        lines: list[str],
+        blocks: dict[int, tuple[int, int]],
+        kept: dict[int, str],
+        written: list[str],
+        rebuilt: BuildOutcome,
+        record: dict[str, Any],
+    ) -> tuple[list[str], BuildOutcome]:
+        """Drop the blocks that will not run, and keep the round's other edits.
+
+        Until this existed, one page that would not run cost the round: the
+        program went back to the text that built, so the nineteen pages the pass
+        had just improved were discarded along with the one it broke -- and the
+        pass returned, so no later round looked at any of them again. In one
+        twenty-page run that happened seventeen times, which is most of what
+        "the design pass ran and the deck did not change" was.
+
+        The block that died is named by the traceback, and dropping one can
+        uncover the next, so it repeats. This is the discipline `apply_verified`
+        already applies to the banner count -- one bad block costs itself rather
+        than the round -- extended to the failures only running the program can
+        find: a helper called with the wrong arity, a name the block never bound.
+        When no block can be named the failure is the prelude's or the file's as
+        a whole, and the caller's whole-round revert is still the right answer.
+        """
+        surviving = dict(kept)
+        reverted: dict[int, str] = {}
+        while surviving:
+            page = broken_page("".join(written), rebuilt.stderr)
+            if page is None or page not in surviving:
+                break
+            tail = rebuilt.stderr.strip().splitlines()[-1] if rebuilt.stderr.strip() else "no error output"
+            reverted[page] = tail
+            surviving.pop(page)
+            written = applied_lines(lines, blocks, surviving)
+            script_path(project).write_text("".join(written), encoding="utf-8")
+            rebuilt = await self.build(project)
+            if rebuilt.ok:
+                break
+        if reverted:
+            record["would_not_run"] = {page: tail for page, tail in sorted(reverted.items())}
+            record["rewrote"] = sorted(surviving)
+            record["edited"] = bool(surviving) or bool(record.get("rewrote_setup"))
+        return written, rebuilt
 
     async def _deck_stage(
         self,
@@ -269,6 +494,9 @@ class DesignPass:
         house_style: bool = False,
         prototypes: dict[int, tuple[int, Path | None]] | None = None,
         house: str = "",
+        broke: dict[int, str] | None = None,
+        planned: dict[int, dict[str, Any]] | None = None,
+        copy_baseline: dict[int, str] | None = None,
     ) -> tuple[dict[int, str], dict[int, Any], dict[int, str]]:
         """One call per page, concurrently. Each sees its page and nothing else."""
         gate = asyncio.Semaphore(self.concurrency)
@@ -285,27 +513,67 @@ class DesignPass:
                 if for_page.get(number):
                     measured = "\n".join(f"- {f.message}" for f in for_page[number])
                     parts.append(text_block(f"Measured on this page:\n{measured}"))
+                plan = (planned or {}).get(number)
+                if plan is not None:
+                    plan_lines = [
+                        f"claim: {plan.get('claim', '')}",
+                        f"intended visual/layout: {plan.get('carries', '')}",
+                    ]
+                    if plan.get("says"):
+                        plan_lines.append(
+                            "supporting points:\n" + "\n".join(f"- {item}" for item in plan["says"])
+                        )
+                    if plan.get("table_plan"):
+                        plan_lines.append(
+                            "planned table information shape:\n"
+                            + json.dumps(plan["table_plan"], ensure_ascii=False, indent=2)
+                        )
+                    if plan.get("figures"):
+                        plan_lines.append("planned figures: " + ", ".join(plan["figures"]))
+                    if plan.get("needs"):
+                        plan_lines.append("material/layout needs: " + str(plan["needs"]))
+                    parts.append(
+                        text_block(
+                            "This page's outline, which its design must preserve:\n" + "\n".join(plan_lines)
+                        )
+                    )
                 prototype = (prototypes or {}).get(number)
                 if prototype is not None:
                     source_page, render = prototype
-                    parts.append(
-                        text_block(
-                            f"This page adapts the template's page {source_page}. Its design is the "
-                            "template's, not yours to replace: keep its structure, its type roles and its "
-                            "furniture, and fix this page against it -- what belongs to you is what the "
-                            "page says and how the content sits in the slots the template drew."
+                    if _structural_plan(plan):
+                        instruction = (
+                            f"This structural page adapts the template's page {source_page}. Keep its native "
+                            "cover, contents, divider or closing furniture; resize and replace its actual "
+                            "content without drawing a second layout over it."
                         )
-                    )
+                    else:
+                        instruction = (
+                            f"This content page started from the template's page {source_page}. Treat it as a "
+                            "designed reference, not an immutable form: preserve the house palette and type "
+                            "roles, but move, resize, delete or replace regions when the actual information "
+                            "shape needs a different composition."
+                        )
+                    parts.append(text_block(instruction))
                     if render is not None:
                         parts.append(text_block(f"The template's page {source_page}, as it renders:"))
                         parts.append(image_block(self.renderer.data_uri(render)))
                 if vocabulary:
                     said = "\n".join(f"- {line}" for line in vocabulary)
                     parts.append(text_block(f"What this deck's pages are to do:\n{said}"))
+                if (broke or {}).get(number):
+                    parts.append(
+                        text_block(
+                            f"Your last rewrite of this page would not run and was dropped: "
+                            f"{broke[number]}. The block below is the one that built, so the page "
+                            "you are looking at is the page before that attempt. Call only what the "
+                            "shared setup defines, with the arguments it takes."
+                        )
+                    )
                 parts.append(text_block(f"The shared setup, read-only:\n\n{prelude}"))
                 parts.append(text_block(f"This page's block, to replace:\n\n{original}"))
                 reply = await self.composer.ask(brief, parts, max_tokens=self.max_tokens)
-                return (number, *_page_reply(number, reply, original))
+                protected = (copy_baseline or {}).get(number, original)
+                return (number, *_page_reply(number, reply, protected))
 
         # Only pages there is a render for. Without one, the call was handed the
         # literal text "Slide 7 as it renders:" and no image, under a brief that
@@ -318,8 +586,11 @@ class DesignPass:
         replacements: dict[int, str] = {}
         notes: dict[int, Any] = dict.fromkeys(skipped, {"skipped": "no render"})
         refused: dict[int, str] = dict(skipped)
-        for result in results:
+        for number, result in zip(judged, results, strict=True):
             if isinstance(result, BaseException):
+                failure = f"{type(result).__name__}: {result}"
+                notes[number] = {"error": failure}
+                refused[number] = failure
                 continue
             number, block, note, refusal = result
             notes[number] = note
@@ -376,6 +647,28 @@ def _house_numbers(project: Project, template: Any) -> str:
             f"- content stays inside ({body[0]:g}, {body[1]:g}) {body[2]:g}x{body[3]:g}in, under the title row"
         )
     return "\n".join(lines)
+
+
+def _structural_plan(plan: dict[str, Any] | None) -> bool:
+    if not plan:
+        return False
+    role = f"{plan.get('carries', '')} {plan.get('section', '')}".casefold()
+    return any(
+        marker in role
+        for marker in (
+            "封面",
+            "目录",
+            "章节",
+            "分隔",
+            "收尾",
+            "封底",
+            "cover",
+            "agenda",
+            "contents",
+            "section divider",
+            "closing",
+        )
+    )
 
 
 def _blocks(outcome: BuildOutcome, lines: list[str]) -> tuple[dict[int, tuple[int, int]], str]:

@@ -65,7 +65,8 @@ $EDITOR ~/.raven/config.json
     "defaults": {
       "provider": "openrouter",
       "model": "anthropic/claude-opus-5",
-      "maxToolIterations": 120
+      "contextWindowTokens": 1000000,
+      "maxToolIterations": 500
     }
   },
   "providers": {
@@ -74,13 +75,13 @@ $EDITOR ~/.raven/config.json
       "apiBase": "https://openrouter.ai/api/v1"
     }
   },
-  "tools": { "ppt": { "enabled": true } }
+  "tools": { "ppt": { "enabled": true, "designer": { "enabled": false } } }
 }
 ```
 
-只有四项，其余全部走代码自己的默认值。`maxToolIterations` 是唯一被抬高的一项（默认
-40）：在本项目实测的几次运行里，做一份十来页的 deck 并逐页审阅要 95 到 120 次工具
-调用，用默认值会让一份真实的 deck 在半途停下。
+这份示例配置固定使用 1,000,000 token 上下文和 500 次工具迭代。PPT 默认关闭独立设计环，
+由主 Agent 在三页一组的渲染回灌中逐页修改；需要额外精修时再显式打开
+`tools.ppt.designer.enabled`。
 
 deck 这件事需要能力强的模型 —— 它要一边看页面渲染图，一边反复改一段几百行的程序，
 是整条链路里最难的活。
@@ -155,7 +156,7 @@ exports/<名字>/deck.pptx    最终交付的文件
 | `tools.ppt.renderDpi` | `144` | 页面渲染图交给模型前的光栅化精度 |
 | `tools.ppt.renderConcurrency` | `2` | 并发的 LibreOffice 转换数 |
 | `tools.ppt.deckName` | `deck.pptx` | 交付文件名 |
-| `tools.ppt.designer.enabled` | `false` | 对成品 deck 再做一轮重新排布。默认关闭：四次实测里它删掉了明令要求保留的文案，还加上了随后被门禁拒绝的装饰 |
+| `tools.ppt.designer.enabled` | `true` | 对完整 deck 自动运行设计环；只有显式关闭时才跳过 |
 | `tools.ppt.designer.model` | `""` | 空表示用主模型 |
 | `agents.defaults.workspace` | `~/.raven/workspace` | |
 

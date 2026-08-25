@@ -1799,6 +1799,7 @@ def test_a_blind_model_is_told_the_picture_is_not_coming(monkeypatch) -> None:
     assert "attached to the following message" not in text
     assert "you cannot see images directly" in text
     assert "understand_media" in text
+    assert text.startswith("orig\n\n")
     assert "AAAA" not in text
 
 
@@ -1824,6 +1825,7 @@ def test_a_transport_that_cannot_carry_images_attaches_them_after(monkeypatch) -
 
     assert blocks is None
     assert attach == [_ROUTING_BLOCKS[1]]
+    assert text.startswith("orig\n\n")
     assert "attached to the following message" in text
     assert "AAAA" not in text
 

@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -207,6 +208,14 @@ async def run_script(
     except TimeoutError:
         process.kill()
         await process.wait()
+        _save_failure(
+            project,
+            source,
+            staging,
+            "timeout",
+            "",
+            f"the build script exceeded {timeout_s:.0f}s and was stopped",
+        )
         _discard(staging, lines_map)
         return BuildOutcome(ok=False, stderr=f"the build script exceeded {timeout_s:.0f}s and was stopped")
 
@@ -215,18 +224,21 @@ async def run_script(
 
     if process.returncode != 0:
         # The line record describes the script that failed, not the deck on disk.
+        _save_failure(project, source, staging, "crash", stdout, stderr or f"exit code {process.returncode}")
         _discard(staging, lines_map)
         return BuildOutcome(ok=False, stdout=stdout, stderr=stderr or f"exit code {process.returncode}", note=note)
     if not staging.is_file():
         # The runner recorded line numbers under this script's hash, but the deck
         # those numbers would be paired with is still the old one -- keeping the
         # record would create exactly the mismatch the hash guards against.
+        message = f"the script finished but wrote no deck at {target.name}; save to os.environ['PPT_OUTPUT']"
+        _save_failure(project, source, staging, "no_output", stdout, message)
         _discard(staging, lines_map)
         return BuildOutcome(
             ok=False,
             stdout=stdout,
             note=note,
-            stderr=(f"the script finished but wrote no deck at {target.name}; save to os.environ['PPT_OUTPUT']"),
+            stderr=message,
         )
 
     # Two defects every deck arrives with, corrected before anything measures it:
@@ -253,6 +265,34 @@ async def run_script(
 def _discard(*paths: Path) -> None:
     for path in paths:
         path.unlink(missing_ok=True)
+
+
+def _save_failure(
+    project: Project,
+    source: Path,
+    staging: Path,
+    kind: str,
+    stdout: str,
+    stderr: str,
+) -> Path:
+    """Keep the failed script and logs so the next edit can continue from it."""
+    root = project.review_dir / "build_failures"
+    index = 1
+    while (root / f"failure-{index:03d}").exists():
+        index += 1
+    destination = root / f"failure-{index:03d}"
+    destination.mkdir(parents=True, exist_ok=True)
+    if source.is_file():
+        shutil.copy2(source, destination / "build.py")
+    if staging.is_file():
+        shutil.copy2(staging, destination / "deck.pptx.building")
+    (destination / "stdout.txt").write_text(stdout, encoding="utf-8")
+    (destination / "stderr.txt").write_text(stderr, encoding="utf-8")
+    (destination / "failure.json").write_text(
+        json.dumps({"kind": kind, "script": str(source), "staging": str(staging)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return destination
 
 
 def _sources(source: Path, lines_map: Path):

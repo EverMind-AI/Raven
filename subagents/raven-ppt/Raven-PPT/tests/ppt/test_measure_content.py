@@ -1,7 +1,11 @@
-"""How much a page carries, whether it shows anything, and table width.
+"""Whether a page shows anything, and how wide a table gets.
 
-All three go to the author, and the ceiling has no floor under it. Both of those
-are decisions with a history, so both are asserted rather than assumed.
+There used to be a character ceiling here as well. It was one number for every
+language, and a character is not one thing: measured in one box at one size,
+Chinese fills it at 400 and English at 1168, so 700 fired long after a Chinese
+page had overflowed and never at all on an English one. What it was for is done
+by measuring the render -- `card_overflow`, `clipped_copy`, `crowded_panel` --
+which is a fact about the built page rather than a count standing in for one.
 """
 
 from __future__ import annotations
@@ -12,86 +16,16 @@ from raven.ppt.contracts.findings import Audience, Severity
 from raven.ppt.services.measure.content import (
     DIAGRAM_SHAPES,
     EVIDENCE_SHARE,
-    MAX_CHARS_PER_PAGE,
     MAX_TABLE_COLUMNS,
-    copy_density,
     evidence_coverage,
     flat_formulas,
+    native_tables,
     unmarked_points,
     wide_tables,
 )
 from tests.ppt.conftest import DeckBuilder
 
 pytest.importorskip("pptx")
-
-
-def test_the_density_ceiling_is_in_characters() -> None:
-    """In characters because `split()` cannot count Chinese.
-
-    The old ceiling was 250 words, and a whole CJK paragraph is one word to
-    `split()`: the densest page across four real decks reached 75, so the check
-    never fired on a Chinese deck at all. In characters the same decks run 26 to
-    467, the 467 being a page a reviewer accepted -- a comparison table with two
-    takeaways under it -- so the ceiling sits half again above that.
-    """
-    assert MAX_CHARS_PER_PAGE == 700
-
-
-def test_a_page_past_the_ceiling_is_reported(deck: DeckBuilder) -> None:
-    deck.text(deck.page(), "字" * 701)
-
-    findings = copy_density(deck.save())
-
-    assert [finding.detail["chars"] for finding in findings] == [701]
-    assert "701 characters" in findings[0].message
-    assert "compartments" in findings[0].message
-
-
-def test_a_dense_page_a_reviewer_accepted_is_not_reported(deck: DeckBuilder) -> None:
-    """The page this ceiling was calibrated against: 467 characters of table and
-    takeaways, which is dense and good. A ceiling that fires here is a rule against
-    saying anything."""
-    page = deck.page()
-    deck.text(page, "一个模型对齐或超过四套任务专用模型" + "，".join(["基准 45.7 对 48.3 与 60.2"] * 12)[:450])
-
-    assert copy_density(deck.save()) == []
-
-
-def test_a_page_exactly_at_the_ceiling_is_not(deck: DeckBuilder) -> None:
-    """700 characters with the whitespace stripped, which is what the check counts."""
-    deck.text(deck.page(), "字" * 700)
-
-    assert copy_density(deck.save()) == []
-
-
-def test_there_is_no_floor_under_the_ceiling(deck: DeckBuilder) -> None:
-    """Deliberately one-sided (design doc D7).
-
-    A page that says little may be a page whose figure does the talking, and no
-    measurement here can tell that from a page with nothing on it. A 45-110 word
-    band was tried and pressed the deck into half-empty pages.
-    """
-    deck.text(deck.page(), "word " * 40)
-    deck.text(deck.page(), ("A title", 40.0))
-    deck.text(deck.page(), ("Thank you", 40.0))
-
-    assert copy_density(deck.save()) == []
-
-
-def test_density_is_the_authors_problem_and_never_the_designers(deck: DeckBuilder) -> None:
-    """The design pass may rearrange a page and is forbidden to rewrite it.
-
-    Handing it a density finding leaves it holding a problem it cannot solve,
-    and the measured result was the same overloaded page coming back arranged
-    into compartments however often it was redesigned.
-    """
-    deck.text(deck.page(), "word " * 400)
-
-    finding = copy_density(deck.save())[0]
-
-    assert finding.kind == "density"
-    assert finding.severity is Severity.WARNING
-    assert finding.audience is Audience.AUTHOR
 
 
 def test_the_evidence_share_is_seven_tenths_of_the_pages() -> None:
@@ -223,6 +157,18 @@ def test_a_table_past_the_ceiling_is_reported(deck: DeckBuilder) -> None:
     assert [finding.detail["columns"] for finding in findings] == [9]
     assert findings[0].severity is Severity.WARNING
     assert findings[0].audience is Audience.AUTHOR
+
+
+def test_a_native_office_table_is_reported_for_design_rebuild(deck: DeckBuilder) -> None:
+    page = deck.page()
+    deck.table(page, 4, 3, top=1.0)
+
+    findings = native_tables(deck.save())
+
+    assert [finding.kind for finding in findings] == ["native_table"]
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].audience is Audience.DESIGNER
+    assert findings[0].detail == {"tables": 1}
 
 
 def test_an_escape_printed_as_characters_is_refused(deck: DeckBuilder) -> None:

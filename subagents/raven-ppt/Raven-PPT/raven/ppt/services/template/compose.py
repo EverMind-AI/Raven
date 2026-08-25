@@ -438,6 +438,17 @@ def replace_text(target, text: str, new: str | None = None) -> None:
 
 
 def _write(paragraph, line: str) -> None:
+    """One paragraph's words replaced, and nothing of the old line left behind.
+
+    A template's soft breaks belong to its placeholder, not to what replaces it. The
+    prompt on one cover ran over two lines -- run, `<a:br/>`, run -- and replacing it
+    dropped the second run and kept the break, so the new title carried a trailing
+    empty line and sat a line high inside a box that had grown one line taller than
+    anything visible in it. Real line breaks in new copy arrive as separate lines and
+    become separate paragraphs, so nothing here needs an `<a:br/>` to survive.
+    """
+    for brk in paragraph._p.findall(f"{{{_A}}}br"):
+        paragraph._p.remove(brk)
     runs = paragraph.runs
     if not runs:
         paragraph.text = line

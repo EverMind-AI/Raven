@@ -193,6 +193,10 @@ async def test_a_build_that_dies_leaves_the_last_deck_alone(project: Project) ->
     assert not broken.ok
     assert "boom" in broken.stderr
     assert good.pptx_path.read_bytes() == before
+    failure = project.review_dir / "build_failures" / "failure-001"
+    assert (failure / "build.py").is_file()
+    assert "boom" in (failure / "stderr.txt").read_text(encoding="utf-8")
+    assert (failure / "failure.json").is_file()
 
 
 @pytest.mark.asyncio
@@ -208,6 +212,9 @@ async def test_a_script_that_writes_nothing_is_told_where_to_save(project: Proje
 
     assert not outcome.ok
     assert "PPT_OUTPUT" in outcome.stderr
+    failure = project.review_dir / "build_failures" / "failure-001"
+    assert (failure / "build.py").is_file()
+    assert "PPT_OUTPUT" in (failure / "stderr.txt").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

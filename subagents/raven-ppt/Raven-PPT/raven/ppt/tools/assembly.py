@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool
-from raven.ppt.backends.script import ScriptBackend, asset_helpers, run_script
+from raven.ppt.backends.script import ScriptBackend, asset_helpers, provision, run_script, with_template_helpers
 from raven.ppt.contracts import Profile
 from raven.ppt.profiles import registry
 from raven.ppt.services.ingest import ingest_materials
+from raven.ppt.services.template import bound
 from raven.ppt.stages._measure import DeckMeasurer
 from raven.ppt.stages._views import DeckViews
 from raven.ppt.stages.build import BuildStage
@@ -33,6 +34,7 @@ from raven.ppt.tools._composer import ProviderComposer
 from raven.ppt.tools.brief import PptBriefTool
 from raven.ppt.tools.build import PptBuildTool
 from raven.ppt.tools.fetch import PptFetchTool
+from raven.ppt.tools.generate_image import PptGenerateImageTool
 from raven.ppt.tools.ingest import PptIngestTool
 from raven.ppt.tools.inspect import PptFigureInspectTool
 from raven.ppt.tools.outline import PptOutlineTool
@@ -48,13 +50,15 @@ def build_ppt_tools(
     profile: str = registry.DEFAULT,
     provider: Any | None = None,
     designer_model: str | None = None,
-    design_pass: bool = False,
+    design_pass: bool = True,
     design_rounds: int = 2,
     render_dpi: int = 144,
     render_concurrency: int = 2,
     design_concurrency: int = 6,
     deck_name: str = "deck.pptx",
     web_proxy: str | None = None,
+    image_config: Any | None = None,
+    media_proxy: str | None = None,
 ) -> list[Tool]:
     """The tools for one route, or [] when the ppt extra is not installed.
 
@@ -83,7 +87,14 @@ def build_ppt_tools(
 
     views = DeckViews(dpi=render_dpi, concurrency=render_concurrency)
     measure = DeckMeasurer(views=views)
-    backend = _backend()
+    helpers = asset_helpers()
+
+    def provision_script_workspace(project):
+        template = bound(project)
+        effective = with_template_helpers(helpers, template) if template else helpers
+        return provision(project, effective)
+
+    backend = _backend(helpers)
     stage = BuildStage(
         backend=backend,
         measure=measure,
@@ -96,13 +107,29 @@ def build_ppt_tools(
         destination=lambda project: project.exports_dir / deck_name,
     )
     tools: list[Tool] = [
-        PptPrepareTool(workspace, _prepare(provider)),
+        PptPrepareTool(workspace, _prepare(provider), provision=provision_script_workspace),
         PptBriefTool(workspace),
         PptFetchTool(workspace, proxy=web_proxy, ingest=ingest_materials),
+        PptGenerateImageTool(workspace, image_config, proxy=media_proxy),
         PptIngestTool(workspace),
-        PptFigureInspectTool(workspace, views),
-        PptOutlineTool(workspace),
-        PptTemplateTool(workspace, views),
+        PptFigureInspectTool(
+            workspace,
+            views,
+            composer=ProviderComposer(provider=provider, model=designer_model or None)
+            if provider is not None
+            else None,
+        ),
+        # The outline gets the same second model the design pass gets, for the same
+        # reason: the copy on a page is written better looking at one page's claim
+        # against the materials than as one twentieth of a reply.
+        PptOutlineTool(
+            workspace,
+            composer=ProviderComposer(provider=provider, model=designer_model or None)
+            if provider is not None
+            else None,
+            views=views,
+        ),
+        PptTemplateTool(workspace, views, provision=provision_script_workspace),
         PptBuildTool(workspace, stage, views, chosen),
     ]
     _warn_if_incomplete(chosen, tools)
@@ -122,7 +149,7 @@ def _prepare(provider: Any | None) -> PrepareStage:
     return PrepareStage(composer=composer, ingest=ingest_materials)
 
 
-def _backend():
+def _backend(helpers):
     """The script backend as the callable the stage expects.
 
     A closure rather than the class, because the stage's contract is "give me a
@@ -130,8 +157,6 @@ def _backend():
     installation belongs to neither and happens here, once, where the assets are
     known to be installed.
     """
-    helpers = asset_helpers()
-
     async def backend(project, script):
         return await run_script(project, script, helpers=helpers)
 

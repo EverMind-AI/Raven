@@ -223,9 +223,9 @@ def _table_asset(table: ExtractedTable, pdf_path: Path, page_index: int) -> Sour
 def _table_section(table: ExtractedTable) -> str:
     """The table as markdown under the page text, so its numbers are indexed.
 
-    The image is what goes on a slide; this is what the fact gate anchors
-    against. A table that exists only as pixels is a table whose figures a deck
-    can only retype from memory.
+    The image is what goes on a slide; this is the text an author can read a
+    figure off. A table that exists only as pixels is a table whose numbers a
+    deck can only retype from memory.
     """
     return (
         f"\n### Source {table.source_label} ({table.path.stem})\n\nCaption: {table.caption.text}\n\n{table.markdown}\n"

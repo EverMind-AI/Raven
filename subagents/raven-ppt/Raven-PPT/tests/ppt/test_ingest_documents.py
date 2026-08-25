@@ -41,7 +41,7 @@ def test_discovery_walks_subdirectories_and_names_what_it_cannot_read(tmp_path: 
 
 def test_html_is_reduced_to_what_a_reader_would_see(tmp_path: Path) -> None:
     """Script and style bodies are not material: indexing them would put
-    numbers in the fact index no reader of the page ever saw."""
+    numbers into the material that no reader of the page ever saw."""
     path = tmp_path / "report.html"
     path.write_text(
         "<html><style>.x{width:999px}</style><script>bad=999</script>"
@@ -54,6 +54,28 @@ def test_html_is_reduced_to_what_a_reader_would_see(tmp_path: Path) -> None:
     assert "Revenue reached 42 million in 2026." in text
     assert "Market update" in text
     assert "999" not in text
+
+
+def test_html_headings_survive_as_headings(tmp_path: Path) -> None:
+    """HTML is the one source format that states its own structure, and flattening it
+    threw that away: `sections` saw a single entry for the whole document, the same
+    blindness a .txt has, self-inflicted. h1 and h2 land beside the "## [f.pdf] page N"
+    the PDF path writes, one level under the "# Source:" line.
+    """
+    path = tmp_path / "report.html"
+    path.write_text(
+        "<html><body><h1>2026 report</h1><p>Opening.</p>"
+        "<h2>Revenue</h2><p>42 million.</p>"
+        "<h3>North America</h3><p>18 million.</p></body></html>",
+        encoding="utf-8",
+    )
+
+    lines = read_text_source(path).splitlines()
+
+    assert "## 2026 report" in lines
+    assert "## Revenue" in lines
+    assert "### North America" in lines
+    assert "42 million." in lines
 
 
 def test_a_plain_text_source_is_passed_through(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 """The citation gate: a page cites the figure it actually shows.
 
 A page saying "Fig. 4" beside Figure 5 is a provenance error a reader checks in
-a second and no other gate can see: every number on the page is real and every
-entity is whitelisted. It went unnoticed until ingest started reading captions --
+a second and nothing else here looks for. It went unnoticed until ingest started
+reading captions --
 before that nothing knew which figure was which, and the author could only guess
 from the picture.
 

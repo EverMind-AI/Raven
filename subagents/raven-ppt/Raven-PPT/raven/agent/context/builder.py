@@ -9,7 +9,7 @@ from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
-from raven.utils.helpers import build_assistant_message
+from raven.utils.helpers import build_assistant_message, text_block
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -278,14 +278,15 @@ Skills with available="false" need dependencies installed first - you can try in
         contents, MCP returns), so it is fenced as untrusted data before it
         reaches the model — every tool result funnels through here.
 
-        ``blocks`` carries multimodal content (an image the tool read) and
-        replaces the plain text when present. It is only ever set for providers
-        that can carry an image in a tool result; ``result`` stays the fallback
-        and must make sense on its own.
+        ``blocks`` carries multimodal content (an image the tool read) in
+        addition to the plain text. It is only ever set for providers that can
+        carry an image in a tool result; ``result`` must still make sense on its
+        own for every other transport.
         """
         content: Any
         if blocks:
-            content = wrap_untrusted_blocks(blocks, source=tool_name)
+            additive = [text_block(result), *blocks] if result.strip() else blocks
+            content = wrap_untrusted_blocks(additive, source=tool_name)
         else:
             content = wrap_untrusted(result, source=tool_name)
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})

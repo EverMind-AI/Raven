@@ -413,6 +413,24 @@ def estimate_prompt_tokens_chain(
     return 0, "none"
 
 
+# A guarantee the bundled agent profile used to make. The fact gate that backed it is
+# gone (see raven/ppt/AGENTS.md), and this migrates the wording out of existing
+# workspaces -- matched as a sentence, not a file, so the rest of a user's profile is
+# never rewritten. Wrapped exactly as the template shipped it, because that is the
+# bytes an existing workspace holds.
+_STALE_AGENTS_GUARANTEE = (
+    "The build refuses a deck with a number no source printed, a page citing one figure\n"
+    "while showing another, a length the brief did not agree, the wrong language, or a\n"
+    "theme that is not the bound template's."
+)
+_CURRENT_AGENTS_GUARANTEE = (
+    "The build refuses a deck with a page citing one figure while showing another, a\n"
+    "length the brief did not agree, the wrong language, or a theme that is not the bound\n"
+    "template's. It does not check whether a number appears in a source: that one is\n"
+    "yours to get right."
+)
+
+
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
@@ -472,6 +490,17 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     # L4 pillar files first; root-level files (TOOLS / HEARTBEAT) stay put.
     _write(tpl / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
     _write(tpl / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
+    profile = workspace / "agent_memory" / "profile" / "agent.md"
+    if profile.is_file():
+        # Read defensively: a profile is user-owned, so it can be any bytes, and a
+        # workspace sync must not crash on one -- as with the legacy files above.
+        try:
+            text = profile.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            text = ""
+        if _STALE_AGENTS_GUARANTEE in text:
+            profile.write_text(text.replace(_STALE_AGENTS_GUARANTEE, _CURRENT_AGENTS_GUARANTEE), encoding="utf-8")
+            added.append(f"{profile.relative_to(workspace)} (retired a stale bundled guarantee)")
     _write(tpl / "USER.md", workspace / "user_memory" / "profile" / "user.md")
     _write(None, workspace / "user_memory" / "episodic" / "episodes.md")
     # Files L4 specifies but the legacy layout had no source for —

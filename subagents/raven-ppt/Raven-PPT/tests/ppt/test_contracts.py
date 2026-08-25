@@ -12,6 +12,8 @@ from raven.ppt.contracts import (
     Capabilities,
     DeckPlan,
     Finding,
+    Outline,
+    PagePlan,
     PageSource,
     PageSpec,
     Profile,
@@ -19,7 +21,9 @@ from raven.ppt.contracts import (
     Severity,
     StageSpec,
     blocking,
+    load_outline,
     warnings,
+    write_outline,
 )
 
 
@@ -102,3 +106,36 @@ def test_a_profile_lists_its_tools_in_stage_order() -> None:
     )
     assert profile.tools == ("ppt_ingest", "ppt_build")
     assert profile.stage("design_pass") is not None and profile.stage("design_pass").tool is None
+
+
+def test_a_recorded_outline_keeps_every_field_the_measurer_reads(tmp_path: Path) -> None:
+    """`section` reached disk and came back empty, so persisted dividers were measured
+    as ordinary pages: `_layout_structural` uses it to exempt them from whitespace."""
+    path = tmp_path / "outline.json"
+    write_outline(
+        Outline(
+            takeaway="the fleet doubled",
+            pages=(
+                PagePlan(
+                    page=1,
+                    claim="the fleet doubled",
+                    carries="chart",
+                    figures=("f1",),
+                    says=("calls went from 310 to 1240",),
+                    section="section divider",
+                    needs="a source for 1240",
+                    prototype=3,
+                ),
+            ),
+        ),
+        path,
+    )
+    page = load_outline(path).pages[0]
+    assert page.section == "section divider"
+    assert (page.claim, page.carries, page.needs, page.prototype) == (
+        "the fleet doubled",
+        "chart",
+        "a source for 1240",
+        3,
+    )
+    assert (page.figures, page.says) == (("f1",), ("calls went from 310 to 1240",))
