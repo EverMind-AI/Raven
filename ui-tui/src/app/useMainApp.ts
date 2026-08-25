@@ -36,6 +36,7 @@ import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } from './chatStream.js'
+import { showCopyNotice } from './copyNoticeStore.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import { getInputSelection } from './inputSelectionStore.js'
@@ -326,10 +327,9 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // mouse tracking, so copy-on-select is what makes a transcript selection
   // copyable at all. That holds on every platform, not just macOS.
   //
-  // Nothing on screen changes when a drag ends, so the transcript line is the
-  // only confirmation the clipboard was written. Lives below `sys` because the
-  // dependency array is evaluated during render, while `sys` is still in its
-  // temporal dead zone further up.
+  // Nothing on screen changes when a drag ends, so the notice is the only
+  // confirmation the clipboard was written -- shown above the composer and
+  // dismissed, not written into the transcript.
   //
   // The path caveat is per session while this hook outlives any one session:
   // `newSession()` and `resumeById()` replace `ui.sid` without remounting it,
@@ -342,9 +342,12 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   useEffect(
     () =>
       subscribeCopyOnSelect(selection, (text, path) => {
-        sys(reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft'))
+        const report = reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft')
+
+        // The first copy's caveat is longer than the terse line, so it stays up longer.
+        showCopyNotice(report.text, report.firstOfSession ? 5000 : 3000)
       }),
-    [selection, sys]
+    [selection]
   )
 
   const page = useCallback(
