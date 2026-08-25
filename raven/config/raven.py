@@ -1343,6 +1343,44 @@ class TracingConfig(_Base):
 # ---------------------------------------------------------------------------
 
 
+class SessionTitleConfig(_Base):
+    """The model call that names a new session.
+
+    Fired once per session, concurrently with the first turn, and never on the
+    turn's critical path: the mechanical title ``SessionManager.save`` derives
+    from the first user message is already in place, so every refusal here --
+    disabled, too short an opening message, timeout, an answer that ignored the
+    instruction -- simply leaves that title standing.
+    """
+
+    enabled: bool = True
+    """On by default. The cost is one short call per *session* (not per turn),
+    against a first message that is already in context; the alternative default
+    leaves every session named by a raw truncated first line, which is what the
+    session picker looks like today."""
+
+    model: str | None = None
+    """Model for the naming call. None inherits the session's own model. Set a
+    cheaper tier here: the task is one short line of output and does not need
+    the model answering the conversation."""
+
+    timeout_seconds: float = 8.0
+    """Wall clock for the call. Past this the fallback title stands. Chosen
+    against the front end's placeholder, which waits a little longer than this
+    and then gives up on its own -- a placeholder outliving the call it waits
+    for is the one failure mode a user cannot recover from by waiting."""
+
+    budget: int = 24
+    """Codepoints the model is asked, and clamped, to fit. A runaway guard, not
+    a layout rule: measured titles run 2-21 codepoints, and how a title fits a
+    row is decided by each surface's own truncation."""
+
+    min_input_chars: int = 8
+    """Below this many characters in the first message, skip the call. There is
+    nothing in "hi" to name a session after, and the mechanical title is
+    already as good as anything a model could invent from it."""
+
+
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1356,6 +1394,7 @@ class RavenConfig(_Base):
     skill_forge: SkillForgeConfig = Field(default_factory=SkillForgeConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
+    session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)

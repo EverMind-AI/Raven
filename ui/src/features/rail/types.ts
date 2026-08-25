@@ -14,6 +14,10 @@ export interface SessRow {
   live?: boolean
   persisted?: boolean
   status?: string | null
+  /* A title is being generated for this row, so the row shows a placeholder
+     where the title goes. Client state only: nothing on the wire carries it,
+     and a reload of a session already named simply never sets it. */
+  naming?: boolean
 }
 
 /* What one draw reads: the list plus the two page facts a row's look depends
@@ -47,8 +51,12 @@ export interface RailSource {
   /* The title just changed, through the island's own inline editor. Not
      `rename`: the editing is the island's and always was, and the live layer
      used to reach into the island's DOM to hang a blur listener off the input
-     it had created. This is the notification that replaces that. */
-  renamed?(id: string, title: string): void
+     it had created. This is the notification that replaces that.
+
+     ``previous`` is what the row showed before the edit: the move here is
+     optimistic, so a source that cannot persist the new name needs the old one
+     to put back. */
+  renamed?(id: string, title: string, previous: string): void
   /* The pin moved. Optimistic in the island; a source that cannot keep the
      flag says so by not being here. */
   pin?(id: string, pinned: boolean): void

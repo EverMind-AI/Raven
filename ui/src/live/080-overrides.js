@@ -167,7 +167,7 @@ function liveSend(text) {
     const current = sessionCurrent();
     turnOwner = current;
     touchSession(current, text);
-    titleFromFirstMessage(text);
+    beginNaming(text);
     rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) }).catch(failed);
     return;
   }
@@ -181,7 +181,7 @@ function liveSend(text) {
     // The composer was owned by 'new' until this point; keep later keystrokes
     // filed under the session that just came into being.
     claimDraft(sessionCurrent());
-    titleFromFirstMessage(text);
+    beginNaming(text);
     sessionDraw();
     await subscribe(s.id);
     await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
@@ -330,6 +330,18 @@ $('#newBtn').onclick = () => { showPage(null); startDraft(); };
    off the input it had just created -- reaching into another layer's DOM, and
    missing an Enter, which replaces that input while it still has focus. The
    island tells us instead. */
-DS.sessions.renamed = (id, title) => {
-  rpc.call('session.title', { session_id: id, title }).catch(() => {});
+DS.sessions.renamed = (id, title, previous) => {
+  /* A refused rename must not stay quiet -- same reason `DS.sessions.pin` puts
+     its flag back. The row moved optimistically, so a name the server rejected
+     (too long for the metadata record) looks identical to one it took until the
+     page is reloaded and the old name is simply back. */
+  rpc.call('session.title', { session_id: id, title }).catch((e) => {
+    const s = sess(id);
+    if (s) { s.title = previous; sessionDraw(); }
+    if (id === sessionCurrent()) {
+      const h = $('#title');
+      if (h) h.textContent = plainTitle(previous);
+    }
+    toast(T('gui.sess.rename_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+  });
 };

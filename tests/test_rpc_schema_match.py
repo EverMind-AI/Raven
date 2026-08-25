@@ -468,6 +468,7 @@ EXPECTED_ERROR_CODES = {
     -32014: "cli_command_timeout",
     -32015: "not_dispatch_compatible",
     -32017: "subagent_not_found",
+    -32018: "session_title_too_long",
 }
 
 

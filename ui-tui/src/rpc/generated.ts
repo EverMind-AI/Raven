@@ -61,7 +61,8 @@ export type TurnEvent =
   | DagNodeUpdatedEvent
   | DagRunCompletedEvent
   | CronMissedEvent
-  | MediaEvent;
+  | MediaEvent
+  | SessionTitledEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -158,6 +159,10 @@ export interface SessionInitInfo {
    * Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.
    */
   endpoint?: string;
+  /**
+   * The resumed session's name, when it has one. Absent on a fresh session, which has nothing to name yet. Carried on the bundle rather than fetched separately because a client resuming a session is already being told what it is resuming.
+   */
+  title?: string;
 }
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
@@ -1322,6 +1327,19 @@ export interface CronMissedEvent {
       scheduled_at: string;
       message: string;
     }[];
+  };
+}
+/**
+ * The model named this session, reading the opening message alongside the turn that carried it. Conversation-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionTitledEvent".
+ */
+export interface SessionTitledEvent {
+  type: 'session.titled';
+  payload: {
+    session_id: string;
+    title: string;
   };
 }
 /**

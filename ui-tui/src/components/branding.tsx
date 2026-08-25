@@ -362,6 +362,20 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
             </Text>
           </Box>
 
+          {/* The resumed session's name, on a line of its own. Not folded into
+              the footer beside the session id: the name says which conversation
+              this is and the id says where it lives, and only one of them is
+              worth reading first. Absent on a fresh session, which has nothing
+              to name yet, so the line is not there rather than empty. */}
+          {info.title ? (
+            <Box marginBottom={1}>
+              <Text wrap="truncate">
+                <Text color={t.color.muted}>session: </Text>
+                <Text color={t.color.text}>{info.title}</Text>
+              </Text>
+            </Box>
+          ) : null}
+
           {/* ── Tools (expanded by default) ── */}
           <Box flexDirection="column" marginTop={1}>
             <CollapseToggle

@@ -5241,6 +5241,10 @@
           "endpoint": {
             "type": "string",
             "description": "Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones."
+          },
+          "title": {
+            "type": "string",
+            "description": "The resumed session's name, when it has one. Absent on a fresh session, which has nothing to name yet. Carried on the bundle rather than fetched separately because a client resuming a session is already being told what it is resuming."
           }
         },
         "required": [
@@ -6947,6 +6951,24 @@
           }
         }
       },
+      "SessionTitledEvent": {
+        "description": "The model named this session, reading the opening message alongside the turn that carried it. Conversation-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "session.titled" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["session_id", "title"],
+            "properties": {
+              "session_id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        }
+      },
       "SubagentDeliveredEvent": {
         "description": "A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.",
         "type": "object",
@@ -7221,7 +7243,8 @@
           { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
           { "$ref": "#/components/schemas/DagRunCompletedEvent" },
           { "$ref": "#/components/schemas/CronMissedEvent" },
-          { "$ref": "#/components/schemas/MediaEvent" }
+          { "$ref": "#/components/schemas/MediaEvent" },
+          { "$ref": "#/components/schemas/SessionTitledEvent" }
         ],
         "discriminator": {
           "propertyName": "type",
@@ -7242,7 +7265,8 @@
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",
             "cron.missed": "#/components/schemas/CronMissedEvent",
-            "media": "#/components/schemas/MediaEvent"
+            "media": "#/components/schemas/MediaEvent",
+            "session.titled": "#/components/schemas/SessionTitledEvent"
           }
         }
       }
@@ -7311,6 +7335,10 @@
       "SubagentNotFound": {
         "code": -32017,
         "message": "subagent_not_found"
+      },
+      "SessionTitleTooLong": {
+        "code": -32018,
+        "message": "session_title_too_long"
       }
     }
   }

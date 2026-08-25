@@ -206,13 +206,14 @@ export function pin(id: string, pinned: boolean): void {
 
 export function renameRow(s: SessRow, title: string): void {
   if (title === s.title) return
+  const previous = s.title
   s.title = title
   if (curId() === s.id) {
     const heading = document.getElementById('title')
     if (heading) heading.textContent = plainTitle(title)
   }
   try {
-    source().renamed?.(s.id, title)
+    source().renamed?.(s.id, title, previous)
   } catch {
     /* no source, nowhere to put it */
   }
@@ -323,7 +324,7 @@ export function rename(): void {
        committing with Enter replaces the input while it still has focus, and
        whether that fires a blur at all is the browser's business -- which is
        why the wrapper this replaces could miss an Enter entirely. */
-    if (next !== was) source().renamed?.(s.id, next)
+    if (next !== was) source().renamed?.(s.id, next, was)
     const nh = document.createElement('h1')
     nh.textContent = plainTitle(next)
     nh.id = 'title'

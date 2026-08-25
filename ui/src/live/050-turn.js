@@ -91,6 +91,10 @@ function onEvent(ev) {
     if (live.st) { live.st.seal(); }
     flushSay();
     live.st = newStep(); live.steps.push(live.st); live.sawEpisode = true;
+  } else if (ev.type === 'session.titled') {
+    /* The server named the session. Replaces whatever the row shows without
+       comparing: the event is emitted only when the title actually changed. */
+    settleNaming(p.session_id, p.title);
   } else if (ev.type === 'notice') {
     killStatus();
     /* Seals the open step first: this ends the turn, so the streamed prose
@@ -279,18 +283,87 @@ function finishTurn(usage) {
   if (nx !== undefined) liveSend(nx);
 }
 
-/* The session's title IS the user's first message (first line, capped) — set
-   the moment it is sent, not after the turn ends, so the rail and the top bar
-   never sit on 新任务 while the agent works. */
-function titleFromFirstMessage(text) {
+/* Naming a new session belongs to the server now: it reads the opening message
+   and answers with `session.titled`. Until that lands the row and the top bar
+   hold a placeholder, which is what the animation is for -- this used to write
+   the truncated first line here and then rewrite it a second later, and no
+   client-side cap is left to disagree with the server's.
+
+   The grace period outlives the server's own timeout on that call
+   (`session_title.timeout_seconds`, 8s by default). A placeholder waiting on an
+   answer that is not coming is the one state a reader cannot leave by waiting,
+   so it gives up on its own.
+
+   It gives up onto the opening line held here, NOT onto the stored title: the
+   session's auto-name is written by `SessionManager.save`, which runs at turn
+   END (agent/loop/main.py), so a turn still working at the 12s mark has no
+   stored title to read and the row would sit on the default name until a
+   reload -- nothing re-reads it, since `refreshList` fires only for sessions
+   the reader is not looking at. The stored read is still tried first, because
+   a turn that has already ended has the better text. */
+const NAMING_GRACE_MS = 12000;
+const namingTimers = new Map();
+
+function titlePlaceholder(on) {
+  const h = $('#title');
+  if (!h) return;
+  h.textContent = '';
+  h.classList.toggle('skel', !!on);
+  if (!on) return;
+  const bar = document.createElement('span');
+  bar.className = 'sk';
+  bar.style.width = '180px';
+  bar.style.height = '14px';
+  bar.setAttribute('aria-label', T('gui.sess.naming'));
+  h.appendChild(bar);
+}
+
+/* Stop waiting on `id` and show `title`, or what the row already had. Looks the
+   row up rather than holding one: `refreshList` replaces the row objects, so a
+   row captured when the wait started can be off the list by the time it ends. */
+function settleNaming(id, title) {
+  const pending = namingTimers.get(id);
+  if (pending) clearTimeout(pending.timer);
+  namingTimers.delete(id);
+  const s = sess(id);
+  if (!s) return;
+  s.naming = false;
+  if (title) s.title = title;
+  if (id === sessionCurrent()) {
+    titlePlaceholder(false);
+    const h = $('#title');
+    if (h) h.textContent = plainTitle(s.title);
+  }
+  sessionDraw();
+}
+
+/* The grace period ran out. Prefer the stored title -- a turn that has ended
+   has an auto-name on disk and it is the one every other client shows -- and
+   otherwise use the opening line captured when the wait started. A read that
+   succeeds and answers null is the ordinary case here, not an error: the turn
+   is still running. */
+async function namingGaveUp(id) {
+  const pending = namingTimers.get(id);
+  let title = '';
+  try {
+    const r = await rpc.call('session.title', { session_id: id });
+    title = (r && r.title) || '';
+  } catch { /* fall through to the captured line */ }
+  settleNaming(id, title || (pending && pending.fallback) || '');
+}
+
+function beginNaming(text) {
   const s = sess(sessionCurrent());
   if (!s || (s.title && s.title !== '新任务' && s.title !== T('gui.new_task'))) return;
-  const t = text.trim().split('\n')[0].trim().slice(0, 30);
-  if (!t) return;
-  s.title = t;
-  $('#title').textContent = plainTitle(t);
+  if (!String(text || '').trim()) return;
+  const id = s.id;
+  /* Not capped here: how a title fits a row is the front end's own business and
+     both places that draw one already ellipsise. */
+  const fallback = String(text).trim().split('\n')[0].trim();
+  s.naming = true;
+  if (id === sessionCurrent()) titlePlaceholder(true);
   sessionDraw();
-  rpc.call('session.title', { session_id: s.id, title: t }).catch(() => {});
+  namingTimers.set(id, { fallback, timer: setTimeout(() => { namingGaveUp(id); }, NAMING_GRACE_MS) });
 }
 
 /* A refused persist must not stay quiet. The row moves optimistically, but a

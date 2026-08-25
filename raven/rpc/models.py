@@ -761,6 +761,29 @@ class CronMissedEvent(_Strict):
     payload: CronMissedPayload
 
 
+class SessionTitledPayload(_Strict):
+    session_id: str = Field(..., description="Full session_key the title belongs to.")
+    title: str = Field(..., description="The generated title, already cleaned and clamped.")
+
+
+class SessionTitledEvent(_Strict):
+    """A session was named by the model that reads its opening message.
+
+    Conversation-scoped rather than broadcast: one session being named is not
+    news to a client watching a different one. Emitted only when the title
+    actually changed, so a client can treat it as "replace what you are showing"
+    without comparing.
+
+    A client is not required to have asked for this. It arrives on the same
+    subscription as the turn it was generated alongside, which is what lets a
+    front end park a placeholder where the title goes and fill it in on arrival
+    instead of showing a truncated first line and rewriting it a second later.
+    """
+
+    type: Literal["session.titled"]
+    payload: SessionTitledPayload
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -780,6 +803,7 @@ TurnEvent = Annotated[
         DagRunCompletedEvent,
         CronMissedEvent,
         MediaEvent,
+        SessionTitledEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -2042,6 +2066,14 @@ class SessionInitInfo(_Strict):
         default=None,
         description="Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.",
     )
+    title: str | None = Field(
+        default=None,
+        description=(
+            "The resumed session's name, when it has one. Absent on a fresh session, which has "
+            "nothing to name yet. Carried on the bundle rather than fetched separately because a "
+            "client resuming a session is already being told what it is resuming."
+        ),
+    )
 
 
 class TranscriptTurnEnded(_Strict):
@@ -3143,6 +3175,8 @@ __all__ = [
     "SessionExportParams",
     "SessionExportResult",
     "MessageStartEvent",
+    "SessionTitledEvent",
+    "SessionTitledPayload",
     "EpisodeStartEvent",
     "NoticeEvent",
     "NoticePayload",

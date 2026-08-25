@@ -3423,6 +3423,10 @@
       "en": "not started",
       "zh": "还没开始"
     },
+    "gui.sess.naming": {
+      "en": "Naming this session",
+      "zh": "正在命名这个会话"
+    },
     "gui.sess.pin": {
       "en": "Pin to top",
       "zh": "固定到顶部"
@@ -3434,6 +3438,10 @@
     "gui.sess.rename": {
       "en": "Rename",
       "zh": "重命名"
+    },
+    "gui.sess.rename_failed": {
+      "en": "Could not save the name - {detail}",
+      "zh": "名称没能保存 · {detail}"
     },
     "gui.sess.running": {
       "en": "Working",

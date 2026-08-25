@@ -11,6 +11,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.utils.atomic_io import atomic_replace, locked_append
 from raven.utils.helpers import ensure_dir, safe_filename, safe_path_segment
 
@@ -126,9 +127,39 @@ class Session:
         Clears the ``title_auto`` marker so fork inheritance treats the
         title as human even when the session was auto-named before. Every
         rename path must come through here, not assign metadata directly.
+
+        Collapsed to one line -- a metadata record is one JSON line and every
+        surface renders a title on one row, so an embedded newline has nowhere
+        to go. Past ``TITLE_STORAGE_MAX`` the title is refused rather than
+        truncated: a person typed this, and quietly storing the first 200
+        characters hands them back a fragment they never wrote with nothing
+        saying why. How a stored title *fits* a row is the front end's business.
         """
-        self.metadata["title"] = title
+        cleaned = collapse_to_line(title)
+        if len(cleaned) > TITLE_STORAGE_MAX:
+            raise ValueError(f"session title is {len(cleaned)} characters; the maximum is {TITLE_STORAGE_MAX}")
+        self.metadata["title"] = cleaned
         self.metadata.pop("title_auto", None)
+
+    def set_generated_title(self, title: str) -> bool:
+        """Record a machine-made title. False when it was declined.
+
+        Stamped ``title_auto`` like the one ``save`` derives, so a generated
+        title is "not human" for fork inheritance exactly as the mechanical one
+        is -- no third state, no change to what forks carry.
+
+        Declined when a person has already named the session: the call that
+        produced this ran concurrently with the turn, so a rename typed while it
+        was in flight is the newer intent and has to win.
+        """
+        if self.metadata.get("title") and not self.metadata.get("title_auto"):
+            return False
+        cleaned = collapse_to_line(title)
+        if not cleaned or len(cleaned) > TITLE_STORAGE_MAX:
+            return False
+        self.metadata["title"] = cleaned
+        self.metadata["title_auto"] = True
+        return True
 
     def record(self, msg: dict[str, Any]) -> None:
         """Append a message dict, stamping a wall-clock timestamp.

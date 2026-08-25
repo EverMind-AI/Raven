@@ -25,7 +25,7 @@ import pytest
 from raven.config.loader import load_config
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import TurnInProgressError
+from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (
@@ -1952,3 +1952,70 @@ def test_a_dag_tool_row_with_notice_prefix_still_names_the_run() -> None:
     )
 
     assert rows[0]["dag_run_id"] == "20260823T063516789587Z-1e97d546"
+
+
+async def test_session_resume_carries_the_stored_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The banner names what is being resumed.
+
+    Carried on the init bundle rather than fetched separately: a client resuming
+    a session is already being told what it is resuming, and a second round trip
+    for the name would draw the panel without it first.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_titled"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "cut a desktop release")
+    session.set_title("Cut a desktop release")
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+
+    assert result["info"]["title"] == "Cut a desktop release"
+
+
+async def test_session_resume_of_an_unnamed_session_carries_no_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh mint has nothing to name yet, so the field is absent rather than
+    an empty string the panel would have to test for."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    result = await session_resume({"session_id": "tui:nonexistent_for_title"})
+
+    assert result["info"].get("title") is None
+
+
+async def test_session_title_refuses_a_name_past_the_ceiling_with_a_legible_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not -32603. A name too long is ordinary user input, and an internal_error
+    tells the person nothing about what they typed."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    with pytest.raises(SessionTitleTooLongError) as caught:
+        await session_title({"session_id": "tui:20260610_143052_toolong", "title": "x" * 201})
+
+    assert caught.value.code == -32018
+    assert caught.value.data == {"limit": 200}
+
+
+async def test_session_title_answers_with_the_stored_form_not_the_argument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller draws what it is told. Echoing the raw argument would have it
+    paint a name that is not the one on disk."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    result = await session_title({"session_id": "tui:20260610_143052_ws", "title": "  Ship\n the   fix "})
+
+    assert result["title"] == "Ship the fix"

@@ -214,6 +214,7 @@ def register_aligned_methods_except_system(
         register_turn_methods(
             dispatcher,
             emitter=emitter,
+            agent_loop_factory=agent_loop_factory,
             scheduler=scheduler,
             turn_ids=turn_ids,
             direct_targets=direct_targets,
