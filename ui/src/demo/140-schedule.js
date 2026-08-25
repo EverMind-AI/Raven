@@ -22,9 +22,13 @@ DS.memory ??= {
 
 /* ══ module 4: scheduled work ═════════════════════════════════════
    The renderer is the cron island (ui/src/features/cron/); what remains
-   here is its shell face -- the names the rail, the palette, the Esc
-   handler and the live layer still call -- and the fixture source. */
-function openCron() { RavenIslands.cron.open(); }
+   here is its shell face -- the names the Esc handler, the cron source's
+   run-opening actions in both layers, and the live layer's turn refresh and
+   redrawAll still call -- and the fixture source. Opening a run closes this
+   page and lands on the session it made, which is why the source's own
+   actions close it: DS.cron.runNow and DS.cron.openRun below, and the live
+   twin at live/100-schedules.js. The rail opens the page by importing the
+   island (features/rail/RailPage.tsx); it does not come through here. */
 function closeCron() { RavenIslands.cron.close(); }
 function refreshCron() { return RavenIslands.cron.refresh(); }
 function drawCron() {

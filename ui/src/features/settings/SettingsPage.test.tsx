@@ -85,7 +85,6 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     showPage: (id) => shellCalls.push(['showPage', id]),
     openSet: () => shellCalls.push(['openSet', null]),
     closeSet: () => shellCalls.push(['closeSet', null]),
-    openConn: () => shellCalls.push(['openConn', null]),
   }
   window.RavenShell = fakeShell
   /* The danger card's button is a SESSION operation offered from this page, so
