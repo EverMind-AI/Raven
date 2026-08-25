@@ -38,12 +38,11 @@ from loguru import logger
 from raven.cli.update_notice import update_notice
 from raven.config.loader import drain_migration_notices, load_config
 from raven.providers.rates import resolve_context_window
-from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
+from raven.rpc.errors import ConfigValidationError, TurnInProgressError
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
-from raven.session.title import TITLE_STORAGE_MAX
 from raven.utils.helpers import estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -150,24 +149,13 @@ async def _baseline_usage(
 async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
-    session_key: str | None = None,
 ) -> dict[str, Any]:
     """Build the init bundle returned by ``session.create`` / ``session.resume``.
 
     ``agent_loop=None`` triggers graceful fallback (``tools={}``, ``skills={}``,
     zero usage, ``lazy=True``); version is always real (cached at module load).
-
-    The model reported is the one this session runs on, not the configured
-    default: a session that switched has its own, and reporting the default
-    would show every other session's user the wrong model. With no
-    ``session_key`` (a session being created) the default is the right answer,
-    because that is what a new session starts on.
     """
     model_id = config.agents.defaults.model
-    if session_key and agent_loop is not None:
-        session_model = getattr(agent_loop, "session_model", None)
-        if callable(session_model):
-            model_id = session_model(session_key)
     usage = await _baseline_usage(agent_loop, config)
     info: dict[str, Any] = {
         "model": model_id,
@@ -448,12 +436,8 @@ async def session_resume(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
+    info = await _default_session_info(agent_loop, config)
     session_key = params.get("session_id")
-    # No restore call here: ``_default_session_info`` asks the loop for this
-    # session's model, and the loop reads the stored one on first ask. Restoring
-    # from this handler covered only the surface that calls it -- a conversation
-    # arriving on a channel came back on the default with its choice unread.
-    info = await _default_session_info(agent_loop, config, session_key if isinstance(session_key, str) else None)
 
     if session_key:
         try:
@@ -461,12 +445,6 @@ async def session_resume(
             raw = mgr.peek(session_key)
             if raw is not None:
                 _fill_resumed_context(info, raw)
-                # The banner names what is being resumed. Read from the stored
-                # metadata rather than derived here: whoever named this session
-                # -- a person, `save`, or the naming call -- put the name there.
-                title = (raw.metadata or {}).get("title")
-                if isinstance(title, str) and title:
-                    info["title"] = title
                 return {
                     "session_id": session_key,
                     "info": info,
@@ -624,15 +602,6 @@ async def session_delete(
         config = load_config()
         mgr = _manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
-        if agent_loop is not None:
-            # Not gated on ``removed``: a session that switched model before its
-            # first save has a binding in memory and no file on disk, and
-            # ``delete`` answers False for exactly that case. Clearing what is
-            # not there costs nothing; leaving it behind leaks for the life of
-            # the process.
-            clear = getattr(agent_loop, "clear_session_binding", None)
-            if callable(clear):
-                clear(session_key)
     return {"deleted": session_key if removed else None}
 
 
@@ -687,18 +656,7 @@ async def session_title(
 
     if title is not None:
         session = mgr.get_or_create(session_key)
-        try:
-            session.set_title(title)
-        except ValueError as exc:
-            # A name too long for the metadata record is ordinary user input, not
-            # a bug: letting the ValueError reach the dispatcher answers -32603
-            # with a traceback in the log and the word "internal_error" in the
-            # user's toast, which says nothing about what they typed.
-            raise SessionTitleTooLongError(str(exc), data={"limit": TITLE_STORAGE_MAX}) from exc
-        # The stored form, not the argument: `set_title` collapses whitespace, and
-        # answering with the raw text would have the caller draw a name that is
-        # not the one on disk.
-        title = session.metadata["title"]
+        session.set_title(title)
         if mgr.exists(session_key):
             try:
                 mgr.save(session)
@@ -967,14 +925,6 @@ async def session_branch(
     config = load_config()
     mgr = _manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
-    if child is not None and agent_loop is not None:
-        # A fork continues its parent's conversation, so it continues on the
-        # parent's model; without this it would silently drop to the default.
-        binding_for = getattr(agent_loop, "binding_for_session", None)
-        setter = getattr(agent_loop, "set_session_binding", None)
-        has_own = getattr(agent_loop, "has_session_binding", None)
-        if callable(binding_for) and callable(setter) and callable(has_own) and has_own(session_key):
-            setter(child.key, binding_for(session_key))
     if child is None:
         return {"session_id": None, "title": None}
     return {

@@ -41,7 +41,6 @@ from raven.agent.subagent_memory import (
 )
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
-from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.tracing import semconv, trace
@@ -140,6 +139,7 @@ class SubagentManager:
     ):
         from raven.config.schema import ExecToolConfig
 
+        self.provider = provider
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
@@ -160,7 +160,7 @@ class SubagentManager:
         # result re-entered the conversation. This announces that seam as its
         # own event; without a sink the announce is merely unmarked, not broken.
         self._delivery_sink = None
-        self._fallback = ModelBinding(provider, model or provider.get_default_model())
+        self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -397,19 +397,15 @@ class SubagentManager:
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
-        Only the out-of-turn fallback moves. A spawn requested during a turn
-        takes that turn's binding, so a subagent follows the conversation
-        that asked for it rather than whatever this manager was built with.
+        Subagents run on the parent's provider, so a switch that is not
+        propagated here leaves every spawn calling the credential the loop
+        has already abandoned. Only spawns requested after this call are
+        affected: a subagent is a detached task that outlives the turn that
+        spawned it, so the loop's park cannot cover it and ``spawn``
+        snapshots the pair it was asked for.
         """
-        self._fallback = ModelBinding(provider, model)
-
-    @property
-    def provider(self) -> LLMProvider:
-        return resolve(None, self._fallback).provider
-
-    @property
-    def model(self) -> str:
-        return resolve(None, self._fallback).model
+        self.provider = provider
+        self.model = model
 
     def _track(
         self,
@@ -577,14 +573,12 @@ class SubagentManager:
         # from the UI for however long it waits.
         await _write_spawn_status(session_key, agent, handle, "pending")
 
-        # The binding of the turn that asked for this spawn, snapshotted here
-        # rather than where the task starts running: it queues behind the
-        # concurrency gate and a sandbox boot first, and a switch landing in
-        # that window would hand it an endpoint chosen after it was asked for.
-        # A subagent has no model of its own, so it follows its conversation.
-        binding = resolve(None, self._fallback)
+        # Snapshot here rather than where the task starts running: it queues
+        # behind the concurrency gate and a sandbox boot first, and a switch
+        # landing in that window would hand this task an endpoint the user
+        # chose after asking for it.
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin, binding.provider, binding.model)
+            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
         )
         self._track(task_id, bg_task, session_key, instance_key)
 

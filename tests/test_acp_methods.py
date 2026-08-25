@@ -936,6 +936,24 @@ class TestConfigOptions:
 
         assert rig.stack.params_for("config.set")["session_id"] == session_id
 
+    async def test_a_refusal_during_a_turn_keeps_its_own_code(self, rig):
+        """-32009 is something a client can act on. Flattening it to an internal
+        error leaves a person retrying a thing that will keep failing for a reason
+        nobody told them."""
+        from raven.rpc.errors import ModelSwitchInTurnError
+
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.stack.config_set_result = ModelSwitchInTurnError("busy")
+
+        response = await rig.call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"},
+        )
+
+        assert response["error"]["code"] == -32009
+        validate_outbound(response)
+
     async def test_an_unknown_option_names_what_is_supported(self, rig):
         await rig.handshake()
         session_id = await rig.new_session()

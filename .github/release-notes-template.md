@@ -28,11 +28,8 @@ irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.
 Open a new terminal, then run:
 
 ```bash
-raven
+raven onboard
 ```
-
-That sets you up on first run and then opens the TUI. `raven onboard` stays
-the explicit way to reconfigure later.
 
 ## Upgrade
 

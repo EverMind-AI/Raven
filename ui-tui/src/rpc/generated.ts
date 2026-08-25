@@ -2135,9 +2135,6 @@ export interface ConfigGetResult {
 export interface ConfigSetParams {
   key: string;
   value: JsonValue;
-  session_id?: string;
-  provider?: string;
-  scope?: 'session' | 'default';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2146,10 +2143,6 @@ export interface ConfigSetParams {
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
-  value?: string;
-  scope?: 'session' | 'default';
-  session_id?: string;
-  applies_to_session?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

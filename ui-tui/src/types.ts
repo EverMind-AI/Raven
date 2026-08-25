@@ -114,23 +114,10 @@ export interface ConfirmReq {
   title?: string
 }
 
-// One entry of an ask_user batch, carried on every question in it so the
-// prompt can show the whole set while answering one at a time.
-export interface ClarifyBatchItem {
-  header?: string
-  question: string
-}
-
 export interface ClarifyReq {
-  batch?: ClarifyBatchItem[]
   choices: string[] | null
-  header?: string
-  index?: number
   question: string
-  recommended?: string
   requestId: string
-  timeoutS?: number
-  total?: number
 }
 
 // One tool invocation inside an episode. `summary` is a target-string ("ls

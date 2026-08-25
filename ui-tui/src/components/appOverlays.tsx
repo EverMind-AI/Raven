@@ -179,7 +179,6 @@ export function FloatingOverlays({
             launcher={launchRavenCommand}
             onCancel={() => patchOverlayState({ modelPicker: false })}
             onSelect={onModelSelect}
-            scope={overlay.modelPicker === 'default' ? 'default' : 'session'}
             sessionId={sid}
             suspend={suspendForHandoff}
             t={theme}
