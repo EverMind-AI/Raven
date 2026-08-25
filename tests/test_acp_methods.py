@@ -921,7 +921,10 @@ class TestConfigOptions:
         assert [o["id"] for o in response["result"]["configOptions"]] == ["model"]
         written = rig.stack.params_for("config.set")
         assert written["key"] == "model"
-        assert written["value"] == "anthropic/opus-5"
+        # The slug leaves the wire value and becomes its own field: config.set
+        # model requires the provider rather than deriving it from the id.
+        assert written["value"] == "opus-5"
+        assert written["provider"] == "anthropic"
 
     async def test_the_session_key_is_passed_so_a_running_turn_can_refuse_it(self, rig):
         await rig.handshake()
@@ -934,22 +937,33 @@ class TestConfigOptions:
 
         assert rig.stack.params_for("config.set")["session_id"] == session_id
 
-    async def test_a_refusal_during_a_turn_keeps_its_own_code(self, rig):
-        """-32009 is something a client can act on. Flattening it to an internal
-        error leaves a person retrying a thing that will keep failing for a reason
-        nobody told them."""
-        from raven.rpc.errors import ModelSwitchInTurnError
+    async def test_a_runtime_refusal_keeps_its_own_code(self, rig):
+        """A code a client can act on must not be flattened to an internal error.
+
+        Was written against -32009, the refusal for a switch attempted during a
+        turn. That code went with the per-session binding: a switch now lands on
+        the session's next turn, so nothing refuses it. The property is about the
+        boundary rather than that one code, so it is asserted on -32011, which
+        `_set_model` raises for a value it will not write.
+
+        The stub is the point here: this asserts only that a code survives the
+        hop. That a switch this adapter emits is one the runtime accepts is a
+        different question, and a stub cannot answer it --
+        `test_acp_config_options.py::TestAgainstTheRealSetter` drives the real
+        setter for that.
+        """
+        from raven.rpc.errors import ConfigValidationError
 
         await rig.handshake()
         session_id = await rig.new_session()
-        rig.stack.config_set_result = ModelSwitchInTurnError("busy")
+        rig.stack.config_set_result = ConfigValidationError("no provider names whose credential serves it")
 
         response = await rig.call(
             "session/set_config_option",
             {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"},
         )
 
-        assert response["error"]["code"] == -32009
+        assert response["error"]["code"] == -32011
         validate_outbound(response)
 
     async def test_an_unknown_option_names_what_is_supported(self, rig):
