@@ -2422,7 +2422,7 @@ async def test_manager_cancel_all_cancels_every_running_spawn(tmp_path: Path) ->
 
 async def test_cli_backend_without_timeout_waits(tmp_path: Path) -> None:
     # No timeout configured: a slow child runs to completion instead of being killed.
-    be = CliAgentBackend(name="slow", command="sh -c 'sleep 2; printf done'", timeout=None)
+    be = CliAgentBackend(name="slow", command="sh -c 'sleep 0.3; printf done'", timeout=None)
     assert await be.run("x", task_id="t1", workspace=tmp_path, executor=None) == "done"
 
 
@@ -2536,7 +2536,7 @@ async def test_cli_backend_timeout_kills_reparented_child_after_launcher_already
     script.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > {pid_file}\nexit 0\n", encoding="utf-8")
     script.chmod(0o755)
 
-    be = CliAgentBackend(name="reparented", command=f"sh {script}", timeout=1)
+    be = CliAgentBackend(name="reparented", command=f"sh {script}", timeout=0.2)
     with pytest.raises(RuntimeError, match="timed out"):
         await be.run("x", task_id="t1", workspace=tmp_path, executor=None)
 

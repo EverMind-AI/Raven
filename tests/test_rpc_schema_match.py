@@ -292,11 +292,6 @@ def test_method_set_matches(methods_by_name: dict[str, dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def method_names(methods_by_name: dict[str, dict[str, Any]]) -> list[str]:
-    return sorted(methods_by_name.keys())
-
-
 def _check_params_drift(method_name: str, method: dict[str, Any], schema: dict[str, Any]) -> None:
     params_model, _ = METHOD_MODELS[method_name]
     oas = _oas_params_to_canonical(method, schema)

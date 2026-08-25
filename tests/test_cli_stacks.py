@@ -15,9 +15,6 @@ contract that:
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from raven.agent.hook import AgentHook, CompositeHook
@@ -25,17 +22,6 @@ from raven.cli._eval_stack import build_eval_stack
 from raven.cli._hooks_stack import build_hooks_stack
 from raven.cli._token_wise_stack import install_from_config
 from raven.eval_engine import EvalEngine, EvalEngineConfig
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def workspace():
-    with tempfile.TemporaryDirectory() as td:
-        yield Path(td)
-
 
 # ===========================================================================
 # build_eval_stack
