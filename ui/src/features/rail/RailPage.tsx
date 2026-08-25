@@ -141,17 +141,11 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
             }}
           />
         ) : s.naming ? (
-          /* The title is being generated. Pixels and `flex: none`, not a
-             percentage: `.sess .t` is a flex row, so a bar sized in percent
-             resolves against a shrink-to-fit item whose own width comes from
-             this bar -- it collapsed to zero and the row read as simply empty.
-             The shimmer is the rail's own loading primitive and already holds
-             still under prefers-reduced-motion. */
-          <span
-            className="sk"
-            style={{ flex: 'none', width: '116px', maxWidth: '62%', height: '11px' }}
-            aria-label={t('gui.sess.naming')}
-          />
+          /* The title is being generated. The bar's width lives in the
+             stylesheet next to the row's own geometry, which is what keeps it
+             from being re-derived per row; only its height stays here, since
+             that is the one dimension the surrounding line box does not set. */
+          <span className="sk" style={{ height: '11px' }} aria-label={t('gui.sess.naming')} />
         ) : (
           <span>{plainTitle(s.title)}</span>
         )}

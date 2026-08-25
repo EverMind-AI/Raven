@@ -357,9 +357,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* One line per session. The summary line doubled the row height and the
    title already says what the session is; the group header carries the date. */
+/* min-height, because the row's height has to come from the title slot and
+   nothing else. A row whose title is still being generated holds a bar, not a
+   line of text, so the slot collapsed to the bar's 11px and the row's height
+   fell through to whatever the timestamp's line box happened to be -- then
+   hover hid the timestamp for the pin/archive buttons and took that away too,
+   so pointing at a naming row shrank it by 11px. `1lh` is this element's own
+   line height, so the slot keeps a text row's height without a magic number
+   to re-derive whenever the rail's font size moves. */
 .sess .t {
   display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1;
   white-space: nowrap; overflow: hidden;
+  min-height: 1.65em;
+  min-height: 1lh;
 }
 .sess .t span { overflow: hidden; text-overflow: ellipsis; }
 /* The stamp is a fixed-width note on the row, so it keeps its own weight when
@@ -2844,13 +2854,37 @@ details[open] summary { margin-bottom: 8px; }
 .hubcard.skel:hover { transform: none; box-shadow: var(--elev); }
 /* Rail placeholder rows: shown by live boot instead of the demo seed, so a
    refresh never flashes mock sessions before the real list lands. */
-.sess.skel { pointer-events: none; justify-content: space-between; min-height: 28px; }
+/* Same height as a row carrying text -- one line box plus the row's own
+   5px/5px padding -- so the list does not grow when the real sessions
+   replace these. */
+.sess.skel {
+  pointer-events: none; justify-content: space-between;
+  min-height: calc(1.65em + 10px);
+  min-height: calc(1lh + 10px);
+}
 .sess.skel:hover { background: none; }
+/* A translucent wash rather than named surfaces: this primitive is used on
+   three different grounds now, and --surface/--raised only read against the
+   white card it was written for. On the rail the bar's base WAS the rail's own
+   --surface, so a bar at rest was exactly the colour behind it -- invisible
+   until the shimmer's --raised peak swept past, and on a hovered row (ground
+   --raised) it inverted and vanished again at the peak. A wash over whatever
+   is behind it holds its contrast on every ground and in both themes. */
 .skel .sk {
   display: block; border-radius: 5px;
-  background: linear-gradient(90deg, var(--surface) 30%, var(--raised) 50%, var(--surface) 70%);
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
   background-size: 300% 100%; animation: skshine 1.3s linear infinite;
 }
+/* The naming bar's own size. It was an inline style carrying max-width: 62%,
+   and a percentage resolves against the title slot -- whose width depends on
+   how long the neighbouring timestamp is and shrinks again under hover's
+   padding-right. One bar came out 116px and the next 80.74px, and hovering
+   moved either by 8px. The slot already clips, so a fixed width cannot push
+   the row out of shape however narrow the rail is dragged. */
+.sess .t.skel .sk { flex: none; width: 116px; }
 @keyframes skshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .skel .sk { animation: none; } }
 .mdprev {
