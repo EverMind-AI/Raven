@@ -40,7 +40,7 @@ from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import validate_and_order
 from raven.agent.subagent_dag._reader import read_node as _read_node
 from raven.agent.subagent_dag._reader import read_run as _read_run
-from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_session_nodes
+from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_index, read_session_nodes
 from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
 from raven.agent.subagent_history import dag_root, session_history_root
@@ -250,6 +250,7 @@ class SubAgentDagTool(Tool):
         everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
+        control_reachable: "Callable[[], bool] | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -285,6 +286,10 @@ class SubAgentDagTool(Tool):
         self._origin: ContextVar[_DagOrigin | None] = ContextVar("dag_origin", default=None)
         self._tool_call_id: ContextVar[str | None] = ContextVar("dag_tool_call_id", default=None)
         self._ask = ask
+        # Whether the control tools have a call path this turn. Injected by
+        # the loop (the controller's predicate); unwired hosts advertise, which
+        # is the old contract a test or an offline entry point expects.
+        self._control_reachable = control_reachable
         self._cancels: dict[str, asyncio.Event] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
@@ -474,6 +479,16 @@ class SubAgentDagTool(Tool):
         graph. Serves in-flight runs too -- see :func:`_reader.read_run`.
         """
         return await _read_run(self._backend, self._run_root(session_key), run_id)
+
+    async def session_run_ids(self, session_key: str | None = None) -> set[str]:
+        """Every run id this conversation's index records.
+
+        The live run set is loop-wide and the index is per session; the
+        intersection of the two is what one conversation's model may see, which
+        is how the control tools scope their listing and their cancel.
+        """
+        entries = await read_index(self._backend, self._run_root(session_key))
+        return {str(entry["run_id"]) for entry in entries if entry.get("run_id")}
 
     async def read_node(
         self,
@@ -786,11 +801,25 @@ class SubAgentDagTool(Tool):
         task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
+        controls = ""
+        if self._control_reachable is None:
+            controls = f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+        else:
+            # Fail closed: the predicate runs after the background task is
+            # already created, so a failure here must mute the hint rather
+            # than turn an accepted submission into an error result.
+            try:
+                reachable = self._control_reachable()
+            except Exception:  # noqa: BLE001
+                reachable = False
+            if reachable:
+                controls = f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
         return _with_notices(
             ToolResult(
                 model_text=(
                     f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
-                    "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+                    + controls
+                    + "I'll report the result when it finishes -- keep working, and do not submit this graph again."
                 ),
                 display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
             ),

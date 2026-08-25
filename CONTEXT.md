@@ -27,6 +27,51 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Model binding**:
+A model id together with the provider whose credential serves it, as one value
+(`raven/providers/binding.py`). The pairing is the point: a model id alone does
+not say which key reaches it, and updating one half is how one vendor's key ends
+up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
+entry and holds it in a context var for the whole turn tree, so everything under
+that turn -- the loop, the context engine's LLM-backed segments, the skill gate
+and rewriter, the consolidator, and any task the turn detaches -- reads the same
+pair. _Avoid_: "the current model" / "the active provider" for this; both name
+one half.
+
+**Session binding**:
+The model binding one conversation runs on. Sessions that never switched have no
+entry and resolve to the **default binding**; a switch writes only that
+session's entry, so it moves no other conversation and does not change what a
+new one starts on. Stored on the session record so it survives a restart.
+
+**Default binding**:
+What a session with no binding of its own runs on: `agents.defaults` from config,
+verbatim. Changed by a `scope="default"` switch, which leaves sessions that
+already chose their own model where they are.
+
+**Provider pool**:
+The one place a model id is resolved to the credential that serves it
+(`raven/providers/pool.py`), caching a provider per (vendor, model) and dropping
+the cache when the credentials behind it change. Also what turns a **subsystem
+pin** into a pair. Constructing a `ModelBinding` from an already-resolved pair
+happens in several places; deciding *which* provider a model id pairs with
+happens only here.
+
+**Subsystem pin**:
+A model configured for one subsystem rather than for the conversation, as a
+model and the provider serving it (`context.curator_model` +
+`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+halves because an id alone is ambiguous the moment a gateway is configured:
+`openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
+`claude-haiku-4-5` are both valid and name different credentials. With the
+provider set nothing is derived, and a named vendor without usable credentials
+is reported and dropped -- the subsystem then follows the conversation's model,
+because a bare pinned id sent on the conversation's key is exactly the
+mis-pairing above. With the provider unset the pin still binds: a configured
+gateway takes it (it serves whatever id it is handed, under its own
+credential), and only without one is the vendor guessed from the id. Unset out
+of the box -- no subsystem ships a vendor default.
+
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the
 agent's final response, including every LLM call and tool execution in between.
@@ -421,13 +466,16 @@ that is nobody's.
 _Avoid_: "pricing" for the resolution -- that names the arithmetic on top
 (`token_wise/pricing.py`), which is a different module for a reason.
 
-**Provider Pin**:
-`agents.defaults.provider`: an explicit override of the Provider a Model Ref names.
-Every surface that changes the model rewrites it by one rule
-(`providers/pin.py::resolve`), because a pin left behind routes the new model to the old
-vendor with the old vendor's key.
-_Avoid_: reading it as a provider *signal* -- a pinned name says which section to ask
-about, never that the section holds credentials.
+**Configured provider**:
+`agents.defaults.provider`: which vendor's credential serves `agents.defaults.model`.
+Said by the user, derived by nothing -- every surface that changes the model writes the
+pair, and `config.set model` refuses a model without one. A config predating that rule
+carries the empty string until the loader resolves it once and writes the answer down
+(`config/loader.py::_migrate_auto_provider`); until then the vendor is derived from the
+id, which is the guess the field exists to end.
+_Avoid_: "pin" for this -- **Subsystem pin** above is a different thing (a model for one
+subsystem, not for the conversation). Also avoid reading it as a provider *signal*: a
+name says which section to ask about, never that the section holds credentials.
 
 **Provider Endpoint**:
 One url/key/headers group a provider section offers, of possibly several
@@ -779,6 +827,92 @@ _Avoid_: "task judge" as a class name — the class is `EvalJudge`.
 The three-state outcome an EvalJudge returns: `completed` (goal addressed), `failed`
 (visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
 writes completed/failed (never unknown) into `HISTORY.md`.
+
+### Trajectory
+
+**Attempt**:
+One task try, possibly spanning several turns — the stable address of a trajectory.
+Every span carries `attempt.id` (`raven/tracing/spans.py`); without an explicitly
+opened attempt (`trace.begin_attempt(session_key)`) each turn is its own single-turn
+attempt whose id equals the trace id, so every trace is addressable as an attempt.
+_Avoid_: "run id" / "task id" — neither is bound to span records.
+
+**Trajectory Verdict** (`raven/trajectory/verdict.py`):
+The task-outcome label for one Attempt: `pass` / `fail` (agent failure) / `infra`
+(environment or harness crash, excluded from diagnosis), plus the judging `source`.
+Appended to `verdicts.jsonl` beside the trace logs by whoever can judge; deliberately
+outside tracing — `status.code` says whether code crashed, a verdict says whether the
+task succeeded.
+_Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown).
+
+**Trajectory Pin** (`raven/trajectory/store.py`):
+The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
+state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
+their spans or the artifacts those spans reference.
+
+**Trajectory Bundle** (`raven/trajectory/bundle.py`):
+The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
+for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
+bundle-relative paths) + `artifacts/` + the session's conversation record + its
+verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
+_Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
+**Trajectory Redaction** (`raven/trajectory/redact.py`):
+The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory
+Bundle (the original is never modified): exact replacement of known secret values
+(secret-typed config fields + credential-shaped env vars, stable
+`[REDACTED:<source>]` placeholders, JSON-escaped spellings included), regex fallback
+for common credential shapes, and a residual scan that flags high-entropy leftovers
+for human review without rewriting. Non-UTF-8 files are excluded from the copy.
+_Avoid_: "masking"/"anonymization" — redaction removes credentials, it does not
+de-identify the user.
+
+**Trajectory Report** (`raven/trajectory/report.py`):
+The shippable form of a trajectory produced by `raven trajectory report`: the
+redacted copy of its Bundle plus `redaction.json` (per-layer replacement counts,
+residual findings, binary policy) packed into a `.tar.gz`, delivered through the
+pluggable `Uploader` protocol (v1 backend: `local` — the tarball itself, nothing
+is sent anywhere).
+_Avoid_: calling the unredacted Bundle a "report" — only the redacted tarball leaves
+the machine.
+
+**Trajectory Replay** (`raven/trajectory/replay.py`):
+Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
+recorded model replies (`llm.output`) and tool results (`tool.output`) are fed back
+in recording order through a `ReplayProvider` and a `ReplayToolRegistry` while the
+live agent-loop code runs for real. No real tool ever executes, and the replay run
+emits no spans (tracing is disabled for its duration).
+_Avoid_: confusing with a real re-run against live models/tools — that is evolver
+evaluation, not replay.
+
+**Replay Divergence** (`raven/trajectory/replay.py`):
+The point where the live harness's request stops matching the recording — the
+expected outcome once a bug is fixed, not an error. Detected per model call
+(model id, message roles/contents, tool-call names+arguments, offered tool names,
+under nonce/timestamp/cache-control normalization) and per tool call (name +
+arguments). Policy `strict` halts at the first divergence; `warn` reports and
+keeps feeding by order. Each divergence carries the structured `expected`/`actual`
+values of its field, and the replay report captures every live request
+(`llm_requests`/`tool_requests`) for programmatic assertions.
+
+**Trajectory Cassette** (`raven/trajectory/cassette.py`):
+The committable form of a Trajectory Bundle, produced by `minimize_bundle` /
+`raven trajectory minimize`: same directory layout, but shrunk to the exact
+surface `load_recording` consumes (consumed spans/artifacts/fields only,
+system-prompt content replaced by a placeholder, the session record sliced to
+the pre-attempt history) and passed through Trajectory Redaction. Payloads are
+never truncated — a field is kept whole or dropped whole.
+_Avoid_: "minimized bundle" as a distinct term — a cassette *is* a bundle to
+the replay layer.
+
+**Trajectory Regression Case** (`raven/trajectory/regression.py`, `tests/trajectories/`):
+One directory pinning a fixed harness bug into CI: a Trajectory Cassette
+(`cassette/`) plus an expectation file (`expect.yaml`) declaring where the
+replay's first Replay Divergence must land and what the live side must do
+there (message contains/not-contains/equals, tool name/params checks).
+Discovered and run by `tests/test_trajectory_regressions.py`; asserting
+"divergence at the expected call, live value = fixed behavior" is the normal
+shape — zero divergence is the special case guarding faithful reproduction.
 
 ### Workspace & Onboarding
 

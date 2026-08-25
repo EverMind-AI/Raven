@@ -57,8 +57,9 @@ from raven.providers.base import (
     LLMResponse,
     send_max_tokens,
 )
+from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.rates import resolve_context_window
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin, session_of
@@ -165,12 +166,19 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig, PlaybookConfig
+    from raven.config.schema import (
+        AskUserToolConfig,
+        ChannelsConfig,
+        DeepResearchToolConfig,
+        ExecToolConfig,
+        PlaybookConfig,
+    )
     from raven.context_engine import ContextEngine
     from raven.mcp.manager import MCPConnectionManager
     from raven.mcp.report import ApplyReport
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
     from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
@@ -438,6 +446,7 @@ class AgentLoop:
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
+        ask_user_config: AskUserToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
@@ -456,6 +465,7 @@ class AgentLoop:
         now_fn: Callable | None = None,
         context_config: "ContextConfig | None" = None,
         runtime_config: "RuntimeConfig | None" = None,
+        provider_pool: "ProviderPool | None" = None,
         interactive: bool = True,
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 8,
@@ -491,7 +501,7 @@ class AgentLoop:
             OnUserInboundAdapter,
             ResponseModifierAdapter,
         )
-        from raven.config.schema import ExecToolConfig
+        from raven.config.schema import AskUserToolConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
         # Optional transform applied to the final assistant content right
@@ -514,37 +524,37 @@ class AgentLoop:
         self.decision_consumer = decision_consumer
         self.channels_config = channels_config
         self._deliverables = deliverables
-        self.provider = provider
-        self.workspace = workspace
         self._workdir_resolver = workdir_resolver
-        self.model = model or provider.get_default_model()
+        self.workspace = workspace
+        # The model a turn runs on is per session, so it cannot live in two
+        # attributes on a process-wide loop. ``_default_binding`` is what a
+        # session starts on; ``provider``/``model`` below read whichever
+        # binding the running turn entered.
+        self._provider_pool = provider_pool
+        # An explicit window rides on the binding, which is what answers for it
+        # from here on -- every binding this loop makes carries it, so a session
+        # switching models cannot shake off a number the user pinned. No special
+        # case for 65536: the retired default the old bootstrap wrote to disk is
+        # cleared where it lives by ``config.loader``, so what arrives here is a
+        # real choice.
+        self._configured_window = context_window_tokens or None
+        self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
+        self._session_bindings: dict[str, ModelBinding] = {}
+        # Keys whose session record has been consulted for a stored model, hit
+        # or miss. See ``_restore_once``.
+        self._restore_attempted: set[str] = set()
         # Resolved lazily on the first tool result that carries an image. Keyed
         # by model, not a single flag: the loop is a long-lived singleton and
         # takes a per-call model (strategies rewrite it, and the model chain
         # falls back), so one model's verdict must not answer for another's.
+        # Keyed by model but *computed from the provider*, so a rebuild that
+        # keeps the model id would keep serving the old transport's verdict --
+        # ``_forget_transport_verdicts`` is what the binding setters call.
         self._image_tool_result_ok: dict[str, bool] = {}
         self._vision_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        # A caller that passed a positive value set the window explicitly;
-        # None/0 means "figure it out", resolved once here against the model's
-        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
-        # registered term, see CONTEXT.md.)
-        self._context_window_explicit = bool(context_window_tokens)
-        # No special case for 65536 here any more: the retired default the old
-        # bootstrap wrote to disk is cleared where it lives, once, by
-        # ``config.loader._migrate_legacy_context_window``. Whatever reaches
-        # this constructor is therefore a real choice, and warning about a real
-        # choice would just be noise.
-        #
-        # allow_fetch=False: construction must not block on a synchronous
-        # network call for an OpenRouter model's window -- whatever is already
-        # cached (in-process or on disk, any age) answers instead. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = context_window_tokens or effective_context_window(
-            self.model, None, allow_fetch=False
-        )
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -553,6 +563,7 @@ class AgentLoop:
         self.media_config = media_config or MediaGenConfig()
         self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
+        self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
@@ -619,6 +630,10 @@ class AgentLoop:
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()
         self._tool_search_config = tool_search_config
+        # Assigned for real only when the feature is on, but read on every
+        # backgrounded DAG submission -- including default deploys, where an
+        # unset attribute would raise instead of answering "no route".
+        self.tool_search_controller = None
         self.tools = ToolRegistry()
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
@@ -664,7 +679,10 @@ class AgentLoop:
             config=context_config,
             builder=self.context,
             provider=provider,
-            model=self.model,
+            model=self._default_binding.model,
+            # The resolved window, not the constructor argument: unset (the
+            # common case) it is None there and the real size comes from the
+            # ladder in ``providers.rates``.
             context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             # Read through a lambda, not bound here: ``self.subagents`` is built
@@ -681,6 +699,7 @@ class AgentLoop:
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
+            provider_pool=provider_pool,
         )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
@@ -708,7 +727,7 @@ class AgentLoop:
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
-            model=self.model,
+            model=self._default_binding.model,
             brave_api_key=brave_api_key,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
@@ -774,7 +793,7 @@ class AgentLoop:
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
             provider=provider,
-            model=self.model,
+            model=self._default_binding.model,
             sessions=self.sessions,
             context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
@@ -784,20 +803,12 @@ class AgentLoop:
 
         self._consolidation_tasks: set[asyncio.Task] = set()
 
-        # A switch that arrives mid-turn is parked here until no turn is
-        # running, so a turn in flight finishes on the provider it started
-        # with. A depth counter, not a flag: OriginPools gates USER and
-        # system origins on independent semaphores with no global cap
-        # (spine/scheduler.py), so a user turn and a cron turn overlap on
-        # this loop under the TUI defaults.
-        self._pending_provider: tuple[LLMProvider, str] | None = None
-        self._turns_in_flight = 0
-
         # ``self.subagents``, ``self.context_engine`` and
         # ``self.memory_consolidator`` were each handed ``provider`` earlier in
-        # this constructor and hold their own reference; ``_adopt_provider`` is
-        # what keeps them from outliving a live model switch. Add the call
-        # there when adding another holder.
+        # this constructor. Inside a turn they read the turn's binding; the
+        # reference they hold is only the fallback for work that runs outside
+        # one, and ``set_default_binding`` is what keeps that fallback current.
+        # Add the call there when adding another holder.
 
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
@@ -845,15 +856,6 @@ class AgentLoop:
         # ``_build_playbook_runtime``.
         self._build_playbooks()
         self._report_reserved_disabled_tools()
-
-        # LazyProvider defers the litellm import behind a background prewarm
-        # thread (see providers.lazy); the window this constructor just
-        # resolved above was answered with allow_import=False, so it can be
-        # wrong until that import lands. Wiring the callback fixes it up in
-        # place once the real provider is built -- a no-op for any other
-        # provider, which has no ``on_built`` to set.
-        if hasattr(provider, "on_built"):
-            provider.on_built = self.refresh_context_window
 
     def _report_reserved_disabled_tools(self) -> None:
         """Tell the operator about an off switch the loop cannot honour.
@@ -926,71 +928,197 @@ class AgentLoop:
             withheld.update(self.tools.resolve_configured(entry))
         return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES))
 
-    def set_provider(self, provider: LLMProvider, model: str) -> None:
-        """Point the loop and everything it built at a new provider/model.
+    @property
+    def provider(self) -> LLMProvider:
+        """The provider of the binding the running turn entered.
 
-        ``config.set model`` builds a provider from the prospective config
-        and hands it here. Assigning ``self.provider`` alone is not enough:
-        the subagent manager, the context engine's LLM-backed segments and
-        the consolidator each captured the provider handed to them in
-        ``__init__``. Left behind, they keep calling the old endpoint for
-        the rest of the process -- which is how switching away from a dead
-        credential fixed the main loop while subagents and the skill
-        rewriter/gate went on failing to authenticate.
-
-        A switch that lands while any turn is running is parked rather than
-        applied: the loop reads ``self.provider`` at call time (eight sites
-        in this module, plus the context engine and consolidator
-        underneath), so adopting mid-turn would relay one conversation
-        across two vendors. How that surfaces depends on the path: the
-        ``chat_with_retry`` sites turn a rejected request into
-        ``finish_reason="error"`` content, so the turn reports a failure
-        with no sign that its endpoint moved, while ``_llm_call_stream``
-        (which a TUI turn takes) catches only ``TimeoutError`` and lets the
-        rejection propagate. Neither is a diagnosis the user can act on.
-
-        The park is the second line of defence, not the first: the RPC
-        rejects a switch outright when the caller's own session has a turn
-        in flight (``is_turn_active`` in ``rpc.methods.config``). This
-        covers what that guard cannot see -- a caller that passes no
-        ``session_id``, and the proactive turns that run in their own lanes.
-        Note the RPC still answers ``applied: True`` and the config file is
-        already written, so a parked switch is applied on disk while the
-        loop reports the old model until the last turn drains.
-
-        Detached subagents are not covered by that park -- they outlive the
-        turn that spawned them -- so ``SubagentManager`` snapshots instead.
+        A property, not an attribute: the model is per session now, so there
+        is no single answer to cache on the loop. Outside a turn (startup, a
+        one-shot CLI call) this is the configured default.
         """
-        if self._turns_in_flight:
-            # The only trace of the window the docstring describes.
-            logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
-            self._pending_provider = (provider, model)
-            return
-        self._adopt_provider(provider, model)
+        binding = active_binding()
+        return binding.provider if binding is not None else self._default_binding.provider
 
-    def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
-        """Hand a provider to the loop and every subsystem holding the old one."""
-        logger.info("adopting provider switch: model={}", model)
-        self.provider = provider
-        self.model = model
-        # Cached per model id but computed from the provider, so a swap that
-        # keeps the model id would keep serving the old transport's verdict.
+    @property
+    def model(self) -> str:
+        """The model id of the binding the running turn entered."""
+        binding = active_binding()
+        return binding.model if binding is not None else self._default_binding.model
+
+    @property
+    def context_window_tokens(self) -> int:
+        """How much the binding of the running turn can hold.
+
+        A property for the same reason ``provider`` and ``model`` are: two
+        sessions can be on models of different sizes at once, so a single int
+        on the loop has no answer that is right for both. Outside a turn this
+        is the configured default's window.
+        """
+        binding = active_binding() or self._default_binding
+        return binding.context_window
+
+    @property
+    def provider_pool(self) -> "ProviderPool | None":
+        """Where a model id becomes a model id plus the credential for it."""
+        return self._provider_pool
+
+    @property
+    def default_binding(self) -> ModelBinding:
+        """What a session with no switch of its own runs on."""
+        return self._default_binding
+
+    def binding_for_session(self, session_key: str) -> ModelBinding:
+        """The binding this session runs on: its own switch, else the default.
+
+        A new session has no entry, so it starts on the configured default
+        rather than on whatever the last session switched to.
+
+        A session whose choice is on disk but not yet in memory is restored here,
+        on first ask. That is what makes the choice outlive a restart on *every*
+        surface: the overrides live in this process, the session record is the
+        only place they survive, and hanging the read off a TUI-only resume call
+        meant a conversation on a channel came back on the default with its
+        choice sitting unread in its own record.
+        """
+        binding = self._session_bindings.get(session_key)
+        if binding is not None:
+            return binding
+        self._restore_once(session_key)
+        return self._session_bindings.get(session_key, self._default_binding)
+
+    def _restore_once(self, session_key: str) -> None:
+        """Read this session's stored model, at most once per key per process.
+
+        The negative answer is remembered too. Most sessions never switched, and
+        without that this would re-read a record on every turn to learn the same
+        nothing.
+        """
+        if session_key in self._restore_attempted:
+            return
+        self._restore_attempted.add(session_key)
+        sessions = getattr(self, "sessions", None)
+        if sessions is None or self._provider_pool is None:
+            return
+        try:
+            record = sessions.peek(session_key)
+        except Exception as exc:
+            logger.debug("cannot read session {!r} to restore its model: {}", session_key, exc)
+            return
+        metadata = getattr(record, "metadata", None) or {}
+        model = metadata.get("model")
+        if model:
+            self.restore_session_model(session_key, model, metadata.get("provider"))
+
+    def session_model(self, session_key: str) -> str:
+        """What to show this session's user, which is not the global default."""
+        return self.binding_for_session(session_key).model
+
+    def has_session_binding(self, session_key: str) -> bool:
+        """Did this session switch, or is it just following the default?
+
+        ``session_model`` cannot answer that -- it falls back to the default,
+        so it never returns None. Callers that must distinguish "chose this"
+        from "inherited this" ask here.
+
+        Restores first, so a session that switched before a restart answers yes
+        rather than being reported as having inherited the default.
+        """
+        if session_key not in self._session_bindings:
+            self._restore_once(session_key)
+        return session_key in self._session_bindings
+
+    def restore_session_model(self, session_key: str, model: str, provider_name: str | None = None) -> None:
+        """Put a session back on the model it was last switched to.
+
+        Session overrides live in memory, so without this a restart moves every
+        switched session back to the default and the user's choice lasts exactly
+        as long as the process. A model that can no longer be built (a credential
+        since removed) leaves the session on the default rather than failing the
+        turn that asked.
+
+        Normally reached through ``_restore_once``, which supplies the stored
+        pair; kept public for a caller that has the pair already.
+        """
+        self._restore_attempted.add(session_key)
+        pool = self._provider_pool
+        if pool is None or not model:
+            return
+        try:
+            self.set_session_binding(session_key, pool.bind(model, provider_name))
+        except Exception as exc:
+            # Broad on purpose. Building a provider imports a vendor module and
+            # checks credentials, so the failures reachable here are open-ended
+            # -- ``MissingCredentialsError`` is one that did not exist when this
+            # guard was first written, and it escaped a tuple of three. A resume
+            # that lands on the default is a worse session; a resume that raises
+            # is no session at all.
+            logger.warning("session {!r} cannot resume on {!r} ({}); using the default", session_key, model, exc)
+
+    def set_session_binding(self, session_key: str, binding: ModelBinding) -> None:
+        """Switch one session, leaving every other session where it was.
+
+        Applied immediately and still safe mid-turn: a turn resolves its
+        binding once at ``run_turn`` entry and holds it in a context var for
+        its whole tree, including anything it detaches. So a switch during a
+        turn cannot move that turn -- it lands on the next one -- and no
+        parking is needed to arrange that.
+        """
+        self._session_bindings[session_key] = binding
+        self._forget_transport_verdicts()
+
+    def clear_session_binding(self, session_key: str) -> None:
+        """Drop a session's override so it follows the default again.
+
+        Deliberately does not mark the key as consulted. The one caller is
+        ``session.delete``, which unlinks the record before this runs, so there
+        is nothing left for a later ask to read back in -- and a session that
+        somehow kept its record is better served by re-reading it than by a
+        marking that claims we looked when we did not.
+        """
+        self._session_bindings.pop(session_key, None)
+
+    def _forget_transport_verdicts(self) -> None:
+        """Drop the capability verdicts a new provider may answer differently.
+
+        Both caches key on a model id but are computed from the provider serving
+        it, so a rebuild that keeps the id keeps the old endpoint's answer. The
+        reachable case is an ``apiBase`` repointed at a box with different
+        capabilities, or a re-authenticated provider: the credentials
+        fingerprint changes, the pool builds a new provider, the model id does
+        not move -- and images stay dropped from tool results for the life of
+        the process, with nothing in the log to say why.
+
+        Cleared wholesale rather than per binding: the loop now holds several
+        providers at once, and the key does not say which one answered.
+        """
         self._image_tool_result_ok.clear()
-        self.subagents.set_provider(provider, model)
-        self.context_engine.set_provider(provider, model)
-        self.memory_consolidator.set_provider(provider, model)
-        # Here rather than at the RPC call site: a parked switch adopts long
-        # after that call returns, and the window must follow the pair that
-        # was actually adopted, not the model the RPC saw.
-        self.refresh_context_window()
+        self._vision_ok.clear()
 
-    def _adopt_pending_provider(self) -> None:
-        """Apply a parked switch. Callers must check that no turn is running."""
-        pending = self._pending_provider
-        if pending is None:
-            return
-        self._pending_provider = None
-        self._adopt_provider(*pending)
+    def set_default_binding(self, binding: ModelBinding) -> None:
+        """Change what new sessions start on.
+
+        Sessions that already switched keep their own binding; sessions that
+        never did pick this up on their next turn. Subsystem fallbacks are
+        re-pointed too, for the paths that run outside a turn and therefore
+        have no binding to read.
+        """
+        self._default_binding = binding
+        self._forget_transport_verdicts()
+        self.subagents.set_provider(binding.provider, binding.model)
+        self.context_engine.set_provider(binding.provider, binding.model)
+        self.memory_consolidator.set_provider(binding.provider, binding.model)
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Change the default binding, from a pair a caller already built.
+
+        No production caller today -- every switch path goes through the pool
+        and lands on ``set_default_binding`` or ``set_session_binding``. Kept as
+        the pair-free entry point for an embedder that has a provider in hand,
+        which is why it carries ``_configured_window`` forward: a window the
+        user pinned belongs to whatever they run, and building the binding
+        without it here would drop it the day this grows a caller.
+        """
+        self.set_default_binding(ModelBinding(provider, model, self._configured_window))
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
@@ -1005,35 +1133,6 @@ class AgentLoop:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
-
-    def refresh_context_window(self) -> None:
-        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
-
-        A no-op once the window was set explicitly at construction -- an
-        explicit value is a deliberate override, and a model switch afterwards
-        must not quietly discard it. Otherwise the ladder is re-walked so a
-        ``/model`` switch picks up the new model's real window instead of
-        keeping the old one's.
-
-        Also the callback ``LazyProvider.on_built`` fires from its prewarm
-        thread, i.e. off the event loop -- safe because every write this
-        method triggers, transitively through the consolidator and the
-        context engine's builders, is a plain ``int`` attribute assignment,
-        and the GIL makes each one atomic.
-        """
-        if self._context_window_explicit:
-            return
-        # allow_fetch=False: a /model switch runs inside the running event
-        # loop, so this must not block it on a synchronous network call. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
-        # Cascade into the builders that sized themselves against the window
-        # at construction (the Curator's trimmer) and the consolidator --
-        # both would otherwise keep budgeting against the pre-switch model's
-        # window for the rest of the session. The consolidator's window is a
-        # plain attribute (no setter of its own), set directly here.
-        self.context_engine.set_context_window(self.context_window_tokens)
-        self.memory_consolidator.context_window_tokens = self.context_window_tokens
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -1131,11 +1230,21 @@ class AgentLoop:
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 ask=self._confirm_graph,
+                control_reachable=self.dag_control_reachable,
             )
         )
+        # The graph tool's own acceptance text is the only advertisement these
+        # two get: hidden from the schema so the per-turn tool list carries
+        # nothing a conversation that never starts a DAG has any use for, they
+        # stay reachable through the registry (and tool_call where it exists).
+        from raven.agent.subagent_dag.control_tools import CancelDagTool, DagStatusTool
+
+        self.tools.register(CancelDagTool(loop=self))
+        self.tools.register(DagStatusTool(loop=self))
+        self.tools.hide_from_schema("cancel_dag", "dag_status")
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
-        self.tools.register(AskUserTool())
+        self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
         # The plugin market, reachable from the conversation. Unconditional: the
         # catalog ships in the wheel and the connection manager is this loop's
         # own, so the only thing that ever made this impossible was the tool not
@@ -1226,6 +1335,7 @@ class AgentLoop:
                 self.tools,
                 always_visible=always,
                 search_result_limit=cfg.search_result_limit,
+                compaction_threshold=cfg.compaction_threshold,
             )
             self.tools.register(ToolSearchTool(self.tool_search_controller))
             self.tools.register(ToolCallTool(self.tool_search_controller))
@@ -1233,10 +1343,7 @@ class AgentLoop:
             # the final tool with ``cache_control`` (else the marked tool may be
             # filtered out and the breakpoint lost).
             self.strategies.register(
-                ToolSearchStrategy(
-                    self.tool_search_controller,
-                    compaction_threshold=cfg.compaction_threshold,
-                ),
+                ToolSearchStrategy(self.tool_search_controller),
                 first=True,
             )
 
@@ -2385,13 +2492,29 @@ class AgentLoop:
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
         self.tools.set_channel(channel)
-        for name in ("message", "spawn", "cron", "deep_research", "run_subagent_dag", "deliver_files"):
+        for name in (
+            "message",
+            "spawn",
+            "cron",
+            "deep_research",
+            "run_subagent_dag",
+            "deliver_files",
+            "dag_status",
+            "cancel_dag",
+        ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research", "run_subagent_dag", "deliver_files"):
+                elif name in (
+                    "spawn",
+                    "deep_research",
+                    "run_subagent_dag",
+                    "deliver_files",
+                    "dag_status",
+                    "cancel_dag",
+                ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
@@ -2442,6 +2565,19 @@ class AgentLoop:
     def cancel_dag_run(self, run_id: str) -> bool:
         """Stop one in-flight run, whichever instance owns it."""
         return any(tool.request_cancel(run_id) for tool in self.dag_tools())
+
+    def dag_control_reachable(self) -> bool:
+        """Whether the schema-hidden dag control tools have a call path.
+
+        The graph tool advertises ``dag_status`` / ``cancel_dag`` in its
+        acceptance text, and this is the gate that keeps the advertisement
+        honest: it answers the same question ToolSearchStrategy answers when it
+        assembles the per-turn tool list, through the controller's single
+        predicate rather than a second copy of the fold condition.
+        """
+        if self.tool_search_controller is None:
+            return False
+        return self.tool_search_controller.tool_call_available()
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the graph tools' progress sink (host wires it to the web
@@ -2971,8 +3107,8 @@ class AgentLoop:
                 # when LiteLLM lags) answers instead; unknown to that table
                 # too, 0 tells the UI to show its empty state rather than a
                 # number that isn't this model's.
-                if self._context_window_explicit:
-                    context_max = self.context_window_tokens
+                if self._configured_window:
+                    context_max = self._configured_window
                 else:
                     # Off the event loop: allow_fetch=True here can hit the
                     # network for up to 10s on an OpenRouter model with both
@@ -4090,27 +4226,23 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
-        """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
+        """Bind the turn to its session's model; see ``_run_turn`` for the turn.
 
-        A parked switch is adopted here, before the turn reads
-        ``self.provider`` for the first time, and the count kept for the
-        duration is what parks the next one. Wrapping rather than
-        snapshotting because the provider is read from ``self`` at eight
-        sites in this module and by the context engine and consolidator
-        underneath them -- one boundary covers all of them, a snapshot
-        would have to be threaded through each.
+        This is where a session's model becomes the one thing everything under
+        the turn reads: the loop's own ``provider``/``model``, the context
+        engine's LLM-backed segments, the skill gate and rewriter, the
+        consolidator, and anything the turn detaches (a subagent inherits the
+        context it was created in).
 
-        Both ends gate on zero, because turns overlap: a user turn and a
-        proactive turn hold slots in separate pools. Adopting on the way in
-        would otherwise land a switch parked for a turn that is still
-        running, and clearing a flag on the way out would unpark it just as
-        wrongly. Adopting again on the last exit is what keeps a park from
-        outliving the turns it was waiting on.
+        Resolving once here is also what makes a mid-turn switch harmless
+        without any parking. The binding is captured before the first read and
+        held for the tree, so a switch that lands while this turn runs is
+        simply not visible to it -- it takes effect on the session's next
+        turn. Turns from other sessions run under their own binding
+        concurrently, which is the point.
         """
-        if self._turns_in_flight == 0:
-            self._adopt_pending_provider()
-        self._turns_in_flight += 1
-        try:
+        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        with use_binding(self.binding_for_session(session_key)):
             return await self._run_turn(
                 req,
                 emit,
@@ -4120,10 +4252,6 @@ class AgentLoop:
                 usage_sink=usage_sink,
                 text_sink=text_sink,
             )
-        finally:
-            self._turns_in_flight -= 1
-            if self._turns_in_flight == 0:
-                self._adopt_pending_provider()
 
     async def _run_turn(
         self,
