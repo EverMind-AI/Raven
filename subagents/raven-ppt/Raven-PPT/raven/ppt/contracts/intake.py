@@ -133,6 +133,14 @@ class IntakePlan:
     fetched later joins the material already there instead of starting a second
     pile only one of which the ingest can hold.
     """
+    request: str = ""
+    """The request this plan was read from, verbatim.
+
+    Kept so a later call can tell a repeat from a revision. Recorded whatever the
+    request turns out to be, unlike the copy `task_is_material` writes into the
+    sources: that one is material the ingest reads, and making every request
+    material would authorise an instruction's own numbers as facts.
+    """
     task_is_material: bool = False
     """Whether the request itself carries the substance of the deck.
 
@@ -159,6 +167,7 @@ class IntakePlan:
             "topic": self.topic,
             "stated": self.stated.as_dict(),
             "materials_dir": self.materials_dir,
+            "request": self.request,
             "task_is_material": self.task_is_material,
             "template": self.template,
             "questions": [question.as_dict() for question in self.questions],
@@ -186,6 +195,7 @@ def load_plan(path: Path) -> IntakePlan | None:
             topic=str(raw.get("topic", "")),
             stated=StatedBrief.of(raw.get("stated")),
             materials_dir=str(raw.get("materials_dir") or ""),
+            request=str(raw.get("request") or ""),
             task_is_material=bool(raw.get("task_is_material")),
             template=str(raw.get("template") or ""),
             questions=tuple(_question(entry) for entry in raw.get("questions") or () if isinstance(entry, dict)),

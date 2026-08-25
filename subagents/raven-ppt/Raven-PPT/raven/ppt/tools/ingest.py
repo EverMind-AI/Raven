@@ -1,8 +1,8 @@
 """`ppt_ingest`: read the materials once, and say what is in them.
 
-Everything downstream stands on this call. The fact gate can only refuse a number
-the materials never printed if the materials were read; the citation gate can only
-catch a page citing Figure 4 while showing Figure 5 if the captions were extracted.
+Everything downstream stands on this call. The citation gate can only catch a page
+citing Figure 4 while showing Figure 5 if the captions were extracted, and an author
+can only quote a figure it was given the text of.
 So the reply's job is to make the deck's evidence *addressable* -- every asset by
 id, with the label the source gave it -- rather than to describe the reading.
 """
@@ -27,10 +27,10 @@ class PptIngestTool(Tool):
     name = "ppt_ingest"
     description = (
         "Read every document in the project's materials directory once: the text, the figures, the tables "
-        "and the numbers. It writes materials.md, a fact index and a figure catalogue into the project, and "
-        "returns the figure ids with the caption each one carries in its source. Every later step reads what "
-        "this produced -- a number on a slide is checked against this index, and a figure reference against "
-        "these labels -- so run it before writing anything."
+        "and the numbers. It writes materials.md and a figure catalogue into the project, and returns the "
+        "figure ids with the caption each one carries in its source. Every later step reads what this "
+        "produced -- a figure reference is checked against these labels, and the material is what any number "
+        "on a slide has to come from -- so run it before writing anything."
     )
     timeout_seconds = 600.0
 
@@ -114,10 +114,13 @@ class PptIngestTool(Tool):
         if outcome.findings:
             payload["measured"] = _return.grouped(outcome.findings)
         asks = [
-            f"read what you need of {_return.where(outcome.materials_path, self.workspace)} before deciding "
-            "what the deck says -- materials_index lists every part with the line it starts at, and read_file "
-            "takes offset and limit. Whatever you read stays in the context and is re-sent on every later "
-            "request, so read the parts the deck stands on rather than the file"
+            f"read {_return.where(outcome.materials_path, self.workspace)} a part at a time, before "
+            "deciding what the deck says. materials_index gives each part its starting line, size and "
+            "opening words, and "
+            "read_file takes offset and limit. Let the opening words rule parts out -- a bibliography, a "
+            "page of class names, a page of stray figure labels cannot carry a slide -- and read the rest. "
+            "They cannot tell an important part from a dull-sounding one, so read anything you are unsure "
+            "of. Whatever you read is re-sent on every later request"
         ]
         if not outcome.assets:
             asks.append("nothing visual was extracted, so any evidence on a page has to be drawn rather than placed")

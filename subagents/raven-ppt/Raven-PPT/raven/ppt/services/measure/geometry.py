@@ -156,8 +156,8 @@ def iter_text_frames(slide: Any) -> Iterator[Any]:
 def page_paragraphs(slide: Any) -> list[str]:
     """Every piece of copy on a page, one string per paragraph or table cell.
 
-    Split this finely on purpose: the fact gate reads a context window around
-    each claim, and a whole page joined into one string puts a number's
+    Split this finely on purpose: the citation gate reads a window around each
+    reference, and a whole page joined into one string puts a citation's
     neighbours several columns away from it.
     """
     found: list[str] = []

@@ -314,22 +314,27 @@ def _slot_findings(pptx_path: Path, spans: Sequence[Span]) -> list[Finding]:
     """The boxes whose copy the reader gets under the floor, named one page at a time."""
     presentation = open_deck(pptx_path)
     body_floor, hard_floor = type_floors(presentation.slide_height / EMU_PER_INCH)
-    by_page: dict[int, list[Slot]] = {}
+    by_page: dict[int, list[tuple[Slot, float]]] = {}
     for slot in slots(pptx_path, spans):
         if slot.rendered_pt is None or slot.chars < _SLOT_CHARS:
             continue
-        copy = slot.chars >= _COPY_CHARS and not _is_caption(slot, presentation)
-        floor = body_floor if copy else hard_floor
+        if _is_footer(slot, presentation):
+            floor = FOOTER_FLOOR_PT
+        else:
+            copy = slot.chars >= _COPY_CHARS and not _is_caption(slot, presentation)
+            floor = body_floor if copy else hard_floor
         if slot.rendered_pt >= floor:
             continue
-        by_page.setdefault(slot.page, []).append(slot)
+        by_page.setdefault(slot.page, []).append((slot, floor))
     findings: list[Finding] = []
     for page, here in sorted(by_page.items()):
-        worst = sorted(here, key=lambda slot: slot.rendered_pt)
-        named = ", ".join(f"{slot.rendered_pt:g}pt ('{slot.head}')" for slot in worst[:3])
+        # Each box against the floor that applies to it: a body block, a caption and a
+        # footer answer to three different numbers, and naming one of them for all of
+        # them is how a page reported a 9.5pt running credit as body copy set too small.
+        worst = sorted(here, key=lambda pair: pair[0].rendered_pt)
+        named = ", ".join(f"{slot.rendered_pt:g}pt under {floor:g}pt ('{slot.head}')" for slot, floor in worst[:3])
         more = f" and {len(worst) - 3} more" if len(worst) > 3 else ""
-        chose = [slot for slot in worst if slot.declared_pt is not None and slot.declared_pt < body_floor]
-        floor = f"the {body_floor:g}pt floor" if worst[0].rendered_pt >= hard_floor else f"{hard_floor:g}pt"
+        chose = [slot for slot, _ in worst if slot.declared_pt is not None and slot.declared_pt < body_floor]
         findings.append(
             Finding(
                 kind="type_floor",
@@ -337,15 +342,16 @@ def _slot_findings(pptx_path: Path, spans: Sequence[Span]) -> list[Finding]:
                 page=page,
                 audience=Audience.DESIGNER,
                 message=(
-                    f"{len(worst)} box(es) on this page show their copy under {floor}: {named}{more}. "
+                    f"{len(worst)} box(es) on this page show their copy under the floor: {named}{more}. "
                     + (_FIX if chose else _AUTOFIT_FIX)
                 ),
                 detail={
                     "page": page,
                     "body_floor_pt": body_floor,
-                    "sizes_pt": [slot.rendered_pt for slot in worst],
-                    "declared_pt": [slot.declared_pt for slot in worst],
-                    "boxes_in": [list(slot.shape) for slot in worst[:3]],
+                    "floors_pt": [floor for _, floor in worst],
+                    "sizes_pt": [slot.rendered_pt for slot, _ in worst],
+                    "declared_pt": [slot.declared_pt for slot, _ in worst],
+                    "boxes_in": [list(slot.shape) for slot, _ in worst[:3]],
                 },
             )
         )
@@ -368,6 +374,13 @@ _CAPTION_MARKERS = ("来源", "资料来源", "注：", "图", "表", "source:",
 # And the band at the foot of a page where those live. A body block starts higher than
 # this on every page measured; below it a line is furniture.
 _FOOTER_BAND = 0.9
+# What the foot of a page may run at. Furniture is not copy: nobody reads a running
+# credit from a seat, and the one person who wants it walks up to the screen. Holding
+# it to the 10.8pt floor meant every page of a deck reported its own footer -- one run
+# collected 210 type_floor findings that were two lines repeated, "Source: ..." and
+# "TarViS · CVPR 2023 · arXiv:2301.02657", both at a perfectly ordinary 9.5pt. Under
+# 8pt it stops being legible even up close, and that is worth saying.
+FOOTER_FLOOR_PT = 8.0
 
 # And under this it holds a label rather than copy: a byline, a unit, a chart's axis.
 # The body floor is about copy that has to hold up projected, and applying it to every
@@ -473,13 +486,18 @@ def _declared_pt(shape) -> float | None:
     return round(max(sizes), 1) if sizes else None
 
 
+def _is_footer(slot: Slot, presentation: Any) -> bool:
+    """In the band at the foot of the page, where a deck puts its furniture."""
+    canvas = (presentation.slide_height or 0) / EMU_PER_POINT
+    return bool(canvas and slot.box.y0 >= canvas - _FOOTER_BAND * 72)
+
+
 def _is_caption(slot: Slot, presentation: Any) -> bool:
     """A source line or a figure caption, which a deck sets small on purpose."""
     head = slot.head.strip().lower()
     if any(head.startswith(marker) for marker in _CAPTION_MARKERS):
         return True
-    canvas = (presentation.slide_height or 0) / EMU_PER_POINT
-    return bool(canvas and slot.box.y0 >= canvas - _FOOTER_BAND * 72)
+    return _is_footer(slot, presentation)
 
 
 def drift_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Finding]:

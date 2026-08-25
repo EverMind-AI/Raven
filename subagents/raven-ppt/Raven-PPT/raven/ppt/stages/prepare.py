@@ -69,7 +69,12 @@ from raven.ppt.contracts import (
 )
 from raven.ppt.services import state as deck_state
 from raven.ppt.services.ingest import documents, sources
-from raven.ppt.services.template import bind
+from raven.ppt.services.template import (
+    bind,
+    default_template_prompt,
+    fallback_default_template,
+    find_default_template,
+)
 from raven.ppt.stages._briefs import intake_brief
 from raven.ppt.stages._reply import json_defect, loads_maybe_fenced
 from raven.utils.helpers import text_block
@@ -121,7 +126,12 @@ class PrepareStage:
         taken = self._take(project, files)
         before = deck_state.read(project)
         recorded = load_plan(intake_path(project))
-        if not taken and recorded is not None and recorded.digest == before.digest():
+        unchanged = recorded is not None and recorded.digest == before.digest()
+        # The digest covers the deck's inputs, not the words that were read. A revised
+        # request with the same materials has the same digest and a different answer,
+        # so the request has to be part of the condition or the reading is skipped for
+        # a question nobody asked yet.
+        if not taken and unchanged and recorded.request.strip() == task.strip():
             # Nothing the reading depended on has changed, so reading the task again
             # would produce the same plan. The questions are recomputed rather than
             # replayed: the brief is not in the digest, so it may have been recorded
@@ -152,7 +162,16 @@ class PrepareStage:
             # names the attachment too, and the path in it is absolute -- so the
             # request path's containment check fired and printed "no template was
             # bound" directly under "bound it", which reads as a failure and is not.
-            done += self._bind_template(project, plan.template)
+            default = find_default_template(Path(plan.template).name)
+            done += (
+                self._bind_default_template(project, default)
+                if default is not None
+                else self._bind_template(project, plan.template)
+            )
+        elif deck_state.read(project).template is None:
+            default = fallback_default_template()
+            if default is not None:
+                done += self._bind_default_template(project, default)
         added = False
         if plan.task_is_material:
             done += self._take_task(project, task)
@@ -175,6 +194,9 @@ class PrepareStage:
             # Always the deck's own source set, whatever the request said: that is
             # where a later fetch has to land, and where the ingest reads.
             materials_dir=_named(project.workspace, project.sources_dir),
+            # Recorded unconditionally so a later call can tell a repeat from a
+            # revision. The copy taken as a source is a separate decision.
+            request=task,
             digest=after.digest(),
         )
         write_plan(plan, intake_path(project))
@@ -196,6 +218,8 @@ class PrepareStage:
             text_block(f"What this deck already has:\n{state.summary()}"),
             text_block(f"The workspace:\n{_listing(project.workspace)}"),
         ]
+        if state.template is None:
+            parts.append(text_block(default_template_prompt()))
         if state.excerpt:
             parts.append(text_block(f"The first of the ingested materials:\n\n{state.excerpt}"))
         reply = await self.composer.ask(intake_brief(), parts, max_tokens=self.max_tokens)
@@ -309,6 +333,17 @@ class PrepareStage:
         if template is None:
             return [f"{source.name} does not open as a presentation, so no template was bound"]
         return [f"bound {template.source.name} as the template, {template.example_pages} example page(s) to read"]
+
+    def _bind_default_template(self, project: Project, template: Any | None) -> list[str]:
+        if template is None:
+            return []
+        bound = bind(template.path, project)
+        if bound is None:
+            return [f"bundled default template {template.filename} could not be opened"]
+        return [
+            f"selected bundled default template {template.filename} ({', '.join(template.tags)})",
+            f"bound {bound.source.name} as the template, {bound.example_pages} example page(s) to read",
+        ]
 
     def _record_brief(self, project: Project, plan: IntakePlan) -> list[str]:
         """Write the brief when the task stated all three of it, and only then.

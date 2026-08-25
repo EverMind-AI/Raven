@@ -27,26 +27,33 @@ from typing import Any
 
 from raven.agent.tools.base import Tool
 from raven.ppt.contracts import DeckBrief, PageBudget, Project, brief_path, write_brief
-from raven.ppt.services.gates import load_source_index, material_findings
-from raven.ppt.services.ingest import SOURCE_INDEX_FILE
+from raven.ppt.services.gates import material_findings
+from raven.ppt.services.ingest import MATERIALS_FILE, stated_chars
 from raven.ppt.tools import _return
+
+
+def _stated_chars(deck: Project) -> int | None:
+    """How much the materials say, or None when nothing has been ingested.
+
+    Counted off `materials.md` rather than a record beside it, so a project whose
+    materials were replaced by hand is measured as it now reads.
+    """
+    path = deck.ingest_dir / MATERIALS_FILE
+    if not path.is_file():
+        return None
+    try:
+        return stated_chars(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
 def _thin_material(deck: Project, brief: DeckBrief) -> list:
     """Whether the sources say enough for the pages just agreed.
 
-    Read off the index the fact gate uses, so the number quoted here is the number
-    that will refuse an invented figure later. No index yet (a brief recorded before
-    the materials are read) means no measurement, not a complaint.
+    Nothing ingested yet (a brief recorded before the materials are read) means no
+    measurement, not a complaint.
     """
-    path = deck.ingest_dir / SOURCE_INDEX_FILE
-    if not path.is_file():
-        return []
-    try:
-        index = load_source_index(path)
-    except (OSError, ValueError):
-        return []
-    return material_findings(index.stated_chars, brief)
+    return material_findings(_stated_chars(deck), brief)
 
 
 class PptBriefTool(Tool):

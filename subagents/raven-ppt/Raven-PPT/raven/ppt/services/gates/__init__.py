@@ -11,7 +11,6 @@ Everything else a build knows about a page is a measurement, lives in
 list; the caller filters by audience and severity.
 """
 
-from raven.ppt.contracts.sources import SourceIndex
 from raven.ppt.services.gates.bands import (
     BAND_MAX_HEIGHT_EMU,
     BAND_MIN_WIDTH_FRACTION,
@@ -31,12 +30,6 @@ from raven.ppt.services.gates.citations import (
     load_figure_catalog,
     shown_labels,
 )
-from raven.ppt.services.gates.facts import (
-    NumberMention,
-    check_text,
-    fact_findings,
-    number_mentions,
-)
 from raven.ppt.services.gates.mapping import mapping_findings
 from raven.ppt.services.gates.registry import (
     DISPATCH,
@@ -47,39 +40,27 @@ from raven.ppt.services.gates.registry import (
     for_audience,
 )
 
-# Re-exported from the ingest, which owns the index and its format. The gate
-# reads what the ingest wrote; keeping a second builder here is how the two
-# sides drifted onto different field names in the first place.
-from raven.ppt.services.ingest.facts import build_source_index, load_source_index
-
 __all__ = [
     "BAND_MAX_HEIGHT_EMU",
     "BAND_MIN_WIDTH_FRACTION",
     "DISPATCH",
     "DeckUnderReview",
-    "NumberMention",
     "RULE_MAX_EMU",
     "STRIP_MAX_SHORT_EMU",
     "STRIP_MIN_ASPECT",
-    "SourceIndex",
     "TITLE_COVERAGE_SHARE",
     "band_findings",
-    "build_source_index",
     "by_page",
     "check_deck",
-    "check_text",
     "checks",
     "citation_findings",
     "cited_labels",
     "data_mark_ids",
-    "fact_findings",
     "figure_labels",
     "for_audience",
     "holds_text",
     "load_figure_catalog",
-    "load_source_index",
     "mapping_findings",
     "material_findings",
-    "number_mentions",
     "shown_labels",
 ]

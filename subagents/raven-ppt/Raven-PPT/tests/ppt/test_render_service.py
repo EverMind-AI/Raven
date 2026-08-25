@@ -399,8 +399,8 @@ _BBOX_XML = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "x
 def test_the_bbox_parser_keeps_pages_apart_and_unescapes_the_text() -> None:
     """Two details that only look cosmetic.
 
-    `R&amp;D` left escaped is a word the fact gate cannot find in source material
-    that plainly contains it. A negative coordinate -- poppler emits them for copy
+    `R&amp;D` left escaped is a word no search can find in source material that
+    plainly contains it. A negative coordinate -- poppler emits them for copy
     whose box starts above the page edge -- fails a digits-only pattern, and the
     predecessor's regex was digits-only, so those words silently vanished from the
     measurement.

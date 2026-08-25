@@ -44,7 +44,7 @@ SUPPORTED_SUFFIXES = TEXT_SUFFIXES | PDF_SUFFIXES | IMAGE_SUFFIXES | OFFICE_SUFF
 # the package. That is the fallback when no converter is installed, and it is worth
 # having because the alternative is not "read it later by hand": a `.docx` is
 # unreachable to the author too -- `read_file` on a zip answers with a codec error --
-# and every figure it states is missing from the fact index, so quoting one is
+# and every figure it states is missing from the catalogue, so citing one is
 # refused. Words only: no figures, no page geometry, no table shape.
 ZIP_OFFICE_SUFFIXES = frozenset({".docx", ".xlsx", ".odt", ".ods"})
 
@@ -60,8 +60,8 @@ _PAGE_HEADING_RE = re.compile(r"^##\s", re.MULTILINE)
 # and OpenDocument, whose namespaces differ and whose local names do not. Word keeps
 # its words on `w:t`; OpenDocument keeps them on the paragraph and on inline spans.
 # Named rather than "every text node in the file", for the reason the HTML extractor
-# below skips `script`: a node no reader sees puts numbers in the fact index anyway,
-# and that is a licence to state them on a slide. `w:instrText` -- field codes, URLs
+# below skips `script`: a node no reader sees puts numbers into the material anyway,
+# and the material is what a page is grounded in, so that is a licence to state them. `w:instrText` -- field codes, URLs
 # among them -- is exactly such a node.
 _TEXT_TAGS = {"t", "p", "h", "span", "a"}
 _INLINE_TAGS = {"t", "span", "a", "s", "tab", "br", "line-break"}
@@ -147,8 +147,8 @@ def _spreadsheet_text(package: zipfile.ZipFile) -> str:
 
     Written out rather than run through :func:`_xml_text` because a cell of type
     ``s`` holds an *index* into the shared string table, and dumping the raw text
-    node would put that index into the fact index as a number -- a licence to state
-    a figure no reader of the sheet ever saw.
+    node would put that index into the material as a number -- a licence to state a
+    figure no reader of the sheet ever saw.
     """
     shared = _shared_strings(package)
     sheets = sorted(name for name in package.namelist() if name.startswith("xl/worksheets/sheet"))
@@ -200,15 +200,23 @@ def read_text_source(path: Path) -> str:
 
 
 class _HTMLTextExtractor(HTMLParser):
-    """Visible text only.
+    """Visible text, with its headings kept as headings.
 
-    Script and style bodies are not material -- indexing them puts numbers in
-    the fact index that no reader of the page could ever have seen, which is a
-    licence to state them on a slide.
+    Script and style bodies are not material -- reading them puts numbers into the
+    material that no reader of the page could ever have seen, which is a licence to
+    state them on a slide.
+
+    ``h1``-``h3`` come out as Markdown headings rather than as bare lines. HTML
+    is the one source format that states its own structure, and flattening it
+    left ``sections`` with a single entry for the whole document -- the same
+    thing that makes a ``.txt`` unindexable, self-inflicted.
     """
 
     _SKIP = {"script", "style", "svg"}
-    _BREAK = {"br", "div", "h1", "h2", "h3", "li", "p", "section", "tr"}
+    _BREAK = {"br", "div", "li", "p", "section", "tr"}
+    # Both h1 and h2 land at "##", beside the "## [paper.pdf] page 3" the PDF path
+    # writes: one level below the "# Source:" line that names the file.
+    _HEADINGS = {"h1": "##", "h2": "##", "h3": "###"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -218,13 +226,19 @@ class _HTMLTextExtractor(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         if tag in self._SKIP:
             self._ignored_depth += 1
-        elif self._ignored_depth == 0 and tag in self._BREAK:
+        elif self._ignored_depth:
+            return
+        elif tag in self._HEADINGS:
+            self.parts.append(f"\n{self._HEADINGS[tag]} ")
+        elif tag in self._BREAK:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self._SKIP and self._ignored_depth:
             self._ignored_depth -= 1
-        elif self._ignored_depth == 0 and tag in self._BREAK:
+        elif self._ignored_depth:
+            return
+        elif tag in self._HEADINGS or tag in self._BREAK:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:

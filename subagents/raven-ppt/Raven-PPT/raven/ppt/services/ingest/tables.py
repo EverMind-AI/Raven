@@ -1,10 +1,9 @@
 """Taking a table out of a PDF as the source printed it.
 
-A table retyped into slide bullets is a table the fact gate can no longer
-check, and a table redrawn by a model is a table whose numbers moved. So a
-table is captured twice: as an image of the printed region, which is what goes
-on the slide, and as markdown in the material text, which is what claims are
-anchored against.
+A table redrawn by a model is a table whose numbers moved. So a table is
+captured twice: as an image of the printed region, which is what goes on the
+slide, and as markdown in the material text, which is what an author reads a
+number off without retyping it from the picture.
 
 The hard part is the region. A table finder reports the cell grid it can see,
 which is neither what a reader calls "Table 2" -- that includes the caption

@@ -11,20 +11,14 @@ Two facts about raven shape what is offered here, and both are stated in the
 option's own ``description`` rather than only in a document, because the schema
 declares that field as text for the client to display:
 
-* **The switch is scoped to the calling session.** ``set_model`` sends the
-  session id and no ``scope``, so ``config.set`` binds that session and leaves
-  ``agents.defaults`` alone; a connection with two sessions open no longer
-  changes both. The protocol's shape says otherwise, which is why it is said
-  where a person will read it.
-* **A running turn is not interrupted.** It keeps the binding it entered with,
-  so the change takes effect on that session's next turn. Nothing refuses the
-  call. A refusal the runtime does still make -- a value it will not write --
-  travels out with its own code instead of being flattened.
-
-Both read the other way round before v0.1.13 moved the model onto a per-session
-binding, and the description outlived the behaviour it described for a while
-afterwards. Whatever this file says here has to match ``MODEL_DESCRIPTION``,
-because that string is the copy a person actually sees.
+* **The switch is process-wide.** ``config.set`` writes
+  ``agents.defaults.model`` and reassigns the live loop's provider. There is no
+  per-session model, so a connection with two sessions open changes both. The
+  protocol's shape says otherwise and honesty about it belongs where a person
+  will read it.
+* **It is refused during a turn.** ``config.set`` guards on ``is_session_busy``
+  and raises, rather than swapping the provider under a running request. That
+  refusal is passed through with its own code instead of being flattened.
 
 Only ``category: "model"`` is exposed. Raven has other hot-changeable config, but
 a selector for each would put a settings panel in an editor's session menu, and
@@ -44,9 +38,9 @@ MODEL_OPTION_ID = "model"
 # declares ``description`` as text for the client to display, and this is the
 # caveat a person needs at the moment they pick.
 MODEL_DESCRIPTION = (
-    "The model this agent answers with. The change applies to this session only, "
-    "so other sessions on this connection keep theirs, and it takes effect on the "
-    "session's next turn if one is running."
+    "The model this agent answers with. Raven has one model setting per installation "
+    "rather than per session, so changing it here affects every session on this "
+    "connection, and it cannot be changed while a turn is running."
 )
 
 # A dropdown built from every configured provider's catalogue. Past this the list
@@ -100,25 +94,13 @@ async def model_option(call: Call) -> dict[str, Any] | None:
 async def set_model(call: Call, *, session_id: str, value: Any) -> None:
     """Apply a model selection, letting the runtime's own refusals through.
 
-    ``session_id`` is what scopes the switch to this session: ``config.set``
-    sends no ``scope``, so a call carrying a session id writes that session's
-    binding and leaves every other session alone.
-
-    The leading segment of the value is the provider, and it is sent as its own
-    field because ``config.set model`` requires one -- a model id does not name
-    whose credential serves it, and deriving it from the prefix is the
-    mis-routing the wire format exists to prevent. The value the client sends
-    back is one this module emitted, so the split is on a shape we wrote.
+    ``session_id`` is passed so ``config.set`` can refuse a switch during that
+    session's turn. Swapping the provider under a running request is the failure
+    the guard exists for, and this layer must not route around it.
     """
     if not isinstance(value, str) or not value:
         raise ValueError("the model value must be a non-empty string")
-    provider, _, model = value.partition("/")
-    if not model:
-        raise ValueError("the model value must name its provider as '<provider>/<model>'")
-    await call(
-        "config.set",
-        {"key": MODEL_OPTION_ID, "value": model, "provider": provider, "session_id": session_id},
-    )
+    await call("config.set", {"key": MODEL_OPTION_ID, "value": value, "session_id": session_id})
 
 
 def _provider_of(options: Any) -> str:
@@ -178,25 +160,18 @@ def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]
 
 
 def _qualified(provider: str, model: str) -> str:
-    """A model id with the slug of the credential that serves it in front.
+    """A model id naming its provider, without naming it twice.
 
-    Unconditional, and deliberately not ``stored_model_id``. That function is
-    for what gets *persisted*, so it declines to prefix an id already carrying a
-    prefix the provider accepts (``skip_prefixes``) and rewrites a slug to its
-    canonical spelling. Both are right for storage and lossy here, because this
-    string is the only thing carrying the choice back: ten (provider, prefix)
-    pairs in the registry leave a leading segment that is not the slug --
-    ``zai`` reached through ``openrouter/`` keeps ``openrouter``, and
-    ``ollama_chat`` becomes ``ollama-chat`` -- so ``set_model`` would send the
-    wrong provider or one that does not exist. Billing the wrong account is the
-    failure ``config.set model``'s required-provider rule exists to prevent.
+    Measured, not defensive: the catalogue's own ids are *already* qualified
+    (``anthropic/claude-opus-5``), so prefixing unconditionally produced
+    ``anthropic/anthropic/claude-opus-5`` -- a value ``config.set`` would refuse
+    and a dropdown a person could not use. The fixtures used bare ids, so only the
+    real catalogue showed it.
 
-    The doubled-looking value that follows for an already-qualified id is
-    cosmetic: the protocol treats it as opaque, the displayed name is the bare
-    tail, and ``_set_model`` runs it through ``stored_model_id`` anyway, which
-    lands on the identical id every other surface stores.
+    Qualified because that is how every other surface stores a selection, so the
+    value a client sends back is one ``config.set`` already understands.
     """
-    if not provider:
+    if not provider or "/" in model:
         return model
     return f"{provider}/{model}"
 

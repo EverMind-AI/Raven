@@ -6,6 +6,8 @@ from pathlib import Path
 # The name a template is stored under when it arrives without one of its own.
 TEMPLATE_FILE = "source.pptx"
 PREPARED_FILE = "prepared.pptx"
+# The ground measured off a render of the template, recorded once beside it.
+GROUND_FILE = "ground.txt"
 
 # Placeholder roles worth naming for an author. The rest -- date, footer, slide
 # number -- are the template's own furniture and not something a deck writes into.
@@ -71,6 +73,24 @@ class TemplateInventory:
     straight off the theme says "background: white" about a black deck. Read
     without it, a derived palette comes out exactly inverted.
     """
+    rendered_ground: str | None = None
+    """The ground read off a render of the template, when one has been taken.
+
+    Ahead of everything the file says about itself, because it is the only reading
+    that cannot be wrong: measured across 119 templates, what they declared matched
+    what they rendered 73 times, and eleven declared the inverse of what they draw.
+    Written beside the template once, by whoever first renders it.
+    """
+    painted_ground: str | None = None
+    """What the master paints its background with, when it paints one at all.
+
+    A layer above `colour_map`, and the one that decides what a reader sees. A
+    master may map `bg1` to `lt1` and then cover the whole page with `<p:bg>` in
+    accent1 -- one template read as a #2F2F2F deck on that mapping while every page
+    of it is #5E31FF purple, because the grey it declared is never painted. Held as
+    the scheme name or hex the XML states; resolving it needs the palette and the
+    map, which live with the theme.
+    """
     fonts: tuple[str, ...] = field(default_factory=tuple)
     example_slides: int = 0
 
@@ -122,9 +142,25 @@ def inspect_template(path: Path) -> TemplateInventory | None:
         layouts=layouts,
         theme_colours=_theme_colours(root),
         colour_map=_colour_map(presentation),
+        painted_ground=_painted_ground(presentation),
+        rendered_ground=read_ground(path.parent),
         fonts=_fonts(root),
         example_slides=len(presentation.slides),
     )
+
+
+def read_ground(folder: Path) -> str | None:
+    """The measured ground beside a template, or None before anything measured it."""
+    try:
+        value = (folder / GROUND_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value if value.startswith("#") and len(value) == 7 else None
+
+
+def write_ground(folder: Path, colour: str) -> None:
+    """Record it beside the template, so later builds do not re-render to learn it."""
+    (folder / GROUND_FILE).write_text(colour, encoding="utf-8")
 
 
 def _placeholders(layout) -> tuple[tuple[int, str], ...]:
@@ -167,6 +203,39 @@ def _colour_map(presentation) -> tuple[tuple[str, str], ...]:
     if node is None:
         return (("bg1", "lt1"), ("tx1", "dk1"), ("bg2", "lt2"), ("tx2", "dk2"))
     return tuple(sorted(node.attrib.items()))
+
+
+def _painted_ground(presentation) -> str | None:
+    """The fill the master lays over the whole page, as the XML states it.
+
+    Only a plain solid fill counts. A gradient or a picture background has no one
+    colour to derive a palette from, and guessing an average of one is worse than
+    falling back to what the colour map says.
+    """
+    ns = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    }
+    try:
+        master = presentation.slide_masters[0]._element
+    except Exception:  # noqa: BLE001 -- a master is required, but be safe
+        return None
+    fill = master.find(".//p:bg//a:solidFill", ns)
+    if fill is None:
+        return None
+    for colour in (fill.find("a:schemeClr", ns), fill.find("a:srgbClr", ns)):
+        if colour is None or not colour.get("val"):
+            continue
+        # Only a colour stated plainly. DrawingML can alpha, tint, shade, lumMod or
+        # saturate a fill, and resolving those needs whatever is behind it. One
+        # template paints `tx1` at `alpha val="5000"` -- 5% black over white, a pale
+        # grey page -- and taken at face value it read as a black deck and put black
+        # body copy on it. What is not plain falls back to the colour map.
+        if len(colour):
+            return None
+        val = colour.get("val")
+        return val if colour.tag.endswith("schemeClr") else f"#{val.upper()}"
+    return None
 
 
 def _theme_colours(root) -> tuple[tuple[str, str], ...]:

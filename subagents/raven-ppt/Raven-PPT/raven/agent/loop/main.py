@@ -202,6 +202,14 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
 
+def _with_image_note(model_text: str, note: str) -> str:
+    if not model_text.strip():
+        return note
+    if not note.strip():
+        return model_text
+    return f"{model_text}\n\n{note}"
+
+
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
 
@@ -1012,11 +1020,14 @@ class AgentLoop:
         if not blocks:
             return model_text, blocks, None
         if not self._supports_vision(model):
-            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
+            placeholder = image_placeholder_text(
+                blocks, blind=True, describe_tool=self._describe_tool_name()
+            )
+            return _with_image_note(model_text, placeholder), None, None
         if self._supports_image_tool_result(model):
             return model_text, blocks, None
         # Each picture keeps the line that identifies it -- see labelled_images.
-        return image_placeholder_text(blocks), None, labelled_images(blocks)
+        return _with_image_note(model_text, image_placeholder_text(blocks)), None, labelled_images(blocks)
 
     def _supports_vision(self, model: str | None = None) -> bool:
         """Cached per model: whether this model can see a picture at all.

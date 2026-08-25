@@ -27,24 +27,6 @@ from raven.ppt.services.measure.geometry import (
 # little dense, runs a median of 158 words a page and tops out at 244. A separate
 # paper-to-deck system puts a slide at 45-110 words, which is calibrated for a
 # different renderer and, applied here, produced a deck of half-empty pages.
-#
-# A ceiling only. There is no floor, deliberately: a page that says little may be
-# a page whose figure does the talking, and no measurement here can tell that
-# from a page with nothing on it. What the ceiling catches is measured twice
-# over -- past it, a page gets compartmented into a card grid, because boxing is
-# what arranging 300 words looks like; and with the boxes forbidden but the copy
-# left alone, the same page came back at 11pt instead.
-# Characters rather than words, because `text.split()` cannot count Chinese: a whole
-# CJK paragraph is one "word" to it, and the old 250-word ceiling never fired on any
-# deck measured -- the densest page in four real decks reached 75. In characters, and
-# with whitespace stripped so a script's spacing habits do not decide the number.
-#
-# Where the ceiling comes from: the densest page a reviewer accepted carries 467
-# characters -- a five-row comparison table, two takeaways and a caveat -- and it is a
-# good page, so a ceiling anywhere near it would be a rule against saying anything.
-# 700 is half again as much, which is a page nobody can read in a room.
-MAX_CHARS_PER_PAGE = 700
-
 # The share of *content* pages that should carry something other than prose: a source
 # figure, a table, a chart, an equation or a drawn diagram.
 #
@@ -61,30 +43,6 @@ DIAGRAM_SHAPES = 4
 
 # A wide table stops being read and starts being looked at.
 MAX_TABLE_COLUMNS = 8
-
-
-def copy_density(pptx_path: Path) -> list[Finding]:
-    """Pages carrying more copy than a slide of a talk can hold."""
-    findings: list[Finding] = []
-    for number, slide in enumerate(open_deck(pptx_path).slides, start=1):
-        chars = sum(len("".join(frame.text.split())) for frame in iter_text_frames(slide))
-        if chars <= MAX_CHARS_PER_PAGE:
-            continue
-        findings.append(
-            Finding(
-                kind="density",
-                severity=Severity.WARNING,
-                page=number,
-                audience=Audience.AUTHOR,
-                message=(
-                    f"the page carries {chars} characters, past the {MAX_CHARS_PER_PAGE} a spoken slide holds. "
-                    "Cut it, split it, or move part of it to a page of its own -- a page this full can only "
-                    "be arranged into compartments, never composed"
-                ),
-                detail={"chars": chars, "ceiling": MAX_CHARS_PER_PAGE},
-            )
-        )
-    return findings
 
 
 # Sequences a slide never shows: an escape that was meant to be a line break, a tab
@@ -364,4 +322,28 @@ def wide_tables(pptx_path: Path) -> list[Finding]:
                     detail={"columns": columns, "ceiling": MAX_TABLE_COLUMNS},
                 )
             )
+    return findings
+
+
+def native_tables(pptx_path: Path) -> list[Finding]:
+    """Native PowerPoint tables whose cell geometry constrains the page design."""
+    findings: list[Finding] = []
+    for number, slide in enumerate(open_deck(pptx_path).slides, start=1):
+        count = sum(1 for shape in iter_shapes(slide.shapes) if getattr(shape, "has_table", False))
+        if not count:
+            continue
+        findings.append(
+            Finding(
+                kind="native_table",
+                severity=Severity.WARNING,
+                page=number,
+                audience=Audience.DESIGNER,
+                message=(
+                    f"the page contains {count} native PowerPoint table object(s). Preserve every row and "
+                    "cell, but redraw the table with aligned text boxes and rules so its row heights, type "
+                    "size and occupied page area can be designed from the render"
+                ),
+                detail={"tables": count},
+            )
+        )
     return findings

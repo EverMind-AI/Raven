@@ -60,3 +60,41 @@ def test_empty_stubs_created_when_no_legacy_source(tmp_path: Path) -> None:
 
     assert (tmp_path / "user_memory" / "attention.md").exists()
     assert (tmp_path / "user_memory" / "behaviors.md").exists()
+
+
+# The guarantee bundled before the fact gate was removed. Wrapped exactly as the
+# template shipped it, because an existing workspace's agent.md holds those bytes
+# verbatim and the migration retires that exact span.
+_STALE_AGENTS_GUARANTEE = (
+    "The build refuses a deck with a number no source printed, a page citing one figure\n"
+    "while showing another, a length the brief did not agree, the wrong language, or a\n"
+    "theme that is not the bound template's."
+)
+
+
+def test_stale_bundled_guarantee_in_an_existing_workspace_is_retired(tmp_path: Path) -> None:
+    """Step 2 fills only missing files, so an agent.md seeded by the previous bundled
+    template keeps a guarantee the code no longer delivers. The sync retires exactly
+    that sentence, leaves the user's own notes alone, and the prompt stops carrying it.
+
+    Rendered with the real bootstrap path rather than read from the file alone, because
+    that is what a resumed job's author model sees."""
+    from raven.context_engine.segments.render import load_bootstrap_files
+
+    profile = tmp_path / "agent_memory" / "profile" / "agent.md"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text(
+        "# What this agent may do\n\n" + _STALE_AGENTS_GUARANTEE + "\n\n## My own note\n\nkeep exactly this\n",
+        encoding="utf-8",
+    )
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    text = profile.read_text(encoding="utf-8")
+    assert "a number no source printed" not in text, "the stale guarantee survived the sync"
+    assert "It does not check whether a number appears in a source" in text
+    assert "keep exactly this" in text, "the user's own note was clobbered"
+
+    prompt = load_bootstrap_files(tmp_path)
+    assert "a number no source printed" not in prompt
+    assert "It does not check whether a number appears in a source" in prompt

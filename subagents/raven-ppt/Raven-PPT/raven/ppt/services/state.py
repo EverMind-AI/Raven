@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven.ppt.contracts import DeckBrief, Project, brief_path, load_brief
-from raven.ppt.services.ingest import CATALOGUE_FILE, MATERIALS_FILE, SOURCE_INDEX_FILE
+from raven.ppt.services.ingest import CATALOGUE_FILE, MATERIALS_FILE, READ_FILE
 from raven.ppt.services.template import PREPARED_FILE, BoundTemplate, bound
 
 # How much of the materials the intake pass is shown, and in how many pieces.
@@ -51,10 +51,19 @@ class Figure:
     kind: str
     label: str = ""
     caption: str = ""
+    visual_caption: str = ""
+    file: str = ""
+    width_px: int = 0
+    height_px: int = 0
+    concerns: tuple[str, ...] = field(default_factory=tuple)
 
     def summary(self) -> str:
         said = self.label or self.kind
-        return f"{self.figure_id} ({said})" + (f": {self.caption[:90]}" if self.caption else "")
+        size = f", {self.width_px}x{self.height_px}px" if self.width_px and self.height_px else ""
+        caption_text = self.caption or self.visual_caption
+        caption = f": {caption_text[:90]}" if caption_text else ""
+        concern = f"; {self.concerns[0][:100]}" if self.concerns else ""
+        return f"{self.figure_id} ({said}{size}){caption}{concern}"
 
 
 @dataclass(frozen=True)
@@ -124,7 +133,15 @@ class DeckState:
         material = json.dumps(
             {
                 "sources": sorted(self.sources),
-                "figures": sorted(figure.figure_id for figure in self.figures),
+                "figures": sorted(
+                    (
+                        figure.figure_id,
+                        figure.label,
+                        figure.caption,
+                        figure.visual_caption,
+                    )
+                    for figure in self.figures
+                ),
                 "characters": self.materials_chars,
                 "template": self.template.source.name if self.template else None,
             },
@@ -136,7 +153,7 @@ class DeckState:
 
 def read(project: Project) -> DeckState:
     """Count what this deck has. Never raises: an absence is an answer."""
-    index = _json(project.ingest_dir / SOURCE_INDEX_FILE)
+    read_record = _json(project.ingest_dir / READ_FILE)
     materials = _text(project.ingest_dir / MATERIALS_FILE)
     script = project.build_dir / "build.py"
     deck = project.build_dir / "deck.pptx"
@@ -145,11 +162,11 @@ def read(project: Project) -> DeckState:
         brief=load_brief(brief_path(project)),
         template=bound(project),
         unbound_templates=_loose_templates(project),
-        sources=tuple(str(name) for name in (index or {}).get("sources") or ()),
+        sources=tuple(str(name) for name in (read_record or {}).get("sources") or ()),
         figures=_figures(_json(project.ingest_dir / CATALOGUE_FILE)),
         materials_chars=len(materials),
         excerpt=_sampled(materials),
-        has_index=index is not None,
+        has_index=read_record is not None,
         script=script.is_file(),
         deck=deck if deck.is_file() else None,
     )
@@ -176,6 +193,11 @@ def _figures(catalogue: dict | None) -> tuple[Figure, ...]:
             kind=str(entry.get("kind") or "figure"),
             label=str(entry.get("source_label") or ""),
             caption=str(entry.get("caption") or ""),
+            visual_caption=str(entry.get("visual_caption") or ""),
+            file=str(entry.get("file") or ""),
+            width_px=int(entry.get("width_px") or 0),
+            height_px=int(entry.get("height_px") or 0),
+            concerns=tuple(str(item) for item in entry.get("concerns") or ()),
         )
         for figure_id, entry in sorted(entries.items())
         if isinstance(entry, dict)

@@ -91,6 +91,15 @@ async def test_binding_a_template_by_path(workspace: Path, house: Path):
     assert bound(Project(workspace=workspace, slug="talk")) is not None
 
 
+async def test_binding_refreshes_the_script_workspace(workspace: Path, house: Path):
+    marker = workspace / "provisioned"
+    tool = PptTemplateTool(workspace, FakeViews(), provision=lambda _project: marker.write_text("ready"))
+
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    assert marker.read_text() == "ready"
+
+
 async def test_the_users_file_is_copied_not_taken(workspace: Path, house: Path):
     before = house.read_bytes()
     tool = PptTemplateTool(workspace, FakeViews())
@@ -100,27 +109,23 @@ async def test_the_users_file_is_copied_not_taken(workspace: Path, house: Path):
     assert house.read_bytes() == before
 
 
-async def test_the_structural_pages_come_back_as_pictures(workspace: Path, house: Path):
-    """The pages a deck clones, and only those.
-
-    The renders are of the *original* -- the prepared copy has had exactly these pages
-    removed -- and they are the template's cover, contents, divider and closing. Its
-    content pages are neither rendered nor offered: what a page in between borrows is the
-    house style below, measured off those pages rather than copied from them.
-    """
+async def test_all_example_pages_come_back_as_pictures(workspace: Path, house: Path):
+    """Every example page is available so the model can choose and adapt a close fit."""
     views = FakeViews()
     tool = PptTemplateTool(workspace, views)
 
     result = await tool.execute(project="talk", path="uploads/house-style.pptx")
 
     assert isinstance(result, ToolResult)
-    assert [block["type"] for block in result.blocks] == ["text", "image_url"]
+    assert [block["type"] for block in result.blocks] == ["text", "image_url", "text", "image_url"]
     assert "Template page 1 -- the template's cover" in result.blocks[0]["text"]
+    assert "Template page 2 -- the template's page" in result.blocks[2]["text"]
     body = _body(result)
     assert body["house_pages"] == {"cover": 1}
+    assert len(body["template_pages"]) == 2
     next_step = body["next_step"]
     assert next_step.startswith("clone the template's structural pages")
-    assert "Compose your own" in body["content_pages"]
+    assert "adaptable prototypes" in body["content_pages"]
 
 
 async def test_a_machine_that_cannot_render_still_binds(workspace: Path, house: Path):

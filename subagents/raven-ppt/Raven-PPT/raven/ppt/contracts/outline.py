@@ -10,11 +10,13 @@ Deciding that is the deck's one genuinely creative act, so it belongs to the aut
 rather than to a pass that runs from code. What belongs here is the part that can be
 checked, and three things can:
 
-A number in the outline is fact-gated against the same index the finished deck is,
-which catches an invented figure a whole build-and-measure cycle earlier than it was
-being caught. A figure the plan means to place has to exist in the catalogue. And
-the page count meets the brief's budget now, rather than after eighteen pages of
-program have been written against a budget of ten.
+A figure the plan means to place has to exist in the catalogue. And the page count
+meets the brief's budget now, rather than after eighteen pages of program have been
+written against a budget of ten.
+
+Numbers are not among them. Whether a figure traces to the materials has no
+code-level check any more -- see the accepted gap recorded in `raven/ppt/AGENTS.md` --
+so grounding a number is guided by the prompt and nothing verifies it here.
 
 The fourth thing it does is not a check: a page that names what it still needs turns
 into a search. This is the moment when what the deck is missing is actually known --
@@ -47,9 +49,26 @@ class PagePlan:
     matches four task-specific ones" is a claim, and it is also the title."""
     carries: str = ""
     """What carries it: a figure id, a table, a chart, a number, a diagram."""
+    table_plan: dict[str, object] | None = None
+    """Optional table information shape: columns, row labels and a reading cue."""
     figures: tuple[str, ...] = field(default_factory=tuple)
     says: tuple[str, ...] = field(default_factory=tuple)
-    """The supporting points, in the deck's language. Fact-gated here."""
+    """The supporting points, in the deck's language."""
+    section: str = ""
+    """Which movement of the deck this page belongs to, named for this material.
+
+    Additive rather than a level of its own: every human outline read for this --
+    238 of them across five domains -- is a list of *sections* with one or more
+    slides each, and the section names are the material's own argument, not a
+    template. An academic paper's came out as background / limitations of existing
+    work / the method / setup / results; an earnings release's as leadership
+    context / financial deep dive / segment performance / closing and disclaimers;
+    a lecture's as the five realities the textbook itself names; a speech's as the
+    four arguments it makes. Pages sharing a name are one movement, and a deck
+    whose pages have no movement between them is the flat list this is here to
+    stop.
+    """
+
     needs: str = ""
     """What the page lacks and the materials do not have. Becomes a search."""
     prototype: int | None = None
@@ -65,17 +84,15 @@ class PagePlan:
     `None` means drawn from scratch, which is a legitimate answer for a page the
     template has no page for; `needs` is where the reason goes."""
 
-    def text(self) -> str:
-        """Everything this page will state, for the fact gate to read."""
-        return "\n".join((self.claim, *self.says))
-
     def as_dict(self) -> dict[str, object]:
         return {
             "page": self.page,
             "claim": self.claim,
             "carries": self.carries,
+            "table_plan": self.table_plan,
             "figures": list(self.figures),
             "says": list(self.says),
+            "section": self.section,
             "needs": self.needs,
             "prototype": self.prototype,
         }
@@ -135,8 +152,10 @@ def load_outline(path: Path) -> Outline | None:
                     page=int(entry.get("page", 0)),
                     claim=str(entry.get("claim", "")),
                     carries=str(entry.get("carries") or ""),
+                    table_plan=entry.get("table_plan") if isinstance(entry.get("table_plan"), dict) else None,
                     figures=tuple(str(f) for f in entry.get("figures") or ()),
                     says=tuple(str(s) for s in entry.get("says") or ()),
+                    section=str(entry.get("section") or ""),
                     needs=str(entry.get("needs") or ""),
                     prototype=int(entry["prototype"]) if entry.get("prototype") is not None else None,
                 )

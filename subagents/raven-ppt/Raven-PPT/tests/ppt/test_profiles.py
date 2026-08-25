@@ -65,10 +65,10 @@ def test_what_was_agreed_refuses_a_deck_on_every_route() -> None:
 
 
 def test_provenance_refuses_publication_on_every_route() -> None:
-    """A number that is not in the sources is fatal whichever way the deck was made."""
+    """A page crediting the wrong figure is fatal whichever way the deck was made."""
     for name in registry.names():
         blocking = registry.get(name).blocking_kinds
-        assert {"fact", "citation"} <= blocking, f"{name} would publish an unanchored claim"
+        assert {"citation"} <= blocking, f"{name} would publish a miscredited figure"
 
 
 def test_the_routes_differ_in_what_they_let_the_model_emit() -> None:
@@ -101,11 +101,18 @@ def test_availability_names_the_missing_tools_instead_of_guessing() -> None:
 def test_the_image_route_keeps_the_words_out_of_the_picture() -> None:
     """Type baked into a generated image is neither editable nor checkable.
 
-    It cannot be retranslated or corrected, and it is a raster the fact gate
-    cannot read -- so a deck could state anything at all and pass every check.
+    It cannot be retranslated or corrected, and it is a raster no check can read
+    -- so a deck could state anything at all and pass every check.
     Hence two stages rather than one, and a fail-closed kind for the case.
     """
     profile = registry.get("image_text")
     stages = [s.name for s in profile.stages]
     assert stages.index("background") < stages.index("place_text")
     assert "text_in_background" in profile.blocking_kinds
+
+
+def test_the_script_route_refuses_a_deck_that_dropped_a_planned_figure() -> None:
+    """Three fetched pictures, two planned onto pages, none in the deck."""
+    from raven.ppt.profiles import registry
+
+    assert "unplaced_figure" in registry.get("script_author").blocking_kinds

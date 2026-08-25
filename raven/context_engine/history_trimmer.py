@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from raven.providers.base import LLMProvider
-from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.helpers import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
@@ -76,24 +75,16 @@ class HistoryTrimmer:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         context_window_tokens: int,
     ) -> None:
-        self._fallback = ModelBinding(provider, model)
+        self.provider = provider
+        self.model = model
         self.get_tool_definitions = get_tool_definitions
-        self._fallback_window = int(context_window_tokens)
-
-    @property
-    def provider(self) -> "LLMProvider":
-        """The provider of the turn's binding; the build-time one outside a turn."""
-        return resolve(None, self._fallback).provider
-
-    @property
-    def model(self) -> str:
-        """The model of the turn's binding; the build-time one outside a turn."""
-        return resolve(None, self._fallback).model
+        self.context_window_tokens = context_window_tokens
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built, so token
         estimates keep matching the model actually being called."""
-        self._fallback = ModelBinding(provider, model)
+        self.provider = provider
+        self.model = model
 
     # ------------------------------------------------------------------
     # Pure history-shaping helpers (no token estimation / no I/O)
@@ -179,20 +170,6 @@ class HistoryTrimmer:
     # ------------------------------------------------------------------
     # Budget-driven trimming
     # ------------------------------------------------------------------
-
-    @property
-    def context_window_tokens(self) -> int:
-        """The running turn's window; the one built with, outside a turn.
-
-        A property because this object outlives any number of turns and two
-        sessions can be on models of different sizes at once -- an int copied
-        at construction answers for whichever session happened to build it.
-        """
-        return active_window(self._fallback_window)
-
-    @context_window_tokens.setter
-    def context_window_tokens(self, tokens: int) -> None:
-        self._fallback_window = int(tokens)
 
     def trim(
         self,

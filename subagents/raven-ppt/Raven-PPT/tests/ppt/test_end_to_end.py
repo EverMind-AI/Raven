@@ -161,24 +161,6 @@ async def test_the_route_runs_from_materials_to_a_delivered_deck(workspace: Path
 
 
 @pytest.mark.asyncio
-async def test_a_number_the_materials_never_printed_stops_delivery(workspace: Path) -> None:
-    """The one class of defect a nicer layout cannot mitigate."""
-    await _ingest(workspace)
-    project = Project(workspace=workspace, slug="tarvis")
-    stage, _views = _stage()
-
-    invented = DECK.replace("48.3 AP on YouTube-VIS 2021", "61.7 AP on YouTube-VIS 2021")
-    result = await stage.run(project, invented)
-
-    assert not result.ok
-    facts = [f for f in result.findings if f.kind == "fact"]
-    assert facts and facts[0].severity is Severity.BLOCKING
-    assert facts[0].audience is Audience.AUTHOR
-    assert "61.7" in facts[0].message
-    assert not (project.exports_dir / "TarViS.pptx").exists()
-
-
-@pytest.mark.asyncio
 async def test_a_deck_whose_pages_cannot_be_told_apart_is_refused(workspace: Path) -> None:
     await _ingest(workspace)
     project = Project(workspace=workspace, slug="tarvis")

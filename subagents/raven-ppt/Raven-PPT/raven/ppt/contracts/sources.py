@@ -1,10 +1,8 @@
 """What ingestion found in the source material.
 
-Two shapes. ``SourceIndex`` is what every claim printed on a slide is checked
-against; ``SourceAsset`` is one figure or table cut out of the material, with
-the provenance a citation needs. They are separate because they have separate
-lifetimes: the index is rebuilt whenever the materials change, while an
-asset's file sits in the project until the deck ships.
+``SourceAsset`` is one figure or table cut out of the material, with the
+provenance a citation needs. Its file sits in the project until the deck
+ships.
 
 The predecessor also carried a three-way ``usability`` label ("good" / "crop"
 / "avoid") derived from the same measurements. Nothing enforced it -- it was
@@ -30,45 +28,6 @@ from raven.ppt.contracts.findings import Finding
 # convention the PDF reader itself uses, kept unconverted so a bbox can be
 # compared against the page it came from.
 Rect = tuple[float, float, float, float]
-
-
-@dataclass(frozen=True)
-class SourceIndex:
-    """Every number and spec-like name the materials state, normalised.
-
-    The gate answers one question with this: did the material print this
-    token? So both sides have to normalise identically, and the rules are
-    part of the contract rather than an implementation detail:
-
-    * numbers lose digit grouping and trailing zeros of a decimal, and gain
-      their scale as an exponent: ``30,972`` -> ``30972``, ``31 billion`` ->
-      ``31e9``, ``14%`` -> ``14%``, ``2.5x`` -> ``2.5x``, ``31.0`` -> ``31``.
-      A scale stated once for a table ("in millions") applies to the bare
-      numbers under it, and a scaled mention also registers its bare digits,
-      so "31 billion" in the source anchors a slide that prints "31".
-    * names are upper-cased: ``gpt-4o`` and ``GPT-4o`` are one entry.
-    * ``caps_phrases`` holds every 2..6 word window of the material,
-      lower-cased, which is how an all-caps phrase on a slide ("STATE OF THE
-      ART") is recognised as ordinary language rather than a spec name.
-
-    ``numbers`` holds everything the ingested text prints, including the page
-    anchors the ingest itself minted, because a slide's provenance line
-    ("Fig. 4, p.7") is a claim the gate sees too. ``stated_numbers`` excludes
-    those structural headings, and is what a *data value* has to trace to: a
-    chart bar of height 17 must not be justified by "page 17".
-    """
-
-    numbers: frozenset[str] = frozenset()
-    stated_numbers: frozenset[str] = frozenset()
-    entities: frozenset[str] = frozenset()
-    caps_phrases: frozenset[str] = frozenset()
-    # How many characters the material stated, headings excluded -- the same
-    # distinction ``stated_numbers`` draws. It answers "was anything read at
-    # all?", which the sets cannot: a scan yields no text, and so does a
-    # document of pure prose with no digits in it, and only one of those two
-    # should stand the gate down. ``None`` means an index written before this
-    # was recorded, and it leaves the gate armed.
-    stated_chars: int | None = None
 
 
 class AssetKind(Enum):
@@ -122,9 +81,7 @@ class IngestOutcome:
     """Everything one ingestion run produced."""
 
     materials_path: Path
-    index_path: Path
     catalogue_path: Path
-    index: SourceIndex
     assets: tuple[SourceAsset, ...] = ()
     source_files: tuple[str, ...] = ()
     page_count: int = 0

@@ -3,7 +3,8 @@
     "defaults": {
       "provider": "openrouter",
       "model": "anthropic/claude-opus-5",
-      "maxToolIterations": 120
+      "contextWindowTokens": 1000000,
+      "maxToolIterations": 500
     }
   },
   "providers": {
@@ -14,7 +15,8 @@
   },
   "tools": {
     "ppt": {
-      "enabled": true
+      "enabled": true,
+      "designer": {"enabled": false}
     }
   }
 }

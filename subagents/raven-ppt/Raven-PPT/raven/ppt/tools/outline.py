@@ -6,10 +6,11 @@ typed -- and the decks were thin, eight pages of a title and three short lines, 
 nothing having asked what the audience must believe by the end.
 
 Deciding that is the author's, not this tool's. What this tool does is bind it and
-check the three things about it that can be checked, each of them a whole
-build-and-measure cycle earlier than it was being checked before: a number the
-materials never printed, a figure that is not in the catalogue, and a page count the
-brief did not agree.
+check the two things about it that can be checked, each of them a whole
+build-and-measure cycle earlier than it was being checked before: a figure that is
+not in the catalogue, and a page count the brief did not agree. Whether a number
+traces to the materials is not among them any more -- see the accepted gap in
+`raven/ppt/AGENTS.md`.
 
 And it is where gathering belongs. A page that names what it lacks becomes a search
 here, at the one moment when what the deck is missing is actually known --
@@ -18,6 +19,9 @@ here, at the one moment when what the deck is missing is actually known --
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +36,11 @@ from raven.ppt.contracts import (
     write_outline,
 )
 from raven.ppt.services import state as deck_state
-from raven.ppt.services.gates import check_text, load_source_index, material_findings
-from raven.ppt.services.ingest import SOURCE_INDEX_FILE
+from raven.ppt.services.gates import material_findings
+from raven.ppt.services.ingest import MATERIALS_FILE, stated_chars
 from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_objects
+from raven.utils.helpers import image_block, text_block
 
 # How many pages one call may plan. Past this the outline is a document rather than
 # an argument, and no brief this route accepts asks for more.
@@ -47,16 +52,20 @@ class PptOutlineTool(Tool):
     description = (
         "Say what the deck argues, page by page, before you write any of it: the one thing the audience "
         "must believe at the end, and for each page the claim it makes, what carries that claim, which "
-        "extracted figures it places, and the supporting points it states. Numbers in it are checked "
-        "against the materials here rather than after the build, figures are checked to exist, and the "
-        "page count against the brief. A page that names what it still needs comes back as something to "
+        "extracted figures it places, and the supporting points it states. Figures are checked to exist "
+        "here rather than after the build, and the page count against the brief. With a template, choose "
+        "the nearest editable content prototype for "
+        "each page by default; use free composition only when no example can carry its information shape "
+        "after editing. A page that names what it still needs comes back as something to "
         "search for -- this is the moment you know what the deck is missing. The build refuses until an "
         "outline is recorded."
     )
     timeout_seconds = 60.0
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, composer: Any | None = None, views: Any | None = None) -> None:
         self.workspace = workspace
+        self.composer = composer
+        self.views = views
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -95,6 +104,28 @@ class PptOutlineTool(Tool):
                                     "number, a diagram, or prose when it genuinely is prose"
                                 ),
                             },
+                            "table_plan": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "description": (
+                                    "optional information shape for a table-led page: columns, complete "
+                                    "cell rows and the reading cue. This plans a table's information, not "
+                                    "a native PowerPoint table or physical coordinates"
+                                ),
+                                "properties": {
+                                    "columns": {"type": "array", "items": {"type": "string"}},
+                                    "rows": {
+                                        "type": "array",
+                                        "items": {
+                                            "oneOf": [
+                                                {"type": "array", "items": {"type": "string"}},
+                                                {"type": "string"},
+                                            ]
+                                        },
+                                    },
+                                    "reading": {"type": "string"},
+                                },
+                            },
                             "figures": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -103,30 +134,78 @@ class PptOutlineTool(Tool):
                             "says": {
                                 "type": "array",
                                 "items": {"type": "string"},
+                                # Shaped after 238 human-written deck outlines (PresentBench's task
+                                # specs, all five domains): 3 points a page at the median, 105 characters
+                                # each, ~315 a page, and 74% written as "Label: instruction" with an action
+                                # verb -- Compare, Explain, Break down, Highlight, Debunk. Asking for four
+                                # to six instead produced five points of 60 characters, which is the same
+                                # budget spent on more and thinner labels. 24% of theirs carry their
+                                # breakdown rows nested under them, which is what a table page is.
+                                # The character figures are where the shape comes from and are not
+                                # stated as a target: measured in one box at one size, Chinese fills
+                                # it at 400 characters and English at 1168, so a count asked for here
+                                # means two different pages. Whether a page holds what it plans is
+                                # settled by measuring the render, which is where the copy gets cut.
                                 "description": (
-                                    "the supporting points, in the deck's language, as they will read on the "
-                                    "page. Four to six for a content page, each carrying the number or the "
-                                    "finding it is about rather than a heading for one; a page planned with two "
-                                    "short points came out with 26 characters on it. These are checked against "
-                                    "the materials"
+                                    "what this page says: the points its claim rests on, each a full "
+                                    "sentence, written as `Label: what the page does with it` -- the label "
+                                    "is the phrase a reader scans, and the sentence starts with the action: "
+                                    "Compare, Explain, Break down, Highlight, Show, Debunk, Recap. "
+                                    "Quantities go in verbatim, with their unit and their basis, and beside "
+                                    "the thing they are measured against where there is one. Two devices "
+                                    "for when the content asks for them and not otherwise: a claim that "
+                                    "turns on one figure or one phrase can mark it in `**`, which is what "
+                                    "the build sets large; and a point that introduces a breakdown ends on "
+                                    "a colon and carries its rows under it, one per line beginning `- `, "
+                                    "saying which rows and columns when they are a subset of a source "
+                                    "table. A page whose claim is an argument rather than a number wants "
+                                    "neither. "
+                                    "Enough of them that the claim is carried and no more: the evidence "
+                                    "under it, the number beside the judgement, the caveat that makes it "
+                                    "honest. Whether the page holds them is settled against the render "
+                                    "when it is built, not guessed here; a page carrying two arguments "
+                                    "is two pages"
+                                ),
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": (
+                                    "which movement of the deck this page belongs to, named for this "
+                                    "material rather than from a template -- the sections of a deck are its "
+                                    "own argument. Consecutive pages that develop one movement share the "
+                                    "name; a deck of twenty pages usually has eight to twelve of them, so a "
+                                    "movement is one or two pages. A deck where every page is its own "
+                                    "section has no movement in it, and one section covering half the deck "
+                                    "has not been thought through"
                                 ),
                             },
                             "needs": {
                                 "type": "string",
                                 "description": (
                                     "what this page lacks and the materials do not hold, if anything -- it "
-                                    "comes back as something to go and get"
+                                    "comes back as something to go and get. When it is a picture, say which "
+                                    "kind, because they are fetched two different ways: a real thing that "
+                                    "exists somewhere (a company's own mark, a product shot, a screenshot, a "
+                                    'published plot) is found with web_search(kind="images") and brought in '
+                                    "with ppt_fetch, while a diagram nobody has drawn (an architecture, a "
+                                    "flow, a timeline, a conceptual figure) is either drawn in the program or "
+                                    "made with ppt_generate_image only after searching confirms there is no "
+                                    "existing visual to use. A named product, company, published architecture or "
+                                    "benchmark is always searched first; generated imagery is limited to a page "
+                                    "background or decorative visual and never replaces evidence. Naming it here is what gets it gathered before "
+                                    "the page is written rather than after"
                                 ),
                             },
                             "prototype": {
-                                "type": "integer",
+                                "type": ["integer", "null"],
                                 "description": (
-                                    "with a template bound: which of its example pages this page adapts, as "
-                                    "ppt_template numbered them. Decide it here, with what the page says -- "
-                                    "by the time the program is being written, inventing a layout is easier "
-                                    "than adapting a designed page, and that is how a template ends up used "
-                                    "as a background colour. Omit only for a page the template has no page "
-                                    "for, and say so in `needs`"
+                                    "with a template bound: the example page this page starts from, as "
+                                    "ppt_template numbered it. Choose the nearest content example by "
+                                    "information shape and adapt its text, pictures and repeated units. "
+                                    "Omit only after comparing the available examples and finding that none "
+                                    "can carry the page even after deletion, movement or resizing; explain "
+                                    "that concrete mismatch in `needs`. A template page is editable, not an "
+                                    "immutable form, and free composition is the exception"
                                 ),
                             },
                         },
@@ -163,12 +242,19 @@ class PptOutlineTool(Tool):
         if refusal:
             return _return.failed(refusal, hint="number the pages 1..n in the order they are presented")
 
+        # Re-planned before anything judges it, so every check below sees the outline
+        # that will be persisted rather than the one that was submitted. Judging first
+        # let a replan rewrite the very fields the checks had just cleared.
+        filled = await self._replan(deck, outline, state, brief.language)
+        if filled is not None:
+            outline, refusal = filled, _numbering(filled)
+            if refusal:
+                return _return.failed(refusal)
+
         findings = (
-            _facts(deck, outline)
-            + _missing_figures(outline, state)
+            _missing_figures(outline, state)
             + _structural(outline)
             + _house_pages(outline, state)
-            + _unplanned_figures(outline, state)
         )
         budget = _budget(outline, brief)
         if budget:
@@ -193,7 +279,7 @@ class PptOutlineTool(Tool):
         if findings:
             payload["measured"] = _return.grouped(findings)
         unprototyped = (
-            [page.page for page in outline.pages if page.prototype is None and not page.needs.strip()]
+            [page.page for page in outline.pages if page.prototype is None]
             if state.template
             else []
         )
@@ -203,14 +289,313 @@ class PptOutlineTool(Tool):
             **payload,
         )
 
+    async def _replan(self, deck: Project, outline: Outline, state: Any, language: str = "") -> Outline | None:
+        """The plan, written by the second model against the materials. None when it stands.
+
+        Not only the copy. Rewriting `says` under claims that were themselves
+        planned thin left the halves disagreeing: a page written up into a
+        five-row comparison still carried the errand its one-line version needed,
+        because the errand was not the copy's to change. Which page argues what,
+        which movement it belongs to, what carries it and what it still needs are
+        one decision, and they are made together or not at all.
+
+        What stays the calling agent's: the deck's takeaway and how many pages it
+        runs to. Those come from the brief it agreed with the user, and a second
+        model is not entitled to either.
+
+        Whenever a second model is configured. It used to run only on a plan
+        measured thin, which meant a character count decided whether the deck got
+        planned properly -- and that count means different things in different
+        languages, so it was deciding on the wrong thing. A reply that does not
+        parse leaves the plan exactly as submitted.
+        """
+        if self.composer is None:
+            return None
+        materials = _materials(deck)
+        if not materials:
+            return None
+        known = [figure.figure_id for figure in getattr(state, "figures", ()) or ()]
+        catalogue = (
+            "\n\nFigures already gathered -- assign relevant ones to pages after inspecting their previews:\n"
+            + "\n".join(f"- {_figure_summary(figure)}" for figure in getattr(state, "figures", ()) or ())
+            if known
+            else "\n\nNo figures have been gathered yet, so `figures` is empty on every page."
+        )
+        draft = "\n".join(
+            f"page {page.page}: {page.claim}"
+            + (f"  [{page.carries}]" if page.carries else "")
+            + (f"  table_plan={page.table_plan}" if page.table_plan else "")
+            + (f"  prototype={page.prototype}" if page.prototype is not None else "  prototype=null")
+            for page in outline.pages
+        )
+        parts = [
+            text_block(
+                f"What the audience must believe at the end: {outline.takeaway}\n\n"
+                f"The pages as first drafted, which you are re-planning:\n{draft}"
+                f"{catalogue}\n\nThe materials:\n\n{materials}"
+            )
+        ]
+        if self.views is not None:
+            for figure in getattr(state, "figures", ()) or ():
+                path = deck.figures_dir / getattr(figure, "file", "")
+                if not path.is_file():
+                    continue
+                parts.append(text_block(f"Figure preview {figure.figure_id}: {_figure_summary(figure)}"))
+                parts.append(image_block(self.views.data_uri(path)))
+        reply = await self.composer.ask(
+            REPLAN_BRIEF.format(pages=len(outline.pages), language=language or "the deck's language"),
+            parts,
+            max_tokens=32000,
+        )
+        planned = _planned_by_page(reply, known)
+        if not planned:
+            return None
+        return replace(
+            outline,
+            pages=tuple(
+                replace(page, **planned[page.page]) if page.page in planned else page for page in outline.pages
+            ),
+        )
+
+
+def _figure_summary(figure: Any) -> str:
+    summary = getattr(figure, "summary", None)
+    return str(summary()) if callable(summary) else str(getattr(figure, "figure_id", "figure"))
+
+
+def _planned_by_page(reply: str, known: Sequence[str]) -> dict[int, dict[str, Any]]:
+    """{page: fields to replace} out of one reply, or {} when it did not parse.
+
+    Figures are filtered against the catalogue rather than trusted: `figure`
+    refuses a plan naming one that does not exist, and a second model inventing an
+    id would cost the round for a reason the calling agent could not act on.
+    """
+    try:
+        body = reply[reply.index("{") : reply.rindex("}") + 1]
+        pages = json.loads(body).get("pages")
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(pages, list):
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for entry in pages:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            number = int(entry.get("page"))
+        except (TypeError, ValueError):
+            continue
+        said = tuple(str(line).strip() for line in (entry.get("says") or []) if str(line).strip())
+        planned_table = _table_plan(entry["table_plan"]) if isinstance(entry.get("table_plan"), dict) else None
+        if not said and not planned_table:
+            continue
+        fields: dict[str, Any] = {"says": said}
+        for name in ("claim", "carries", "section", "needs"):
+            value = str(entry.get(name) or "").strip()
+            if value:
+                fields[name] = value
+        if "prototype" in entry:
+            raw_prototype = entry.get("prototype")
+            fields["prototype"] = (
+                int(raw_prototype)
+                if str(raw_prototype or "").strip().isdigit()
+                else None
+            )
+        figures = tuple(str(f).strip() for f in (entry.get("figures") or ()) if str(f).strip() in known)
+        fields["figures"] = figures
+        if planned_table:
+            fields["table_plan"] = planned_table
+        out[number] = fields
+    return out
+
+
+def _table_plan(value: dict[str, Any]) -> dict[str, object]:
+    """Keep table structure useful while ignoring physical layout instructions."""
+    columns = tuple(str(item).strip() for item in value.get("columns") or () if str(item).strip())
+    rows: list[object] = []
+    for item in value.get("rows") or ():
+        if isinstance(item, (list, tuple)):
+            cells = tuple(str(cell).strip() for cell in item)
+            if any(cells):
+                rows.append(cells)
+        elif str(item).strip():
+            rows.append(str(item).strip())
+    reading = str(value.get("reading") or "").strip()
+    result: dict[str, object] = {}
+    if columns:
+        result["columns"] = columns
+    if rows:
+        result["rows"] = tuple(rows)
+    if reading:
+        result["reading"] = reading
+    return result
+
+
+def _said_by_page(reply: str) -> dict[int, tuple[str, ...]]:
+    """{page: says} out of one reply, or {} when it did not parse.
+
+    A page missing from the reply keeps the plan it had rather than being emptied:
+    the caller reads this as "nothing better for that page", which is what a partial
+    reply means.
+    """
+    try:
+        body = reply[reply.index("{") : reply.rindex("}") + 1]
+        pages = json.loads(body).get("pages")
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(pages, list):
+        return {}
+    out: dict[int, tuple[str, ...]] = {}
+    for entry in pages:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            number = int(entry.get("page"))
+        except (TypeError, ValueError):
+            continue
+        said = tuple(str(line).strip() for line in (entry.get("says") or []) if str(line).strip())
+        if said:
+            out[number] = said
+    return out
+
+
+def _materials(deck: Project) -> str:
+    """The ingested materials, or "" when there are none to read."""
+    path = deck.ingest_dir / MATERIALS_FILE
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+# Shaped after 238 human-written deck outlines -- PresentBench's task specs across
+# academia, economics, education, advertising and talks.
+#
+# Read per domain, not in aggregate, because the aggregate lies. Of the devices
+# below, none is universal and two are habits of particular kinds of material:
+#
+#   emphasis marks   academia 0%   economics 69%  education 86%  ads 25%  talk 6%
+#   nested rows      academia 40%  economics 29%  education 14%  ads  0%  talk 0%
+#   colon lead-in    academia 2%   economics 11%  education  1%  ads  0%  talk 1%
+#
+# So they are offered on a condition -- a claim that turns on one figure, a point
+# that introduces a breakdown -- and not required. Required, they would push a
+# speech into bolding numbers it does not have. The aggregate figures (42% and 24%)
+# are what two data-heavy domains do to a mean, and reading them as "general" is
+# the mistake this comment exists to stop. What they have in common,
+# and what none of them are, is the whole of this brief:
+#
+#   * a list of sections, each one or two slides, named for the material's own
+#     argument -- never a template's ("Great Reality #3", "The Great Compromiser",
+#     "Segment Performance", not "Analysis" or "Details")
+#   * 3 points a section at the median, 105 characters each, ~315 a section
+#   * 74% written "Label: instruction", the sentence opening on an action verb --
+#     include, show, summarise, highlight, explain, compare, break down, debunk
+#   * quantities written into the outline verbatim, with unit and basis
+#   * 24% nesting their breakdown rows underneath, which is what a table page is
+#   * the visual said as intent, not as a file: "a dual timeline showing X against
+#     Y", "a performance table, from Table 2"
+#
+# What is deliberately not here: the derivation of any number, and a worked example
+# from the deck in front of the model, which is an example it copies.
+# Shaped after 238 human-written deck outlines -- PresentBench's task specs across
+# academia, economics, education, advertising and talks. What they have in common
+# is the whole of this brief: sections named for the material's own argument and
+# never a template's; three points a section at ~105 characters; 74% written
+# "Label: instruction" with the sentence opening on an action verb; quantities in
+# verbatim with unit and basis; a quarter nesting their breakdown rows underneath,
+# which is what a table page is a plan of.
+#
+# Deliberately absent: the derivation of any number; a worked example from the deck
+# in front of the model, which is an example it copies; and any character count as a
+# target -- the same count is a full page in Chinese and a third of one in English
+# (400 against 1168, measured in one box at one size), so the brief describes what a
+# page has to carry and the render decides whether it fits.
+REPLAN_BRIEF = """You are planning a {pages}-page deck from the materials. A first draft of
+the pages is below; re-plan it. The one thing you may not change is what the audience must
+believe at the end, and how many pages there are.
+
+For each page give:
+
+- **section** -- which movement of the deck it belongs to, named for this material's own
+  argument, never a generic label. Consecutive pages developing one movement share the name;
+  a deck this long usually has eight to twelve of them.
+- **claim** -- what the page says, as a statement, and its title. A topic is not a claim.
+- **carries** -- what carries it: a figure, a drawn table, a chart, a single number, a diagram, or
+  prose when it genuinely is prose.
+- **table_plan** -- when `carries` is table-led, give `columns`, complete `rows` and one
+  `reading` cue. Each row is an array of cells in the same order as `columns`, so a pure data
+  table and a two-product comparison both retain every value. This plans the information
+  shape without choosing coordinates or asking for a native PowerPoint table. Omit it for
+  non-table pages.
+- **says** -- the points its claim rests on, each a full sentence in {language}. Enough of them
+  that the claim is carried and no more: the evidence under it, the number beside the
+  judgement, the caveat that makes it honest. Whether the page holds them is settled when it
+  is built and measured, not here; a page carrying two arguments is two pages rather than one
+  long one. Write each as
+  **Label: what the page does with it** -- the label is the phrase a
+  reader scans, and the sentence after it opens on the action: Compare, Explain, Break down,
+  Highlight, Show, Debunk, Recap. A term the deck rests on is said in full where it first
+  appears; a result comes with the conditions it was measured under; a quantity is written
+  out with its unit and its basis, not referred to. **A page that breaks something down
+  carries its rows under their point, one per line beginning `- `** -- that is what a table
+  page is a plan of -- when it has one. What makes the rows appear is the sentence *ending on a
+  colon* so that it governs them -- a self-contained sentence with the figures run together inside it leaves them
+  nowhere to go, which is how a breakdown becomes one long comma-separated line:
+
+      "<label>: <the headline figure>. <the verb introducing the rows>:
+      - <row label>: <what this row's cell says>
+      - <row label>: <what this row's cell says>"
+
+  When the rows are a subset of a table in the materials, the point says which rows and which
+  columns, because otherwise a whole table is copied or an unrecorded selection is invented.
+
+- **one thing to make prominent, when there is one** -- a claim that turns on a single figure
+  or a single phrase can wrap it in `**`, inside the sentence where it sits, and the build sets
+  that large. The marks are instructions, not characters: nothing prints them. A page arguing a
+  position rather than reporting a quantity has nothing to mark, and marking something anyway
+  puts the emphasis where the claim is not.
+
+- **figures** -- ids from the catalogue below, and nothing else. Empty when the page places
+  none. Inspect the previews before assigning them. A page pairing a figure with text plans
+  two to four labelled supporting points on restrained coloured surfaces, with the figure
+  dominant and its source or inspected visual caption retained.
+- **needs** -- what the page still lacks. When it is a picture, say which kind, because they
+  are gathered two different ways: a real thing that exists somewhere -- a company's own
+  mark, a product shot, a screenshot, a published plot -- is found with
+  web_search(kind="images") and brought in with ppt_fetch; a diagram nobody has drawn -- an
+  architecture, a flow, a timeline, a conceptual figure -- is drawn in the program or made
+  with ppt_generate_image only after searching finds no existing visual, and only for a page background
+  or decorative visual. A named product, company, published architecture or benchmark is always searched
+  first; generated imagery never replaces evidence. Empty when the page needs nothing.
+
+- **prototype** -- when a template is bound, choose the nearest example page for every
+  content page by default. The page may replace its words and pictures, delete spare
+  units, and move or resize regions. Set it to `null` only when no example can carry the
+  information shape after those edits, and state the concrete mismatch in `needs`.
+
+Every label and every sentence is written in {language} -- a label in one language and its
+sentence in another is not a line a reader can use, and it is what happens when the length
+stops being the thing being watched.
+
+The deck is read front to back: a page that restates what an earlier page settled is a page
+to spend on what comes next. Numbers, names and dates come from the materials.
+
+Reply as JSON and nothing else, one entry per page, in page order:
+{{"pages": [{{"page": 1, "section": "...", "claim": "...", "carries": "...",
+"table_plan": {{"columns": [], "rows": [["...", "..."]], "reading": "..."}},
+"says": ["..."], "figures": [], "needs": "...", "prototype": null}}, ...]}}"""
+
 
 def _plan(entry: dict[str, Any]) -> PagePlan:
     return PagePlan(
         page=int(entry.get("page", 0)),
         claim=str(entry.get("claim", "")).strip(),
         carries=str(entry.get("carries") or "").strip(),
+        table_plan=_table_plan(entry["table_plan"]) if isinstance(entry.get("table_plan"), dict) else None,
         figures=tuple(str(figure) for figure in entry.get("figures") or ()),
         says=tuple(str(said) for said in entry.get("says") or () if str(said).strip()),
+        section=str(entry.get("section") or "").strip(),
         needs=str(entry.get("needs") or "").strip(),
         prototype=int(entry["prototype"]) if str(entry.get("prototype") or "").strip().isdigit() else None,
     )
@@ -228,53 +613,42 @@ def _numbering(outline: Outline) -> str:
     return ""
 
 
-def _facts(deck: Project, outline: Outline) -> list:
-    """The fact gate, run on the outline's own words.
+def _stated_chars(deck: Project) -> int | None:
+    """How much the materials say, or None when nothing has been ingested.
 
-    The same index and the same check the finished deck gets, a whole build earlier.
-    Nothing ingested means no index and no gate, exactly as at build time: refusing
-    every number with nothing to check it against would leave the author no move.
+    Counted off `materials.md` rather than a record beside it, so a project whose
+    materials were replaced by hand is measured as it now reads.
     """
-    path = deck.ingest_dir / SOURCE_INDEX_FILE
+    path = deck.ingest_dir / MATERIALS_FILE
     if not path.is_file():
-        return []
+        return None
     try:
-        index = load_source_index(path)
-    except (OSError, ValueError):
-        return []
-    return [finding for page in outline.pages for finding in check_text(page.text(), index, page=page.page)]
+        return stated_chars(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
-# What one page's worth of plan is, measured against what got built from it. Twelve
-# pages of a live outline, each page's `says` compared to the characters that ended
-# up on the finished slide:
-#
-#   4 says / 94-109 chars of plan  ->  200-301 chars on the page   (full)
-#   3 says /  80 chars             ->  115                          (fair)
-#   3 says /  57 chars             ->   33                          (empty)
-#   1-2 says / 21-39 chars         ->   26-27                       (empty)
-#
-# So both conditions together, not either: the pages that came out empty were under
-# both.
-#
-# Raised from 4/80 when the template's content pages stopped being prototypes. Those
-# pages capped what a slide could hold -- a card slot drawn for a three-word phrase
-# holds a three-word phrase -- so the plan was not the binding constraint and the floor
-# only had to catch the outright empty. A page composed from scratch holds whatever it
-# is given: measured across four real decks the content pages run 200-467 characters,
-# and the 467 is a table with two takeaways under it that a reviewer accepted. To land
-# there a page needs about five points and 140 characters of plan.
-SAYS_PER_PAGE = 5
-SAYS_CHARS_PER_PAGE = 140
+def _table_led(page: PagePlan) -> bool:
+    carries = page.carries.casefold()
+    return any(term in carries for term in ("table", "matrix", "表格", "矩阵", "对照", "定价", "选型表"))
 
 
 def _thin_pages(outline: Outline, state: Any) -> list:
-    """Pages whose plan is too thin to fill a slide, said while a page is cheap.
+    """Pages whose whole plan is one line, said while a page is still cheap to merge.
 
-    Nothing measured this at either end. The outline checked page *count* against the
-    brief and the build checked whether a page held too *much* (`density`), so a page
-    planned with one bullet passed both and came back as a slide with 27 characters on
-    it -- which is the complaint a reader makes first and the one no gate made.
+    Structural, not a floor. This used to ask for five points or 140 characters,
+    measured off one deck -- and a character count is a different page in every
+    language (in one body box at one size, Chinese fills it at 400 and English at
+    1168), so the floor asked one language for a page and the other for a third of
+    one. Nothing at plan time can tell a page that is short because its figure does
+    the talking from a page that is short because nobody planned it -- which is why
+    the built page has no floor either.
+
+    What is left is not a judgement about how much: a page with one `says` line, no
+    figure, no errand and no prototype has nothing to build from at all, and that is
+    true in any language. How full the rest come out is settled by measuring the
+    render, where a page that does not fit gets cut and one that does not fill gets
+    more.
 
     A warning, and worded for the case it gets wrong: a table or a chart page carries
     its content in cells and points rather than in `says`, and the plan for one is
@@ -294,10 +668,30 @@ def _thin_pages(outline: Outline, state: Any) -> list:
 
     findings = []
     for page in outline.pages:
-        if page.figures or page.needs.strip() or (page.prototype in structural and page.prototype is not None):
+        if _table_led(page) and not page.table_plan:
+            findings.append(
+                Finding(
+                    kind="thin_page",
+                    severity=Severity.WARNING,
+                    page=page.page,
+                    audience=Audience.AUTHOR,
+                    message=(
+                        f"page {page.page} is table-led but has no `table_plan`, so the builder sees prose "
+                        "instead of columns and complete cell rows. Record columns, rows[][] and the reading "
+                        "cue before layout; the table will be drawn from text boxes and rules, not as an "
+                        "Office table"
+                    ),
+                    detail={"table_plan": False, "carries": page.carries},
+                )
+            )
+        if (
+            page.table_plan
+            or page.figures
+            or page.needs.strip()
+            or (page.prototype in structural and page.prototype is not None)
+        ):
             continue
-        chars = sum(len(line) for line in page.says)
-        if len(page.says) >= SAYS_PER_PAGE or chars >= SAYS_CHARS_PER_PAGE:
+        if len(page.says) > 1:
             continue
         findings.append(
             Finding(
@@ -306,14 +700,14 @@ def _thin_pages(outline: Outline, state: Any) -> list:
                 page=page.page,
                 audience=Audience.AUTHOR,
                 message=(
-                    f"page {page.page} plans {len(page.says)} point(s) and {chars} characters. Pages planned "
-                    f"like this came out with 26 to 57 characters on them -- a slide with a heading and one "
-                    f"line, and most of the page empty. Give it more to say, merge it into its neighbour, or "
-                    f"-- if it is a table, a chart or a diagram -- name the figure in `figures` or put the "
-                    f"numbers it shows in `says`, because a plan that does not mention them cannot be checked "
-                    f"for having them"
+                    f"page {page.page} plans {len(page.says)} point(s) and nothing else -- no figure, no "
+                    f"errand, and not one of the template's own pages. Pages planned like this came out "
+                    f"with 26 to 57 characters on them: a heading, one line, and the rest of the page "
+                    f"empty. Give it more to say, merge it into its neighbour, or -- if it is a table, a "
+                    f"chart or a diagram -- name the figure in `figures` or put the numbers it shows in "
+                    f"`says`, because a plan that does not mention them cannot be checked for having them"
                 ),
-                detail={"says": len(page.says), "chars": chars},
+                detail={"says": len(page.says)},
             )
         )
     return findings
@@ -326,14 +720,7 @@ def _thin(deck: Project, brief: Any) -> list:
     before a program is written, and an author who read it as advice about the brief
     gets it once more as advice about the twelve pages now in front of them.
     """
-    path = deck.ingest_dir / SOURCE_INDEX_FILE
-    if not path.is_file():
-        return []
-    try:
-        index = load_source_index(path)
-    except (OSError, ValueError):
-        return []
-    return material_findings(index.stated_chars, brief)
+    return material_findings(_stated_chars(deck), brief)
 
 
 def _missing_figures(outline: Outline, state: Any) -> list:
@@ -381,7 +768,6 @@ STRUCTURAL_SHARE = 0.25
 SAME_PROTOTYPE_IS_STRUCTURAL = 3
 # Under this share of pages carrying something to look at, the deck is a document
 # read aloud. The same number the built deck is measured against.
-PLANNED_EVIDENCE = 0.5
 
 
 def _house_pages(outline: Outline, state: Any) -> list:
@@ -414,32 +800,6 @@ def _house_pages(outline: Outline, state: Any) -> list:
         wanted.append(("agenda", named["agenda"], None if holds else first))
 
     findings = []
-    # The mirror of the requirement below: a content page that names a prototype is
-    # asking to be filled in, and the template's content pages are not handed out for
-    # that any more. Measured on the decks that were: a slot drawn for a three-word
-    # phrase set a sentence at 10.8pt, a six-card grid filled with four left a hole, and
-    # a portrait picture frame could not take a landscape figure. The page is composed
-    # instead, inside the house style `ppt_template` measured.
-    for page in outline.pages:
-        if page.prototype is None or page.prototype in named.values():
-            continue
-        findings.append(
-            Finding(
-                kind="house_page",
-                severity=Severity.BLOCKING,
-                page=page.page,
-                audience=Audience.AUTHOR,
-                message=(
-                    f"page {page.page} names the template's page {page.prototype} as its prototype, and that is "
-                    f"one of the template's content pages. Only its "
-                    + ", ".join(f"{role} (page {number})" for role, number in named.items())
-                    + " are cloned; every other page you draw yourself, inside the house style ppt_template "
-                    "returns -- its layout, its title row, its type ladder, its safe area. Drop the prototype "
-                    "field from this page"
-                ),
-                detail={"named": page.prototype, "structural": named},
-            )
-        )
     for role, page_number, page in wanted:
         if page is None:
             continue
@@ -512,33 +872,6 @@ def _structural(outline: Outline) -> list:
     ]
 
 
-def _unplanned_figures(outline: Outline, state: Any) -> list:
-    """Evidence the deck has and the plan does not use."""
-    from raven.ppt.contracts import Audience, Finding, Severity
-
-    held = len(state.figures)
-    if not held or not outline.pages:
-        return []
-    showing = sum(1 for page in outline.pages if page.figures)
-    share = showing / len(outline.pages)
-    if share >= PLANNED_EVIDENCE:
-        return []
-    return [
-        Finding(
-            kind="unplanned_figures",
-            severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
-            message=(
-                f"{showing} of {len(outline.pages)} pages plan to show a figure, and the materials hold {held}. "
-                "Name the ones that carry a page's claim in its `figures` -- an architecture a source drew is "
-                "better than an architecture redrawn from its description, and a page that means to draw its "
-                "own diagram or chart instead should say so in `carries`"
-            ),
-            detail={"pages_with_figures": showing, "pages": len(outline.pages), "figures_held": held},
-        )
-    ]
-
-
 def _budget(outline: Outline, brief: Any):
     """Whether the plan is the length that was agreed -- now, not after the build."""
     from raven.ppt.contracts import Audience, Finding, Severity
@@ -566,15 +899,18 @@ def _asks(errands: list, blocking: list, has_figures: bool, unprototyped: list[i
         return asks
     if unprototyped:
         asks.append(
-            f"pages {', '.join(str(number) for number in unprototyped)} name no template page to adapt. This "
-            "deck has a template, and most of its design is on the pages it ships rather than on its layouts "
-            "-- pick a prototype for each of those pages with ppt_template, or say in `needs` why the template "
-            "has nothing for it, and call ppt_outline again"
+            f"pages {', '.join(str(number) for number in unprototyped)} have no template prototype. This "
+            "deck has a template, so pick the nearest editable content example for each page with ppt_template. "
+            "Keep a page free only when no example can carry its information shape after editing, and record "
+            "that concrete mismatch in `needs`"
         )
     if errands:
         asks.append(
-            f'get what the {len(errands)} page(s) under gather still need: web_search(kind="images") for a '
-            "picture, ppt_fetch to bring it in, ppt_ingest to register it, then ppt_outline again"
+            f"get what the {len(errands)} page(s) under gather still need. In parallel, run "
+            'web_fetch(extractMode="images") on the source report\'s cited URLs and '
+            'web_search(kind="images") for additional candidates; bring selected existing pictures in with '
+            "ppt_fetch. Use ppt_generate_image only when both paths find no suitable existing visual. Each "
+            "path registers the result in this deck; then call ppt_outline again"
         )
     if not has_figures:
         asks.append(

@@ -8,19 +8,21 @@ materials held thirteen.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from raven.ppt.contracts.outline import Outline, PagePlan
 from raven.ppt.tools.outline import (
-    PLANNED_EVIDENCE,
     SAME_PROTOTYPE_IS_STRUCTURAL,
     STRUCTURAL_SHARE,
     _structural,
-    _unplanned_figures,
+    _thin_pages,
 )
 
 
 class _State:
     def __init__(self, figures: int) -> None:
-        self.figures = tuple(range(figures))
+        self.figures = tuple(type("Figure", (), {"figure_id": f"fig_{index}"})() for index in range(figures))
 
 
 def _page(number: int, *, says: int = 3, prototype: int | None = None, figures: tuple[str, ...] = ()) -> PagePlan:
@@ -36,7 +38,6 @@ def _page(number: int, *, says: int = 3, prototype: int | None = None, figures: 
 def test_the_shares_are_the_measured_ones() -> None:
     assert STRUCTURAL_SHARE == 0.25
     assert SAME_PROTOTYPE_IS_STRUCTURAL == 3
-    assert PLANNED_EVIDENCE == 0.5
 
 
 def test_three_dividers_in_twelve_pages_are_reported() -> None:
@@ -55,27 +56,6 @@ def test_one_divider_in_twelve_pages_is_not_worth_saying() -> None:
     pages = tuple(_page(number, says=1 if number == 5 else 3, prototype=number) for number in range(1, 13))
 
     assert _structural(Outline(takeaway="t", pages=pages)) == []
-
-
-def test_a_plan_that_shows_nothing_while_the_materials_hold_figures() -> None:
-    pages = tuple(_page(number) for number in range(1, 13))
-    findings = _unplanned_figures(Outline(takeaway="t", pages=pages), _State(13))
-
-    assert [f.kind for f in findings] == ["unplanned_figures"]
-    assert findings[0].detail == {"pages_with_figures": 0, "pages": 12, "figures_held": 13}
-
-
-def test_half_the_pages_showing_something_is_enough() -> None:
-    pages = tuple(_page(number, figures=("fig_one",) if number % 2 else ()) for number in range(1, 13))
-
-    assert _unplanned_figures(Outline(takeaway="t", pages=pages), _State(13)) == []
-
-
-def test_materials_with_no_figures_are_not_a_gap() -> None:
-    """A text-only source cannot be asked for pictures it does not have."""
-    pages = tuple(_page(number) for number in range(1, 13))
-
-    assert _unplanned_figures(Outline(takeaway="t", pages=pages), _State(0)) == []
 
 
 class _Template:
@@ -151,3 +131,110 @@ def test_no_template_means_no_requirement() -> None:
 
     pages = tuple(_page(number) for number in range(1, 13))
     assert _house_pages(Outline(takeaway="t", pages=pages), NoTemplate()) == []
+
+
+class _Deck:
+    """A project whose materials say this much, without one on disk."""
+
+    def __init__(self, chars: int = 0) -> None:
+        self.chars = chars
+        self.ingest_dir = Path("/nowhere")
+
+
+def test_the_says_field_names_no_character_count() -> None:
+    """A count here is a different page in each language.
+
+    Measured in one body box at one size, Chinese fills it at 400 characters and
+    English at 1168. A budget stated to the planner therefore asks one language for
+    a full page and the other for a third of one -- so the field says what a page
+    has to carry, and whether it fits is settled by measuring the render.
+    """
+    from pathlib import Path
+
+    from raven.ppt.tools.outline import PptOutlineTool
+
+    said = PptOutlineTool(workspace=Path("/tmp")).parameters["properties"]["pages"]["items"]["properties"]["says"]
+
+    assert not re.search(r"\d{3,} character", said["description"])
+    assert "the claim is carried" in said["description"]
+
+
+class _Bare:
+    """A project state with no template bound, so no page counts as structural."""
+
+    template = None
+
+
+def _planned(number: int, says: tuple[str, ...], **kw) -> PagePlan:
+    return PagePlan(page=number, claim=f"claim {number}", says=says, **kw)
+
+
+def test_a_page_whose_whole_plan_is_one_line_is_reported() -> None:
+    outline = Outline(takeaway="t", pages=(_planned(1, ("Only this.",)),))
+
+    found = _thin_pages(outline, _Bare())
+
+    assert [finding.kind for finding in found] == ["thin_page"]
+    assert found[0].page == 1
+    assert found[0].detail == {"says": 1}
+
+
+def test_a_page_planning_nothing_at_all_is_reported() -> None:
+    assert [f.kind for f in _thin_pages(Outline(takeaway="t", pages=(_planned(1, ()),)), _Bare())] == ["thin_page"]
+
+
+def test_two_points_are_a_plan_however_short_they_are() -> None:
+    """No character floor, deliberately.
+
+    It used to take five points or 140 characters, measured off one deck. A count
+    is a different page in each language -- in one body box at one size Chinese
+    fills it at 400 characters and English at 1168 -- so the floor asked one
+    language for a page and the other for a third of one. How full a page comes out
+    is settled by measuring the render, not guessed from the plan.
+    """
+    outline = Outline(takeaway="t", pages=(_planned(1, ("Up.", "Down.")),))
+
+    assert _thin_pages(outline, _Bare()) == []
+
+
+def test_a_table_led_page_without_cell_structure_is_reported() -> None:
+    outline = Outline(
+        takeaway="t",
+        pages=(_planned(1, ("one", "two"), carries="pricing table"),),
+    )
+
+    findings = _thin_pages(outline, _Bare())
+    assert [finding.kind for finding in findings] == ["thin_page"]
+    assert findings[0].detail == {"table_plan": False, "carries": "pricing table"}
+
+
+def test_a_drawn_table_with_complete_cell_rows_is_planned() -> None:
+    outline = Outline(
+        takeaway="t",
+        pages=(
+            _planned(
+                1,
+                ("Compare the plans.",),
+                carries="drawn table",
+                table_plan={
+                    "columns": ("Plan", "Price"),
+                    "rows": (("Hobby", "Free"), ("Pro", "$249")),
+                    "reading": "compare price",
+                },
+            ),
+        ),
+    )
+
+    assert _thin_pages(outline, _Bare()) == []
+
+
+def test_a_page_carrying_a_figure_plans_its_copy_in_the_figure() -> None:
+    outline = Outline(takeaway="t", pages=(_planned(1, ("One line.",), figures=("fig-1",)),))
+
+    assert _thin_pages(outline, _Bare()) == []
+
+
+def test_a_page_with_an_errand_is_going_to_get_something_to_show() -> None:
+    outline = Outline(takeaway="t", pages=(_planned(1, ("One line.",), needs="draw the six-stage path"),))
+
+    assert _thin_pages(outline, _Bare()) == []

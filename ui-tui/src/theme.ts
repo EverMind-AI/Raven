@@ -12,7 +12,6 @@ export interface ThemeColors {
   text: string
   muted: string
   completionBg: string
-  userBg: string
   completionCurrentBg: string
   completionMetaBg: string
   completionMetaCurrentBg: string
@@ -64,11 +63,6 @@ export interface Theme {
 }
 
 export type ColorScheme = 'dark' | 'light'
-
-// Whether a filled background reads as a block rather than mud. Tier 1 has no
-// shade between black and brightBlack, and tier 0 strips the codes outright,
-// so both fall back to the glyph the caller already draws.
-export const canFillBackground = () => activeColorTier() >= 2
 
 // ── Color math ───────────────────────────────────────────────────────
 //
@@ -214,7 +208,6 @@ export const DARK_THEME: Theme = {
     text: '#FFF5EA',
     muted: '#858482',
     completionBg: '#000000',
-    userBg: '#1c2128',
     completionCurrentBg: '#2a260c',
     completionMetaBg: '#080808',
     completionMetaCurrentBg: '#221d08',
@@ -262,7 +255,6 @@ export const LIGHT_THEME: Theme = {
     text: '#24201a',
     muted: '#57606a',
     completionBg: '#f6f8fa',
-    userBg: '#eaeef2',
     completionCurrentBg: '#fff8e7',
     completionMetaBg: '#eef1f4',
     completionMetaCurrentBg: '#ffefc2',
@@ -308,7 +300,6 @@ const DARK_256_COLORS: ThemeColors = {
   text: 'ansi256(255)',
   muted: 'ansi256(102)',
   completionBg: 'ansi256(16)',
-  userBg: 'ansi256(235)',
   completionCurrentBg: 'ansi256(234)',
   completionMetaBg: 'ansi256(232)',
   completionMetaCurrentBg: 'ansi256(234)',
@@ -342,7 +333,6 @@ const LIGHT_256_COLORS: ThemeColors = {
   text: 'ansi256(234)',
   muted: 'ansi256(59)',
   completionBg: 'ansi256(231)',
-  userBg: 'ansi256(254)',
   completionCurrentBg: 'ansi256(230)',
   completionMetaBg: 'ansi256(255)',
   completionMetaCurrentBg: 'ansi256(229)',
@@ -383,7 +373,6 @@ const DARK_16_COLORS: ThemeColors = {
   text: 'ansi:white',
   muted: 'ansi:blackBright',
   completionBg: 'ansi:black',
-  userBg: 'ansi:blackBright',
   completionCurrentBg: 'ansi:blackBright',
   completionMetaBg: 'ansi:black',
   completionMetaCurrentBg: 'ansi:blackBright',
@@ -416,7 +405,6 @@ const LIGHT_16_COLORS: ThemeColors = {
   text: 'ansi:black',
   muted: 'ansi:blackBright',
   completionBg: 'ansi:white',
-  userBg: 'ansi:white',
   completionCurrentBg: 'ansi:blackBright',
   completionMetaBg: 'ansi:white',
   completionMetaCurrentBg: 'ansi:blackBright',
@@ -726,7 +714,6 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     completionCurrentBg,
     completionMetaBg,
     completionMetaCurrentBg,
-    userBg: c('ui_user_bg') ?? base.userBg,
 
     label: c('ui_label') ?? base.label,
     ok: c('ui_ok') ?? base.ok,

@@ -1,6 +1,6 @@
 """What the model sees coming back from ppt_build.
 
-Thin as the adapter is, this is where two measured failures were: twelve
+Thin as the adapter is, this is where two measured failures were: batches of
 unlabelled renders that the model could not pair with page numbers, and a reply
 voicing one problem while two stood -- which cost a run seven rebuilds spent
 re-checking numbers while seventeen colour bars went unmentioned.
@@ -37,7 +37,7 @@ from raven.ppt.contracts import (
     write_plan,
 )
 from raven.ppt.profiles import registry
-from raven.ppt.tools.build import PptBuildTool
+from raven.ppt.tools.build import BATCH_VIEWS, PptBuildTool
 
 
 class FakeViews:
@@ -86,7 +86,11 @@ class FakeStage:
         # The stage decides which pages the reply shows, because that is where the
         # deck is published and an unseen page has to refuse before delivery.
         pages = getattr(self.result.data.get("outcome"), "pages", 0)
-        showing = sorted(set(slides))[:12] if slides else list(range(page_from, min(pages, page_from + 11) + 1))
+        showing = (
+            sorted(set(slides))[:BATCH_VIEWS]
+            if slides
+            else list(range(page_from, min(pages, page_from + BATCH_VIEWS - 1) + 1))
+        )
         return replace(self.result, data={**self.result.data, "showing": showing})
 
 
@@ -166,12 +170,13 @@ def _body(reply: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_each_render_is_preceded_by_the_line_that_names_its_page(project: Project) -> None:
-    reply = await _tool(project, _ok(project)).execute(project="tarvis")
+    reply = await _tool(project, _ok(project)).execute(project="tarvis", slides=[1, 2])
 
     assert isinstance(reply, ToolResult)
     kinds = [block["type"] for block in reply.blocks or []]
-    assert kinds == ["text", "image_url", "text", "image_url"]
+    assert kinds == ["text", "image_url"]
     assert "Page 1 of 2" in (reply.blocks or [])[0]["text"]
+    assert "Planned claim: It works" in (reply.blocks or [])[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -180,38 +185,37 @@ async def test_a_page_s_findings_travel_with_that_page_s_picture(project: Projec
         kind="card_overflow",
         severity=Severity.WARNING,
         message="'VIPSeg' runs 0.27in past the edge of its card",
-        page=2,
+        page=1,
         audience=Audience.DESIGNER,
     )
-    reply = await _tool(project, _ok(project, [finding])).execute(project="tarvis")
+    reply = await _tool(project, _ok(project, [finding])).execute(project="tarvis", slides=[1])
 
     assert isinstance(reply, ToolResult)
     labels = [b["text"] for b in (reply.blocks or []) if b["type"] == "text"]
-    assert "runs 0.27in past" in labels[1]
-    assert "runs 0.27in past" not in labels[0]
+    assert "runs 0.27in past" in labels[0]
 
 
 @pytest.mark.asyncio
 async def test_the_reply_text_stands_on_its_own_without_the_pictures(project: Project) -> None:
     """Only providers that carry an image in a tool result ever see the blocks."""
-    reply = await _tool(project, _ok(project)).execute(project="tarvis")
+    reply = await _tool(project, _ok(project, pages=1)).execute(project="tarvis", slides=[1])
     body = _body(reply)
     assert body["ok"] is True
     assert body["pptx_path"].endswith("deck.pptx")
-    assert body["slides"] == 2
+    assert body["slides"] == 1
 
 
 @pytest.mark.asyncio
 async def test_every_ask_is_voiced_not_only_the_first(project: Project) -> None:
     findings = [
-        Finding(kind="fact", severity=Severity.BLOCKING, message="48.3 is not in the sources", page=11),
+        Finding(kind="citation", severity=Severity.BLOCKING, message="page 11 cites Fig. 4, shows Fig. 5", page=11),
         Finding(kind="band", severity=Severity.BLOCKING, message="a filled bar", page=4),
         Finding(kind="band", severity=Severity.BLOCKING, message="another filled bar", page=6),
     ]
     body = _body(await _tool(project, _ok(project, findings)).execute(project="tarvis"))
 
     assert body["ok"] is False
-    assert "unanchored value" in body["next_step"]
+    assert "citing one figure while showing another" in body["next_step"]
     assert "2 filled colour bar" in body["next_step"]
 
 
@@ -244,7 +248,7 @@ async def test_designer_warnings_are_reported_but_not_asked_of_the_author(projec
     # rebuilt the same finished deck eight times, each reply identical.
     assert body["next_step"].startswith("this deck is delivered at ")
     assert "nothing refuses it" in body["next_step"]
-    assert "look at every page below" in body["next_step"]
+    assert "page(s) below" in body["next_step"]
 
 
 @pytest.mark.asyncio
@@ -281,14 +285,14 @@ async def test_only_the_requested_pages_come_back(project: Project) -> None:
     views = FakeViews(pages=18)
     tool = _tool(project, _ok(project, pages=18), views)
     await tool.execute(project="tarvis", slides=[3, 1, 2])
-    assert views.asked == [[1, 2, 3]]
+    assert views.asked == [[1]]
 
 
 @pytest.mark.asyncio
-async def test_at_most_twelve_pages_come_back_unasked(project: Project) -> None:
+async def test_one_page_comes_back_unasked(project: Project) -> None:
     views = FakeViews(pages=18)
     await _tool(project, _ok(project, pages=18), views).execute(project="tarvis")
-    assert views.asked == [list(range(1, 13))]
+    assert views.asked == [[1]]
 
 
 @pytest.mark.asyncio
@@ -303,7 +307,10 @@ async def test_the_design_pass_summary_keeps_the_notes_and_drops_the_machinery(p
     body = _body(await _tool(project, _ok(project, design_pass=design)).execute(project="tarvis"))
 
     assert body["design_pass"]["vocabulary"] == ["keep the rail"]
-    assert body["design_pass"]["rounds"][0]["deck"] == ["set a scale"]
+    round_one = body["design_pass"]["rounds"][0]
+    assert round_one["deck"]["notes"] == ["set a scale"]
+    assert round_one["pages_judged"] == 1
+    assert round_one["page_decisions"]["2"]["notes"] == ["tightened"]
     assert "outcome" not in body["design_pass"]
 
 

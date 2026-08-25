@@ -37,12 +37,9 @@ from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_ints
 from raven.utils.helpers import image_block, text_block
 
-# How many page renders come back in one reply. Twelve 144-dpi pages is already a
-# multi-megabyte request body, and 144 is the floor for judging type size, so the
-# batch cannot grow -- but it is a batch and not a cap. It was a cap, and on a
-# twenty-page deck that meant eight pages nobody ever saw and nothing saying so.
-# Every page is reachable now, and the reply names the ones it did not show.
-BATCH_VIEWS = 12
+# How many page renders come back in one reply. Keeping this to one makes each
+# author-model call inspect one page instead of skimming a batch.
+BATCH_VIEWS = 1
 
 
 class PptBuildTool(Tool):
@@ -51,9 +48,10 @@ class PptBuildTool(Tool):
         "Build the deck by running the python-pptx program you write, then look at every page it made. "
         "Write the program to ppt_projects/<project>/build/build.py with write_file -- that whole path, "
         "relative to the workspace, because a bare build/build.py lands somewhere the build does not look "
-        "-- revise it with edit_file, then call this with just the project. It returns the rendered pages, anything the script printed, and everything "
-        "measured on the deck -- including any number on a slide that does not trace back to the sources. "
-        "Iterate: read the render, edit the file, run again."
+        "-- revise it with edit_file, then call this with just the project. Read the recorded outline before writing each page: "
+        "each page must carry its claim, supporting points, intended visual, and listed material needs. You may rewrite the wording, "
+        "but do not silently drop the planned argument or replace a planned visual with empty boxes. With a template, keep the measured title row, body area, type ladder and background language from ppt_template; start every content page from the nearest example prototype and adapt its text, pictures, repeated units and spare furniture to the actual content. Free composition inside the house style is only for a page whose outline explicitly says that no example can carry its information shape after those edits. Define one shared content-page header helper and call it everywhere; page blocks must not invent title coordinates. Keep the kicker, title and explanatory line as one compact group with the larger gap below it. Never use a native PowerPoint table, `add_table`, or `ppt_layout.table`; preserve tabular rows and cells by drawing tables or comparison matrices from Box, write, rule and optional quiet planes so the model controls row height and type size. Table headers are the same size as body rows or larger and bold, never smaller. On a figure-and-text page, keep the figure dominant and put two to four labelled supporting points on restrained theme-coloured surfaces; retain its source caption or inspected visual_caption. Use the provided ppt_layout and ppt_icons modules instead of inventing a second coordinate or icon system. Keep source notes to one short line, at most two lines. It returns the rendered pages, anything the script printed, and everything "
+        "measured on the deck. Iterate: read the render, edit the file, run again."
     )
     timeout_seconds = 900.0
 
@@ -104,6 +102,23 @@ class PptBuildTool(Tool):
                         "before deciding it is done, and name the ones you want again after an edit"
                     ),
                 },
+                "design_pages": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "description": (
+                        "pages to replay through the design pass after a prior full design run. Omit on the "
+                        "first finished build. A targeted replay keeps the shared setup and rechecks only "
+                        "these rendered pages"
+                    ),
+                },
+                "design_setup": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "with design_pages, also let the global design stage rewrite the shared setup once. "
+                        "Use when the defect is cross-page, such as inconsistent header geometry"
+                    ),
+                },
                 "page_from": {
                     "type": "integer",
                     "minimum": 1,
@@ -116,10 +131,9 @@ class PptBuildTool(Tool):
                     "type": "boolean",
                     "default": False,
                     "description": (
-                        "true while the program is still being written: it builds what exists, measures it and "
+                        "true only while the program is still being written: it builds what exists, measures it and "
                         "hands back the renders, without holding a part-written deck to the length that was "
-                        "agreed and without publishing. Write the setup, append two or three pages, build a "
-                        "draft, look, append the next few -- one reply cannot carry twenty pages"
+                        "agreed and without publishing. Write the setup, append two or three pages, build a draft, look, append the next few. Once the requested pages are written, omit draft: only the finished build runs the design pass and attempts delivery"
                     ),
                 },
             },
@@ -131,6 +145,8 @@ class PptBuildTool(Tool):
         project: str,
         script: str | None = None,
         slides: list[int] | None = None,
+        design_pages: list[int] | None = None,
+        design_setup: bool = False,
         page_from: int = 1,
         draft: bool = False,
         **kwargs: Any,
@@ -167,21 +183,31 @@ class PptBuildTool(Tool):
             return _return.failed(
                 "no outline recorded, so nothing has decided what this deck argues or what each page says",
                 hint=(
-                    "plan it with ppt_outline first -- it checks the numbers against the materials and the "
+                    "plan it with ppt_outline first -- it checks the figures against the catalogue and the "
                     "length against the brief, which is a cheap edit there and an expensive one here"
                 ),
             )
 
         try:
             wanted = as_ints(slides, "slides") or None
+            replay = as_ints(design_pages, "design_pages") or None
         except ArgumentError as exc:
-            return _return.failed(str(exc), hint="slides: [1, 2, 3]")
+            return _return.failed(str(exc), hint="slides: [1, 2, 3], design_pages: [4, 9]")
 
         # `polish` is not a parameter of this tool. It was, and it was the one switch that
         # turned off the only stage that owns layout: a live run passed `polish=false` on
         # eight consecutive finished builds. A draft is not polished and a finished deck
         # always is (design doc D8), so `draft` is the whole choice.
-        result = await self.stage.run(deck, script, polish=True, slides=wanted, page_from=page_from, draft=draft)
+        run_options: dict[str, Any] = {
+            "polish": True,
+            "slides": wanted or [page_from],
+            "page_from": page_from,
+            "draft": draft,
+        }
+        if replay is not None:
+            run_options["design_pages"] = replay
+            run_options["design_setup"] = design_setup
+        result = await self.stage.run(deck, script, **run_options)
         outcome = result.data.get("outcome")
 
         if outcome is None or not getattr(outcome, "ok", False):
@@ -209,6 +235,11 @@ class PptBuildTool(Tool):
             payload["pptx_path"] = result.data["pptx_path"]
 
         shown = list(result.data.get("showing") or [])
+        outline = load_outline(outline_path(deck))
+        if outline is not None:
+            payload["planned_pages"] = [
+                page.as_dict() for page in outline.pages if page.page in set(shown)
+            ]
         remaining = (
             max(outcome.pages - len(set(shown)), 0) if wanted else max(outcome.pages - (shown[-1] if shown else 0), 0)
         )
@@ -255,11 +286,16 @@ class PptBuildTool(Tool):
                 # told to publish went looking for one, said it was not in the toolset,
                 # and built again.
                 f"this deck is delivered at {payload.get('pptx_path', 'the export path above')} and nothing "
-                "refuses it: the findings below are reports. Answer the ones you agree with by editing the "
-                "program and building again, or stop here"
+                "refuses it: the findings below are reports, and the renders are the judge. Look at the "
+                "pages first and trust what you see -- a finding you look at and disagree with is a finding "
+                "to leave alone, and a page that reads wrong is worth fixing whether or not anything "
+                "measured it. Answer the ones you agree with by editing the program and building again, "
+                "or stop here"
                 if not draft
-                else "nothing refuses this draft. When the pages read right, build again without `draft` -- that "
-                "is the call that runs the design pass and delivers the deck",
+                else "nothing refuses this draft. The findings are reports and the renders are the judge: "
+                "read the pages, fix what looks wrong to you whether or not it was measured, and leave a "
+                "finding you disagree with alone. When the pages read right, build again without `draft` -- "
+                "that is the call that runs the design pass and delivers the deck",
             )
         body = _return.done(blocking=blocking, asks=asks, **payload)
         return await self._with_views(deck, outcome, body, findings, shown)
@@ -280,9 +316,24 @@ class PptBuildTool(Tool):
         for finding in findings:
             if finding.page is not None:
                 by_page.setdefault(finding.page, []).append(finding)
+        outline = load_outline(outline_path(deck))
+        planned = {page.page: page for page in outline.pages} if outline is not None else {}
         blocks: list[Any] = []
         for number in sorted(renders):
             said = [f"Page {number} of {outcome.pages}"]
+            plan = planned.get(number)
+            if plan is not None:
+                said.append(f"Planned claim: {plan.claim}")
+                if plan.carries:
+                    said.append(f"Planned visual/layout: {plan.carries}")
+                if plan.table_plan:
+                    said.append(f"Planned table information shape: {plan.table_plan}")
+                if plan.says:
+                    said.append("Planned supporting points:\n" + "\n".join(f"  - {point}" for point in plan.says))
+                if plan.figures:
+                    said.append("Planned figures: " + ", ".join(plan.figures))
+                if plan.needs:
+                    said.append(f"Planned needs: {plan.needs}")
             said += [f"  - {f.message}" for f in by_page.get(number, [])]
             blocks.append(text_block("\n".join(said)))
             blocks.append(image_block(self.views.data_uri(renders[number])))
@@ -307,7 +358,6 @@ def _asks(findings: list[Finding], blocking: list[Finding]) -> list[str]:
 
 
 _ASK = {
-    "fact": "correct {count} unanchored value(s) against the materials",
     "citation": "fix {count} page(s) citing one figure while showing another",
     "band": "remove {count} filled colour bar(s)",
     "unmapped_page": "give each slide its own block in build.py",
@@ -398,19 +448,38 @@ def _summary(design: dict[str, Any]) -> dict[str, Any]:
     if "skipped" in design:
         return {"did_not_run": design["skipped"]}
     rounds = design.get("rounds") or []
-    return {
-        "rounds": [
+    compact_rounds: list[dict[str, Any]] = []
+    for entry in rounds:
+        pages = entry.get("pages") or {}
+        verdicts: dict[str, int] = {}
+        decisions: dict[str, Any] = {}
+        for page, raw in pages.items():
+            decision = raw if isinstance(raw, dict) else {}
+            verdict = str(decision.get("verdict") or "unknown")
+            verdicts[verdict] = verdicts.get(verdict, 0) + 1
+            visible = {
+                key: decision[key]
+                for key in ("verdict", "notes", "error")
+                if decision.get(key)
+            }
+            if visible and (visible.get("verdict") != "ok" or len(visible) > 1):
+                decisions[str(page)] = visible
+        compact_rounds.append(
             {
                 "round": entry.get("round"),
-                "deck": (entry.get("deck") or {}).get("notes"),
-                "pages": {str(k): (v or {}).get("notes") for k, v in (entry.get("pages") or {}).items()},
+                "deck": entry.get("deck") or {},
+                "pages_judged": len(pages),
+                "page_verdicts": verdicts,
+                "page_decisions": decisions,
                 "refused": {str(k): v for k, v in (entry.get("refused") or {}).items()},
-                # The fact beside the claim: `deck` and `pages` are what the pass decided,
-                # `rewrote` is which page blocks it actually replaced.
                 "rewrote": entry.get("rewrote") or [],
                 "rewrote_setup": bool(entry.get("rewrote_setup")),
             }
-            for entry in rounds
-        ],
+        )
+    return {
+        "status": design.get("status", "unknown"),
+        "changed": bool(design.get("changed")),
+        "rounds": compact_rounds,
         "vocabulary": design.get("vocabulary") or [],
+        "artifacts": design.get("artifacts") or {},
     }

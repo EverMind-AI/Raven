@@ -24,7 +24,7 @@ def _body(reply: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_a_text_source_is_read_and_indexed(workspace: Path) -> None:
+async def test_a_text_source_is_read_and_recorded(workspace: Path) -> None:
     (workspace / "materials" / "notes.md").write_text(
         "# TarViS\n\nThe M4 chip delivers 30,972 million units and 14% growth.\n", encoding="utf-8"
     )
@@ -39,7 +39,7 @@ async def test_a_text_source_is_read_and_indexed(workspace: Path) -> None:
     assert body["characters"] > 0
     project = Project(workspace=workspace, slug="tarvis")
     assert (project.ingest_dir / "materials.md").is_file()
-    assert (project.ingest_dir / "fact_index.json").is_file()
+    assert (project.ingest_dir / "read.json").is_file()
 
 
 @pytest.mark.asyncio

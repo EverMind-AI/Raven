@@ -41,13 +41,16 @@ from raven.ppt.contracts import (
     Project,
     Severity,
     StageResult,
+    load_outline,
+    outline_path,
 )
 from raven.ppt.services import seen
+from raven.ppt.services.measure.geometry import iter_shapes, open_deck, shows_picture
 from raven.ppt.services.publish import PublishRefusedError, publish, stage
 
 # How many page renders one reply carries. Here rather than in the tool because the
 # unseen check has to agree with what the tool will actually show.
-BATCH_VIEWS = 12
+BATCH_VIEWS = 3
 
 
 @dataclass
@@ -68,6 +71,8 @@ class BuildStage:
         *,
         polish: bool = True,
         slides: Sequence[int] | None = None,
+        design_pages: Sequence[int] | None = None,
+        design_setup: bool = False,
         page_from: int = 1,
         draft: bool = False,
     ) -> StageResult:
@@ -90,7 +95,11 @@ class BuildStage:
 
         skipped = self._not_polished(polish, draft)
         if skipped is None:
-            result = await self.design_pass.run(project, outcome)
+            result = (
+                await self.design_pass.run(project, outcome)
+                if design_pages is None
+                else await self.design_pass.run(project, outcome, pages=design_pages, setup=design_setup)
+            )
             design = dict(result.data)
             if not result.ok:
                 # The pass reverted itself and the deck that built is back. Its
@@ -114,6 +123,7 @@ class BuildStage:
             return StageResult(ok=True, findings=tuple(findings), data=data, note="draft: not published")
 
         showing = _showing(outcome.pages, slides, page_from)
+        findings.extend(_unplaced_figure_findings(project, outcome))
         findings.extend(_unseen_findings(project, outcome, showing, findings))
 
         blocking = self._blocking(findings)
@@ -185,6 +195,63 @@ def _showing(pages: int, slides: Sequence[int] | None, page_from: int) -> list[i
         return sorted(set(slides))[:BATCH_VIEWS]
     first = max(1, min(page_from, pages or 1))
     return list(range(first, min(pages, first + BATCH_VIEWS - 1) + 1))
+
+
+def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
+    """Pages the plan gave a figure to, that were built without one.
+
+    The gap this closes was found by looking: a run planned a logo on page 1 and a
+    repository card on page 6, fetched both, and built twenty pages carrying no
+    picture at all. Nothing said so. `ppt_outline` checks that a figure the plan
+    names is in the catalogue, which is a check on the plan; from there to the
+    deck the figure was on nobody's list.
+
+    Both sides are files, which is why this is measured rather than judged: the
+    outline says which pages carry a figure, and a built page either shows a
+    picture or does not. What it deliberately does not check is *which* picture --
+    an author that crops, recolours or substitutes one has still placed a figure,
+    and the finding would then be about identity rather than presence.
+
+    Warning by severity and refused by the route, which is what a profile's
+    `blocking_kinds` is for. A deck that drops the evidence it planned is not a
+    deck that is nearly right, and nothing about it is fixed by shrinking or
+    rewrapping something -- and it cannot deadlock, because the plan only ever
+    names figures the catalogue holds and answering it is one line either way.
+    """
+    outline = load_outline(outline_path(project))
+    if outline is None or outcome.pptx_path is None:
+        return []
+    planned = {page.page: list(page.figures) for page in outline.pages if page.figures}
+    if not planned:
+        return []
+    try:
+        deck = open_deck(outcome.pptx_path)
+    except Exception:
+        return []
+    findings = []
+    for number, slide in enumerate(deck.slides, 1):
+        wanted = planned.get(number)
+        if not wanted:
+            continue
+        if any(shows_picture(shape) for shape in iter_shapes(slide.shapes)):
+            continue
+        listed = ", ".join(wanted)
+        findings.append(
+            Finding(
+                kind="unplaced_figure",
+                severity=Severity.WARNING,
+                page=number,
+                audience=Audience.AUTHOR,
+                message=(
+                    f"the plan gives this page {listed} and the page was built without a picture on it. "
+                    "Place it (`add_picture`, or `picture_fit` to scale it into a box whole), or call "
+                    "ppt_outline again for a plan that does not promise it -- a figure gathered and never "
+                    "placed is a page arguing from a description of evidence rather than the evidence"
+                ),
+                detail={"figures": wanted},
+            )
+        )
+    return findings
 
 
 def _unseen_findings(

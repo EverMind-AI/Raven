@@ -1,4 +1,4 @@
-"""End to end: a directory of materials becomes text, an index, and assets.
+"""End to end: a directory of materials becomes text, a read record, and assets.
 
 Fixtures are built here, page by page, so each test pins the one source shape
 it is about. Real papers and brochures never enter the tests.
@@ -15,7 +15,7 @@ import pytest
 
 from raven.ppt.contracts.findings import Audience, Severity
 from raven.ppt.contracts.sources import AssetKind
-from raven.ppt.services.ingest import ingest_materials, load_catalogue, load_source_index
+from raven.ppt.services.ingest import READ_FILE, ingest_materials, load_catalogue
 
 fitz = pytest.importorskip("fitz", reason="render extra (pymupdf) not installed")
 
@@ -53,7 +53,7 @@ def _ruled_table(page, *, label: str, caption_y: float, table_y: float) -> None:
             page.insert_text((x0 + col_index * col_w + 8, table_y + row_index * row_h + 24), value, fontsize=10)
 
 
-# --- text and the index -----------------------------------------------------
+# --- text and the read record ------------------------------------------------
 
 
 def test_a_pdf_and_a_markdown_file_become_one_material_text(tmp_path: Path, noise_png) -> None:
@@ -72,20 +72,21 @@ def test_a_pdf_and_a_markdown_file_become_one_material_text(tmp_path: Path, nois
     assert outcome.text_chars == sum(
         len(line.strip()) for line in text.splitlines() if not line.lstrip().startswith("#")
     )
-    assert {"30972e6", "14%"} <= outcome.index.numbers
-    assert {"M4", "TOPS"} <= outcome.index.entities
+    # The figures the sources print survive into the text a page quotes from.
+    assert "30,972" in text and "14%" in text and "TOPS" in text
 
 
-def test_the_index_on_disk_is_the_index_in_memory(tmp_path: Path, noise_png) -> None:
-    """The gate reads the file, not the return value."""
+def test_what_was_read_is_recorded_beside_the_materials(tmp_path: Path, noise_png) -> None:
+    """A later stage reads the file, not the return value."""
     materials = tmp_path / "materials"
     materials.mkdir()
     _report_pdf(noise_png, materials / "report.pdf", with_figure=False)
 
     outcome = ingest_materials(materials, tmp_path / "out")
 
-    assert load_source_index(outcome.index_path) == outcome.index
-    assert json.loads(outcome.index_path.read_text(encoding="utf-8"))["sources"] == ["report.pdf"]
+    record = json.loads((outcome.materials_path.parent / READ_FILE).read_text(encoding="utf-8"))
+    assert record["sources"] == ["report.pdf"]
+    assert record["stated_chars"] == outcome.text_chars
 
 
 def test_materials_with_nothing_supported_are_refused(tmp_path: Path) -> None:
@@ -108,14 +109,14 @@ def test_an_html_source_contributes_only_visible_text(tmp_path: Path) -> None:
 
     outcome = ingest_materials(materials, tmp_path / "out")
 
-    assert "Revenue reached 42 million" in outcome.materials_path.read_text(encoding="utf-8")
-    assert "42e6" in outcome.index.numbers
-    assert "999" not in outcome.index.numbers
+    text = outcome.materials_path.read_text(encoding="utf-8")
+    assert "Revenue reached 42 million" in text
+    assert "999" not in text
 
 
-def test_image_only_sources_come_back_with_a_warning_not_a_silent_empty_index(tmp_path: Path, noise_png) -> None:
-    """A scan has no text layer, so the gate has nothing to anchor a claim to.
-    Left unsaid, the deck gets written against an empty index."""
+def test_image_only_sources_come_back_with_a_warning_not_silent_empty_text(tmp_path: Path, noise_png) -> None:
+    """A scan has no text layer, so a deck written from it stands on nothing.
+    Left unsaid, that reads the same as a source with plenty to say."""
     materials = tmp_path / "materials"
     materials.mkdir()
     doc = fitz.open()
@@ -309,8 +310,7 @@ def test_a_printed_table_is_registered_as_an_asset_and_as_markdown(tmp_path: Pat
     text = outcome.materials_path.read_text(encoding="utf-8")
     assert f"Source Table 1 ({asset.asset_id})" in text
     assert "Baseline" in text and "83.7" in text
-    # The numbers the table prints are what a slide may quote from it.
-    assert {"83.7", "11.4"} <= outcome.index.numbers
+    assert "11.4" in text
 
 
 def test_two_stacked_tables_keep_separate_labels_and_regions(tmp_path: Path) -> None:
@@ -361,6 +361,7 @@ def test_a_supplied_image_is_registered_with_where_it_was_downloaded_from(tmp_pa
     assert asset.kind is AssetKind.IMAGE
     assert asset.source_url == "https://cdn.example.com/source.png"
     assert asset.source_file == "source.png"
+    assert asset.path.name == "source.png"
     # Not a region of any page, so coverage says nothing about it.
     assert asset.page_coverage == 0.0
     assert asset.source_bbox is None

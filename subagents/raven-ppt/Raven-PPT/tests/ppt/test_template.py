@@ -12,6 +12,7 @@ the decompiler, it is the only way that part of a template reaches a deck at all
 
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import Path
 
@@ -393,6 +394,30 @@ def test_replacing_text_with_more_lines_than_the_template_had(template: Path, tm
 
     assert [p.text for p in heading.text_frame.paragraphs] == ["one", "two", "three"]
     assert heading.text_frame.paragraphs[2].runs[0].font.size.pt == 32
+
+
+def test_replacing_text_leaves_no_line_break_of_the_templates_behind(template: Path):
+    """A placeholder written over two lines is run, `<a:br/>`, run. Replacing it drops
+    the second run and used to keep the break, so the new text carried a trailing
+    empty line: one cover's title sat a line high inside a box that had grown a line
+    taller than anything visible in it, and the text read back as "...方法\x0b".
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+
+    presentation = Presentation(str(template))
+    heading = next(s for s in presentation.slides[0].shapes if getattr(s, "has_text_frame", False))
+    paragraph = heading.text_frame.paragraphs[0]
+    # The template's own two-line prompt: a break between two runs.
+    paragraph._p.append(paragraph._p.makeelement(qn("a:br"), {}))
+    second = copy.deepcopy(paragraph.runs[0]._r)
+    paragraph._p.append(second)
+    assert "\x0b" in heading.text_frame.text
+
+    replace_text(heading, "TarViS：面向目标的视频分割统一方法")
+
+    assert heading.text_frame.text == "TarViS：面向目标的视频分割统一方法"
+    assert paragraph._p.findall(qn("a:br")) == []
 
 
 def test_replacing_text_refuses_a_shape_that_holds_none(template: Path):

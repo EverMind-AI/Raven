@@ -1,13 +1,12 @@
-"""One ingestion run: materials in, a checkable deck's worth of source out.
+"""One ingestion run: materials in, a deck's worth of source out.
 
-Three artefacts, and the whole of the deck's grounding rests on them:
-``materials.md`` is the text a model reads and quotes, ``fact_index.json`` is
-what every number and name it prints is checked against, and ``figures/`` plus
-its catalogue is the imagery -- extracted, never generated, so there is no
-surface on which a figure can be invented.
+Two artefacts, and the whole of the deck's grounding rests on them:
+``materials.md`` is the text a model reads and quotes, and ``figures/`` plus its
+catalogue is the imagery -- extracted, never generated, so there is no surface
+on which a figure can be invented.
 
 Deterministic and offline by construction: no model is called from here, and
-running it twice on the same directory produces the same three artefacts.
+running it twice on the same directory produces the same two artefacts.
 
 Reading is also cached per source file, keyed by its bytes. That matters because the
 deck's source set accumulates -- a fetch adds one document and the whole set is read
@@ -28,13 +27,16 @@ from raven.ppt.contracts.findings import Audience, Finding, Severity
 from raven.ppt.contracts.sources import AssetKind, IngestOutcome, SourceAsset
 from raven.ppt.services.ingest import assets as asset_meta
 from raven.ppt.services.ingest import documents
-from raven.ppt.services.ingest.facts import build_source_index, write_source_index
 from raven.ppt.services.ingest.figures import cut_page_blocks
 from raven.ppt.services.ingest.pdf import read_pdf
+from raven.ppt.services.ingest.sections import stated_chars
 
 CACHE_DIR = "cache"
 MATERIALS_FILE = "materials.md"
-SOURCE_INDEX_FILE = "fact_index.json"
+# What was read, and how much of it was the document rather than the anchors this
+# pipeline writes. Two numbers a later stage needs and cannot recover from the
+# markdown alone -- an image source contributes no heading to it.
+READ_FILE = "read.json"
 CATALOGUE_FILE = "figures.json"
 # Written by whatever fetched the material, read here for attribution.
 MANIFEST_FILE = "sources.jsonl"
@@ -89,18 +91,24 @@ def ingest_materials(materials_dir: Path, out_dir: Path) -> IngestOutcome:
     materials_path = out_dir / MATERIALS_FILE
     materials_path.write_text(markdown, encoding="utf-8")
 
-    index = build_source_index(markdown)
-    index_path = out_dir / SOURCE_INDEX_FILE
-    write_source_index(index, index_path, sources=[source.name for source in sources])
     catalogue_path = out_dir / CATALOGUE_FILE
     asset_meta.write_catalogue(kept, catalogue_path)
+    (out_dir / READ_FILE).write_text(
+        json.dumps(
+            {
+                "sources": [source.name for source in sources],
+                "stated_chars": stated_chars(markdown),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
     chars, pages = documents.text_density(markdown)
     return IngestOutcome(
         materials_path=materials_path,
-        index_path=index_path,
         catalogue_path=catalogue_path,
-        index=index,
         assets=tuple(kept),
         source_files=tuple(source.name for source in sources),
         page_count=page_count,
@@ -248,8 +256,8 @@ def _unread_findings(unread: list[Path], materials_dir: Path) -> list[Finding]:
 def _words_only_findings(words_only: list[Path]) -> list[Finding]:
     """Say which documents were read as text alone, so their figures are not on offer.
 
-    Not the same report as unread: every word of these is in the evidence and in the
-    fact index, so the deck may quote them. What is missing is what only the
+    Not the same report as unread: every word of these is in the evidence, so the deck
+    may quote them. What is missing is what only the
     converter produces -- the figures, and a table's shape.
     """
     if not words_only:
@@ -288,7 +296,10 @@ def _image_asset(source: Path, materials_dir: Path, figures_dir: Path, url: str 
     with Image.open(source) as image:
         size = (int(image.width), int(image.height))
     asset_id = documents.image_asset_id(source, materials_dir)
-    destination = figures_dir / f"{asset_id}{source.suffix.lower()}"
+    # Keep the source-relative path so the author can use source_file directly
+    # from PPT_FIGURES_DIR without collisions between nested material folders.
+    destination = figures_dir / source.relative_to(materials_dir)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
     return asset_meta.build(
         asset_id,
@@ -344,8 +355,8 @@ def _findings(chars: int, pages: int) -> list[Finding]:
             audience=Audience.AUTHOR,
             message=(
                 f"only {chars} characters of text across {pages} source pages — these documents are "
-                "image-only (scanned, or a web-print export), so the fact gate has nothing to anchor a "
-                "claim to. Read the page images and register what you read as a transcript; do not write a "
+                "image-only (scanned, or a web-print export), so nothing here can read a number off them. "
+                "Read the page images and register what you read as a transcript; do not write a "
                 "materials file by hand and do not fill the gap from memory"
             ),
             detail={"characters": chars, "pages": pages},

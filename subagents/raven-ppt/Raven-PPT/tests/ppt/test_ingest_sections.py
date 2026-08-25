@@ -79,14 +79,56 @@ def test_a_missing_file_is_not_an_error(tmp_path: Path) -> None:
 
 
 def test_the_tool_returns_the_index_and_asks_for_parts() -> None:
-    """The ask matters as much as the index: the wording it replaces ("read
-    materials.md before deciding what the deck says") is what sent a live author to
-    read all 16k of it.
+    """The ask matters as much as the index, and "read what you need of" was not
+    enough.
+
+    Measured A/B on one paper, same model both sides: the author holding the index
+    read 65% of the file, the one without it 37%. A list of page numbers is a
+    checklist, not a filter, and "what you need" is a judgement it cannot make from
+    page numbers. So the wording now states the granularity up front and gives the
+    opening words one job -- ruling parts out -- with reading as the fallback.
     """
     from raven.ppt.tools.ingest import PptIngestTool
 
     source = Path("raven/ppt/tools/ingest.py").read_text(encoding="utf-8")
     assert '"materials_index": index(' in source
-    assert "read what you need of" in source
+    assert "a part at a time" in source
+    assert "rule parts out" in source, "the opening words are for exclusion"
+    assert "unsure" in source, "and reading is what it falls back to"
     assert "offset and limit" in source
     del PptIngestTool
+
+
+def test_a_part_carries_enough_to_be_ruled_out(tmp_path: Path) -> None:
+    """A bibliography and a page of class names are what the gist has to catch: they
+    are the parts a deck can never quote, and together they were a fifth of the file
+    on the run that prompted this.
+    """
+    materials = tmp_path / "materials.md"
+    materials.write_text(
+        "# Source: paper.pdf\n\n"
+        "## [paper.pdf] page 8\n\n"
+        "Table 4. Ablation experiment results with ResNet-50 backbone.\n\n"
+        "## [paper.pdf] page 9\n\n"
+        "References\n\n[1] A. Author, A paper, CVPR 2023.\n\n"
+        "## [paper.pdf] page 14\n\n"
+        "airplane\nbicycle\nbird\n",
+        encoding="utf-8",
+    )
+    by_heading = {part.heading: part.gist for part in sections(materials)}
+    assert by_heading["[paper.pdf] page 8"].startswith("Table 4.")
+    assert by_heading["[paper.pdf] page 9"] == "References"
+    assert by_heading["[paper.pdf] page 14"] == "airplane"
+
+
+def test_a_part_of_stray_labels_says_so(tmp_path: Path) -> None:
+    """A PDF page that is only a diagram comes out as loose labels. The gist reports
+    the first of them rather than inventing a description -- which is the honest
+    answer: that part is fragments, and an author can see that.
+    """
+    materials = tmp_path / "materials.md"
+    materials.write_text(
+        "## [paper.pdf] page 3\n\n---\n\nQsem\nQinst\nBackbone\n",
+        encoding="utf-8",
+    )
+    assert sections(materials)[0].gist == "Qsem"

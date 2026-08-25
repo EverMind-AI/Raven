@@ -48,6 +48,7 @@ dependencies = [
     # three-hop transitive path — pinning it directly so reading an image keeps
     # working if any link in that chain drops it.
     "pillow>=10.0.0",
+    "beautifulsoup4>=4.12,<5",
 ]
 
 [project.optional-dependencies]
@@ -125,6 +126,11 @@ ppt = [
     # commercial licence). It is imported, not modified and not redistributed --
     # see NOTICES.md. Everything else here is Apache-2.0, MIT or BSD.
     "pymupdf>=1.24,<2",
+    # Brand marks ship as SVG and python-pptx places rasters only, so a fetched
+    # logo is a document until something draws it. Optional at runtime -- `ppt_fetch`
+    # keeps an SVG it cannot rasterise as the text it is -- but a deck without this
+    # cannot show a company its own mark, which is most of what "find a logo" means.
+    "cairosvg>=2.7,<3",
 ]
 # The slot route additionally compiles SVG (ppt-master dialect) to DrawingML and
 # draws charts and TeX formulae.
@@ -153,6 +159,10 @@ raven = "raven.cli.commands:run"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -183,6 +193,7 @@ include = [
     "raven/ppt/services/assets/data/*.json",
     "raven/ppt/services/assets/fonts/*.ttf",
     "raven/ppt/services/assets/fonts/*.txt",
+    "raven/ppt/assets/templates/*.pptx",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
     # Bundled model-label snapshot, so a fresh install labels models offline.

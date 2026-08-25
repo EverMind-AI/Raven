@@ -18,16 +18,22 @@ from __future__ import annotations
 
 from raven.ppt.contracts import Capabilities, Profile, StageSpec
 
-# Fail-closed kinds. Both are claims about the source material: a number that
-# never appeared in it, and a page citing one figure while showing another.
-# Everything else warns -- see docs/ppt-raven-design.md D2 for why measurements
-# of the rendered page must not refuse publication.
-_PROVENANCE = frozenset({"fact", "citation"})
+# Fail-closed kind. A claim about the source material that the file itself
+# settles: a page citing one figure while showing another. Everything else warns
+# -- see docs/ppt-raven-design.md D2 for why measurements of the rendered page
+# must not refuse publication.
+_PROVENANCE = frozenset({"citation"})
 
 # What the deck was agreed to be. Refusals rather than warnings on every route: a
 # deck of the wrong length or in the wrong language is not a deck the audience
 # asked for, and neither is answerable by rearranging a page.
-_AGREED = frozenset({"page_budget", "language"})
+# What the deck and the plan agreed between them, which a built deck either honours
+# or does not. `unplaced_figure` joins them because the plan only ever names figures
+# the catalogue holds -- `figure` refuses one it does not -- so a page planned with a
+# picture is a page that can have one, and shipping it without is the deck quietly
+# dropping the evidence it said it would show. Answering it is one line either way:
+# place it, or plan again without it.
+_AGREED = frozenset({"page_budget", "language", "unplaced_figure"})
 
 SCRIPT_AUTHOR = Profile(
     name="script_author",
@@ -48,6 +54,7 @@ SCRIPT_AUTHOR = Profile(
         StageSpec(name="brief", tool="ppt_brief", required=False),
         StageSpec(name="template", tool="ppt_template", required=False),
         StageSpec(name="gather", tool="ppt_fetch", required=False),
+        StageSpec(name="generate", tool="ppt_generate_image", required=False),
         StageSpec(name="ingest", tool="ppt_ingest", required=False),
         StageSpec(name="inspect", tool="ppt_figure_inspect", required=False),
         # What the deck argues, page by page, before any of it is drawn. The route
@@ -109,8 +116,8 @@ IMAGE_TEXT = Profile(
         # is leaving clear; the text stage may only write into those regions.
         # A single stage that generated an image with words baked into it would
         # produce a page nobody can edit, retranslate or fix a typo in -- and
-        # the words would be a raster the fact gate cannot read, so a deck could
-        # state anything at all and pass every check.
+        # the words would be a raster no measurement here can read, so every
+        # check on the copy would pass by having nothing to look at.
         StageSpec(name="background", tool="ppt_background"),
         StageSpec(name="place_text", tool="ppt_place_text"),
         StageSpec(name="build", tool=None),

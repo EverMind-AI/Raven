@@ -39,6 +39,22 @@ def test_empty_tool_result_not_fenced(tmp_path: Path) -> None:
     assert messages[0]["content"] == ""
 
 
+def test_multimodal_tool_result_keeps_model_text_before_blocks(tmp_path: Path) -> None:
+    b = ContextBuilder(workspace=tmp_path)
+    blocks = [
+        {"type": "text", "text": "Page 1"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+
+    messages = b.add_tool_result([], "call-1", "ppt_build", '{"design_pass":{"changed":false}}', blocks)
+
+    content = messages[0]["content"]
+    assert content[0]["type"] == "text"
+    assert '"changed":false' in content[0]["text"]
+    assert content[1]["type"] == "text" and "Page 1" in content[1]["text"]
+    assert content[2] == blocks[1]
+
+
 def test_recalled_memory_is_fenced() -> None:
     out = render.render_recalled_memory([Memory(text="likes espresso")])
     assert "- likes espresso" in out

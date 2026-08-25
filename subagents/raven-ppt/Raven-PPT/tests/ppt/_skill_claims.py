@@ -148,7 +148,14 @@ blocking = registry.get("script_author").blocking_kinds
 declared_blocking = {k for k, (sev, _) in DISPATCH.items() if sev.value == "blocking"}
 refused_section = skill.split("**Refused**")[1].split("**Reported**")[0]
 reported_section = skill.split("**Reported**")[1]
-ok("no source printed" in refused_section, "the fact refusal left the refused list")
+# Inverted rather than deleted. This assertion used to require the fact refusal to be
+# advertised; the gate it described is gone (see `raven/ppt/AGENTS.md`), so what needs
+# guarding now is the opposite -- that nothing puts the promise back while no code
+# enforces it. Deleting it instead is what let the claim outlive the gate.
+ok(
+    "no source printed" not in refused_section,
+    "the skill promises a refusal for unsourced numbers and nothing refuses them",
+)
 ok("citing" in refused_section, "the citation refusal left the refused list")
 ok("length the brief did not agree" in refused_section, "the page-budget refusal left the refused list")
 ok("wrong\nlanguage" in refused_section or "wrong language" in refused_section, "the language refusal left the list")
@@ -206,7 +213,6 @@ for promised in ("claim", "carries", "figures", "says", "needs"):
         f'"{promised}"' in outline_tool,
         f"the skill names the outline field {promised!r} and the schema has no such field",
     )
-ok("check_text" in outline_tool, "the skill says the outline's numbers are checked and nothing checks them")
 ok("page_budget" in outline_tool, "the skill says the page count is checked at outline time and it is not")
 ok(
     "template, the face `ppt_theme` hands you is the template's own" in skill,

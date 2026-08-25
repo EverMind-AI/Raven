@@ -1,20 +1,14 @@
 """Which checks could not run, said out loud.
 
 Every gate in this registry is written so that a missing input means it reports
-nothing. No fact index and the fact gate is silent; no brief and the page budget
-and the language check are silent; no render and three of the measurements are
-silent. Each of those is the right call on its own -- a deck built without sources
-has no ground truth to be refused against, and inventing a refusal would block
-every deck built without ingest -- and together they produce a reply in which
-"checked and clean" and "never checked at all" are the same reply.
+nothing. No brief and the page budget and the language check are silent; no
+figure labels and the citation check is silent; no render and three of the
+measurements are silent. Each of those is the right call on its own, and
+together they produce a reply in which "checked and clean" and "never checked at
+all" are the same reply. These close that gap.
 
-A run had exactly that shape: a directory was passed where a file was meant, the
-read raised, the raise was caught, and a deck with an invented number in it
-published with nothing to say about it. The path bug is fixed. The silence it hid
-behind is what these close.
-
-Four checks rather than one, so each is a row in the registry beside the checks it
-stands in for, can be asked for alone, and has its own kind for a profile to
+Three checks rather than one, so each is a row in the registry beside the checks
+it stands in for, can be asked for alone, and has its own kind for a profile to
 declare on. Warnings, all of them: an absent input is not a defect in the deck,
 and refusing on one would be the refusal the other gates correctly decline to
 invent. What they change is what the reply -- and the report written beside the
@@ -31,22 +25,8 @@ from raven.ppt.contracts import Audience, Finding, Severity
 _RENDER_DEPENDENT = ("word collision", "rule strike-through", "card overflow")
 
 
-def unchecked_facts(deck) -> list[Finding]:
-    if deck.source_index is not None:
-        return []
-    return [
-        _gap(
-            "unchecked_facts",
-            "no sources were ingested, so no number, name or citation on any page has been checked against "
-            "anything -- every figure in this deck is the author's word for it",
-            "run ppt_ingest on the materials, or make it explicit on delivery that this deck was written "
-            "without sources",
-        )
-    ]
-
-
 def unchecked_citations(deck) -> list[Finding]:
-    if deck.figure_labels:
+    if deck.figure_labels or deck.figure_catalogue is not None:
         return []
     return [
         _gap(

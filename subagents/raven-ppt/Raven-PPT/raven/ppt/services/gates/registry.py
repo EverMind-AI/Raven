@@ -34,10 +34,8 @@ from raven.ppt.services.gates.citations import citation_findings
 from raven.ppt.services.gates.coverage import (
     unchecked_agreement,
     unchecked_citations,
-    unchecked_facts,
     unrendered,
 )
-from raven.ppt.services.gates.facts import SourceIndex, fact_findings
 from raven.ppt.services.gates.house_style import house_style_findings, title_row_findings
 from raven.ppt.services.gates.mapping import mapping_findings
 from raven.ppt.services.measure.adherence import (
@@ -47,16 +45,16 @@ from raven.ppt.services.measure.adherence import (
     template_pictures,
 )
 from raven.ppt.services.measure.content import (
-    copy_density,
     evidence_coverage,
     flat_formulas,
     literal_escapes,
+    native_tables,
     unmarked_points,
     wide_tables,
 )
 from raven.ppt.services.measure.contrast import contrast_findings
 from raven.ppt.services.measure.fit import overset_copy
-from raven.ppt.services.measure.geometry import deck_text, slide_count
+from raven.ppt.services.measure.geometry import slide_count
 from raven.ppt.services.measure.inherited import over_layout_art
 from raven.ppt.services.measure.layout import off_page_shapes, spilled_copy, wrapped_labels
 from raven.ppt.services.measure.overlap import overlap_findings
@@ -65,6 +63,7 @@ from raven.ppt.services.measure.rendered import (
     cards,
     clipped_copy,
     crowded_panels,
+    excessive_whitespace,
     hairline_rules,
     orphan_lines,
     rule_strikes,
@@ -97,19 +96,18 @@ from raven.ppt.services.measure.words import WordBox, words_from_pdf
 # what happened -- the same overloaded page came back arranged into compartments
 # however often it was redesigned.
 DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
-    "fact": (Severity.BLOCKING, Audience.AUTHOR),
-    # A bare acronym the materials never use. Reported, not refused: it is usually
-    # ordinary vocabulary, and the checkable claims -- numbers, alphanumeric
-    # identifiers -- are what "fact" above covers.
-    "unfamiliar_name": (Severity.WARNING, Audience.AUTHOR),
     "citation": (Severity.BLOCKING, Audience.AUTHOR),
     "band": (Severity.BLOCKING, Audience.DESIGNER),
-    "page_mapping": (Severity.BLOCKING, Audience.AUTHOR),
+    # Whether each page traces to its own block in build.py. What it protects is the
+    # design pass's ability to find a page's code, not anything a reader sees, so it
+    # reports: a deck whose pages are right and whose program is arranged oddly is a
+    # deck, and refusing it buys the reader nothing.
+    "page_mapping": (Severity.WARNING, Audience.AUTHOR),
     "page_budget": (Severity.BLOCKING, Audience.AUTHOR),
     "language": (Severity.BLOCKING, Audience.AUTHOR),
-    "density": (Severity.WARNING, Audience.AUTHOR),
     "evidence": (Severity.WARNING, Audience.AUTHOR),
     "wide_table": (Severity.WARNING, Audience.AUTHOR),
+    "native_table": (Severity.WARNING, Audience.DESIGNER),
     # A page printing "48.3\\nOVIS" is not taste and not layout: the escape was escaped on
     # its way in, and the fix is one character in the author's program. Refused, with the
     # other rows about what a page says.
@@ -157,6 +155,7 @@ DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
     # the design brief asks for in prose and nothing measured: "a gap that is plainly
     # wider than the gaps inside each group".
     "unseparated_blocks": (Severity.WARNING, Audience.DESIGNER),
+    "excessive_whitespace": (Severity.WARNING, Audience.DESIGNER),
     "wrapped_label": (Severity.WARNING, Audience.DESIGNER),
     # Copy that does not fit the box it was put in, decided by measurement rather
     # than by looking at what the renderer did with it. The render checks could only
@@ -171,7 +170,6 @@ DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
     # able to run. Warnings for the same reason the checks they stand in for
     # report nothing: an absent input is not a defect, and refusing on one would
     # be the refusal those checks correctly decline to invent.
-    "unchecked_facts": (Severity.WARNING, Audience.AUTHOR),
     "unchecked_citations": (Severity.WARNING, Audience.AUTHOR),
     "unchecked_agreement": (Severity.WARNING, Audience.AUTHOR),
     "unrendered": (Severity.WARNING, Audience.AUTHOR),
@@ -208,9 +206,13 @@ DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
     # page shows two designs at once, and the fix is the author's program, not the
     # design pass, which may not rewrite a word.
     "template_underlay": (Severity.BLOCKING, Audience.AUTHOR),
-    # A page that did not come from the prototype its own outline named. The
-    # promise is the author's and so is the fix.
-    "prototype_kept": (Severity.BLOCKING, Audience.AUTHOR),
+    # A page that did not come from the prototype its own outline named. Reported
+    # rather than refused: the mismatch is real, but it is a mismatch between a plan
+    # and a page and says nothing about the page. One run drew its own four-card
+    # layout where the outline had promised the template's page 3, and the page reads
+    # well -- refusing it asked for a worse page. The escape the message itself offers,
+    # "or change the outline", is one line, so refusal bought nothing either.
+    "prototype_kept": (Severity.WARNING, Audience.AUTHOR),
     # Type a reader cannot make out: measured off the render, because what is behind a
     # text box is a layout's artwork, a photograph or a panel three shapes down, and
     # only the renderer has resolved that. Refused -- a page whose title is #1A1A1A on
@@ -230,8 +232,8 @@ class DeckUnderReview:
     The optional fields are the reason this is a record rather than a long
     parameter list: a check with no ground truth to work from reports nothing,
     and there are several legitimate ways to arrive here short of the full set --
-    no render service, so no PDF; no ingest, so no fact index; a page placing an
-    image this deck never ingested.
+    no render service, so no PDF; no ingest, so no figure catalogue; a page placing
+    an image this deck never ingested.
     """
 
     pptx_path: Path
@@ -251,8 +253,8 @@ class DeckUnderReview:
     # `prototype` per page -- a promise about which of the template's pages that page
     # would be built on -- and nothing checked it against the file until now.
     outline: Any | None = None
-    source_index: SourceIndex | None = None
     figure_labels: Mapping[str, str] | None = None
+    figure_catalogue: Mapping[str, Mapping[str, object]] | None = None
     # What was agreed with the person asking for the deck. None when nobody was
     # asked, in which case the checks that need it report nothing rather than
     # inventing a budget to fail against.
@@ -312,11 +314,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
     a flag per stage.
     """
     return {
-        "fact": lambda deck: _facts(deck, "fact"),
-        # The same pass, filtered: one gate reads the deck's copy and answers two
-        # questions of it, and a row per kind is what makes the table above a
-        # specification. The pass is a few regexes over text already in memory.
-        "unfamiliar_name": lambda deck: _facts(deck, "unfamiliar_name"),
         "citation": lambda deck: citation_findings(deck.pptx_path, deck.figure_labels or {}),
         "band": lambda deck: band_findings(deck.pptx_path),
         "page_mapping": lambda deck: mapping_findings(deck.outcome),
@@ -324,9 +321,9 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "house_style": lambda deck: house_style_findings(deck.pptx_path, deck.template),
         "title_row": lambda deck: title_row_findings(deck.pptx_path, deck.prototypes, deck.outline),
         "language": lambda deck: language_findings(deck.pptx_path, deck.brief),
-        "density": lambda deck: copy_density(deck.pptx_path),
         "evidence": lambda deck: evidence_coverage(deck.pptx_path, _structural(deck.outline)),
         "wide_table": lambda deck: wide_tables(deck.pptx_path),
+        "native_table": lambda deck: native_tables(deck.pptx_path),
         "flat_formula": lambda deck: flat_formulas(deck.pptx_path),
         "unmarked_points": lambda deck: unmarked_points(deck.pptx_path),
         "literal_escape": lambda deck: literal_escapes(deck.pptx_path),
@@ -358,7 +355,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "overset_copy": lambda deck: overset_copy(deck.pptx_path, deck.measurer),
         # Not findings about the deck, but about which of the checks above were
         # able to run at all.
-        "unchecked_facts": unchecked_facts,
         "unchecked_citations": unchecked_citations,
         "unchecked_agreement": unchecked_agreement,
         "unrendered": unrendered,
@@ -370,6 +366,10 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "crowded_panel": lambda deck: _rendered(deck, lambda words: crowded_panels(cards(deck.pptx_path), words)),
         "orphan_line": lambda deck: _rendered(deck, lambda words: orphan_lines(deck.pptx_path, words)),
         "unseparated_blocks": lambda deck: _rendered(deck, lambda words: unseparated_blocks(deck.pptx_path, words)),
+        "excessive_whitespace": lambda deck: _rendered(
+            deck,
+            lambda words: excessive_whitespace(deck.pptx_path, words, _layout_structural(deck.outline)),
+        ),
     }
 
 
@@ -382,6 +382,29 @@ def _structural(outline: Any | None) -> list[int]:
     """
     pages = getattr(outline, "pages", ()) if outline is not None else ()
     return [page.page for page in pages if getattr(page, "prototype", None) is not None]
+
+
+def _layout_structural(outline: Any | None) -> list[int]:
+    pages = getattr(outline, "pages", ()) if outline is not None else ()
+    markers = (
+        "封面",
+        "目录",
+        "章节",
+        "分隔",
+        "收尾",
+        "封底",
+        "cover",
+        "agenda",
+        "contents",
+        "section divider",
+        "closing",
+    )
+    structural: list[int] = []
+    for page in pages:
+        role = f"{getattr(page, 'carries', '')} {getattr(page, 'section', '')}".casefold()
+        if any(marker in role for marker in markers):
+            structural.append(page.page)
+    return structural
 
 
 def check_deck(
@@ -428,10 +451,6 @@ def by_page(findings: Iterable[Finding]) -> dict[int, list[Finding]]:
         if finding.page is not None:
             grouped.setdefault(finding.page, []).append(finding)
     return grouped
-
-
-def _facts(deck: DeckUnderReview, kind: str) -> list[Finding]:
-    return [f for f in fact_findings(deck_text(deck.pptx_path), deck.source_index) if f.kind == kind]
 
 
 def _rendered(deck: DeckUnderReview, check: Callable[[Sequence[WordBox]], list[Finding]]) -> list[Finding]:

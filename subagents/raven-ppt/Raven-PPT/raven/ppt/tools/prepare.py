@@ -14,12 +14,22 @@ call to produce it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool
 from raven.ppt.backends.script import script_path
-from raven.ppt.contracts import Project
+from raven.ppt.contracts import (
+    Project,
+    brief_path,
+    intake_path,
+    load_brief,
+    load_outline,
+    load_plan,
+    outline_path,
+)
+from raven.ppt.services import state as deck_state
 from raven.ppt.stages.prepare import PrepareStage
 from raven.ppt.tools import _return
 
@@ -29,7 +39,8 @@ class PptPrepareTool(Tool):
     description = (
         "Start a deck: pass the user's request through verbatim and this reads it, then gets the project "
         "ready. It locates the materials the request names and ingests them, takes in any file the user "
-        "attached, binds a .pptx the request said to build inside, and records the language, audience and "
+        "attached, binds a .pptx the request said to build inside, and when no user template is provided selects "
+        "one tagged light template from the bundled defaults. It records the language, audience and "
         "page count the request already states. What it cannot do itself comes back as two lists: "
         "questions to put to the user with "
         "ask_user, and material to fetch with web_search and ppt_fetch. Call it first, and call it again "
@@ -37,9 +48,15 @@ class PptPrepareTool(Tool):
     )
     timeout_seconds = 600.0
 
-    def __init__(self, workspace: Path, stage: PrepareStage) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        stage: PrepareStage,
+        provision: Callable[[Project], Path] | None = None,
+    ) -> None:
         self.workspace = workspace
         self.stage = stage
+        self.provision = provision
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -79,9 +96,19 @@ class PptPrepareTool(Tool):
         except ValueError as exc:
             return _return.failed(str(exc))
 
+        if self.provision is not None:
+            self.provision(deck)
+        # Only when this turn brought nothing to take in. Resuming skips the stage,
+        # and the stage is the only thing that copies an attachment into the project,
+        # so resuming past a file is losing it -- there is no second intake.
+        resumed = None if files else _resume_payload(deck, project, task)
+        if resumed is not None:
+            return _return.done(**resumed)
         result = await self.stage.run(deck, task, files or ())
         if not result.ok:
             return _return.failed(result.note or "the task could not be read", hint="try again with the request text")
+        if self.provision is not None:
+            self.provision(deck)
 
         plan = result.data["plan"]
         state = result.data["state"]
@@ -110,6 +137,52 @@ class PptPrepareTool(Tool):
         script = str(script_path(deck).relative_to(self.workspace))
         payload["write_the_program_to"] = script
         return _return.done(asks=_asks(plan, state, script), **payload)
+
+
+def _resume_payload(deck: Project, project: str, task: str) -> dict[str, Any] | None:
+    """Return a build handoff when this is an existing, prepared deck.
+
+    A resumed layout pass must not re-read the user's task or reopen template intake:
+    those calls reset the model's attention to preparation and can discard the fact
+    that an outline and a runnable program already exist.
+
+    Only for a request this project was already prepared from. Resuming skips the
+    reading, so resuming past a revised request answers it with the old plan -- and
+    the recorded topic is a reading of the old words, not of these.
+    """
+    if not (
+        load_brief(brief_path(deck))
+        and load_plan(intake_path(deck))
+        and load_outline(outline_path(deck))
+        and script_path(deck).is_file()
+    ):
+        return None
+    recorded = load_plan(intake_path(deck))
+    if recorded is not None and recorded.request.strip() != task.strip():
+        return None
+    state = deck_state.read(deck)
+    plan = load_plan(intake_path(deck))
+    outline = load_outline(outline_path(deck))
+    brief = load_brief(brief_path(deck))
+    assert plan is not None and outline is not None and brief is not None
+    payload: dict[str, Any] = {
+        "project": project,
+        "topic": plan.topic,
+        "sources": [_return.where(deck.sources_dir / name, deck.workspace) for name in state.sources],
+        "figures": len(state.figures),
+        "brief": brief.summary(),
+        "outline_pages": len(outline.pages),
+        "resumed": True,
+        "write_the_program_to": str(script_path(deck).relative_to(deck.workspace)),
+    }
+    if state.template is not None:
+        payload["template"] = state.template.source.name
+    return {
+        **payload,
+        "asks": [
+            "this project is already prepared with its brief, outline and build.py; continue directly with ppt_build",
+        ],
+    }
 
 
 def _asks(plan: Any, state: Any, script: str) -> list[str]:

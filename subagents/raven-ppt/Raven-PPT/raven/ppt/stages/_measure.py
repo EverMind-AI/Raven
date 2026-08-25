@@ -20,9 +20,8 @@ from raven.ppt.services.gates import (
     check_deck,
     figure_labels,
     load_figure_catalog,
-    load_source_index,
 )
-from raven.ppt.services.ingest import CATALOGUE_FILE, SOURCE_INDEX_FILE
+from raven.ppt.services.ingest import CATALOGUE_FILE
 from raven.ppt.stages._views import DeckViews
 
 
@@ -39,8 +38,8 @@ class DeckMeasurer:
             pptx_path=pptx,
             pdf_path=pdf,
             outcome=outcome,
-            source_index=_source_index(project),
             figure_labels=_figure_labels(project),
+            figure_catalogue=_figure_catalogue(project),
             brief=load_brief(brief_path(project)),
             template=_template(project),
             prototypes=_prototypes(project),
@@ -56,28 +55,6 @@ def _outline(project: Project):
 
     try:
         return load_outline(outline_path(project))
-    except (OSError, ValueError):
-        return None
-
-
-def _source_index(project: Project):
-    """The fact index, or None when nothing has been ingested.
-
-    None means the fact gate reports nothing, which is the honest answer with no
-    sources on record: there is nothing to anchor a claim against, and inventing a
-    refusal would block every deck built without ingest.
-
-    The file name comes from the ingest service rather than being written here.
-    Passing the *directory* by mistake looked exactly like "nothing ingested" --
-    the read raised, the read was caught, and a deck with an invented number in it
-    published clean. The end-to-end test that caught it is in
-    tests/ppt/test_end_to_end.py.
-    """
-    path = project.ingest_dir / SOURCE_INDEX_FILE
-    if not path.is_file():
-        return None
-    try:
-        return load_source_index(path)
     except (OSError, ValueError):
         return None
 
@@ -118,5 +95,15 @@ def _figure_labels(project: Project):
         return None
     try:
         return figure_labels(project.figures_dir, load_figure_catalog(path)) or None
+    except (OSError, ValueError):
+        return None
+
+
+def _figure_catalogue(project: Project):
+    path = project.ingest_dir / CATALOGUE_FILE
+    if not path.is_file():
+        return None
+    try:
+        return load_figure_catalog(path)
     except (OSError, ValueError):
         return None

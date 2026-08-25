@@ -86,9 +86,27 @@ _FOOTER_H = 0.30
 
 
 class Box(namedtuple("Box", "x0 y0 x1 y1")):
-    """A rectangle in inches, which knows how to divide itself."""
+    """A rectangle in inches, given as two corners, which knows how to divide itself.
+
+    Two corners is what makes `columns()` and `rows()` read as division rather than
+    arithmetic. It is also the opposite of every python-pptx call in the same script
+    -- add_textbox, add_shape and add_picture all take left, top, width, height --
+    and a script holding both conventions is a real trap. Use `Box.at` when a size
+    is what you have.
+    """
 
     __slots__ = ()
+
+    @classmethod
+    def at(cls, x, y, w, h):
+        """A box from its top-left corner and a size, python-pptx's own convention.
+
+        A live run wrote `Box(x, y, w, h)` throughout, worked out from the render
+        that it had, and then "fixed" it everywhere -- including its own
+        `box_shape(slide, x, y, w, h)` helper, which had been right, turning a
+        3.75in-wide box into a 12.4in one that ran off the page.
+        """
+        return cls(x, y, x + w, y + h)
 
     @property
     def w(self):
@@ -269,7 +287,8 @@ def _east_asian(run, name):
         properties.append(element)
 
 
-def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=1):
+def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=1,
+          style="minimal", emphasize_rows=()):
     """A table that reads like a table in a book, not like a spreadsheet.
 
     python-pptx hands you the Office default, and the default is why tables come out
@@ -284,26 +303,45 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     theme's own muted tone. Separation comes from alignment and weight, which is what
     a reader actually follows across a row.
 
-    `rows` is a list of lists of strings, the first being the header. `weights` sizes
-    the columns (defaults to equal). `numeric_from` is the first column index to
-    right-align, because a column of numbers that is not right-aligned cannot be
-    compared down its length -- pass len(header) to align everything left.
+    `rows` is a list of lists of strings, the first being the header. `numeric_from`
+    is the first column index to right-align, because a column of numbers that is not
+    right-aligned cannot be compared down its length -- pass len(header) to align
+    everything left. `style` is optional and applies to this table only: `minimal`
+    keeps the quiet treatment, `header_tint` gives the header a restrained surface,
+    `row_rules` shows row separators, and `compact` reduces row padding for a dense
+    lookup. `emphasize_rows` tints selected body-row indices when they carry the
+    page's point.
+
+    **Columns are sized from what they hold**, so a 22-character benchmark name gets
+    the room it needs and a 4-character metric does not. Equal columns are why a live
+    run spent thirteen requests on one page's tables: it shortened "DAVIS J&F" to
+    "DAVIS", tried `weights=(1.9, 1.25, 1.25, 1.3, 1.3)`, rebuilt, shortened another
+    header, and rebuilt again -- all of it work the measurement below does. `weights`
+    is still there for a table that wants a column wider than its content.
     """
+    if style not in ("minimal", "header_tint", "row_rules", "compact"):
+        raise ValueError(f"unknown table style {style!r}")
+    emphasize_rows = {int(index) for index in emphasize_rows}
     columns = len(rows[0])
-    shape = slide.shapes.add_table(len(rows), columns, *box.pptx())
+    shares = list(weights) if weights else _content_weights(rows, size)
+    total = float(sum(shares))
+    # Sized weights are inches, so a table whose content is narrower than its box
+    # stays narrow rather than being stretched across it: five columns spread over
+    # 12.6in put so much air between them that the eye loses the row. Given weights
+    # are proportions and mean "fill the box".
+    width = box.w if weights else min(box.w, total)
+    shape = slide.shapes.add_table(len(rows), columns, Inches(box.x0), Inches(box.y0), Inches(width), Inches(box.h))
     tbl = shape.table
     _drop_gallery_style(tbl)
     tbl.first_row = True
     tbl.horz_banding = False
     tbl.vert_banding = False
 
-    shares = list(weights or [1] * columns)
-    total = float(sum(shares))
-    for index, share in enumerate(shares):
-        tbl.columns[index].width = Inches(box.w * share / total)
+    for index, column_width in enumerate(_column_widths(shares, width, _header_floors(rows[0], size))):
+        tbl.columns[index].width = Inches(column_width)
 
     head_h = (size + 12) / 72
-    body_h = (size + 10) / 72
+    body_h = (size + 5 if style == "compact" else size + 10) / 72
     tbl.rows[0].height = Inches(head_h)
     for row in list(tbl.rows)[1:]:
         row.height = Inches(body_h)
@@ -312,6 +350,12 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
         for c, value in enumerate(line):
             cell = tbl.cell(r, c)
             cell.fill.background()
+            if r == 0 and style == "header_tint":
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = _rgb(theme["accent_soft"])
+            elif r in emphasize_rows:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = _rgb(theme["accent_soft"])
             _strip_borders(cell)
             cell.margin_left = cell.margin_right = Inches(0.10)
             cell.margin_top = cell.margin_bottom = Inches(0.03)
@@ -334,9 +378,98 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
 
     # One rule under the header, and hairlines between rows. Drawn as shapes because
     # a table's own borders cannot be set per edge through python-pptx.
-    _hairline(slide, box, box.y0 + head_h, theme["accent"], 0.022)
-    _hairline(slide, box, box.y0 + head_h + body_h * (len(rows) - 1), theme["grid"], 0.012)
+    ruled = Box(box.x0, box.y0, box.x0 + width, box.y1)
+    _hairline(slide, ruled, box.y0 + head_h, theme["accent"], 0.022)
+    if style == "row_rules":
+        for row_index in range(1, len(rows)):
+            _hairline(slide, ruled, box.y0 + head_h + body_h * row_index, theme["grid"], 0.012)
+    else:
+        _hairline(slide, ruled, box.y0 + head_h + body_h * (len(rows) - 1), theme["grid"], 0.012)
     return tbl
+
+
+# No column takes more than this share of the table, however long one cell is: a
+# single 60-character note in an otherwise numeric table would otherwise squeeze
+# every metric into nothing.
+_WIDEST_COLUMN = 0.5
+# And none narrower than this, so a column of "-" still has a header over it.
+_NARROWEST_IN = 0.55
+
+
+def _content_weights(rows, size):
+    """Column weights from the widest thing in each column.
+
+    Measured rather than declared: `_em_width` is the same estimate the formula
+    setter uses, which is a class average per character and not a font metric. It
+    does not need to be exact -- it decides proportions, and the render-side checks
+    catch a column that still does not fit.
+    """
+    columns = len(rows[0])
+    widest = [0.0] * columns
+    for index, line in enumerate(rows):
+        for column, value in enumerate(line[:columns]):
+            # The header is set bold, which is wider than the estimate for its text.
+            needed = _em_width(str(value), size) * (1.08 if index == 0 else 1.0)
+            widest[column] = max(widest[column], needed)
+    # The cell's own margins are 0.10 a side; the rest is the air that keeps a column
+    # from reading as a box with a word wedged into it.
+    padded = [value + 0.30 for value in widest]
+    # The ceiling is against one runaway cell, not against a table that genuinely has
+    # a wide column: twice the median leaves a two-column table alone and still stops
+    # a 60-character note from squeezing seven metrics into nothing.
+    middle = sorted(padded)[len(padded) // 2]
+    ceiling = max(sum(padded) * _WIDEST_COLUMN, middle * 2)
+    return [min(max(value, _NARROWEST_IN), ceiling) for value in padded]
+
+
+def _unbroken(text):
+    """The longest run in `text` a line break cannot fall inside.
+
+    Latin words and figures are unbreakable; CJK is not -- a Chinese header wraps
+    between any two characters, so it never sets a floor of its own.
+    """
+    longest = run = ""
+    for character in str(text):
+        if character.isascii() and (character.isalnum() or character in "-.&/+%"):
+            run += character
+            if len(run) > len(longest):
+                longest = run
+        else:
+            run = ""
+    return longest
+
+
+def _header_floors(header, size):
+    """What each column needs so its header is not broken mid-word.
+
+    Bold, hence the same 1.08 the sized weights use, plus the cell's own margins.
+    """
+    return [_em_width(_unbroken(value), size) * 1.08 + 0.30 for value in header]
+
+
+def _column_widths(shares, table_width, floors):
+    """`shares` as proportions of `table_width`, except no header word is split.
+
+    A live run gave weights that fit its numbers and starved its headings, and the
+    deck came out reading "VIPSe / g", "DAVI / S", "BURS / T". Weights say which
+    column deserves the room; they cannot know what the words in row one measure,
+    so a column too narrow for its own header is raised and the shortfall comes off
+    whichever columns still have slack, in their own proportions.
+    """
+    total = float(sum(shares)) or 1.0
+    widths = [table_width * share / total for share in shares]
+    short = [max(0.0, floor - width) for floor, width in zip(floors, widths)]
+    if not any(short):
+        return widths
+    owed = sum(short)
+    slack = [max(0.0, width - floor) for floor, width in zip(floors, widths)]
+    spare = sum(slack)
+    if spare < owed:
+        # Not enough room anywhere: hold the proportions between the floors and let
+        # the render-side measurements report what still does not fit.
+        scale = table_width / (sum(floors) or 1.0)
+        return [floor * scale for floor in floors]
+    return [width + rise - give * owed / spare for width, rise, give in zip(widths, short, slack)]
 
 
 def _hairline(slide, box, y, colour, thickness):
@@ -402,6 +535,93 @@ def _drop_gallery_style(tbl):
             element.getparent().remove(element)
             break
 
+
+class Stack:
+    """A cursor down a region: `take` hands back the next band, `rest` the remainder.
+
+    What it replaces is arithmetic on y. A live run wrote
+    `band = Box(BODY.x0, 5.34, BODY.x1, 6.72)`, looked at the render, tried 5.50,
+    looked again, tried 4.86, and did the same thing twice more on later pages --
+    five requests at about half a dollar each, spent working out where the last
+    thing on the page ended.
+    """
+
+    __slots__ = ("box", "gutter", "y")
+
+    def __init__(self, box, gutter=GUTTER):
+        self.box = box
+        self.gutter = gutter
+        self.y = box.y0
+
+    @property
+    def left(self):
+        """How much height is still unspoken for."""
+        return max(0.0, self.box.y1 - self.y)
+
+    def take(self, height):
+        """The next `height` inches, full width."""
+        if height <= 0:
+            raise ValueError("a band takes some height")
+        if height > self.left + 1e-9:
+            raise ValueError(
+                f"{height:.2f}in was asked for and {self.left:.2f}in is left in this region. "
+                "Give the page fewer bands, a shorter one, or start from a taller box"
+            )
+        band = Box(self.box.x0, self.y, self.box.x1, self.y + height)
+        self.y = band.y1 + self.gutter
+        return band
+
+    def rest(self):
+        """Everything still unspoken for, as one band."""
+        if self.left <= 0:
+            raise ValueError("nothing is left in this region")
+        band = Box(self.box.x0, self.y, self.box.x1, self.box.y1)
+        self.y = self.box.y1
+        return band
+
+    def skip(self, height):
+        """Leave `height` inches empty and carry on."""
+        self.y += height
+        return self
+
+
+def stack(box, gutter=GUTTER):
+    """A cursor down `box`, so a page of stacked bands needs no arithmetic on y."""
+    return Stack(box, gutter)
+
+
+def picture_fit(slide, image, box, theme, *, caption=None, size=LABEL_PT, align="center"):
+    """A picture scaled to fit `box` whole, centred in it, with its caption under it.
+
+    `add_picture` with one dimension scales the other, and which of the two to give
+    depends on the image -- so a program that wants "fill this region, keep the
+    aspect, do not crop" has to place it, measure, and place it again. A live run
+    wrote that itself, reached into `slide.shapes._spTree` to do it, and spent three
+    requests on it. Returns the picture, already positioned.
+    """
+    room = box
+    if caption:
+        lines = 1 + str(caption).count(chr(10))
+        room = Box(box.x0, box.y0, box.x1, max(box.y0, box.y1 - (size + 9) / 72 * lines - 0.08))
+    unit = Inches(1)
+    shape = slide.shapes.add_picture(str(image), Inches(room.x0), Inches(room.y0), width=Inches(room.w))
+    if shape.height / unit > room.h:
+        shape._element.getparent().remove(shape._element)  # noqa: SLF001 -- no API for removing a shape
+        shape = slide.shapes.add_picture(str(image), Inches(room.x0), Inches(room.y0), height=Inches(room.h))
+    shape.left = Inches(room.x0 + (room.w - shape.width / unit) / 2)
+    shape.top = Inches(room.y0 + (room.h - shape.height / unit) / 2)
+    if caption:
+        write(
+            slide,
+            Box(box.x0, room.y1 + 0.06, box.x1, box.y1),
+            caption,
+            size=size,
+            colour=theme.get("muted", theme["foreground"]),
+            align=align,
+            font=theme.get("font_family"),
+            cjk_font=theme.get("cjk_font_family"),
+        )
+    return shape
 
 def points(slide, box, theme, items, *, size=BODY_PT, numbered=False, mark="\u2022", colour=None,
            mark_colour=None, spacing=1.25):

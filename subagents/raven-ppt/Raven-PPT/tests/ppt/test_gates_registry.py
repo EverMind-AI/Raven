@@ -29,16 +29,11 @@ from raven.ppt.services.gates.registry import (
     checks,
     for_audience,
 )
-from raven.ppt.services.ingest.facts import build_source_index
 from raven.ppt.services.measure.type_size import Span
 from raven.ppt.services.measure.words import WordBox
 from tests.ppt.conftest import DeckBuilder
 
 pytest.importorskip("pptx")
-
-# Everything the deck below says, so the fact gate has an index to check it
-# against and only the one deliberate claim comes back unanchored.
-MATERIAL = "Video panoptic segmentation results. Qualitative evidence in Figure 4 and Figure 5."
 
 # The text a template writes into a slot it means the author to fill. A page still
 # carrying it is a page whose own words were laid over the template's, not into them.
@@ -200,7 +195,6 @@ def sample(tmp_path: Path, image) -> Sample:
         deck=DeckUnderReview(
             pptx_path=builder.save(),
             outcome=BuildOutcome(ok=True, pages=4, sources=()),
-            source_index=build_source_index(MATERIAL),
             figure_labels=figure_labels(figures, load_figure_catalog(tmp_path / "figures.json")),
             words=words,
             type_spans=spans,
@@ -345,38 +339,40 @@ def test_every_check_produces_the_severity_and_audience_it_declares(sample: Samp
 
 def test_a_deck_with_nothing_behind_it_says_which_checks_did_not_run(sample: Sample) -> None:
     """The reply for a deck built with no sources used to be indistinguishable
-    from the reply for one whose every number checked out. A run had exactly that
-    shape: a directory was passed where a file was meant, the read raised, the
-    raise was caught, and a deck with an invented number published clean."""
+    from the reply for one whose every citation checked out -- "checked and clean"
+    and "never checked at all" arriving as the same reply."""
     findings = check_deck(DeckUnderReview(pptx_path=sample.deck.pptx_path))
 
-    kinds = {"unchecked_facts", "unchecked_citations", "unchecked_agreement", "unrendered"}
+    kinds = {"unchecked_citations", "unchecked_agreement", "unrendered"}
     assert kinds <= {finding.kind for finding in findings}
-    # An absent input is not a defect in the deck, so none of the four refuses
+    # An absent input is not a defect in the deck, so none of the three refuses
     # one -- that would be the refusal the checks they stand in for correctly
     # decline to invent.
     assert kinds & {finding.kind for finding in blocking(findings)} == set()
     said = " ".join(finding.message for finding in findings if finding.kind in kinds)
-    assert "the author's word for it" in said
+    assert "would not have been caught" in said
     assert "ppt_ingest" in said
 
 
 def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample: Sample) -> None:
     """Design doc D3's blocking set, and nothing has crept into it.
 
-    Twelve kinds, in four groups. Provenance: a claim the materials do not make.
-    Comprehension: a deck the pipeline cannot tell the pages of. What was agreed
-    with the user -- its length, its language, and the template it was to be built
-    inside, which now includes two ways of not building inside it: pages still
-    carrying the template's own placeholder copy, pages that cloned a template
-    page for its background and laid new text boxes over it, and pages that did not come
-    from the prototype their own outline named -- a promise the outline gate already
-    enforces and that nothing read back off the finished file until now. Both are refused for the
-    same reason as `house_style`: the user handed over a template, and a deck that
-    ships "click here to add a title" is not the deck they asked for. Neither is
-    answerable by the design pass, which may not rewrite a word. And one measurement:
-    copy painted over copy in the render, and type a reader cannot make out
-    against the ground it landed on -- #1A1A1A on #000000 is not a matter of degree.
+    Ten kinds, in three groups. Provenance: a page crediting a figure it does not
+    show. What was agreed with the user -- its length, its language, and the
+    template it was to be built inside, which includes two ways of not building
+    inside it: pages still carrying the template's own placeholder copy, and pages
+    that cloned a template page for its background and laid new text boxes over it.
+    Both are refused for the same reason as `house_style`: the user handed over a
+    template, and a deck that ships "click here to add a title" is not the deck they
+    asked for. Neither is answerable by the design pass, which may not rewrite a
+    word. And the measurements: copy painted over copy in the render, content a
+    later shape paints over, and type a reader cannot make out against the ground it
+    landed on -- #1A1A1A on #000000 is not a matter of degree.
+
+    Two kinds left this set (D3b). `page_mapping` protects the design pass's ability
+    to find a page's code, which is not something a reader sees. `prototype_kept`
+    compares a page against a promise the outline made about it, and one run drew a
+    better page than the promise -- refusing it asked for a worse one.
 
     That last one is the deliberate exception to D2, added after three live runs
     delivered decks with overlapping text: the rest of the measured layout problems
@@ -388,15 +384,12 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
     findings = check_deck(sample.deck)
 
     assert {finding.kind for finding in blocking(findings)} == {
-        "fact",
         "citation",
         "band",
-        "page_mapping",
         "page_budget",
         "language",
         "house_style",
         "placeholder_copy",
-        "prototype_kept",
         "template_underlay",
         "unreadable",
         "word_collision",
@@ -405,9 +398,9 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
     }
     assert {finding.kind for finding in warnings(findings)} == {
         "template_picture",
-        "density",
         "evidence",
         "wide_table",
+        "native_table",
         "flat_formula",
         "unmarked_points",
         "type_floor",
@@ -419,29 +412,37 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "crowded_panel",
         "orphan_line",
         "unseparated_blocks",
+        "excessive_whitespace",
         "title_row",
         "wrapped_label",
         "overset_copy",
-        "unfamiliar_name",
         "off_page",
         "spilled_copy",
         "over_layout_art",
         "template_adherence",
+        # Downgraded in D3b: a plan a page did not follow, and a program the design
+        # pass cannot navigate. Neither is visible to a reader.
+        "prototype_kept",
+        "page_mapping",
         # This sample has no render, so the four render-truth checks did not run
-        # and the coverage check says so. The other three coverage kinds stay
-        # quiet because the sample has an index, labels and a brief.
+        # and the coverage check says so. The other two coverage kinds stay
+        # quiet because the sample has labels and a brief.
         "unrendered",
     }
 
 
 def test_content_problems_reach_the_author_and_never_the_design_pass(sample: Sample) -> None:
-    """The pass may rearrange a page and never rewrite it, so a page's density,
-    its lack of evidence and its table width are the author's."""
+    """The pass may rearrange a page and never rewrite it, so a page's lack of
+    evidence and its table width are the author's.
+
+    A character ceiling used to be in this list. What replaced it measures the
+    render instead -- `card_overflow`, `crowded_panel` -- and those are the design
+    pass's, because a page that overflows its card is a page laid out too small."""
     findings = check_deck(sample.deck)
     designer = {finding.kind for finding in for_audience(findings, Audience.DESIGNER)}
 
-    assert {"density", "evidence", "wide_table"} & designer == set()
-    assert {"density", "evidence", "wide_table", "fact", "citation", "page_mapping"} <= {
+    assert {"evidence", "wide_table"} & designer == set()
+    assert {"evidence", "wide_table", "citation", "page_mapping"} <= {
         finding.kind for finding in for_audience(findings, Audience.AUTHOR)
     }
 
@@ -489,12 +490,12 @@ def test_without_a_render_the_rendered_checks_report_nothing(sample: Sample) -> 
     assert "band" in kinds  # the declared-geometry checks still run
 
 
-def test_without_an_index_or_a_catalogue_the_provenance_gates_stay_quiet(sample: Sample) -> None:
+def test_without_a_catalogue_the_provenance_gate_stays_quiet(sample: Sample) -> None:
     """Nothing ingested means nothing to check against, and a gate may only
     refuse on evidence."""
     findings = check_deck(DeckUnderReview(pptx_path=sample.deck.pptx_path))
 
-    assert {finding.kind for finding in findings} & {"fact", "citation"} == set()
+    assert {finding.kind for finding in findings} & {"citation"} == set()
 
 
 def test_the_render_is_read_once_for_the_three_checks_that_need_it(sample: Sample, monkeypatch) -> None:
@@ -522,20 +523,20 @@ def _outcome(pages: int, sources: tuple[PageSource, ...] = (), ok: bool = True) 
     return BuildOutcome(ok=ok, pages=pages, sources=sources)
 
 
-def test_a_deck_whose_pages_cannot_be_told_apart_is_refused() -> None:
-    """Not because anything is wrong with it, but because nothing after this
-    point can act on it -- and a deck that silently skips the design pass ships
-    with every defect the pass exists to find."""
+def test_a_deck_whose_pages_cannot_be_told_apart_is_reported() -> None:
+    """Reported, not refused: nothing after this point can act on the deck, and the
+    design pass it skips is where the defects would have been found -- but the pages
+    themselves may be perfectly good, and refusing them buys the reader nothing."""
     findings = mapping_findings(_outcome(4))
 
     assert len(findings) == 1
     assert findings[0].kind == "page_mapping"
-    assert findings[0].severity is Severity.BLOCKING
+    assert findings[0].severity is Severity.WARNING
     assert findings[0].audience is Audience.AUTHOR
     assert findings[0].detail == {"pages": 4, "mapped": 0, "distinct_starts": 0}
 
 
-def test_pages_drawn_from_one_line_are_refused() -> None:
+def test_pages_drawn_from_one_line_are_reported() -> None:
     """A loop that draws every page from one call site maps them all together."""
     sources = tuple(PageSource(page=page, first_line=10, last_line=20) for page in (1, 2, 3))
 
