@@ -7,8 +7,9 @@ const os = require('os');
 const { URL } = require('url');
 const { applyStateDirArg } = require('./state-dir');
 applyStateDirArg();
-const { readJsonl, statLogFiles, getLogsDir } = require('./log-store');
+const { readJsonl, readJsonlFile, statLogFiles, getLogsDir } = require('./log-store');
 const everosDeposits = require('./everos-deposits');
+const shardIndex = require('./shard-index');
 
 const PORT = Number(process.env.TRACE_UI_PORT || process.env.TRACING_UI_PORT || 4318);
 const STATE_DIR =
@@ -124,63 +125,35 @@ function dedupeSpans(spans) {
   return [...byId.values()];
 }
 
-function isUuidLike(value) {
-  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
+const { isUuidLike } = shardIndex;
 
+// Tally what the election consumes, then hand off to the shared elector. The
+// sharded reader merges the identical tallies out of per-file sidecars and calls
+// the same function, so the two paths cannot drift into electing differently.
 function buildSessionIdentityIndex(spans) {
-  const countsBySessionKey = new Map();
-  const metaBySessionId = new Map();
+  const keyToId = {};
+  const idMeta = {};
 
   for (const span of spans) {
     if (span?.sessionKey) {
-      if (!countsBySessionKey.has(span.sessionKey)) countsBySessionKey.set(span.sessionKey, new Map());
-      const counts = countsBySessionKey.get(span.sessionKey);
-      const sessionId = span.sessionId || '';
-      counts.set(sessionId, (counts.get(sessionId) || 0) + 1);
+      if (!keyToId[span.sessionKey]) keyToId[span.sessionKey] = {};
+      const bucket = span.sessionId || '';
+      keyToId[span.sessionKey][bucket] = (keyToId[span.sessionKey][bucket] || 0) + 1;
     }
-
     if (span?.sessionId) {
-      const current = metaBySessionId.get(span.sessionId) || {
-        keyCounts: new Map(),
-        agentCounts: new Map(),
-        workspaceCounts: new Map()
-      };
-      if (span.sessionKey) current.keyCounts.set(span.sessionKey, (current.keyCounts.get(span.sessionKey) || 0) + 1);
-      if (span.agentId) current.agentCounts.set(span.agentId, (current.agentCounts.get(span.agentId) || 0) + 1);
-      if (span.workspaceDir) current.workspaceCounts.set(span.workspaceDir, (current.workspaceCounts.get(span.workspaceDir) || 0) + 1);
-      metaBySessionId.set(span.sessionId, current);
+      if (!idMeta[span.sessionId]) {
+        idMeta[span.sessionId] = { keyCounts: {}, agentCounts: {}, workspaceCounts: {} };
+      }
+      const meta = idMeta[span.sessionId];
+      if (span.sessionKey) meta.keyCounts[span.sessionKey] = (meta.keyCounts[span.sessionKey] || 0) + 1;
+      if (span.agentId) meta.agentCounts[span.agentId] = (meta.agentCounts[span.agentId] || 0) + 1;
+      if (span.workspaceDir) {
+        meta.workspaceCounts[span.workspaceDir] = (meta.workspaceCounts[span.workspaceDir] || 0) + 1;
+      }
     }
   }
 
-  const canonicalIdBySessionKey = new Map();
-  for (const [sessionKey, counts] of countsBySessionKey.entries()) {
-    const entries = [...counts.entries()].filter(([sessionId]) => sessionId);
-    if (!entries.length) continue;
-    entries.sort((a, b) => {
-      const [idA, countA] = a;
-      const [idB, countB] = b;
-      const uuidBias = Number(isUuidLike(idB)) - Number(isUuidLike(idA));
-      if (uuidBias !== 0) return uuidBias;
-      if (countB !== countA) return countB - countA;
-      return idA.localeCompare(idB);
-    });
-    canonicalIdBySessionKey.set(sessionKey, entries[0][0]);
-  }
-
-  const preferredValue = (counts) =>
-    [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0] || null;
-
-  const sessionMetaById = new Map();
-  for (const [sessionId, meta] of metaBySessionId.entries()) {
-    sessionMetaById.set(sessionId, {
-      sessionKey: preferredValue(meta.keyCounts),
-      agentId: preferredValue(meta.agentCounts),
-      workspaceDir: preferredValue(meta.workspaceCounts)
-    });
-  }
-
-  return { canonicalIdBySessionKey, sessionMetaById };
+  return shardIndex.electIdentity({ keyToId, idMeta });
 }
 
 function projectSpanForDisplay(span, identityIndex) {
@@ -490,13 +463,18 @@ function extractSessionsSpawnPayload(span, identityIndex) {
   };
 }
 
-function synthesizeSubagentCallSpans(spans, identityIndex) {
-  const existingToolCallIds = new Set(
-    spans
-      .filter((span) => span.name === 'subagent.call')
-      .map((span) => span.attributes?.['subagent.tool_call_id'])
-      .filter(Boolean)
-  );
+// `knownToolCallIds` lets a caller that only loaded part of the corpus dedupe
+// against all of it. Without it a per-session build would synthesize a
+// subagent.call whose real counterpart sits in a session it did not read.
+function synthesizeSubagentCallSpans(spans, identityIndex, knownToolCallIds = null) {
+  const existingToolCallIds =
+    knownToolCallIds ||
+    new Set(
+      spans
+        .filter((span) => span.name === 'subagent.call')
+        .map((span) => span.attributes?.['subagent.tool_call_id'])
+        .filter(Boolean)
+    );
   const derived = [];
 
   for (const span of spans) {
@@ -731,6 +709,77 @@ function enrichStoreDeposits(spans) {
   }
 }
 
+// Fold one session's spans and events into the object the page renders. Shared
+// by the whole-corpus reader and the per-session one so a session cannot come
+// out differently depending on which asked for it.
+function assembleSession(sessionId, sessionSpans, sessionEvents) {
+  const traceGroups = buildTraceGroups(sessionSpans);
+  const sessionKey = pickMostFrequent(sessionSpans.map((span) => span.sessionKey));
+  const agentId = pickMostFrequent(sessionSpans.map((span) => span.agentId));
+  const workspaceDir = pickMostFrequent(sessionSpans.map((span) => span.workspaceDir));
+  const trigger = pickMostFrequent(sessionSpans.map((span) => span.trigger));
+  const channelId = pickMostFrequent(sessionSpans.map((span) => span.channelId));
+  // Which front end produced it. The terminal and the served page share
+  // one channel, so channelId alone cannot tell them apart.
+  const surface = pickMostFrequent(sessionSpans.map((span) => span.surface));
+  const sessionStartEvent = sessionEvents.find(
+    (event) => event.type === 'session_start' && event.sessionId === sessionId
+  );
+  const resumedFrom = sessionStartEvent?.event?.resumedFrom || null;
+
+  for (const event of sessionEvents.sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))) {
+    const group = chooseTraceRoot(traceGroups, event.traceId, event.timestamp);
+    if (group) group.events.push(event);
+  }
+
+  const hiddenSpanNames = new Set(['skills.scan', 'skills.catalog_read', 'skills.cataloged']);
+  const traces = traceGroups
+    .map((trace) => {
+      const traceKey = `${sessionId}::${trace.root?.spanId || trace.id}`;
+      const normalizedSpans = trace.spans.map((span) => ({ ...span, traceKey }));
+      const meaningfulVisibleSpans = normalizedSpans.filter(
+        (span) => !hiddenSpanNames.has(span.name) && span.name !== 'session.turn'
+      );
+      return {
+        traceKey,
+        traceId: trace.traceId,
+        sessionId,
+        sessionKey,
+        agentId,
+        workspaceDir,
+        trigger,
+        channelId,
+        surface,
+        startTime: trace.startTime,
+        endTime: trace.endTime,
+        durationMs: durationMs(trace.startTime, trace.endTime),
+        spanCount: normalizedSpans.length,
+        visibleSpanCount: meaningfulVisibleSpans.length,
+        spans: normalizedSpans,
+        tree: buildTraceTree(normalizedSpans),
+        events: trace.events.sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))
+      };
+    })
+    .filter((trace) => trace.visibleSpanCount > 0)
+    .sort((a, b) => parseTime(b.startTime) - parseTime(a.startTime));
+
+  return {
+    sessionId,
+    sessionKey,
+    agentId,
+    workspaceDir,
+    trigger,
+    channelId,
+    surface,
+    resumedFrom,
+    resumedTo: null,
+    startedAt: sessionSpans.map((span) => span.startTime).sort((a, b) => parseTime(a) - parseTime(b))[0] || null,
+    updatedAt: sessionSpans.map((span) => span.endTime).sort((a, b) => parseTime(b) - parseTime(a))[0] || null,
+    traceCount: traces.length,
+    traces
+  };
+}
+
 function buildSessions() {
   const rawSpans = dedupeSpans(readJsonl('spans')).map(normalizeSpan);
   const identityIndex = buildSessionIdentityIndex(rawSpans);
@@ -747,76 +796,15 @@ function buildSessions() {
 
   const sessions = [];
   for (const [sessionId, sessionSpans] of spansBySessionId.entries()) {
-    const traceGroups = buildTraceGroups(sessionSpans);
+    // Hoisted deliberately. Inside the filter this is recomputed per event, each
+    // time mapping and sorting every span in the session, which turns the fold
+    // into O(events x spans) -- 0.24s to 2.36s on 24k spans and 8k events.
     const sessionKey = pickMostFrequent(sessionSpans.map((span) => span.sessionKey));
-    const agentId = pickMostFrequent(sessionSpans.map((span) => span.agentId));
-    const workspaceDir = pickMostFrequent(sessionSpans.map((span) => span.workspaceDir));
-    const trigger = pickMostFrequent(sessionSpans.map((span) => span.trigger));
-    const channelId = pickMostFrequent(sessionSpans.map((span) => span.channelId));
-    // Which front end produced it. The terminal and the served page share
-    // one channel, so channelId alone cannot tell them apart.
-    const surface = pickMostFrequent(sessionSpans.map((span) => span.surface));
     const sessionEvents = events.filter((event) => {
       if (event.sessionId && event.sessionId === sessionId) return true;
-      if (sessionKey && event.sessionKey === sessionKey) return true;
-      return false;
+      return Boolean(sessionKey && event.sessionKey === sessionKey);
     });
-    const sessionStartEvent = sessionEvents.find(
-      (event) => event.type === 'session_start' && event.sessionId === sessionId
-    );
-    const resumedFrom = sessionStartEvent?.event?.resumedFrom || null;
-
-    for (const event of sessionEvents.sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))) {
-      const group = chooseTraceRoot(traceGroups, event.traceId, event.timestamp);
-      if (group) group.events.push(event);
-    }
-
-    const hiddenSpanNames = new Set(['skills.scan', 'skills.catalog_read', 'skills.cataloged']);
-    const traces = traceGroups
-      .map((trace) => {
-        const traceKey = `${sessionId}::${trace.root?.spanId || trace.id}`;
-        const normalizedSpans = trace.spans.map((span) => ({ ...span, traceKey }));
-        const meaningfulVisibleSpans = normalizedSpans.filter(
-          (span) => !hiddenSpanNames.has(span.name) && span.name !== 'session.turn'
-        );
-        return {
-          traceKey,
-          traceId: trace.traceId,
-          sessionId,
-          sessionKey,
-          agentId,
-          workspaceDir,
-          trigger,
-          channelId,
-          surface,
-          startTime: trace.startTime,
-          endTime: trace.endTime,
-          durationMs: durationMs(trace.startTime, trace.endTime),
-          spanCount: normalizedSpans.length,
-          visibleSpanCount: meaningfulVisibleSpans.length,
-          spans: normalizedSpans,
-          tree: buildTraceTree(normalizedSpans),
-          events: trace.events.sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))
-        };
-      })
-      .filter((trace) => trace.visibleSpanCount > 0)
-      .sort((a, b) => parseTime(b.startTime) - parseTime(a.startTime));
-
-    sessions.push({
-      sessionId,
-      sessionKey,
-      agentId,
-      workspaceDir,
-      trigger,
-      channelId,
-      surface,
-      resumedFrom,
-      resumedTo: null,
-      startedAt: sessionSpans.map((span) => span.startTime).sort((a, b) => parseTime(a) - parseTime(b))[0] || null,
-      updatedAt: sessionSpans.map((span) => span.endTime).sort((a, b) => parseTime(b) - parseTime(a))[0] || null,
-      traceCount: traces.length,
-      traces
-    });
+    sessions.push(assembleSession(sessionId, sessionSpans, sessionEvents));
   }
 
   const sessionById = new Map(sessions.map((session) => [session.sessionId, session]));
@@ -831,6 +819,90 @@ function buildSessions() {
   return {
     generatedAt: new Date().toISOString(),
     sessions
+  };
+}
+
+// Rows for the session list, from the per-file indexes rather than from the
+// spans. This is the whole point of the sidecars: answering "which sessions
+// exist" costs a merge of 38 small tallies instead of a parse of every retained
+// span. Field for field the same shape buildSessions produced, minus `traces`,
+// which now has its own endpoint.
+function buildSessionList() {
+  const merged = shardIndex.mergedIndex('spans');
+  const events = readJsonl('events');
+
+  const rows = [];
+  for (const row of merged.sessions.values()) {
+    const sessionKey = shardIndex.preferredValue(row.counts.sessionKey);
+    const sessionStart = events.find(
+      (event) => event.type === 'session_start' && event.sessionId === row.sessionId
+    );
+    rows.push({
+      sessionId: row.sessionId,
+      sessionKey,
+      agentId: shardIndex.preferredValue(row.counts.agentId),
+      workspaceDir: shardIndex.preferredValue(row.counts.workspaceDir),
+      trigger: shardIndex.preferredValue(row.counts.trigger),
+      channelId: shardIndex.preferredValue(row.counts.channelId),
+      surface: shardIndex.preferredValue(row.counts.surface),
+      resumedFrom: sessionStart?.event?.resumedFrom || null,
+      resumedTo: null,
+      startedAt: row.startedAt,
+      updatedAt: row.updatedAt,
+      // Exact, and the reason there is no traceCount here: see the note in
+      // shard-index.js. A trace count comes with the session's own response.
+      spanCount: row.spans
+    });
+  }
+
+  const byId = new Map(rows.map((row) => [row.sessionId, row]));
+  for (const row of rows) {
+    if (!row.resumedFrom) continue;
+    const parent = byId.get(row.resumedFrom);
+    if (parent) parent.resumedTo = row.sessionId;
+  }
+
+  rows.sort((a, b) => parseTime(b.updatedAt) - parseTime(a.updatedAt));
+  return { generatedAt: new Date().toISOString(), sessions: rows };
+}
+
+// One session's traces, reading only the files the index says it touches. The
+// global identity and tool-call ids come from the merged index, not from the
+// subset that was read, so a span resolves to the same session and a subagent
+// call dedupes the same way it would in a whole-corpus build.
+function buildSessionDetail(sessionId) {
+  const merged = shardIndex.mergedIndex('spans');
+  const row = merged.sessions.get(sessionId);
+  if (!row) return null;
+
+  const rawSpans = [];
+  for (const filePath of row.files) {
+    for (const record of readJsonlFile(filePath)) rawSpans.push(record);
+  }
+
+  const identityIndex = merged.identity;
+  const spans = synthesizeSubagentCallSpans(
+    dedupeSpans(rawSpans)
+      .map(normalizeSpan)
+      .map((span) => projectSpanForDisplay(span, identityIndex))
+      .filter(Boolean)
+      .filter((span) => span.sessionId === sessionId),
+    identityIndex,
+    merged.toolCallIds
+  );
+  enrichStoreDeposits(spans);
+
+  // From the tallies, not off the row -- mergedIndex does not put a sessionKey
+  // there, and reading one silently killed the key-matched branch below.
+  const sessionKey = shardIndex.preferredValue(row.counts.sessionKey);
+  const events = readJsonl('events').filter((event) => {
+    if (event.sessionId && event.sessionId === sessionId) return true;
+    return Boolean(sessionKey && event.sessionKey === sessionKey);
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    session: assembleSession(sessionId, spans, events)
   };
 }
 
@@ -901,6 +973,67 @@ function scheduleSnapshotRebuild(res) {
       }
     }, 0);
   });
+}
+
+// Which session holds a trace. The page follows subagent-run to parent-turn
+// jumps by trace id, and can no longer scan every session's traces for it.
+function findTraceOwner(traceId) {
+  if (!traceId) return null;
+  const merged = shardIndex.mergedIndex('spans');
+  for (const row of merged.sessions.values()) {
+    if (row.visibleTraceIds.has(traceId)) return row.sessionId;
+  }
+  return null;
+}
+
+const API_WINDOWS = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 };
+
+// llm.call spans across every session, for the API view. A quarter of all spans
+// are llm.call, so this is the one view that genuinely wants the corpus -- but it
+// is windowed, and the window is applied to whole files first: a file whose spans
+// all predate the window is never opened.
+function buildLlmCalls(windowKey) {
+  const merged = shardIndex.mergedIndex('spans');
+  const spanMs = API_WINDOWS[windowKey] || null;
+  const cutoff = spanMs ? Date.now() - spanMs : null;
+
+  const sessionByPair = new Map();
+  for (const row of merged.sessions.values()) sessionByPair.set(row.sessionId, row);
+
+  const calls = [];
+  for (const entry of statLogFiles('spans')) {
+    const index = shardIndex.indexFor(entry, 'spans');
+    if (cutoff !== null) {
+      const latest = (index.pairs || []).reduce(
+        (acc, pair) => Math.max(acc, parseTime(pair.maxTime) || 0),
+        0
+      );
+      if (latest && latest < cutoff) continue;
+    }
+    const spans = dedupeSpans(readJsonlFile(entry.path))
+      .filter((record) => record?.name === 'llm.call')
+      .map(normalizeSpan)
+      .map((span) => projectSpanForDisplay(span, merged.identity))
+      .filter(Boolean);
+    for (const span of spans) {
+      if (cutoff !== null && (parseTime(span.startTime) || 0) < cutoff) continue;
+      // A call the election could not attribute to a session is dropped, as the
+      // whole-corpus reader drops it: there is nowhere in a session-oriented view
+      // to show it, and on the measured store there are 34,644 of them.
+      if (!span.sessionId) continue;
+      const row = sessionByPair.get(span.sessionId);
+      calls.push({
+        sessionId: span.sessionId,
+        sessionKey: row ? shardIndex.preferredValue(row.counts.sessionKey) : span.sessionKey,
+        sessionAgentId: row ? shardIndex.preferredValue(row.counts.agentId) : span.agentId,
+        traceId: span.traceId,
+        span
+      });
+    }
+  }
+
+  calls.sort((a, b) => parseTime(b.span.startTime) - parseTime(a.span.startTime));
+  return { generatedAt: new Date().toISOString(), window: windowKey || 'all', calls };
 }
 
 function isSafeArtifactPath(filePath) {
@@ -1145,6 +1278,33 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/search') {
     sendJson(res, 200, { results: searchSpans(url.searchParams.get('q') || '') });
+    return;
+  }
+
+  if (url.pathname === '/api/trace-owner') {
+    const sessionId = findTraceOwner(url.searchParams.get('traceId') || '');
+    sendJson(res, sessionId ? 200 : 404, { sessionId });
+    return;
+  }
+
+  if (url.pathname === '/api/llm-calls') {
+    sendJson(res, 200, buildLlmCalls(url.searchParams.get('window') || 'all'));
+    return;
+  }
+
+  if (url.pathname === '/api/sessions') {
+    sendJson(res, 200, buildSessionList());
+    return;
+  }
+
+  const sessionDetail = url.pathname.match(/^\/api\/sessions\/(.+)$/);
+  if (sessionDetail) {
+    const payload = buildSessionDetail(decodeURIComponent(sessionDetail[1]));
+    if (!payload) {
+      sendJson(res, 404, { error: 'unknown session' });
+      return;
+    }
+    sendJson(res, 200, payload);
     return;
   }
 
