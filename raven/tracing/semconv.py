@@ -183,6 +183,7 @@ def _llm_output_payload(resp: Any) -> Any:
             for t in (getattr(resp, "tool_calls", None) or [])
         ],
         "reasoning_content": getattr(resp, "reasoning_content", None),
+        "thinking_blocks": getattr(resp, "thinking_blocks", None),
         "usage": getattr(resp, "usage", None),
     }
 
