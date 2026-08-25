@@ -237,9 +237,12 @@ describe('copy notice rendering', () => {
   })
 
   it('renders nothing for the notice once it has been dismissed', () => {
-    dismissCopyNotice()
-
-    const frame = renderFrame()
+    const frame = renderFrame({
+      setup: () => {
+        showCopyNotice('copied 7 characters', 3000)
+        dismissCopyNotice()
+      }
+    })
 
     expect(frame).not.toContain('copied 7 characters')
   })
