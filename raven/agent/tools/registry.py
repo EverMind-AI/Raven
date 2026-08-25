@@ -84,12 +84,7 @@ class ToolRegistry:
         # Asked, not stored: the operator's off switches are a *preference*, and
         # a preference read once at startup is one the operator cannot change.
         # See ``set_withheld_source``.
-        # ``_withheld`` and ``_schema_hidden`` are distinct axes: the first is an
-        # operator off switch (a withheld tool is unreachable everywhere), the
-        # second a design property (a hidden tool stays callable -- ``tool_call``
-        # resolves by registry, never by schema -- it is just not advertised).
         self._withheld: Callable[[], frozenset[str]] | None = None
-        self._schema_hidden: set[str] = set()
 
     def set_withheld_source(self, source: "Callable[[], frozenset[str]] | None") -> None:
         """Install the answer to "which tools has the operator switched off".
@@ -116,19 +111,6 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its tools
             logger.warning("tools: could not read the disabled-tool list; offering everything")
             return frozenset()
-
-    def hide_from_schema(self, *names: str) -> None:
-        """Keep tools registered and callable, but out of the provider's tool schema.
-
-        For tools whose only advertisement is another tool's result text. Unlike
-        the off switch this is not operator-reversible: the tool itself is what
-        decides it is not for the schema.
-        """
-        self._schema_hidden.update(names)
-
-    def schema_hidden_names(self) -> frozenset[str]:
-        """Every registered name withheld from the schema (still callable)."""
-        return frozenset(self._schema_hidden)
 
     def set_channel(self, channel: str | None) -> None:
         """Record the channel this turn is answering on (turn-local).
@@ -292,11 +274,7 @@ class ToolRegistry:
         runs.
         """
         withheld = self.withheld_names()
-        return [
-            tool.to_schema()
-            for tool in self._tools.values()
-            if self.offers(tool, withheld) and tool.name not in self._schema_hidden
-        ]
+        return [tool.to_schema() for tool in self._tools.values() if self.offers(tool, withheld)]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(

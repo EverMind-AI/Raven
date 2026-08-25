@@ -708,9 +708,6 @@ class TestBackgroundRun:
 
         assert "started in the background" in out.model_text
         assert "2 nodes" in out.model_text
-        # The acceptance text is the only advertisement the control tools get.
-        assert 'dag_status("' in out.model_text
-        assert 'cancel_dag("' in out.model_text
         # The outcome cannot be in the result -- nothing has run yet.
         assert "completed" not in out.model_text
 
@@ -719,49 +716,6 @@ class TestBackgroundRun:
         assert "2 completed" in summary
         assert "hello world" in summary  # a's output flowed to b and into the announce
         assert origin == {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
-
-    async def test_the_acceptance_text_advertises_the_controls_only_when_reachable(self, tmp_path: Path) -> None:
-        reachable = SubAgentDagTool(
-            workspace=tmp_path,
-            agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-            control_reachable=lambda: True,
-        )
-        muted = SubAgentDagTool(
-            workspace=tmp_path,
-            agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-            control_reachable=lambda: False,
-        )
-        node = {"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}
-
-        reachable.set_context("web", "default", "web:sess1")
-        out = await reachable.execute(task_summary="run the graph under test", nodes=[node])
-        assert 'dag_status("' in out.model_text
-        assert 'cancel_dag("' in out.model_text
-
-        muted.set_context("web", "default", "web:sess2")
-        out = await muted.execute(task_summary="run the graph under test", nodes=[node])
-        assert "started in the background" in out.model_text
-        assert "dag_status" not in out.model_text
-        assert "cancel_dag" not in out.model_text
-
-    async def test_the_acceptance_text_mutes_the_hint_when_the_predicate_raises(self, tmp_path: Path) -> None:
-        # The predicate runs after the background task exists, so a failing
-        # one must mute the hint, never turn the acceptance into an error.
-        tool = SubAgentDagTool(
-            workspace=tmp_path,
-            agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-            control_reachable=lambda: (_ for _ in ()).throw(AttributeError("no controller")),
-        )
-        tool.set_context("web", "default", "web:sess3")
-
-        out = await tool.execute(
-            task_summary="run the graph under test",
-            nodes=[{"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}],
-        )
-
-        assert "started in the background" in out.model_text
-        assert "dag_status" not in out.model_text
-        assert "cancel_dag" not in out.model_text
 
     async def test_two_overlapping_runs_each_report_to_their_own_turn(self, tmp_path: Path) -> None:
         """Backgrounding makes concurrent runs on one shared tool the normal case.

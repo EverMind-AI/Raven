@@ -21,8 +21,6 @@ import json
 import re
 from typing import Any
 
-from ._store import memory_path_in
-
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
 # are re-checked before being joined into a path. Without this a crafted id
@@ -110,8 +108,6 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
             continue
         nid = node["id"]
         entry = (manifest or {}).get(nid) or {}
-        mem_path = memory_path_in(backend, root, run_id, nid)
-        mem_path = mem_path if await backend.file_exists(mem_path) else None
         files.append(
             {
                 "node": nid,
@@ -128,15 +124,14 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
                 "ended_at": entry.get("ended_at"),
                 "prompt_file": entry.get("prompt_file"),
                 "output_file": entry.get("output_file"),
-                "memory_file": mem_path,
                 "error": entry.get("error"),
                 "prompt_template": node.get("prompt_template"),
-                "node_summary": node.get("node_summary"),
                 # Beside the template because it is the other half of what the
                 # node was asked: the template's `{{ inputs.k }}` says nothing
                 # about where k came from. Only from graph.json -- the manifest
                 # records what happened, not what was requested.
                 "inputs": node.get("inputs") if isinstance(node.get("inputs"), dict) else None,
+                "node_summary": node.get("node_summary"),
             }
         )
 
@@ -145,7 +140,6 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
         "run_id": run_id,
         "dir": rdir,
         "finalized": manifest is not None,
-        "task_summary": graph.get("task_summary"),
         "files": files,
         "terminal_outputs": [],
         "summary": {

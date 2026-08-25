@@ -114,16 +114,10 @@ export interface ConfigGetValueResponse {
 
 export interface ConfigSetResponse {
   applied?: boolean
-  // Does the asking conversation now run this model? A default-scoped switch
-  // moves the sessions that never chose one, so the scope alone cannot answer
-  // it and a client that guesses paints a model the conversation is not on.
-  applies_to_session?: boolean
   credential_warning?: string
   history_reset?: boolean
   info?: SessionInfo
   previous?: null | string
-  scope?: 'default' | 'session'
-  session_id?: string
   value?: string
   warning?: string
 }
@@ -563,17 +557,7 @@ export type GatewayEvent =
       type: 'tool.complete'
     }
   | {
-      payload: {
-        batch?: { header?: string; question: string }[]
-        choices: string[] | null
-        header?: string
-        index?: number
-        question: string
-        recommended?: string
-        request_id: string
-        timeout_s?: number
-        total?: number
-      }
+      payload: { choices: string[] | null; question: string; request_id: string }
       session_id?: string
       type: 'clarify.request'
     }
