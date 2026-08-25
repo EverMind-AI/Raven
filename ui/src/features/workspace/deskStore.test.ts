@@ -41,6 +41,38 @@ describe('desk store', () => {
     expect(desk.getState().panes).toHaveLength(1)
   })
 
+  it('promotes a graph node record into the pane it already occupies', () => {
+    desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['agent-record:r1:brief', 'file:/workspace/a.ts'])
+
+    /* The instance the node ran on is the SAME work reached a second way: it
+       takes the record's slot instead of opening a third pane beside it. */
+    desk.openDeskAgent({
+      sessionKey: 's', agent: 'raven', handle: 'brief-9f', kind: 'dag',
+      runId: 'r1', nodeId: 'brief', resumable: true,
+    })
+
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['agent:raven:brief-9f', 'file:/workspace/a.ts'])
+    expect(desk.getState().active).toBe('agent:raven:brief-9f')
+  })
+
+  it('keeps fullscreen through that promotion and drops it for a different pane', () => {
+    desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
+    desk.toggleSolo('agent-record:r1:brief')
+
+    desk.openDeskAgent({
+      sessionKey: 's', agent: 'raven', handle: 'brief-9f', kind: 'dag',
+      runId: 'r1', nodeId: 'brief', resumable: true,
+    })
+    expect(desk.getState().solo).toBe('agent:raven:brief-9f')
+
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().solo).toBeNull()
+  })
+
   it('clears session panes without dropping subscribers', () => {
     desk.openDeskFile('/workspace/a.ts')
     let updates = 0

@@ -414,6 +414,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sess .w[data-sig="done"] i {
   box-shadow: inset 0 0 0 1.5px var(--moss); animation: sigin .5s ease backwards;
 }
+/* Filled, like `run`: a failure is a state the row is IN, not a transition it
+   just made, and the ring is already spoken for by `done`. */
+.sess .w[data-sig="err"] i { background: var(--clay); animation: sigin .5s ease backwards; }
 @keyframes sigin { from { opacity: 0; transform: scale(.4); } }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
@@ -834,7 +837,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    whichever place is showing it. */
 .dtl.dlg.dagc .bd { max-height: none; overflow: visible; }
 .dagc .canvas { margin-top: 11px; overflow: visible; max-height: none; }
-.dagc .canvas > svg { display: block; width: 100%; height: auto; margin: 0 auto; }
+/* Its own size, centred -- never stretched. The renderer sizes a node so its id
+   and agent fit at a fixed type size, and `width: 100%` threw that away: a
+   three-node graph in a 744px column was blown up to 1.7x, so the card's boxes
+   came out half again as big as the SAME graph in the composer sheet. Shrinking
+   is still allowed, because a wide graph in a narrow column has to fit. */
+.dagc .canvas > svg { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
 .daggraph { --dag-id-size: 12px; --dag-meta-size: 9.5px; }
 .dagc .daggraph { --dag-id-size: 11px; --dag-meta-size: 9px; }
 .daggraph .dagcap {
@@ -979,16 +987,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the reading column is fixed, which is exactly how the delegated row grew
    past the page. */
 .arts {
-  margin: 26px 0 2px; padding: 14px; min-width: 0;
+  margin: 22px 0 2px; padding: 12px; min-width: 0;
   border: 1px solid var(--line); border-radius: 14px; background: var(--ink);
   container: artifacts / inline-size;
 }
 .arts .asec + .asec {
-  margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line-soft);
 }
 .arts .ahd {
-  display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
-  font-size: 14.5px; line-height: 1.5; color: var(--muted);
+  display: flex; align-items: center; gap: 12px; margin-bottom: 6px;
+  font-size: 13.5px; line-height: 1.45; color: var(--muted);
 }
 .arts .ahd .ahm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .arts .ahd .lb { color: var(--text); font-weight: 600; }
@@ -1025,6 +1033,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
 .atile .hit:disabled { cursor: default; }
 .atile .pic {
+  --mini-inset: 7px;
   display: grid; height: 80px; overflow: hidden; position: relative;
   background: var(--surface); border-bottom: 1px solid var(--line-soft);
 }
@@ -1034,21 +1043,53 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 600;
   letter-spacing: .08em;
 }
-.atile .pic.doc { background: var(--ink); place-items: start; }
+/* The miniature is a PAGE resting in the tile, not a screenshot cropped to the
+   corner: the document sits inset on the tile's own surface, with the hairline
+   and the small radius every other card in the page gives its content. The
+   chrome is drawn HERE rather than on .mini, because .mini is scaled and a 1px
+   border on it would land as 0.4px. */
+.atile .pic.doc { background: var(--surface); place-items: start; padding: var(--mini-inset); }
+.atile .pic.doc::before {
+  content: ''; position: absolute; inset: var(--mini-inset); border-radius: 4px;
+  background: var(--ink); border: 1px solid var(--line-soft);
+}
 .atile .pic.shot { background: var(--surface); }
 .atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
-/* The miniature: the file rendered at its own size and then SCALED. A smaller
-   font would re-wrap every line and stop a heading from being a heading, so
-   the tile would show a different document from the one it names. */
-.atile .mini {
-  display: block; width: 250%; height: 250%; padding: 9px 11px;
-  transform: scale(.4); transform-origin: top left; pointer-events: none;
+/* The miniature: the file rendered small and then SCALED down again, so a
+   101px square shows the SHAPE of the document -- a title, a rule, a list --
+   rather than four words of it at reading size. Body type is set here; the
+   prose headings keep their own absolute sizes, so a heading is still visibly
+   a heading and the document still looks like itself.
+
+   NOT `.mini`, which this used to be called: that is the page's small BUTTON
+   (see below, ~line 3040), and the miniature was quietly wearing its border,
+   its 8px radius, its 12px type, its hover background and -- the visible one --
+   its `white-space: nowrap`, which every paragraph in the rendered document
+   inherited. The document could not wrap, so it was clipped mid-word at the
+   tile's edge whatever width it was given.
+
+   Its own padding is divided by the scale: this box is drawn at 250% and shown
+   at 40%, so the margin the text keeps from the paper's edge has to be stated
+   at 250% too. */
+.atile .amini {
+  --mini-scale: .4;
+  font-size: 12px; line-height: 1.55;
+  position: relative; display: block; width: calc(100% / var(--mini-scale));
+  height: calc(100% / var(--mini-scale)); padding: calc(9px / var(--mini-scale)) calc(10px / var(--mini-scale));
+  transform: scale(var(--mini-scale)); transform-origin: top left; pointer-events: none;
+  /* Faded rather than cut, the same way a folded question ends: a hard edge
+     mid-glyph reads as the render having broken, a fade as a page continuing. */
+  -webkit-mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
 }
-.atile .mini .raw {
+.atile .amini .raw {
   display: block; font-family: var(--mono); font-size: 12px; line-height: 1.55;
   color: var(--muted); white-space: pre; overflow: hidden;
 }
-.atile .mini.prose > :first-child { margin-top: 0; }
+/* A long unbroken token (a URL, a path) still has to give way rather than run
+   past the paper. */
+.atile .amini.prose { overflow-wrap: anywhere; }
+.atile .amini.prose > :first-child { margin-top: 0; }
 .atile .cap { display: grid; gap: 2px; min-height: 43px; padding: 7px 10px 8px; min-width: 0; }
 .atile .cap .nm {
   color: var(--text); font-size: 14.5px; font-weight: 600; line-height: 1.4;
@@ -1059,30 +1100,35 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-variant-numeric: tabular-nums;
 }
 .atiles.single .atile {
-  grid-template-columns: clamp(104px, 18cqi, 132px) minmax(0, 1fr);
+  grid-template-columns: clamp(92px, 15cqi, 116px) minmax(0, 1fr);
   transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
 }
+/* The ratio has to stay definite: the miniature inside is sized in PERCENT of
+   this box (see .atile .amini), so an auto height here has nothing to resolve
+   against and the tile grows to the full height of the rendered document.
+   Narrower column, same square. */
 .atiles.single .atile .pic {
+  --mini-inset: 9px;
   width: 100%; height: auto; aspect-ratio: 1;
   border-right: 1px solid var(--line-soft); border-bottom: 0;
 }
 .atiles.single .atile .cap {
-  align-content: center; gap: 5px; min-height: 0; padding: 14px 18px;
+  align-content: center; gap: 4px; min-height: 0; padding: 11px 15px;
 }
 .atiles.single .atile .cap .nm {
   display: -webkit-box; overflow: hidden; white-space: normal;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  font-size: 16px; line-height: 1.35;
+  font-size: 15px; line-height: 1.35;
 }
 .atiles.single .atile .cap .ds {
   display: -webkit-box; overflow: hidden; color: var(--muted);
-  font-size: 13px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  font-size: 12.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 .atiles.single .atile .cap .mt { font-size: 10.5px; }
 @container artifacts (max-width: 430px) {
-  .atiles.single .atile .cap { gap: 3px; padding: 10px 12px; }
-  .atiles.single .atile .cap .nm { font-size: 14.5px; -webkit-line-clamp: 1; }
-  .atiles.single .atile .cap .ds { font-size: 12px; -webkit-line-clamp: 1; }
+  .atiles.single .atile .cap { gap: 3px; padding: 9px 11px; }
+  .atiles.single .atile .cap .nm { font-size: 14px; -webkit-line-clamp: 1; }
+  .atiles.single .atile .cap .ds { font-size: 11.5px; -webkit-line-clamp: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .atiles.single .atile { transition: none; } }
 /* Where it opens, said before the click rather than after it. */
@@ -2361,9 +2407,15 @@ textarea:focus, textarea:focus-visible,
 /* The same reading measure the transcript gives itself, for the same reason: a
    panel pulled wide (or opened full screen) would otherwise set a reply in one
    200-character line. Capped, not fixed, so the ordinary narrow panel is
-   unchanged. `.answer` is the reply's class -- this rule used to name `.ans`,
-   which matches nothing, so the cap it looks like it always had never applied. */
-.satx .ask, .satx .answer, .satx .step { max-width: min(var(--col), 100%); margin-left: auto; margin-right: auto; }
+   unchanged.
+
+   Every segment, not a list of three. The lane host is `display: contents`, so
+   its children ARE the stage's rows -- naming three of them left the turn fold,
+   the runtime notes and the products bar hugging the panel's left edge while
+   the prose beside them sat in a centred column. The chat does this with one
+   `.col` wrapper; a stage box has no wrapper to put it on, so the measure goes
+   on the rows. */
+.satx > [data-tsl] > * { max-width: min(var(--col), 100%); margin-left: auto; margin-right: auto; }
 /* Which agent ran it. Absent on a raven sub-agent, where the name is still the
    answer, so the row never leaves it unsaid. */
 .sarow .st .who, .sahd .trow .who {
@@ -3875,18 +3927,24 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .desk-ready .split[data-open="true"] #wsBtn { display: grid; }
 
 #deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
-  --desk-palette-gap: 12px; position: fixed; inset: 0; z-index: calc(var(--z-takeover) + 1); pointer-events: none; }
-body:has(#split[data-open="true"]) #deskHost { --desk-anchor-width: var(--wsw); }
-.desk-follow-toggle { position: fixed; z-index: 1; top: 27px; width: var(--desk-launcher-size);
+  --desk-palette-gap: 12px; --desk-launcher-center: 27px;
+  position: fixed; inset: 0; z-index: calc(var(--z-takeover) + 1); pointer-events: none; }
+/* The desk hangs off the workspace's left edge while the workspace is a column
+   beside the chat -- but a fullscreen pane IS the window, and then there is no
+   column to hang off. Written as an exclusion rather than as a second rule
+   overriding this one: `#split[data-open]` outweighs `.desk-grid[data-solo]`
+   inside :has(), so the override lost and the palette floated a panel-width in
+   from the edge while its own launcher sat against it. */
+body:has(#split[data-open="true"]):not(:has(.desk-grid[data-solo="true"])) #deskHost {
+  --desk-anchor-width: var(--wsw); }
+.desk-follow-toggle { position: fixed; z-index: 1; top: var(--desk-launcher-center); width: var(--desk-launcher-size);
   height: var(--desk-launcher-size); padding: 0;
   right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge)); transform: translateY(-50%);
   pointer-events: auto; border: 0; background: transparent; box-shadow: none; }
 .desk-follow-toggle[aria-expanded="true"] { color: var(--text); background: var(--raised); }
 .desk-follow-toggle:hover { background: var(--raised); }
 .desk-follow-toggle svg { stroke-linecap: round; stroke-linejoin: round; }
-:root[data-shell="1"] .desk-follow-toggle { top: calc(var(--tl-row, 38px) / 2); }
-body:has(.desk-grid[data-solo="true"]) .desk-follow-toggle { right: 12px; }
-body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
+:root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
 .desk-palette { position: fixed; display: flex; flex-direction: column; min-width: 250px; min-height: 250px;
   z-index: 2;
   max-width: min(480px, calc(100vw - 16px)); max-height: min(480px, calc(100vh - 16px));
@@ -3894,9 +3952,13 @@ body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
   border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
   animation: desk-up .14s ease-out; }
+/* Under the launcher and flush with it, not beside it: the transcript column is
+   centred, so a desk hung to the LEFT of the launcher reached back across what
+   the reader was reading. Kept in step with anchoredGeometry() in
+   deskGeometry.ts, which is where the magnet reads the same placement back. */
 .desk-palette[data-anchored="true"] { left: auto;
-  right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge) + var(--desk-launcher-size) + var(--desk-palette-gap));
-  top: 8px; }
+  right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge));
+  top: calc(var(--desk-launcher-center) + var(--desk-launcher-size) / 2 + var(--desk-palette-gap)); }
 @keyframes desk-up { from { opacity: 0; transform: translateY(-5px) scale(.985); } }
 .desk-drag { height: 48px; flex: none; cursor: grab; padding: 7px 8px; border-bottom: 1px solid var(--line-soft);
   user-select: none; touch-action: none; }
@@ -4011,9 +4073,14 @@ body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
 .desk-grid.n3 .fwrap .ftree, .desk-grid.n4 .fwrap .ftree,
 .desk-grid.n3 .fwrap .frow > .grip, .desk-grid.n4 .fwrap .frow > .grip { display: none; }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 190px; }
-.instance-conversation::after { content: ''; position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; height: 154px;
-  pointer-events: none; background: var(--ink); }
+.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
+/* Room for the composer, and the glass the transcript scrolls under -- but only
+   where there IS one. A finished node's record has nothing to type into, and
+   reserving the composer's 150px there left a blank band under its last line
+   that read as the answer having been cut off. */
+.instance-conversation[data-composer="true"] .satx { padding-bottom: 190px; }
+.instance-conversation[data-composer="true"]::after { content: ''; position: absolute; z-index: 4;
+  left: 0; right: 0; bottom: 0; height: 154px; pointer-events: none; background: var(--ink); }
 .instance-dock { bottom: calc(18px - var(--desk-pad)); }
 .instance-dock.sasend { display: block; padding: 0 22px; border-top: 0; }
 .instance-dock .dock-in { max-width: var(--col); min-height: 116px;
@@ -4031,8 +4098,8 @@ body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
 .instance-qrow button { width: 20px; height: 20px; flex: none; border: 0; background: transparent; color: var(--faint); cursor: pointer; }
 
 @container desk-pane (max-height: 720px) {
-  .instance-conversation .satx { padding-bottom: 148px; }
-  .instance-conversation::after { height: 118px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 148px; }
+  .instance-conversation[data-composer="true"]::after { height: 118px; }
   .instance-dock { bottom: 8px; }
   .instance-dock.sasend { padding: 0 12px; }
   .instance-dock .dock-in { min-height: 88px; padding: 8px 10px; border-radius: 15px; }
@@ -4043,8 +4110,8 @@ body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
 }
 
 @container desk-pane (max-height: 500px) {
-  .instance-conversation .satx { padding-bottom: 120px; }
-  .instance-conversation::after { height: 94px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 120px; }
+  .instance-conversation[data-composer="true"]::after { height: 94px; }
   .instance-dock { bottom: 6px; }
   .instance-dock.sasend { padding: 0 8px; }
   .instance-dock .dock-in { min-height: 72px; padding: 6px 8px; border-radius: 13px; }
@@ -4052,10 +4119,30 @@ body:has(.desk-grid[data-solo="true"]) #deskHost { --desk-anchor-width: 0px; }
   .instance-dock .under { margin-top: 3px; }
 }
 
-.desk-divider { position: absolute; z-index: 8; touch-action: none; }
+/* Fullscreen: the pane IS the window, so it takes the chat's own frame rather
+   than a floating card's. No border or corners to draw around the screen edge,
+   the header given the room a title bar has, and the transcript set on the same
+   measure and gutters the chat column uses -- the rows carry that cap
+   themselves (see .satx > [data-tsl] > *), so what is left here is the padding
+   around them. */
+.desk-grid[data-solo="true"] .desk-pane { border: 0; border-radius: 0; }
+.desk-grid[data-solo="true"] .desk-pane > header { height: 46px; padding: 0 14px 0 18px; }
+.desk-grid[data-solo="true"] .satx { padding: 26px 22px; }
+.desk-grid[data-solo="true"] .instance-conversation[data-composer="true"] .satx {
+  padding-bottom: calc(190px + 26px); }
+
+/* The grid passes pointer events through so the chat behind it stays usable
+   between panes; a divider has to take them back, or the seam a reader can see
+   between two panes is one they can never grab. */
+.desk-divider { position: absolute; z-index: 8; touch-action: none; pointer-events: auto; }
 .desk-divider.column { top: 0; bottom: 0; left: var(--desk-col); width: 8px; margin-left: -4px; cursor: col-resize; }
 .desk-divider.row { height: 8px; margin-top: -4px; cursor: row-resize; }
 .desk-divider.row.left { left: 0; width: var(--desk-col); top: var(--desk-left-row); }
+/* Two panes are ONE column, so the seam between them runs the whole width. The
+   left-column width is the right answer only from the third pane on, where a
+   second column starts beside it; at two panes it left the right half of a
+   visible seam undraggable. */
+.desk-grid.n2 .desk-divider.row.left { width: 100%; }
 .desk-divider.row.right { left: var(--desk-col); right: 0; top: var(--desk-right-row); }
 .desk-divider:hover::after { content: ''; position: absolute; border-radius: 999px; background: var(--faint); opacity: .35; }
 .desk-divider.column:hover::after { width: 2px; height: 38px; left: 3px; top: calc(50% - 19px); }

@@ -220,6 +220,10 @@ export interface Lane {
   /* agent stage bookkeeping: messages already drawn, running glyph */
   agentKey: string | null
   agentDrawn: number
+  /* How many segments were settled at the end of the last paint. Anything past
+     it is the answer still being written, redrawn from the record on every
+     paint rather than appended to; 0 means nothing is provisional. */
+  agentHold: number
   running: boolean
   empty: string
 }

@@ -878,25 +878,61 @@ const DELIVERY_GAP = 8
 /* How many of the file's own lines a miniature draws. More than fills the
    tile at this scale; the rest would be rendered and then clipped. */
 const ART_HEAD_LINES = 16
-/* Text draws itself with nothing to wait for: a write tool's hunk already
-   carried what it wrote, live and on replay both, so `head` is in memory
-   before the tile mounts.
+/* Enough of the file to fill the miniature, for the files whose opening lines
+   have to be READ rather than remembered (see useDeliveryHead). */
+const HEAD_BYTES = 4096
+/* Which kinds draw themselves as text. `bin` and the ones with their own
+   picture (an image, a shot) are not on it, and `html` is deliberately absent:
+   its source is markup, and a miniature of the markup is not a miniature of
+   the page. */
+const HEAD_KINDS = new Set(['md', 'code', 'csv', 'json', 'diff'])
 
-   Markdown goes through the renderer the full-size viewer uses, and the
+/* The file's own first lines, read from the same URL the tile already probes.
+
+   The workspace record answers this for free when the MAIN agent wrote the
+   file -- a write tool's hunk IS what it wrote. Nothing answers it for a file
+   a playbook or a sub-agent produced: that write happened on another lane, so
+   this session's workspace holds no change for it and the tile fell back to a
+   grey "MD" square for the one product the turn was about. One ranged GET
+   costs less than the HEAD probe it rides beside. */
+function useDeliveryHead(url: string, want: boolean): string | null {
+  const [head, setHead] = useState<string | null>(null)
+  useEffect(() => {
+    if (!want) {
+      setHead(null)
+      return
+    }
+    let alive = true
+    fetch(url, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Range: `bytes=0-${HEAD_BYTES - 1}` },
+    })
+      .then((res) => (res.ok ? res.text() : ''))
+      /* Sliced again on this side: a server that ignores Range answers with
+         the whole file, and the miniature wants sixteen lines of it. */
+      .then((text) => { if (alive) setHead(text.slice(0, HEAD_BYTES) || null) })
+      .catch(() => { if (alive) setHead(null) })
+    return () => { alive = false }
+  }, [url, want])
+  return head
+}
+
+/* Markdown goes through the renderer the full-size viewer uses, and the
    result is SCALED by the stylesheet. Not set in a smaller font: shrinking
    the type re-wraps every line and stops a heading from being a heading, so
    what the tile showed would be a different document from the one it names. */
-const ArtMini = memo(function ArtMini({ row }: { row: ArtifactRow }): ReactElement {
-  if (!row.head) return <span className="pic none"><Ico d={ACT_ICO.doc as string} cls="fi" /></span>
-  const head = row.head.split('\n').slice(0, ART_HEAD_LINES).join('\n')
-  if (fileKind(row.name) === 'md') {
+const ArtMini = memo(function ArtMini({ name, head }: { name: string; head: string | null }): ReactElement {
+  if (!head) return <span className="pic none"><Ico d={ACT_ICO.doc as string} cls="fi" /></span>
+  const text = head.split('\n').slice(0, ART_HEAD_LINES).join('\n')
+  if (fileKind(name) === 'md') {
     return (
       <span className="pic doc">
-        <span className="mini prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(head) }} />
+        <span className="amini prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(text) }} />
       </span>
     )
   }
-  return <span className="pic doc"><span className="mini"><span className="raw">{head}</span></span></span>
+  return <span className="pic doc"><span className="amini"><span className="raw">{text}</span></span></span>
 })
 
 const humanSize = (bytes: number): string => {
@@ -939,6 +975,9 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
     return () => { alive = false }
   }, [row.missing, url])
   const kind = fileKind(row.name)
+  /* Only when the workspace has no hunk to draw from, and only once the probe
+     says the file is there: a miss would just be a second 404. */
+  const fetched = useDeliveryHead(url, state === 'ready' && !preview?.head && HEAD_KINDS.has(kind))
   const type = row.ext ? row.ext.toUpperCase() : t('gui.arts.file')
   const fallback = (
     <span className="pic none">
@@ -952,9 +991,10 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
     fallback
   ) : kind === 'img' || kind === 'svg' ? (
     <DeliveryShot row={row} missing={() => setState('missing')} />
-  ) : preview ? <ArtMini row={preview} /> : (
-    fallback
-  )
+  ) : preview?.head ? <ArtMini name={row.name} head={preview.head} />
+    : fetched ? <ArtMini name={row.name} head={fetched} /> : (
+      fallback
+    )
   const meta = state === 'missing'
     ? t('gui.arts.missing')
     : [type, humanSize(row.size)].filter(Boolean).join(' \u00b7 ')

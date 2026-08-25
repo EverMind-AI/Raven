@@ -370,8 +370,11 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
   useEffect(() => {
     if (box.current) store.paintInstanceDirect(box.current, current.agent, current.handle)
   }, [current.agent, current.handle, current.status, current.updatedAtMs, chat.busy, chat.pending.length, poll])
+  /* The pane reserves the composer's room -- a bottom inset and the glass it
+     scrolls under -- so it has to say whether there IS one: a record with
+     nothing to type into was leaving a blank 150px band under its last line. */
   return (
-    <div className="instance-conversation">
+    <div className="instance-conversation" data-composer={String(!!current.resumable)}>
       <div className="satx" ref={box} />
       {current.resumable
         ? (
@@ -399,7 +402,11 @@ export function AgentRecordConversation({ row }: { row: AgentRow }): JSX.Element
   useEffect(() => {
     if (box.current) store.paintAgentRecord(box.current, current)
   }, [current.id, current.kind, current.node, current.run_id, current.status, poll])
-  return <div className="instance-conversation"><div className="satx" ref={box} /></div>
+  return (
+    <div className="instance-conversation" data-composer="false">
+      <div className="satx" ref={box} />
+    </div>
+  )
 }
 
 function InstanceDetail(

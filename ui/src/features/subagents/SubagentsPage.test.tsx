@@ -93,6 +93,9 @@ describe('subagents island, the list', () => {
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
     expect(openAgent).toHaveBeenCalledWith(row)
+    /* And records WHAT it opened. Leaving `open` on the node it was promoted
+       from is what made the promotion below fire again on every heartbeat. */
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
@@ -940,6 +943,34 @@ describe('subagents island, an instance detail', () => {
     })
     expect(document.querySelector('.sahd .trow b')?.textContent).toBe('shape')
     expect(document.querySelector('.sasend textarea')).toBeTruthy()
+  })
+
+  it('promotes that node once, not on every heartbeat after it', async () => {
+    const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
+    const openAgent = vi.fn()
+    const openAgentRecord = vi.fn()
+    window.RavenIslands = { workspace: { openAgent, openAgentRecord } }
+    instances([], {
+      instances: async () => [row],
+      instanceHistory: async () => ({ turns: [] }),
+      node: async () => ({ messages: [] }),
+    })
+    await act(async () => {
+      store.openDagNode('r1', { id: 'shape', subagent: 'hermes' })
+    })
+    for (let beat = 0; beat < 3; beat += 1) {
+      await act(async () => {
+        store.refreshInstances(true)
+        await Promise.resolve()
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
+    /* Once. Reopening the pane every couple of seconds is what dropped the
+       reader out of fullscreen and stole the pane they were reading. */
+    expect(openAgent).toHaveBeenCalledTimes(1)
+    expect(openAgentRecord).toHaveBeenCalledTimes(1)
   })
 
   it('repaints a running instance on the heartbeat, without a remount', async () => {
