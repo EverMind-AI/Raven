@@ -283,7 +283,7 @@ export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
     key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: 0, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -869,6 +869,43 @@ export function foldRuns(lane: Lane, steps: StepData[]): void {
   }
 }
 
+/* An episode that produced ONLY a thought: no prose, no call, no failure. The
+   agent loop opens an episode per model call, and a call that comes back with
+   nothing usable is retried -- so a turn the model had to retry four times left
+   four "thought" rows behind, one per attempt, over a single answer. Reloading
+   the same turn showed one, because the session keeps only the message that
+   landed: the live turn and its own replay disagreeing about what happened. */
+const isThoughtOnly = (s: StepData): boolean =>
+  s.hasThink && !s.hasSay && !s.hasQA && !s.failed && !s.calls.length
+
+/* One row for the run, holding every thought in it -- nothing the reader
+   watched arrive is thrown away, it is just no longer one row per attempt. The
+   clock is the sum, which is what the turn actually spent thinking. */
+function mergeThoughts(lane: Lane, group: StepData[]): void {
+  const head = group[0] as StepData
+  head.think = group.map((s) => s.think).filter((x) => x.trim()).join('\n\n')
+  head.thinkMs = group.reduce((sum, s) => sum + s.thinkMs, 0)
+  const secs = group.reduce((sum, s) => sum + (s.thinkSecs || 0), 0)
+  head.thinkSecs = secs > 0 ? secs : null
+  group.slice(1).forEach((s) => replaceStep(lane, s, null))
+  bump(lane, head)
+  bumpList(lane)
+}
+
+/* Same shape as foldRuns, over the other kind of run. Separate passes because
+   the two merges keep different things: a silent run keeps its calls under a
+   new holder, a thought run keeps its first step and absorbs the rest. */
+export function foldThoughts(lane: Lane, steps: StepData[]): void {
+  let i = 0
+  while (i < steps.length) {
+    if (!isThoughtOnly(steps[i] as StepData)) { i += 1; continue }
+    let j = i
+    while (j < steps.length && isThoughtOnly(steps[j] as StepData)) j += 1
+    if (j - i >= MIN_RUN_STEPS) mergeThoughts(lane, steps.slice(i, j))
+    i = j
+  }
+}
+
 function replaceStep(lane: Lane, at: StepData, next: StepData | null): boolean {
   const i = lane.segs.indexOf(at)
   if (i >= 0) {
@@ -937,6 +974,10 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
     answer(lane, text, stamp(Date.now()), at >= 0 ? at : null)
   }
   foldRuns(lane, steps)
+  /* After the answer is promoted, not before: promoting empties the last
+     step's prose, which is what makes it the tail of the retry run it belongs
+     to. */
+  foldThoughts(lane, steps)
   collapse(lane, time)
 }
 
@@ -1283,14 +1324,28 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
     lane.segs = []
     lane.agentKey = key
     lane.agentDrawn = 0
+    lane.agentHold = 0
     lane.epoch += 1
   }
-  /* An answer being streamed is held back until it settles -- but only an
-     assistant message; the user prompt is never rewritten and for most of a
-     run it is the only message there is. */
+  /* An answer still being written is redrawn rather than appended: it is the
+     one message a later read can replace, and only an assistant message -- the
+     user prompt is never rewritten and for most of a run it is the only
+     message there is.
+
+     Drawn, not withheld. It used to be skipped until the record called itself
+     settled, which made the whole answer depend on a status this stage does not
+     own: a node whose list row had aged out, or whose last turn was still
+     flagged live, kept saying "working" forever and its answer -- written,
+     complete, sitting in the record -- was never drawn at all. */
   const last = msgs[msgs.length - 1]
-  const streaming = running && last && last.role === 'assistant'
+  const streaming = !!(running && last && last.role === 'assistant')
   const commit = streaming ? msgs.length - 1 : msgs.length
+  /* Whatever the previous paint drew provisionally goes first, so the answer
+     grows in place instead of stacking one copy per poll. */
+  if (lane.agentHold) {
+    lane.segs = lane.segs.slice(0, lane.agentHold)
+    lane.agentHold = 0
+  }
   const tail = msgs.slice(lane.agentDrawn, commit)
   const did = fresh && r ? agentFlatCalls(r) : []
   if (tail.length || did.length) {
@@ -1303,6 +1358,10 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
       history(lane, tail)
     }
     lane.agentDrawn = commit
+  }
+  if (streaming) {
+    lane.agentHold = lane.segs.length
+    history(lane, msgs.slice(commit))
   }
   lane.running = running
   lane.empty = (opts && opts.empty) || t('gui.ws.agents_none')

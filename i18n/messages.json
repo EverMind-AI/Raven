@@ -3387,6 +3387,10 @@
       "en": "Session {id}",
       "zh": "会话 {id}"
     },
+    "gui.sess.failed": {
+      "en": "Failed",
+      "zh": "已失败"
+    },
     "gui.sess.finished": {
       "en": "Finished, unread",
       "zh": "已完成，未查看"

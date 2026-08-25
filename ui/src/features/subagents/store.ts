@@ -236,18 +236,23 @@ function instanceOf(runId: string, nodeId: string, rows: InstanceRow[] = state.i
   return rows.find((x) => x.kind !== 'dag-node' && x.runId === runId && x.nodeId === nodeId) || null
 }
 
+/* The same stage the runs use: an instance's direct chat is a transcript, and
+   giving it a second renderer would be a second place for the transcript's
+   rules to drift out of.
+
+   The state moves first and the workspace is told after, the way openRow below
+   already does it. Handing the row over and returning left `open` saying
+   whatever it said before -- for a node reached through openDagNode, `dag` --
+   so the promotion in refreshInstances matched again on the next heartbeat,
+   and every heartbeat after that: the desk reopened the pane, cleared the
+   reader's fullscreen and stole the active pane, every couple of seconds, with
+   nothing touched. */
 export function openInstance(it: InstanceRow): void {
-  const workspace = window.RavenIslands?.workspace as { openAgent?: (row: InstanceRow) => void } | undefined
-  if (workspace?.openAgent) {
-    workspace.openAgent(it)
-    return
-  }
-  /* The same stage the runs use: an instance's direct chat is a transcript, and
-     giving it a second renderer would be a second place for the transcript's
-     rules to drift out of. */
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
+  const workspace = window.RavenIslands?.workspace as { openAgent?: (row: InstanceRow) => void } | undefined
+  workspace?.openAgent?.(it)
 }
 
 /* What a row in the list opens. Ordinarily the instance it names; for a

@@ -255,6 +255,59 @@ describe('transcript island, history', () => {
     expect(mount.turnKept()).toBe(true)
   })
 
+  /* The agent loop opens an episode per model call, and it retries a call that
+     comes back with nothing usable -- so a turn the model had to retry four
+     times over left four thought rows behind, one per attempt, above a single
+     answer. Reloading the same turn showed one, because the session keeps only
+     the message that landed: the two halves disagreeing again. */
+  it('lands a retried turn on one thought row, the way a reload of it reads', () => {
+    act(() => { mount.ask('?') })
+    const steps: Array<ReturnType<typeof mount.step>> = []
+    act(() => {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const retry = mount.step()
+        retry.thinkAppend(`attempt ${attempt}`)
+        retry.seal()
+        steps.push(retry)
+      }
+    })
+    /* Four rows while it is happening, which is what the reader complained of. */
+    expect(document.querySelectorAll('.think').length).toBe(4)
+    let last!: ReturnType<typeof mount.step>
+    act(() => {
+      last = mount.step()
+      last.thinkAppend('the one that worked')
+      last.setSay('here you go')
+      steps.push(last)
+    })
+    act(() => { mount.finishTurn(last, steps, '2m05s') })
+    expect($('.answer .prose')?.textContent).toBe('here you go')
+    expect(document.querySelectorAll('.think').length).toBe(1)
+    /* One row, holding every thought: nothing the reader watched arrive is
+       thrown away, it is just no longer one row per attempt. */
+    const cot = $('.cot')?.textContent || ''
+    expect(cot).toContain('attempt 0')
+    expect(cot).toContain('the one that worked')
+  })
+
+  /* A thought that led to real work is not a retry, and must keep its own row. */
+  it('leaves a thought that led to a tool call standing on its own', () => {
+    act(() => { mount.ask('check the log') })
+    let first!: ReturnType<typeof mount.step>
+    let second!: ReturnType<typeof mount.step>
+    act(() => {
+      first = mount.step()
+      first.thinkAppend('which log is it')
+      first.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'line1', 12)
+      first.seal()
+      second = mount.step()
+      second.thinkAppend('now I can answer')
+      second.setSay('the pool is the problem')
+    })
+    act(() => { mount.finishTurn(second, [first, second], '4s') })
+    expect(document.querySelectorAll('.think').length).toBe(2)
+  })
+
   /* The replayed half of the same shape. A stopped turn's last prose usually
      shares its message with the tool calls it introduced, and their results
      come after it in the payload -- so emitting the answer on sight put it
@@ -577,6 +630,51 @@ describe("the turn's delivered files and file changes", () => {
     expect(Array.from(turn.children).map((node) => node.className)).toEqual(['answer in', 'arts', 'ansfoot'])
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
+  })
+
+  /* A file a playbook or a sub-agent wrote landed on another lane, so this
+     session's workspace holds no change for it -- and the tile fell back to a
+     grey square for the one product the turn was about. */
+  it('draws a delivered file the workspace never saw a write for', async () => {
+    const asked: Array<{ url: string; method?: string }> = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      asked.push({ url, method: init?.method })
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('# Radar\n\nfirst finding') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run the radar', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['radar.md']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect($('.changes')).toBeNull()
+    expect($('.atile .pic')?.className).toBe('pic doc')
+    expect($('.atile .amini.prose')?.textContent).toContain('Radar')
+    /* Not `.mini`: that class is the page's small button, and the miniature
+       inherited its nowrap, so the document could not wrap at any width. */
+    expect($('.atile .mini')).toBeNull()
+    /* Read from the same URL the tile already probed, and only a range of it. */
+    const read = asked.find((a) => a.method !== 'HEAD')
+    expect(read?.url).toBe('/files/download?token=radar.md')
+  })
+
+  it('leaves a delivered file the tile cannot reach on its kind, not a miniature', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run the radar', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['radar.md']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect($('.atile')?.className).toContain('missing')
+    expect($('.atile .pic')?.className).toBe('pic none')
   })
 
   it('opens a delivered file through the workspace panel', async () => {
@@ -1060,32 +1158,39 @@ describe('transcript island, language', () => {
 })
 
 describe('transcript island, the agent stage', () => {
-  it('paints a running record with the glyph, holds back a streaming answer, appends on poll', () => {
+  it('paints a running record with the glyph, redrawing the streaming answer in place', () => {
     const box = document.createElement('div')
     document.body.appendChild(box)
     const t0 = Date.now() - 9000
+    const at = (text: string, status: string): void => {
+      act(() => {
+        mount.agentStage(box, {
+          status,
+          messages: [
+            { role: 'user', text: 'survey the repo', timestamp: iso(t0) },
+            { role: 'assistant', text, timestamp: iso(t0 + 5000) },
+          ],
+        }, { key: 'sp:a1' })
+      })
+    }
     act(() => {
       mount.agentStage(box, {
         status: 'run',
-        messages: [
-          { role: 'user', text: 'survey the repo', timestamp: iso(t0) },
-          { role: 'assistant', text: 'half an ans' },
-        ],
+        messages: [{ role: 'user', text: 'survey the repo', timestamp: iso(t0) }],
       }, { key: 'sp:a1', reset: true })
     })
     expect(box.querySelector('.ask .b')?.textContent).toBe('survey the repo')
-    /* The streaming answer is held back; the glyph carries the motion. */
-    expect(box.querySelector('.answer')).toBeNull()
+    /* The answer being written is DRAWN, not withheld: a record that never
+       reports itself settled used to hide a finished answer forever. */
+    at('half an ans', 'run')
+    expect(box.querySelector('.answer .prose')?.textContent).toBe('half an ans')
     expect(box.querySelector('.sarun .wkg')).toBeTruthy()
-    act(() => {
-      mount.agentStage(box, {
-        status: 'ok',
-        messages: [
-          { role: 'user', text: 'survey the repo', timestamp: iso(t0) },
-          { role: 'assistant', text: 'the whole answer', timestamp: iso(t0 + 5000) },
-        ],
-      }, { key: 'sp:a1' })
-    })
+    /* Each poll replaces it rather than stacking another copy. */
+    at('half an answer now', 'run')
+    expect(box.querySelectorAll('.answer').length).toBe(1)
+    expect(box.querySelector('.answer .prose')?.textContent).toBe('half an answer now')
+    at('the whole answer', 'ok')
+    expect(box.querySelectorAll('.answer').length).toBe(1)
     expect(box.querySelector('.answer .prose')?.textContent).toBe('the whole answer')
     expect(box.querySelector('.sarun')).toBeNull()
   })

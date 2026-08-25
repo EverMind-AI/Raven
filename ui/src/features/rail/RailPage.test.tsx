@@ -208,12 +208,26 @@ describe('rail island', () => {
     expect(run.querySelector('i')).toBeTruthy()
     const done = rowByTitle(host, 'done one').querySelector('.w')!
     expect(done.getAttribute('data-sig')).toBe('done')
-    expect(rowByTitle(host, 'broken one').querySelector('.dot.err')).toBeTruthy()
+    /* A failed turn reports from the same slot the running one does, not from a
+       dot at the other end of the row. */
+    const bad = rowByTitle(host, 'broken one').querySelector('.w')!
+    expect(bad.getAttribute('data-sig')).toBe('err')
+    expect(bad.getAttribute('aria-label')).toBe('gui.sess.failed')
+    expect(bad.querySelector('i')).toBeTruthy()
+    expect(rowByTitle(host, 'broken one').querySelector('.dot')).toBeNull()
     h.state.busy = false
     h.state.rows[1]!.status = null
     act(() => store.draw())
-    expect(host.querySelector('[data-sig]')).toBeNull()
-    expect(host.querySelector('.dot.err')).toBeTruthy()
+    expect(rowByTitle(host, 'GTM research').querySelector('[data-sig]')).toBeNull()
+    expect(rowByTitle(host, 'done one').querySelector('[data-sig]')).toBeNull()
+    expect(rowByTitle(host, 'broken one').querySelector('[data-sig="err"]')).toBeTruthy()
+  })
+
+  it('keeps a queued session on a leading dot: it is not the state of a turn', () => {
+    install({ rows: [row({ id: 'q', title: 'queued one', status: 'que' })], busy: false, cur: null })
+    const host = mount()
+    expect(rowByTitle(host, 'queued one').querySelector('.dot.que')).toBeTruthy()
+    expect(rowByTitle(host, 'queued one').querySelector('[data-sig]')).toBeNull()
   })
 
   it('keeps the permanent groups on an empty list', () => {

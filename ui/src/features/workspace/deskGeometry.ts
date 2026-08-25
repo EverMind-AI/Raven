@@ -2,13 +2,21 @@
 
 import type { DeskGeometry, DeskPane } from './deskTypes'
 
-export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v4'
+/* Bumped with the anchor: a desk stored under the old key carries the geometry
+   of the corner it used to hang off, and re-clamping it would keep the size
+   that covered the transcript. */
+export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v5'
 export const DESK_ANCHOR_GAP = 12
-export const DESK_ANCHOR_TOP = 4
 export const DESK_SNAP_DISTANCE = 34
 export const DESK_MIN_SIZE = 250
 export const DESK_MAX_SIZE = 480
 export const DESK_VIEWPORT_GUTTER = 8
+/* The default is the smallest desk worth reading, and it hangs UNDER the
+   launcher against the same edge rather than beside it. Beside it, a 300px
+   panel reached back over the centred transcript column, so the palette the
+   reader opened to look something up sat on top of what they were reading. */
+export const DESK_DEFAULT_WIDTH = 250
+export const DESK_DEFAULT_HEIGHT = 260
 
 const CHAT_MIN_FALLBACK = 430
 const FILE_PANE_INITIAL_WIDTH = 720
@@ -35,25 +43,30 @@ function launcher(): HTMLElement | null {
 }
 
 export function defaultGeometry(): DeskGeometry {
-  const w = Math.min(300, window.innerWidth - 20)
-  const h = Math.min(300, window.innerHeight - 82)
-  const anchor = document.getElementById('wsBtn')?.getBoundingClientRect()
-  return clampGeometry({
-    x: anchor ? anchor.left - w - DESK_ANCHOR_GAP : window.innerWidth - w - 42,
-    y: anchor ? anchor.top - DESK_ANCHOR_TOP : DESK_VIEWPORT_GUTTER,
-    w,
-    h,
-    detached: false,
-  })
+  const w = Math.min(DESK_DEFAULT_WIDTH, window.innerWidth - 20)
+  const h = Math.min(DESK_DEFAULT_HEIGHT, window.innerHeight - 82)
+  return anchoredGeometry({ x: 0, y: 0, w, h, detached: false })
 }
 
+/* Where the anchored desk actually sits, for the magnet to snap back to. It
+   MUST agree with .desk-palette[data-anchored="true"] in the stylesheet, which
+   is what positions it while it is attached: right edge flush with the
+   launcher, hanging below it. Two expressions of one placement, so a change to
+   either is a change to both. */
 export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
   const rect = launcher()?.getBoundingClientRect()
-  if (!rect) return clampGeometry(value)
+  if (!rect) {
+    return clampGeometry({
+      ...value,
+      x: window.innerWidth - value.w - DESK_VIEWPORT_GUTTER,
+      y: DESK_VIEWPORT_GUTTER,
+      detached: false,
+    })
+  }
   return clampGeometry({
     ...value,
-    x: rect.left - value.w - DESK_ANCHOR_GAP,
-    y: rect.top - DESK_ANCHOR_TOP,
+    x: rect.right - value.w,
+    y: rect.bottom + DESK_ANCHOR_GAP,
     detached: false,
   })
 }

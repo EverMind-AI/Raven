@@ -44,16 +44,31 @@ function revealWorkspace(): void {
   shell().workspaceSetOpen?.(true)
 }
 
-function addPane(pane: DeskPane): void {
+/* `supersedes` names a pane this one REPLACES rather than joins: the same work
+   reached a second way must land in the slot the first one took, or the reader
+   ends up with two panes showing one node. */
+function addPane(pane: DeskPane, supersedes?: string | null): void {
   const same = state.panes.findIndex((item) => item.id === pane.id)
-  const panes = same >= 0
-    ? state.panes.map((item, index) => index === same ? pane : item)
-    : [...state.panes, pane]
-  if (panes.length > 4) {
-    toast(t('gui.ws.desk_limit'))
-    return
+  const slot = same >= 0
+    ? same
+    : supersedes ? state.panes.findIndex((item) => item.id === supersedes) : -1
+  let panes: DeskPane[]
+  if (slot >= 0) panes = state.panes.map((item, index) => index === slot ? pane : item)
+  else {
+    if (state.panes.length >= 4) {
+      toast(t('gui.ws.desk_limit'))
+      return
+    }
+    panes = [...state.panes, pane]
   }
-  update({ panes, solo: null, active: pane.id })
+  update({
+    panes,
+    /* A pane taking the fullscreen pane's own slot keeps the fullscreen: the
+       reader did not ask to come back out. Anything else is a new thing to
+       look at, and looking at it means leaving the one screen that hides it. */
+    solo: state.solo && (state.solo === pane.id || state.solo === supersedes) ? pane.id : null,
+    active: pane.id,
+  })
   revealWorkspace()
 }
 
@@ -75,8 +90,16 @@ export function openDeskDiff(change: WsChange): void {
   addPane({ id: `diff:${change.key}:${change.turn}`, kind: 'diff', change })
 }
 
+/* The id openDeskAgentRecord gives a graph node's own record, so an instance
+   that turns out to BE that node can take its place. */
+const recordIdOfNode = (runId: string, node: string): string => `agent-record:${runId}:${node}`
+
 export function openDeskAgent(row: InstanceRow): void {
-  addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row })
+  /* A node opened before its instance row was known shows as the node's record;
+     when the row arrives the panel promotes it, and the promoted view is the
+     same work -- so it replaces that pane instead of opening beside it. */
+  const supersedes = row.runId && row.nodeId ? recordIdOfNode(row.runId, row.nodeId) : null
+  addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row }, supersedes)
 }
 
 export function openDeskAgentRecord(row: AgentRow): void {
