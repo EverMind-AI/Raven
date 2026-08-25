@@ -3989,6 +3989,16 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    from the edge while its own launcher sat against it. */
 body:has(#split[data-open="true"]):not(:has(.desk-grid[data-solo="true"])) #deskHost {
   --desk-anchor-width: var(--wsw); }
+/* The desk belongs to the conversation its panes were opened from. A module
+   page -- skills, plugins, memory, cron, connections -- is a full-window layer
+   over the chat, so a desk floating above one shows a file and a sub-agent from
+   a session the reader has navigated away from, over a page that has nothing to
+   do with either. `.app[data-page]` is the shell's own flag for "a page is up",
+   the same one the rail reads to decide who owns the selected state.
+
+   Hidden rather than unmounted: the panes are still the session's, and coming
+   back to the chat should find the desk as it was left. */
+body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-follow-toggle { position: fixed; z-index: 1; top: var(--desk-launcher-center); width: var(--desk-launcher-size);
   height: var(--desk-launcher-size); padding: 0;
   right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge)); transform: translateY(-50%);
