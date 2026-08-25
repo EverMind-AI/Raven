@@ -223,7 +223,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
 
             <Box width={30}>
               <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected}>
-                ({s.message_count} msgs, {age(s.updated_at || s.started_at)}, {s.source || 'tui'})
+                ({s.message_count} msgs, {age(s.started_at)}, {s.source || 'tui'})
               </Text>
             </Box>
 

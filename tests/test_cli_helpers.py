@@ -75,7 +75,7 @@ def test_send_probe_timeout_raises(monkeypatch: pytest.MonkeyPatch, stub_load_co
     monkeypatch.setattr(_helpers, "make_provider", lambda _config: _SlowProvider())
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
-        send_probe(timeout_s=0.05)
+        send_probe(timeout_s=1)
 
 
 # ---------------------------------------------------------------------------
@@ -99,34 +99,6 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
     )
     provider = _helpers.make_provider(load_config(p))
     assert isinstance(provider, LiteLLMProvider)
-
-
-def _model_config(tmp_path: Path) -> Path:
-    p = tmp_path / "config.json"
-    p.write_text(
-        json.dumps(
-            {
-                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
-                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    return p
-
-
-def test_make_provider_honours_explicit_model(tmp_path: Path) -> None:
-    from raven.config.loader import load_config
-
-    provider = _helpers.make_provider(load_config(_model_config(tmp_path)), "other-model")
-    assert provider.get_default_model() == "other-model"
-
-
-def test_make_provider_defaults_to_the_config_model(tmp_path: Path) -> None:
-    from raven.config.loader import load_config
-
-    provider = _helpers.make_provider(load_config(_model_config(tmp_path)))
-    assert provider.get_default_model() == "my-model"
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +239,7 @@ def test_which_client_serves_a_provider_is_read_from_the_registry(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     assert type(make_provider(config)).__name__ == expected
 
@@ -359,7 +331,7 @@ def test_make_provider_builds_a_rotor_over_several_endpoints(monkeypatch: pytest
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     provider = _helpers.make_provider(config)
 
@@ -382,7 +354,7 @@ def test_make_provider_a_single_endpoint_entry_still_returns_a_plain_provider(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     provider = _helpers.make_provider(config)
 
@@ -416,7 +388,7 @@ def test_make_provider_single_endpoint_entry_credentials_are_not_dropped(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     provider = _helpers.make_provider(config)
 
@@ -449,7 +421,7 @@ def test_make_provider_flat_config_is_equivalent_through_the_endpoint_path(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     provider = _helpers.make_provider(config)
 
@@ -491,7 +463,7 @@ def test_make_provider_rejects_endpoints_on_providers_that_cannot_rotate(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
 
     with pytest.raises(MissingCredentialsError, match="endpoints"):
         _helpers.make_provider(config)

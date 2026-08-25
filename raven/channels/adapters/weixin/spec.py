@@ -16,5 +16,5 @@ def _make(config):
 SPEC = ChannelSpec(
     display_name="WeChat",
     factory=_make,
-    capabilities=Capabilities(interactive_login=True, file_attachments=True),
+    capabilities=Capabilities(interactive_login=True),
 )

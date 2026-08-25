@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import metadata
@@ -18,8 +17,6 @@ from urllib.parse import urlparse
 import httpx
 import typer
 from rich.console import Console
-
-from raven.cli import _install_guard
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
 LATEST_RELEASE_WEB = "https://github.com/EverMind-AI/Raven/releases/latest"
@@ -54,87 +51,11 @@ class ToolInstallTarget:
     bin_dir: Path
 
 
-_UPGRADE_HELPER_SOURCE = r"""import json
-import os
-import subprocess
+_UPGRADE_HELPER_SOURCE = r"""import subprocess
 import sys
-import time
-
-# How long to wait for the process being replaced to exit. Sized for a real
-# `raven serve` shutdown, which cancels detached sub-agents, closes every MCP
-# server, flushes the memory backend and closes the browser driver first, and so
-# takes tens of seconds routinely and minutes at worst. A tight bound is not a
-# safety margin here: the parent is going away either way, and giving up early
-# means the install never runs and the surface the upgrade was clicked from
-# never comes back. Waiting too long costs one sleeping helper; waiting too
-# little costs the user a Raven they have to restart by hand.
-PARENT_EXIT_TIMEOUT_S = 300
-
-# Where the spawning side recorded that this environment is being replaced. The
-# helper runs under `python -I` outside the environment it is rewriting, so it
-# cannot import raven to ask; the path is handed over instead.
-MARKER_PATH = os.environ.get("RAVEN_UPGRADE_MARKER") or None
-
-
-def stamp_marker():
-    # Claim the marker for this helper. The pid is the only thing that tells an
-    # install still running from one whose helper was killed, and those two need
-    # opposite answers from whoever is starting up.
-    if not MARKER_PATH:
-        return
-    try:
-        with open(MARKER_PATH, encoding="utf-8") as handle:
-            payload = json.load(handle)
-        if not isinstance(payload, dict):
-            payload = {}
-    except (OSError, ValueError):
-        payload = {}
-    payload.setdefault("started_at", time.time())
-    payload["pid"] = os.getpid()
-    try:
-        with open(MARKER_PATH, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle)
-    except OSError:
-        pass
-
-
-def clear_marker():
-    if not MARKER_PATH:
-        return
-    try:
-        os.unlink(MARKER_PATH)
-    except OSError:
-        pass
 
 
 def wait_for_parent(parent_pid):
-    if sys.platform != "win32":
-        return wait_for_parent_posix(parent_pid)
-    return wait_for_parent_windows(parent_pid)
-
-
-def wait_for_parent_posix(parent_pid):
-    # POSIX has no waitable handle for a non-child process, so poll the pid.
-    # Bounded, so a parent that refuses to die cannot leave the helper resident.
-    deadline = time.monotonic() + PARENT_EXIT_TIMEOUT_S
-    while time.monotonic() < deadline:
-        try:
-            os.kill(parent_pid, 0)
-        except ProcessLookupError:
-            return 0
-        except PermissionError:
-            # The pid exists but belongs to someone else, i.e. the parent is
-            # gone and its pid was recycled. Treat that as exited.
-            return 0
-        except OSError as exc:
-            print(f"Unable to upgrade Raven: could not watch Raven ({exc}).", file=sys.stderr)
-            return 1
-        time.sleep(0.2)
-    print("Unable to upgrade Raven: waiting for Raven to exit timed out.", file=sys.stderr)
-    return 1
-
-
-def wait_for_parent_windows(parent_pid):
     import ctypes
     from ctypes import wintypes
 
@@ -165,7 +86,7 @@ def wait_for_parent_windows(parent_pid):
         return 1
 
     try:
-        wait_status = kernel32.WaitForSingleObject(handle, PARENT_EXIT_TIMEOUT_S * 1000)
+        wait_status = kernel32.WaitForSingleObject(handle, 30_000)
         wait_error = ctypes.get_last_error()
     finally:
         kernel32.CloseHandle(handle)
@@ -183,38 +104,13 @@ def wait_for_parent_windows(parent_pid):
 
 
 def main(argv=None):
-    # Claimed before the argument check, and released however this ends: a
-    # helper that exits without clearing the marker leaves every later start
-    # waiting on an install that is not running.
-    stamp_marker()
-    try:
-        return run(argv)
-    finally:
-        clear_marker()
-
-
-def run(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (4, 5, 6):
+    if len(args) not in (4, 5):
         print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
         return 2
 
     uv_path, wheel_url, current_version, latest_version = args[:4]
-    # A 6th argument is a JSON argv the helper runs after a successful install:
-    # `raven serve` uses it to bring the gateway back up on the same port, so an
-    # open GUI can reconnect instead of dying with the process it asked to
-    # replace. The CLI passes 4 args and keeps the old exec-in-place behaviour.
-    relaunch = None
-    if len(args) == 6:
-        try:
-            relaunch = json.loads(args[5])
-        except ValueError:
-            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
-            return 2
-        if not (isinstance(relaunch, list) and relaunch and all(isinstance(x, str) for x in relaunch)):
-            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
-            return 2
-    if len(args) >= 5:
+    if len(args) == 5:
         try:
             parent_pid = int(args[4])
         except (TypeError, ValueError):
@@ -251,59 +147,12 @@ def run(argv=None):
         )
         constraints_path = None
 
-    def run_uv(requirement, mode):
-        command = [uv_path, "tool", "install"] + mode
+    def install(requirement):
+        command = [uv_path, "tool", "install", "--force"]
         if constraints_path:
             command += ["-c", constraints_path]
         command.append(requirement)
         return subprocess.run(command, check=False).returncode
-
-    def install(requirement):
-        # Cheap shape first. `--force` tears the whole environment down and
-        # writes 150-odd packages back even when the only thing that moved is
-        # raven's own wheel; `--reinstall-package raven` replaces that wheel and
-        # leaves the dependencies -- and their bytecode -- where they are. It
-        # still resolves and syncs the rest, so a dependency the constraints
-        # moved is moved here too; it is not a shortcut past correctness.
-        #
-        # `--force` stays as the fallback for the failures the cheap shape
-        # reports. The reachable one is a stale entry on the executable name --
-        # which is what a helper killed between writing the launcher and
-        # finishing leaves: uv refuses with "Executable already exists: raven
-        # (use `--force` to overwrite)" and only `--force` gets past it.
-        #
-        # What the fallback does NOT cover, said out loud because the shape of
-        # the code invites the opposite assumption: a dependency whose files are
-        # gone while its metadata survives. uv cannot see that, so the cheap
-        # shape reports success, the fallback never runs, and the environment
-        # stays broken. `--force` used to repair it by accident on every
-        # upgrade. Nothing repairs it now short of rerunning the installer.
-        status = run_uv(requirement, ["--reinstall-package", "raven"])
-        if status == 0:
-            return 0
-        return run_uv(requirement, ["--force"])
-
-    def restart():
-        # Called on every path out of the install, not just the successful one.
-        # Once the parent has exited, this helper holds the only handle to the
-        # surface the user was sitting in -- so a failed install must still put
-        # it back. Leaving nothing running is strictly worse than not upgrading:
-        # the page the upgrade was clicked from cannot even reconnect to say
-        # what went wrong, and the user is left with a dead window.
-        #
-        # The marker goes first, before anything is launched: the process being
-        # started here reads it, and would wait out an upgrade that is over.
-        clear_marker()
-        if relaunch is None:
-            return True
-        try:
-            kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
-            subprocess.Popen(relaunch, **kwargs)
-        except OSError as exc:
-            print(f"Could not restart Raven: {exc}.", file=sys.stderr)
-            return False
-        print("Raven restarted.")
-        return True
 
     try:
         channel_status = install(f"raven[channels] @ {wheel_url}")
@@ -314,7 +163,6 @@ def run(argv=None):
                     f"Unable to upgrade Raven: uv exited with status {base_status}.",
                     file=sys.stderr,
                 )
-                restart()
                 return base_status
             print(
                 "Warning: Channel dependencies failed to install; installed base raven only. "
@@ -323,14 +171,11 @@ def run(argv=None):
             )
     except OSError as exc:
         print(f"Unable to upgrade Raven: could not run uv: {exc}.", file=sys.stderr)
-        restart()
         return 1
 
     print(f"Raven upgraded: {current_version} -> {latest_version}")
-    if relaunch is None:
-        print("Restart any other running Raven process to use the new version.")
-        return 0
-    return 0 if restart() else 1
+    print("Restart any other running Raven process to use the new version.")
+    return 0
 
 
 if __name__ == "__main__":
@@ -677,7 +522,6 @@ def _handoff_upgrade(
     env = os.environ.copy()
     env["UV_TOOL_DIR"] = str(target.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
-    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
     argv = [
         str(base_python),
         "-I",
@@ -698,101 +542,8 @@ def _handoff_upgrade(
             return
         os.execve(str(base_python), argv, env)
     except OSError as exc:
-        _install_guard.clear_marker()
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
-
-
-@dataclass(frozen=True)
-class UpgradePlan:
-    current_version: str
-    release: ReleaseInfo
-    target: ToolInstallTarget
-
-
-def fetch_latest_for_channel() -> tuple[ReleaseInfo, Callable[[str], tuple[int, ...]]]:
-    """The newest build this install should see, and the ordering to judge it by.
-
-    Imported lazily because ``beta_channel`` imports this module for its release
-    type. Its comparison reads a plain ``X.Y.Z`` too, so the beta channel can
-    keep using it after a tester's build catches up with a stable one.
-    """
-    from raven.cli import beta_channel
-
-    chan = beta_channel.channel()
-    if chan is None:
-        return _fetch_latest_release(), _version_key
-    return beta_channel.fetch_latest(chan), beta_channel.release_key
-
-
-def plan_upgrade() -> UpgradePlan:
-    """Resolve what an upgrade would install, or raise ``UpgradeError`` with why.
-
-    Network-bound (fetches the latest release), so callers on an event loop must
-    run it in a thread.
-    """
-    current_version = _current_version()
-    release, version_key = fetch_latest_for_channel()
-    if version_key(current_version) >= version_key(release.version):
-        raise UpgradeError(f"Raven {current_version} is already up to date")
-    if _is_editable_install():
-        raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
-    target = _uv_tool_target()
-    if target is None:
-        raise UpgradeError("This Raven installation is not managed by uv")
-    return UpgradePlan(current_version=current_version, release=release, target=target)
-
-
-def spawn_detached_upgrade(
-    plan: UpgradePlan,
-    *,
-    parent_pid: int,
-    relaunch: list[str] | None = None,
-    extra_env: dict[str, str] | None = None,
-) -> None:
-    """Start the upgrade helper as a process that outlives this one.
-
-    The CLI's ``_handoff_upgrade`` execs the helper in place, which a server
-    cannot do: it still owes its caller a reply. So the helper is detached
-    instead, told which pid to wait for, and optionally given a command to run
-    once the install lands (see the helper's 6th argument).
-    """
-    uv_value = shutil.which("uv")
-    if uv_value is None:
-        raise UpgradeError("uv was not found on PATH")
-    uv_path = _external_executable(uv_value, label="uv")
-    base_python = _external_executable(getattr(sys, "_base_executable", None), label="Raven base Python")
-
-    env = os.environ.copy()
-    env["UV_TOOL_DIR"] = str(plan.target.tool_dir)
-    env["UV_TOOL_BIN_DIR"] = str(plan.target.bin_dir)
-    # Written here rather than by the helper: the window this marker exists for
-    # opens the moment the caller lets go of the port, which is before the
-    # helper has run its first instruction.
-    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version))
-    if extra_env:
-        env.update(extra_env)
-
-    argv = [
-        str(base_python),
-        "-I",
-        "-c",
-        _upgrade_helper_bootstrap(),
-        str(uv_path),
-        plan.release.wheel_url,
-        plan.current_version,
-        plan.release.version,
-        str(parent_pid),
-    ]
-    if relaunch is not None:
-        argv.append(json.dumps(relaunch))
-
-    kwargs: dict[str, object] = {} if sys.platform == "win32" else {"start_new_session": True}
-    try:
-        subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
-    except OSError as exc:
-        _install_guard.clear_marker()
-        raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
 
 
 def register(app: typer.Typer) -> None:
@@ -801,21 +552,15 @@ def register(app: typer.Typer) -> None:
         check: bool = typer.Option(
             False,
             "--check",
-            help="Check for a newer Raven build without installing it.",
+            help="Check for a newer stable Raven release without installing it.",
         ),
     ) -> None:
-        """Check for and install the newest Raven build this install is entitled to.
-
-        Stable by default; an install that joined the beta channel gets its
-        newest beta instead. The failure path of the served page's one-click
-        update tells the reader to run this, so it has to follow the same
-        channel that offered them the update.
-        """
+        """Check for and install the latest stable Raven release."""
         try:
             current_version = _current_version()
-            release, version_key = fetch_latest_for_channel()
-            current_key = version_key(current_version)
-            latest_key = version_key(release.version)
+            release = _fetch_latest_release()
+            current_key = _version_key(current_version)
+            latest_key = _version_key(release.version)
 
             if current_key == latest_key:
                 console.print(f"Raven {current_version} is up to date.")

@@ -2,55 +2,28 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 
-import { activeColorTier, Box, NoSelect, stringWidth, Text } from '@hermes/ink'
-import { useStore } from '@nanostores/react'
-import { memo, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { Box, NoSelect, stringWidth, Text } from '@hermes/ink'
+import { memo, useEffect, useState } from 'react'
 
-import type { Segment } from '../domain/episodeSummary.js'
 import type { Theme } from '../theme.js'
 import type { Episode, EpisodeTool, Msg } from '../types.js'
 
-import { $directChat, viewKeyOf } from '../app/directChatStore.js'
-import { $folds, toggleFold } from '../app/foldStore.js'
-import {
-  callFailed,
-  failureNote,
-  previewLines,
-  segmentTurn,
-  TOOL_PREVIEW_ROWS,
-  toolArgument,
-  toolParts,
-  toolsSummary,
-  totalDurationMs
-} from '../domain/episodeSummary.js'
+import { episodeFailed, groupTools, toolParts, toolsSummary } from '../domain/episodeSummary.js'
 import { fmtDuration } from '../domain/messages.js'
-import { spawnRunSettled } from '../domain/spawnRun.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
-import { boundedLiveRenderText, compactPreview, tailPreview, clipToWidthFromEnd } from '../lib/text.js'
-import { DagPanel } from './dagPanel.js'
+import { boundedLiveRenderText, clipToWidth, compactPreview, tailPreview } from '../lib/text.js'
 import { Md } from './markdown.js'
-import { SpawnPanel } from './spawnPanel.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { Spinner } from './thinking.js'
 
-// Everything the transcript renders sits one step in from the edge, which is
-// also where a normal assistant message's body starts (the width messageLine
-// reserves for its gutter). Prose spends that step on the same reply marker;
-// activity leaves it blank. Either way the body column is shared on purpose:
-// inventing a second left edge would misalign this message kind from every
-// other one. Depth steps in from there.
-const INDENT = 2
-const STEP = 2
-const MIN_TAIL = 12
+// Activity rows (tool calls and their result previews) are clipped a few cells
+// short of the container so the transcript keeps a right-hand margin instead of
+// running flush to the edge. Prose keeps the full width — it wraps, so it never
+// looks crammed.
+const ROW_SLACK = 4
 
-// A detail block paints a background so the argument and its output read as one
-// object rather than more transcript rows. Below 256 colors there is no shade
-// between "black" and "grey" that stays subtle, so those terminals get a rule
-// instead of a fill.
-const canFill = () => activeColorTier() >= 2
-
-// Re-render once a second while `active`, so an in-flight call can show how long
-// it has been running. Idle turns install no timer.
+// Re-render once a second while `active`, so an in-flight tool can show how
+// long it has been running. Idle turns install no timer.
 const useNow = (active: boolean) => {
   const [now, setNow] = useState(() => Date.now())
 
@@ -67,772 +40,423 @@ const useNow = (active: boolean) => {
   return now
 }
 
-const elapsedOf = (tool: EpisodeTool, now: number): number | undefined =>
+// Elapsed for a tool: its final duration once known, else the live time since it
+// started — so a long call reports progress instead of just spinning. A finished
+// tool never reports live time (that kept old rows counting up).
+const toolElapsed = (tool: EpisodeTool, now: number): number | undefined =>
   tool.durationMs ?? (!tool.done && tool.startedAt ? Math.max(0, now - tool.startedAt) : undefined)
 
-// fmtDuration floors to whole seconds, so anything quick reads "(0s)" -- a
-// column of zeroes that says nothing. Only a call slow enough to have made the
-// reader wait gets a time.
-const SHOWN_DURATION_MS = 1000
-const durationLabel = (ms: number | undefined, running: boolean): string | undefined => {
-  if (ms == null || (!running && ms < SHOWN_DURATION_MS)) {
-    return undefined
-  }
-
-  return `${fmtDuration(ms)}${running ? '…' : ''}`
-}
-
-// A row shows a URL without its scheme and a needle inside quotes; both are the
-// same argument, so compare them stripped of those.
-const sameArgument = (rowDetail: string, argument: string) => {
-  const norm = (s: string) =>
-    s
-      .replace(/^https?:\/\//, '')
-      .replace(/\/+$/, '')
-      .trim()
-
-  return norm(rowDetail) === norm(argument)
-}
-
-// The expanded payload of one call: its full argument, then its output. No tree
-// rails inside -- the block's own ground already scopes it, and the two are told
-// apart by weight (argument in text color, output dim).
-const DetailBlock = memo(function DetailBlock({
-  argument,
+// One tool row: the `· verb (detail) (dur) ✗` line plus its inline result
+// preview, with a large diff click-to-expand. Shared by both step layouts.
+const ToolRow = memo(function ToolRow({
   compact,
-  onToggle,
-  output,
-  t,
-  width
-}: {
-  argument: string
-  compact?: boolean
-  onToggle?: () => void
-  output: string[]
-  t: Theme
-  width: number
-}) {
-  const fill = canFill()
-  const body = Math.max(8, width - 2)
-
-  return (
-    <Box
-      flexDirection="column"
-      marginBottom={1}
-      onClick={onToggle}
-      paddingX={1}
-      width={width}
-      {...(fill && { backgroundColor: t.color.detailBg })}
-    >
-      {argument ? (
-        <Box>
-          {fill ? null : (
-            <NoSelect fromLeftEdge>
-              <Text color={t.color.border}>{'▏'}</Text>
-            </NoSelect>
-          )}
-          <Box width={body}>
-            {/* `wrap` is the only mode this ink measures: wrap-char/wrap-trim
-                render wrapped but leave the box one row tall, so the text
-                overflowed the block. `wrap` also hard-breaks an unbreakable
-                token (a long URL), which is what tool arguments are made of. */}
-            <Text color={t.color.text} wrap="wrap">
-              {argument}
-            </Text>
-          </Box>
-        </Box>
-      ) : null}
-
-      {output.map((line, i) => (
-        <Box key={i}>
-          {fill ? null : (
-            <NoSelect fromLeftEdge>
-              <Text color={t.color.border}>{'▏'}</Text>
-            </NoSelect>
-          )}
-          <Box width={body}>
-            {/* The block is the one place the whole result appears, so a line
-                wraps here rather than ending in an ellipsis -- truncating twice
-                (the backend cap, then the column) left nothing readable. */}
-            <Text color={t.color.muted} dim wrap="wrap">
-              {line}
-            </Text>
-          </Box>
-        </Box>
-      ))}
-    </Box>
-  )
-})
-
-// The reasoning row. It is an ActivityRow in spirit but not in layout: the
-// spinner sits out in the margin column rather than inline, so the label lands
-// on the same column as the block underneath it and as the answer -- one left
-// edge for the text, one for the markers.
-//
-// While the model is still reasoning and the block is closed, the row spends
-// whatever columns it has left on a live tail of the reasoning. That is the
-// only view of it in that state, and a bare label plus a ticking clock says
-// nothing about whether the model is getting anywhere.
-// The person's words merged into a running turn, drawn where they landed: one
-// indented line, not the filled card a prompt gets, because a steer did not
-// open a turn -- it bent the one already running.
-const SteerRow = memo(function SteerRow({
-  at,
-  t,
-  text,
-  width
-}: {
-  at?: number
-  t: Theme
-  text: string
-  width: number
-}) {
-  const when = at ? new Date(at).toTimeString().slice(0, 5) : ''
-
-  return (
-    <Box width={width}>
-      <Box flexShrink={0} width={INDENT} />
-      <Text>
-        <Text color={t.color.accent}>{'\u21b3 steer'}</Text>
-        {when ? <Text color={t.color.muted}>{` ${when}`}</Text> : null}
-        <Text color={t.color.muted}>{' \u00b7 '}</Text>
-        <Text bold>{text}</Text>
-      </Text>
-    </Box>
-  )
-})
-
-const ReasoningRow = memo(function ReasoningRow({
-  onToggle,
-  running,
-  t,
-  tail,
-  time,
-  width
-}: {
-  onToggle?: () => void
-  running?: boolean
-  t: Theme
-  tail?: string
-  time?: string
-  width: number
-}) {
-  const head = `reasoning${time ? ` (${time})` : ''}`
-  // ` \u00b7 ` costs 3, and a tail shorter than this is more ellipsis than text.
-  const room = width - INDENT - stringWidth(head) - 3
-  const trail = tail && room >= MIN_TAIL ? clipToWidthFromEnd(tail, room) : ''
-
-  return (
-    <Box width={width}>
-      <Box flexShrink={0} width={INDENT}>
-        {running ? (
-          <NoSelect fromLeftEdge>
-            <Text>
-              <Spinner color={t.color.accent} variant="tool" />
-            </Text>
-          </NoSelect>
-        ) : null}
-      </Box>
-
-      <Box flexGrow={1} minWidth={0} onClick={onToggle}>
-        <Text color={t.color.muted} dim wrap="truncate-end">
-          {head}
-          {trail ? ` \u00b7 ${trail}` : ''}
-        </Text>
-      </Box>
-    </Box>
-  )
-})
-
-// A left-only hairline. `single` would draw the same U+2502 the tree rails
-// used, and this view retired that glyph on purpose; the thinner bar also tells
-// an aside apart from a real blockquote inside the answer, which does use
-// `single`. Only `left` is ever drawn, so the rest is filler.
-const ASIDE_RULE = {
-  bottom: ' ',
-  bottomLeft: ' ',
-  bottomRight: ' ',
-  left: '\u258f',
-  right: ' ',
-  top: ' ',
-  topLeft: ' ',
-  topRight: ' '
-} as const
-
-// The model's scratch work, rendered as an aside instead of as a payload: a
-// left rule and muted prose, the same shape a markdown blockquote gets. It
-// deliberately does not reuse DetailBlock's filled ground -- that ground reads
-// as "tool output" everywhere else in the transcript, and a slab behind ten
-// lines of prose outweighs the answer it was only leading up to. The rule is a
-// border rather than a glyph in the text so it spans every wrapped row.
-//
-// Rule and padding together spend exactly INDENT, so the body lands on the
-// transcript's own prose column: the reasoning reads as the same column of text
-// as the answer under it, with the rule out in the margin the reply marker
-// occupies. Indenting the block instead left two ragged left edges.
-//
-// The margin is on top, not bottom: every follower (the reply, the next
-// segment) already opens with one, so a bottom margin here put the answer two
-// blank rows below the scratch work while the label sat flush against it.
-const ReasoningBlock = memo(function ReasoningBlock({
-  onToggle,
-  t,
-  text,
-  width
-}: {
-  onToggle?: () => void
-  t: Theme
-  text: string
-  width: number
-}) {
-  const body = Math.max(8, width - 2)
-
-  return (
-    <Box
-      borderBottom={false}
-      borderColor={t.color.muted}
-      borderLeft
-      borderRight={false}
-      borderStyle={ASIDE_RULE}
-      borderTop={false}
-      marginTop={1}
-      onClick={onToggle}
-      paddingLeft={1}
-      width={width}
-    >
-      <Box width={body}>
-        {/* `wrap` is the only mode this ink measures: wrap-char/wrap-trim
-            render wrapped but leave the box one row tall, so the text
-            overflowed the block. No `dim` on top of `muted` -- the rule is
-            already doing the separating, and doubling it up made this the
-            lowest-contrast text in the UI. */}
-        <Text color={t.color.muted} wrap="wrap">
-          {text}
-        </Text>
-      </Box>
-    </Box>
-  )
-})
-
-// One activity row: dim text, an inline duration, and nothing else. There is no
-// fold marker -- a summary row announces that it summarizes, and repeating that
-// as a glyph on every row is what made the transcript look like a control panel.
-// Expandability is a property of the whole activity column, not of each row.
-const ActivityRow = memo(function ActivityRow({
-  depth,
-  failed,
-  label,
-  note,
-  onToggle,
-  running,
-  t,
-  time,
-  width
-}: {
-  depth: number
-  failed?: boolean
-  label: string
-  note?: string
-  onToggle?: () => void
-  running?: boolean
-  t: Theme
-  time?: string
-  width: number
-}) {
-  const color = failed ? t.color.error : t.color.muted
-
-  return (
-    <Box>
-      {/* The spinner goes in the marker margin the reasoning row and the reply
-          glyph already share, not inline ahead of the label. Inline, a row's
-          text sat two columns right of every other row for as long as the call
-          ran and snapped back when it landed -- the running row, the one a
-          reader is actually watching, was the only row aligned with nothing. */}
-      <Box flexShrink={0} width={INDENT}>
-        {running ? (
-          <NoSelect fromLeftEdge>
-            <Text>
-              <Spinner color={t.color.accent} variant="tool" />
-            </Text>
-          </NoSelect>
-        ) : null}
-      </Box>
-      <Box flexGrow={1} minWidth={0} onClick={onToggle} paddingLeft={Math.max(0, depth - INDENT)}>
-        <Text color={color} dim={!failed} wrap="truncate-end">
-          {label}
-          {note ? ` · ${note}` : ''}
-          {time ? ` (${time})` : ''}
-        </Text>
-      </Box>
-    </Box>
-  )
-})
-
-// A stretch of work between two things the model said. Three depths:
-//   folded  -- one row: "listed .raven/, read TOOLS.md, ran 4 commands (2.4s)"
-//   open    -- one row per call
-//   detail  -- a call's full argument and output, in a filled block
-// A single-call stretch skips the middle depth: its folded row already names the
-// call, so an identical row underneath would just be the same sentence twice.
-// A dag call is the one exception to "folded is one row" -- see dagFor below.
-const WorkSegment = memo(function WorkSegment({
-  compact,
-  defaultOpen,
   isOpen,
   live,
   now,
-  openCalls,
+  onToggle,
   t,
-  toggleCall,
-  toggleSelf,
-  tools,
+  tool,
   width
 }: {
   compact?: boolean
-  defaultOpen: boolean
   isOpen: boolean
   live: boolean
   now: number
-  openCalls: ReadonlySet<string>
+  onToggle: () => void
   t: Theme
-  toggleCall: (id: string) => void
-  toggleSelf: () => void
-  tools: EpisodeTool[]
-  width: number
+  tool: EpisodeTool
+  width?: number
 }) {
-  const inFlight = live && tools.some(tool => !tool.done)
-  const failure = failureNote(tools)
-  const summaryRoom = Math.max(8, width - INDENT)
-  const solo = tools.length === 1
-
-  // A dag call has no row of its own: its panel is a titled box carrying the
-  // call, the graph and the tally, and the row above it said the first of those
-  // a second time -- with the node ids spelled out again, which is what the box
-  // header replaced. A spawn call renders as a panel on the same terms.
-  const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void) => {
-    if (tool.dag || tool.spawn) {
-      return null
-    }
-
-    const parts = toolParts(tool)
-    const running = live && !tool.done
-    const failed = callFailed(tool)
-
-    return (
-      <ActivityRow
-        depth={depth}
-        failed={failed}
-        key={tool.id}
-        label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-        note={failed ? 'failed' : undefined}
-        onToggle={onToggle}
-        running={running}
-        t={t}
-        time={durationLabel(elapsedOf(tool, now), running)}
-        width={summaryRoom}
-      />
-    )
-  }
-
-  // A dag call's graph is its result, not a detail of it: which node failed is
-  // the answer, and no one-line label can carry it. So it renders under the
-  // call's own row rather than inside the detail block, at every depth --
-  // including a folded summary row. That is exactly why a stretch holding one
-  // defaults open, and why folding it back by hand still leaves the graph.
-  const dagFor = (tool: EpisodeTool, depth: number) =>
-    tool.dag ? (
-      <Box key={`g:${tool.id}`} paddingLeft={depth}>
-        <DagPanel now={now} run={tool.dag} t={t} width={Math.max(28, width - depth)} />
-      </Box>
-    ) : null
-
-  // A spawn call renders on the dag call's terms: a titled panel that carries
-  // the call, at every depth -- including the folded summary row. Its trace box
-  // opens itself while the run works (see `spawnOpen`), which is what a single
-  // delegated run has instead of a graph to watch.
-  const spawnFor = (tool: EpisodeTool, depth: number) =>
-    tool.spawn ? (
-      <Box key={`s:${tool.id}`} paddingLeft={depth}>
-        <SpawnPanel
-          now={now}
-          prompt={toolArgument(tool)}
-          run={tool.spawn}
-          t={t}
-          width={Math.max(28, width - depth)}
-        />
-      </Box>
-    ) : null
-
-  const detailFor = (tool: EpisodeTool, depth: number, onCollapse: () => void) => {
-    const lines = previewLines(tool)
-    const shown = lines.length > TOOL_PREVIEW_ROWS ? lines.slice(0, TOOL_PREVIEW_ROWS) : lines
-    const hidden = lines.length - shown.length
-    const argument = toolArgument(tool)
-    const rowDetail = toolParts(tool).detail.replace(/^"|"$/g, '')
-    // The block repeats the row only when the row is showing the same thing --
-    // the argument modulo a display transform (a stripped scheme, quotes). A
-    // containment test is too loose here: `ruff check` is a prefix of `ruff
-    // check raven/ ui-tui/` and would have swallowed a real argument.
-    //
-    // Suppressed only when there is output to show in its place: a call still
-    // running has none, and dropping the argument as well is what opened an
-    // empty slab on the one call a reader most wants to look inside. The row
-    // truncates to its width where the block wraps, so even an echoed argument
-    // is more than the row was showing.
-    const echoed = Boolean(rowDetail) && shown.length > 0 && sameArgument(rowDetail, argument)
-    const body = echoed ? '' : argument
-
-    if (!body && !shown.length) {
-      return null
-    }
-
-    return (
-      <Box key={`d:${tool.id}`} paddingLeft={depth}>
-        <DetailBlock
-          argument={body}
-          compact={compact}
-          onToggle={onCollapse}
-          output={hidden > 0 ? [...shown, `… +${hidden}`] : shown}
-          t={t}
-          width={Math.max(12, width - depth)}
-        />
-      </Box>
-    )
-  }
-
-  // ── Running: the summary so far, plus only the call in hand ──
-  //
-  // Quiet by default and openable all the same. What a reader wants from a call
-  // is most urgent while it runs -- the command a two-minute `exec` is actually
-  // running is a question that cannot wait for it to finish -- so the rows here
-  // carry the same toggles the settled ones do. Only the default differs: the
-  // stretch stays compressed to the summary and the call in hand until the
-  // reader opens it (see `detailDefaultOpen`, which does not fire in flight).
-  if (inFlight) {
-    const latest = [...tools].reverse().find(tool => !tool.done) ?? tools[tools.length - 1]!
-    const done = totalDurationMs(tools.filter(tool => tool.done))
-    const parts = toolParts(latest)
-    const elapsed = elapsedOf(latest, now)
-
-    // One call in the whole stretch means the summary IS the call: printing
-    // both gives the same sentence twice, under two spinners. So it opens the
-    // way a settled lone call does -- its row straight into its detail.
-    if (solo) {
-      return (
-        <Box flexDirection="column">
-          {callRow(latest, INDENT, toggleSelf)}
-          {dagFor(latest, INDENT)}
-          {spawnFor(latest, INDENT)}
-          {isOpen ? detailFor(latest, INDENT, toggleSelf) : null}
-        </Box>
-      )
-    }
-
-    return (
-      <Box flexDirection="column">
-        <ActivityRow
-          depth={INDENT}
-          label={toolsSummary(tools, summaryRoom)}
-          onToggle={toggleSelf}
-          // Opened, the running call's own row carries the spinner, and two of
-          // them twitching at once is what this row's was competing with.
-          running={!isOpen}
-          t={t}
-          time={durationLabel(done, false)}
-          width={summaryRoom}
-        />
-        {isOpen ? (
-          tools.map(tool => (
-            <Box flexDirection="column" key={tool.id}>
-              {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP)}
-              {spawnFor(tool, INDENT + STEP)}
-              {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
-            </Box>
-          ))
-        ) : (
-          <>
-            {/* The spinner above already says "in flight"; a second one on the
-                call in hand just makes two things twitch at once. */}
-            {latest.dag || latest.spawn ? null : (
-              <ActivityRow
-                depth={INDENT + STEP}
-                label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-                onToggle={() => toggleCall(latest.id)}
-                t={t}
-                time={durationLabel(elapsed, true)}
-                width={summaryRoom}
-              />
-            )}
-            {dagFor(latest, INDENT + STEP)}
-            {spawnFor(latest, INDENT + STEP)}
-            {openCalls.has(latest.id) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
-          </>
-        )}
-      </Box>
-    )
-  }
-
-  const total = totalDurationMs(tools)
-
-  // ── One call: the folded row IS the call; opening goes straight to detail ──
-  if (solo) {
-    const tool = tools[0]!
-
-    return (
-      <Box flexDirection="column">
-        {callRow(tool, INDENT, toggleSelf)}
-        {dagFor(tool, INDENT)}
-        {spawnFor(tool, INDENT)}
-        {isOpen ? detailFor(tool, INDENT, toggleSelf) : null}
-      </Box>
-    )
-  }
+  const toolRunning = live && !tool.done
+  const parts = toolParts(tool)
+  const elapsed = toolElapsed(tool, now)
+  // ink's `truncate-end` is a no-op once a <Text> nests other <Text> nodes (the
+  // bold verb + dim detail), so clip the detail to the row's own budget instead
+  // of trusting the wrap mode.
+  const room = (width ?? 120) - ROW_SLACK
+  const suffixW = (elapsed != null ? fmtDuration(elapsed).length + (toolRunning ? 4 : 3) : 0) + (tool.ok ? 0 : 2)
+  const detail = parts.detail
+    ? clipToWidth(parts.detail, Math.max(6, room - 2 - stringWidth(parts.verb) - 3 - suffixW))
+    : ''
+  const resultLines = (tool.resultPreview ?? '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
 
   return (
     <Box flexDirection="column">
-      <ActivityRow
-        depth={INDENT}
-        failed={Boolean(failure)}
-        label={toolsSummary(tools, summaryRoom)}
-        note={failure || undefined}
-        onToggle={toggleSelf}
-        t={t}
-        time={durationLabel(total, false)}
-        width={summaryRoom}
-      />
-      {isOpen
-        ? tools.map(tool => (
-            <Box flexDirection="column" key={tool.id}>
-              {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP)}
-              {spawnFor(tool, INDENT + STEP)}
-              {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
-            </Box>
-          ))
-        : defaultOpen
-          ? tools.map(tool => [dagFor(tool, INDENT + STEP), spawnFor(tool, INDENT + STEP)])
-          : null}
+      <Box>
+        <NoSelect fromLeftEdge onClick={tool.diff ? onToggle : undefined}>
+          {toolRunning ? (
+            <Text>
+              <Spinner color={t.color.accent} variant="tool" />{' '}
+            </Text>
+          ) : (
+            <Text color={t.color.accent}>{tool.diff ? (isOpen ? '▾ ' : '▸ ') : '· '}</Text>
+          )}
+        </NoSelect>
+        <Box flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end">
+            <Text bold color={tool.ok ? t.color.accent : t.color.error}>
+              {parts.verb}
+            </Text>
+            {detail ? (
+              <Text color={t.color.statusFg} dim>
+                {' ('}
+                {detail}
+                {')'}
+              </Text>
+            ) : (
+              ''
+            )}
+          </Text>
+        </Box>
+        {elapsed != null ? (
+          <NoSelect flexShrink={0}>
+            <Text color={t.color.statusFg} dim>
+              {' ('}
+              {fmtDuration(elapsed)}
+              {toolRunning ? '…' : ''}
+              {')'}
+            </Text>
+          </NoSelect>
+        ) : null}
+        {tool.ok ? null : (
+          <NoSelect flexShrink={0}>
+            <Text color={t.color.error}> ✗</Text>
+          </NoSelect>
+        )}
+      </Box>
+
+      {/* Result preview is shown inline (info density); only a large diff is
+          click-to-expand. A tool may report several lines (ask_user's
+          question -> answer pairs); each becomes its own row. */}
+      {resultLines.map((line, i) => (
+        <Box key={i}>
+          <NoSelect fromLeftEdge>
+            <Text color={t.color.muted} dim>
+              {'  '}
+              {i === resultLines.length - 1 ? '└ ' : '├ '}
+            </Text>
+          </NoSelect>
+          <Box flexGrow={1} minWidth={0}>
+            <Text color={t.color.muted} dim wrap="truncate-end">
+              {clipToWidth(line, Math.max(8, room - 4))}
+            </Text>
+          </Box>
+        </Box>
+      ))}
+
+      {isOpen && tool.diff ? <Md compact={compact} t={t} text={`\`\`\`diff\n${tool.diff}\n\`\`\``} /> : null}
     </Box>
   )
 })
 
-// Renders a turn as an alternating stream of what the model said and what the
-// machine did. Prose carries the transcript's reply marker in the margin it
-// already had; activity shares that margin unmarked, dim, with an inline
-// duration. The marker is the same one a plain assistant row draws, so a reply
-// reads the same whichever renderer produced it -- previously only prose colour
-// and weight separated the two voices here, which left a streaming reply
-// unmarked until the turn settled into a history row.
+// A run of N same-name tool calls in one step (e.g. 4 parallel searches),
+// rendered as a tree: one verb header, each call a `├`/`└` child with its arg
+// and result. Keeps a burst of identical calls from filling the transcript.
+const ToolGroup = memo(function ToolGroup({
+  live,
+  now,
+  t,
+  tools,
+  width
+}: {
+  live: boolean
+  now: number
+  t: Theme
+  tools: EpisodeTool[]
+  width?: number
+}) {
+  const verb = toolParts(tools[0]!).verb
+  const anyFailed = tools.some(tool => !tool.ok)
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <NoSelect fromLeftEdge>
+          <Text color={t.color.accent}>{'· '}</Text>
+        </NoSelect>
+        <Text>
+          <Text bold color={anyFailed ? t.color.error : t.color.accent}>
+            {verb}
+          </Text>
+          <Text color={t.color.statusFg} dim>
+            {' ('}
+            {tools.length}
+            {')'}
+          </Text>
+        </Text>
+      </Box>
+
+      {tools.map((tool, i) => {
+        const last = i === tools.length - 1
+        const toolRunning = live && !tool.done
+        const elapsed = toolElapsed(tool, now)
+        const suffixW = (elapsed != null ? fmtDuration(elapsed).length + (toolRunning ? 4 : 3) : 0) + (tool.ok ? 0 : 2)
+        // 4 = the '  ├ ' child prefix.
+        const detail = clipToWidth(
+          toolParts(tool).detail || toolParts(tool).verb,
+          Math.max(6, (width ?? 120) - ROW_SLACK - 4 - suffixW)
+        )
+
+        return (
+          <Box flexDirection="column" key={tool.id}>
+            <Box>
+              <NoSelect fromLeftEdge>
+                {toolRunning ? (
+                  <Text>
+                    {'  '}
+                    <Spinner color={t.color.accent} variant="tool" />{' '}
+                  </Text>
+                ) : (
+                  <Text color={t.color.accent} dim>
+                    {'  '}
+                    {last ? '└ ' : '├ '}
+                  </Text>
+                )}
+              </NoSelect>
+              <Box flexShrink={1} minWidth={0}>
+                <Text color={tool.ok ? t.color.muted : t.color.error} dim={tool.ok} wrap="truncate-end">
+                  {detail}
+                </Text>
+              </Box>
+              {elapsed != null ? (
+                <NoSelect flexShrink={0}>
+                  <Text color={t.color.statusFg} dim>
+                    {' ('}
+                    {fmtDuration(elapsed)}
+                    {toolRunning ? '…' : ''}
+                    {')'}
+                  </Text>
+                </NoSelect>
+              ) : null}
+              {tool.ok ? null : (
+                <NoSelect flexShrink={0}>
+                  <Text color={t.color.error}> ✗</Text>
+                </NoSelect>
+              )}
+            </Box>
+
+            {tool.resultPreview ? (
+              <Box>
+                <NoSelect fromLeftEdge>
+                  <Text color={t.color.muted} dim>
+                    {'  '}
+                    {last ? '  ' : '│ '}
+                    {'└ '}
+                  </Text>
+                </NoSelect>
+                <Box flexGrow={1} minWidth={0}>
+                  <Text color={t.color.muted} dim wrap="truncate-end">
+                    {clipToWidth(tool.resultPreview, Math.max(8, (width ?? 120) - ROW_SLACK - 6))}
+                  </Text>
+                </Box>
+              </Box>
+            ) : null}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+})
+
+// Renders a turn as a flat, single-level stream of rows — no outer wrapper, no
+// nesting. Two visual tiers:
+//   - narration + the final answer render as normal prose (the model's voice),
+//   - reasoning and tool rows render as dim, foldable "activity" lines.
+// A step with no narration collapses to one line ("reasoning for 8s · read 2
+// files"); a step with narration (or the running step) shows its reasoning
+// fold, the narration prose, then its tool folds.
 export const EpisodeView = memo(function EpisodeView({
-  closedKeys,
   cols,
   compact,
-  dense = false,
   episodes,
   live = false,
-  openKeys,
-  scope = '',
   t,
   text
 }: {
-  closedKeys?: readonly string[]
   cols?: number
   compact?: boolean
-  /** Trace-box rendering: no breathing rows between segments, and a static
-   *  reasoning row carries a tail of its text instead of standing bare. The
-   *  height estimator's own `dense` must agree (see `estimatedMsgHeight`). */
-  dense?: boolean
   episodes: Episode[]
   live?: boolean
-  openKeys?: readonly string[]
-  /** Which transcript these folds belong to, so two views never share one. */
-  scope?: string
   t: Theme
   text?: string
 }) {
-  // One fold set: `seg:<id>` a stretch of work, `call:<id>` one call's detail,
-  // `rsn:<n>` an episode's chain of thought.
-  //
-  // Held outside this component (see `foldStore`) so that a row the runtime
-  // replaces -- a step landing in a turn still running -- does not close what
-  // the reader just opened. `openKeys` and `closedKeys` still seed it, for a
-  // caller rendering a fixed state and for the tests.
-  const stored = useStore($folds)
-  const seeded = useMemo(
-    () => ({
-      closed: new Set(closedKeys ?? []),
-      open: new Set([...(openKeys ?? []), ...(stored[scope]?.open ?? [])])
-    }),
-    [closedKeys, openKeys, scope, stored]
-  )
-  const foldOpen = (key: string, defaultOpen: boolean) =>
-    seeded.open.has(key)
-      ? true
-      : seeded.closed.has(key) || (stored[scope]?.closed ?? []).includes(key)
-        ? false
-        : defaultOpen
-  const toggle = (key: string) => toggleFold(scope, key)
+  // One fold set keyed by role: `ep:N` expands a collapsed no-narration step,
+  // `rsn:N` its reasoning, `tool:ID` a tool's result/diff.
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+  const toggle = (key: string) =>
+    setOpen(prev => {
+      const next = new Set(prev)
+
+      if (!next.delete(key)) {
+        next.add(key)
+      }
+
+      return next
+    })
 
   const lastIdx = episodes.length - 1
-  // A delegated run outlives its turn: the panel pinned onto its tool row only
-  // re-renders on status frames, which for a long run means minutes between
-  // repaints -- and an elapsed column frozen at whatever the clock said when
-  // the reply committed. So the ticker also runs while any pinned run is still
-  // working, not only while the turn itself is live.
-  const working = episodes.some(ep =>
-    ep.tools.some(tool => (tool.dag && !tool.dag.done) || (tool.spawn && !spawnRunSettled(tool.spawn)))
-  )
-  const now = useNow((live || working) && episodes.length > 0)
-  const width = cols ? Math.max(20, cols - 4) : 116
-  const proseWidth = Math.max(20, width - INDENT)
-  const liveIndex = live ? episodes[lastIdx]?.index : undefined
-  const openCalls = new Set([...seeded.open].filter(k => k.startsWith('call:')).map(k => k.slice(5)))
+  // Tick only while a tool is actually in flight.
+  const now = useNow(live && episodes.length > 0)
 
-  // The model's prose carries the same reply marker `messageLine` draws in its
-  // gutter (`ROLE.assistant`). Drawn here because this view owns the live turn:
-  // without it a reply stayed unmarked until the turn settled into a plain
-  // history row, so the marker looked like something the turn earned by
-  // finishing. The glyph sits inside the INDENT the prose already had, so the
-  // body column does not move and activity rows still line up with it.
-  const prose = (node: ReactNode) => (
-    <Box>
-      <Box flexShrink={0} width={INDENT}>
-        <Text color={t.color.muted}>{t.brand.tool}</Text>
-      </Box>
+  const reasoningText = (ms?: number) => (ms ? `reasoning for ${fmtDuration(ms)}` : 'reasoning')
 
-      <Box flexDirection="column" width={proseWidth}>
-        {node}
-      </Box>
-    </Box>
-  )
-
-  const renderTalk = (ep: Episode) => {
-    if (ep.steer !== undefined) {
-      return <SteerRow at={ep.steerAtMs} key={`t:${ep.index}`} t={t} text={ep.steer} width={width} />
-    }
-
-    const reasoning = (ep.reasoning ?? '').trim()
-    const hasReasoning = hasMeaningfulReasoning(reasoning)
-    const running = ep.index === liveIndex
-    // The model streams reasoning and visible content on separate channels; when
-    // it splits a sentence across that boundary the narration can begin with a
-    // dangling separator ("，那我用…"). Trim leading punctuation/space.
-    const narration = (ep.narration ?? '').trim().replace(/^[\s，,、；;：:。.]+/, '')
-    const thinking = live && running && !narration && ep.tools.length === 0 && !text
-    const reasoningMs =
-      ep.reasoningMs ?? ep.durationMs ?? (thinking && ep.startedAt ? Math.max(0, now - ep.startedAt) : undefined)
-    // Open by default while the model is still reasoning, but through foldOpen
-    // so a reader who closes it mid-run stays closed -- the old expression
-    // ignored `closed` outright, which made the row's live tail unreachable.
-    const rsnOpen = foldOpen(`rsn:${ep.index}`, thinking && hasReasoning)
-
-    return (
-      <Box flexDirection="column" key={`t:${ep.index}`}>
-        {hasReasoning ? (
-          <>
-            <ReasoningRow
-              onToggle={() => toggle(`rsn:${ep.index}`)}
-              running={thinking}
-              t={t}
-              // In a trace box the row is static, so without the tail it reads
-              // as a bare label -- the one word "reasoning" says nothing.
-              tail={(thinking || dense) && !rsnOpen ? reasoning : ''}
-              time={durationLabel(reasoningMs, Boolean(thinking))}
-              width={width}
-            />
-            {rsnOpen ? (
-              <ReasoningBlock
-                onToggle={() => toggle(`rsn:${ep.index}`)}
-                t={t}
-                text={(thinking ? tailPreview : compactPreview)(reasoning, 4000)}
-                width={width}
-              />
-            ) : null}
-          </>
-        ) : null}
-
-        {narration || (live && running && text) ? (
-          <Box marginTop={hasReasoning && !dense ? 1 : 0}>
-            {prose(
-              narration ? (
-                <Md avail={proseWidth} compact={compact} t={t} text={narration} />
-              ) : (
-                <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text ?? '')} />
-              )
-            )}
-          </Box>
-        ) : null}
-      </Box>
-    )
-  }
-
-  const renderWork = (seg: Extract<Segment, { kind: 'work' }>) => {
-    // The tools whose result is a panel: a summary line cannot say which node
-    // failed or what a delegated run is doing, so a stretch holding one opens
-    // itself, and folding it by hand still leaves the panel.
-    const hasPanel = seg.tools.some(tool => tool.dag || tool.spawn)
-    // A solo stretch has no "expanded" depth of its own: its fold state gates the
-    // detail block directly (WorkSegment's solo branch above), so defaulting that
-    // state open would auto-expand the detail block, not just draw the graph
-    // (which renders unconditionally there regardless). Only a multi-call
-    // stretch's fold state means "show one row per call," which a dag call
-    // should still default open.
-    //
-    // Never while the stretch is still running, though: in flight that state
-    // also decides whether every call gets a row, and a stretch that unfolds
-    // itself as the calls land is the churn the compressed live view exists to
-    // avoid. A reader's own open still stands -- `foldOpen` reads it first.
-    const detailDefaultOpen = hasPanel && seg.tools.length > 1 && !seg.live
-
-    return (
-      <WorkSegment
-        compact={compact}
-        defaultOpen={hasPanel}
-        isOpen={foldOpen(`seg:${seg.key}`, detailDefaultOpen)}
-        key={`w:${seg.key}`}
-        live={seg.live}
-        now={now}
-        openCalls={openCalls}
-        t={t}
-        toggleCall={id => toggle(`call:${id}`)}
-        toggleSelf={() => toggleFold(scope, `seg:${seg.key}`, detailDefaultOpen)}
-        tools={seg.tools}
-        width={width}
-      />
-    )
-  }
-
-  const segments = segmentTurn(episodes, liveIndex)
-
-  // The running episode only gets a talk segment once it has said something --
-  // and the closing answer streams through `text` while `narration` is still
-  // empty, because nothing flushes it into narration until the message ends. So
-  // an episode that only answers has nowhere to put its stream, and the tail
-  // block below is the one thing that can show it.
-  const liveTalk = segments.some(seg => seg.kind === 'talk' && seg.episode.index === liveIndex)
+  // Bound the view so each row has a finite width to truncate/wrap against.
+  // The transcript wraps its rows in `paddingX={1}` and keeps a scrollbar gutter
+  // on the right (appLayout), so the real room is 4 cells less than `cols` —
+  // assuming only 2 made rows overflow the container and soft-wrap in the
+  // terminal, which showed up as stray blank lines and edge-cut text.
+  const width = cols ? Math.max(20, cols - 4) : undefined
+  // Prose (narration + the final answer) is indented one step in, so it gets
+  // that much less room. Both must use the SAME indent: the streaming text
+  // renders inside the running step and the committed answer renders here, so a
+  // mismatch makes the whole block visibly jump sideways when the turn ends.
+  const PROSE_INDENT = 2
+  const proseWidth = width ? Math.max(20, width - PROSE_INDENT) : undefined
 
   return (
     <Box flexDirection="column" width={width}>
-      {segments.map((seg, i) => (
-        <Box
-          flexDirection="column"
-          key={seg.kind === 'talk' ? `t:${seg.episode.index}` : `w:${seg.key}`}
-          marginTop={i > 0 && !dense ? 1 : 0}
-        >
-          {seg.kind === 'talk' ? renderTalk(seg.episode) : renderWork(seg)}
-        </Box>
-      ))}
+      {episodes.map((ep, epIdx) => {
+        // A step that follows one which displayed tool rows gets a blank line, so
+        // the next `reasoning` row doesn't butt straight up against the previous
+        // step's tool output. Collapsed one-line steps stay tight together.
+        const prev = epIdx > 0 ? episodes[epIdx - 1] : undefined
+        const prevShowedTools = Boolean(
+          prev &&
+          prev.tools.length > 0 &&
+          ((prev.narration ?? '').trim() || (live && prev.index === episodes[lastIdx]?.index))
+        )
+        const running = live && ep.index === episodes[lastIdx]?.index
+        const reasoning = (ep.reasoning ?? '').trim()
+        const hasReasoning = hasMeaningfulReasoning(reasoning)
+        // The model streams reasoning and visible content on separate channels;
+        // when it splits a sentence across that boundary the narration can begin
+        // with a dangling separator ("，那我用…"). Trim leading punctuation/space.
+        const narration = (ep.narration ?? '').trim().replace(/^[\s，,、；;：:。.]+/, '')
+        const hasNarration = narration.length > 0
+        // Live only while the step is genuinely still thinking — once it speaks,
+        // runs a tool, or starts the answer, the span is fixed (the controller
+        // stamps reasoningMs at that moment). Keying this off `running` alone made
+        // the row keep counting for the rest of the turn.
+        const thinking = running && !hasNarration && ep.tools.length === 0 && !text
+        const reasoningMs =
+          ep.reasoningMs ?? ep.durationMs ?? (thinking && ep.startedAt ? Math.max(0, now - ep.startedAt) : undefined)
 
-      {text && (!live || !liveTalk) ? (
-        <Box marginTop={segments.length > 0 && !dense ? 1 : 0}>
-          {prose(
-            live ? (
-              <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text)} />
-            ) : (
-              <Md avail={proseWidth} compact={compact} t={t} text={text} />
-            )
-          )}
+        // A run of the same tool collapses into one ToolGroup tree; a lone call
+        // stays a flat ToolRow (with its own result/diff fold).
+        const toolRows = groupTools(ep.tools).map(g =>
+          g.length === 1 ? (
+            <ToolRow
+              compact={compact}
+              isOpen={open.has(`tool:${g[0]!.id}`)}
+              key={g[0]!.id}
+              live={live}
+              now={now}
+              onToggle={() => toggle(`tool:${g[0]!.id}`)}
+              t={t}
+              tool={g[0]!}
+              width={width}
+            />
+          ) : (
+            <ToolGroup key={g[0]!.id} live={live} now={now} t={t} tools={g} width={width} />
+          )
+        )
+
+        // Tools render as a tight block, set off from the prose above by one
+        // blank line (so reasoning/narration and the tool list don't run together).
+        const toolBlock = ep.tools.length ? (
+          <Box flexDirection="column" marginTop={1}>
+            {toolRows}
+          </Box>
+        ) : null
+
+        // `tail` follows the stream (recent tokens) while thinking live; the
+        // head preview is fine for a finished, folded step.
+        const cot = (tail: boolean) =>
+          hasReasoning ? (
+            <Box paddingLeft={2}>
+              <Text color={t.color.muted} dim wrap="wrap-trim">
+                {(tail ? tailPreview : compactPreview)(reasoning, 4000)}
+              </Text>
+            </Box>
+          ) : null
+
+        // ── No-narration, finished step: one collapsible summary line ──
+        // A single `ep:N` toggle flips the whole step, so opening it can be undone
+        // (the earlier design toggled the reasoning fold instead, leaving the step
+        // stuck open with its tools exposed).
+        if (!hasNarration && !running) {
+          const epOpen = open.has(`ep:${ep.index}`)
+          const bits = [hasReasoning ? reasoningText(reasoningMs) : '', toolsSummary(ep.tools)]
+            .filter(Boolean)
+            .join(' · ')
+
+          return (
+            <Box flexDirection="column" key={ep.index} marginTop={prevShowedTools ? 1 : 0}>
+              <Box>
+                <NoSelect fromLeftEdge onClick={() => toggle(`ep:${ep.index}`)}>
+                  <Text color={t.color.accent}>{epOpen ? '▾ ' : '▸ '}</Text>
+                </NoSelect>
+                <Box flexGrow={1} minWidth={0}>
+                  <Text color={episodeFailed(ep) ? t.color.error : t.color.muted} dim wrap="truncate-end">
+                    {bits ? clipToWidth(bits, Math.max(8, (width ?? 120) - ROW_SLACK - 2)) : '…'}
+                  </Text>
+                </Box>
+              </Box>
+              {epOpen ? (
+                <>
+                  {cot(false)}
+                  {toolBlock}
+                </>
+              ) : null}
+            </Box>
+          )
+        }
+
+        // ── Narrated or running step: always open; reasoning is its own fold ──
+        // Expanded while the reasoning is actually streaming, folded once the
+        // step has produced anything visible — narration, tools, or (for the
+        // final step, which gets neither) the streaming answer text. Without the
+        // `!text` case the last step's CoT stayed open for the whole answer.
+        const liveReasoning = thinking && hasReasoning
+        const rsnOpen = liveReasoning || open.has(`rsn:${ep.index}`)
+
+        return (
+          <Box flexDirection="column" key={ep.index} marginTop={prevShowedTools ? 1 : 0}>
+            {hasReasoning ? (
+              <Box flexDirection="column">
+                <Box>
+                  <NoSelect fromLeftEdge onClick={() => toggle(`rsn:${ep.index}`)}>
+                    <Text color={t.color.accent}>{rsnOpen ? '▾ ' : '▸ '}</Text>
+                  </NoSelect>
+                  <Text color={t.color.muted} dim>
+                    {reasoningText(reasoningMs)}
+                  </Text>
+                </Box>
+                {rsnOpen ? cot(liveReasoning || running) : null}
+              </Box>
+            ) : null}
+
+            {hasNarration || (running && text) ? (
+              <Box marginTop={hasReasoning ? 1 : 0} paddingLeft={PROSE_INDENT}>
+                {hasNarration ? (
+                  <Md avail={proseWidth} compact={compact} t={t} text={narration} />
+                ) : (
+                  <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text ?? '')} />
+                )}
+              </Box>
+            ) : null}
+
+            {toolBlock}
+          </Box>
+        )
+      })}
+
+      {text && (!live || episodes.length === 0) ? (
+        <Box marginTop={episodes.length > 0 ? 1 : 0} paddingLeft={PROSE_INDENT}>
+          <Md avail={proseWidth} compact={compact} t={t} text={text} />
         </Box>
       ) : null}
     </Box>
@@ -840,85 +464,16 @@ export const EpisodeView = memo(function EpisodeView({
 })
 
 // History path: a committed `kind: 'episodes'` message.
-// A per-message identity for the fold scope, stable while the message grows.
-//
-// The fold ids are not all unique on their own: `seg:` and `call:` carry the
-// transport's call ids, but `rsn:<n>` is an index that restarts at 0 in every
-// message. One scope per *view* therefore put every turn's first thought under
-// one key, and opening one turn's reasoning opened all of them.
-//
-// Three stable discriminators, in this order:
-//
-//  - the turn the message came from (`foldId`): minted at message.start and
-//    published on the turn state, so the live view names this scope before the
-//    turn has called anything, and the committed message names the same one.
-//    A resumed transcript sets it from the fold's own first call id
-//    (`episodeFold`), which is the string the live read used, so the two agree
-//    across a restart as well;
-//  - the message's first tool call, for a message that carries no `foldId` --
-//    the transport's own id, and the same string before and after the settle;
-//  - the object, as a last resort, for a message that came from neither. Only
-//    safe for rows that are not replaced while they are read: a message rebuilt
-//    on every poll gets a new id each time, which closes the reader's fold.
-const foldIds = new WeakMap<object, string>()
-let foldSeq = 0
-
-/** One transcript view's fold namespace for one turn. A live read and the
- * settled row MUST resolve to the same string, or every fold the reader opened
- * mid-turn is lost the moment the turn lands. */
-export const turnFoldScope = (viewKey: string, turnId: string): string => `${viewKey}:${turnId}`
-
-const messageFoldId = (msg: Msg): string => {
-  if (msg.foldId !== undefined) {
-    return msg.foldId
-  }
-
-  const firstCall = msg.episodes?.find(ep => ep.tools.length > 0)?.tools[0]?.id
-
-  if (firstCall !== undefined) {
-    return firstCall
-  }
-
-  const hit = foldIds.get(msg)
-
-  if (hit !== undefined) {
-    return hit
-  }
-
-  const next = `m${++foldSeq}`
-
-  foldIds.set(msg, next)
-
-  return next
-}
-
 export const EpisodeMessage = memo(function EpisodeMessage({
   cols,
   compact,
-  dense,
   msg,
   t
 }: {
   cols?: number
   compact?: boolean
-  dense?: boolean
   msg: Msg
   t: Theme
 }) {
-  // The view is read here rather than threaded down as a prop: only one
-  // transcript is ever on screen, and this is the adapter that knows which. The
-  // message part keeps two turns in that view from sharing a fold.
-  const scope = turnFoldScope(viewKeyOf(useStore($directChat).active), messageFoldId(msg))
-
-  return (
-    <EpisodeView
-      cols={cols}
-      compact={compact}
-      dense={dense}
-      episodes={msg.episodes ?? []}
-      scope={scope}
-      t={t}
-      text={msg.text}
-    />
-  )
+  return <EpisodeView cols={cols} compact={compact} episodes={msg.episodes ?? []} t={t} text={msg.text} />
 })

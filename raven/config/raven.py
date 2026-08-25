@@ -111,24 +111,6 @@ class ContextConfig(_Base):
     protect_first_n: int = 3
     """Number of head exchanges always preserved in context."""
 
-    pinned_skill_ids: list[str] = Field(default_factory=lambda: ["local/subagent-dag-orchestration"])
-    """Skills whose fetched body is pinned into every later context window.
-
-    A skill body arrives as a ``use_skill`` / ``read_skill`` tool result, which
-    is an ordinary history message: only the first ``protect_first_n`` exchanges
-    are protected, so a body read mid-session is dropped like any other old one.
-    For instruction material that is usually fine -- re-fetch it. It is not fine
-    when a tool's own description says "unless the guide is already in your
-    context": the agent cannot observe whether it still is, so it either
-    re-fetches every turn or builds from the memory of a body that is gone.
-
-    Pinning keeps that fetch (the assistant tool_call and its results) in every
-    later window of the session, at the cost of those tokens of history budget.
-    Only for bodies whose absence is silently wrong; the default is the sub-agent
-    DAG guide, whose wiring rules the tool description cannot restate in full.
-    Re-fetching the same id supersedes the earlier pin, so one body is never
-    pinned twice. Set to ``[]`` to disable."""
-
     archive_dir: str = "memory/.curator/archive"
     """Relative path under workspace for lossless message archives."""
 
@@ -785,25 +767,22 @@ class EverOSConfig(_Base):
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
     # budget for supporting_cases scales with this number.
-    # Bounds live here rather than on the writers: the web RPC is one of three
-    # ways in (onboard/CLI and a hand-edited config.json are the others), and
-    # only a schema constraint covers all of them.
-    max_skills_top_k: int = Field(default=5, ge=1)
+    max_skills_top_k: int = 5
     # Confidence floor: skills falling below this after a downward
     # adjustment are soft-deleted on the spot.
-    retire_confidence: float = Field(default=0.1, ge=0.0, le=1.0)
+    retire_confidence: float = 0.1
     # Skip the skill_extractor LLM call when ``case.quality_score`` is
     # below this floor. Low-quality distillations tend to produce noisy
     # / contradictory skills more often than reusable ones; the case is
     # still persisted (useful for retrieval / audit).
-    min_quality_for_skill_extract: float = Field(default=0.2, ge=0.0, le=1.0)
+    min_quality_for_skill_extract: float = 0.2
     # 3-tier value gate placed before case extraction (in _flush_segment).
     # Only segments that pass at least one tier are extracted:
     #   Tier 1 (fast-pass): has_user_feedback AND >=2 user messages in segment
     #   Tier 2 (fast-pass): total tool_calls > complex_task_tool_call_threshold
     #   Tier 3 (cheap LLM): detect_llm asked whether trajectory is worth
     #                        learning from; false → skip, true → extract
-    complex_task_tool_call_threshold: int = Field(default=20, ge=0)
+    complex_task_tool_call_threshold: int = 20
 
 
 class LocalDirConfig(_Base):
@@ -847,20 +826,6 @@ class SkillForgeConfig(_Base):
     enabled: bool = True
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
-
-    discovery: Literal["pull", "push"] = "pull"
-    """How retrieved skills reach the model.
-
-    ``"pull"`` (default): a per-turn scent menu (a few name+description
-    lines from the same three-source router) rides the user envelope, and
-    the model fetches bodies itself via ``find_skill`` / ``read_skill``.
-    No per-turn rewriter/gate LLM calls; the system prefix carries no
-    retrieved-skill bytes.
-
-    ``"push"``: the pre-existing pipeline (rewriter -> router -> gate ->
-    selected bodies rendered into the system prefix). Kept for
-    deployments whose main model under-uses tools.
-    """
 
     blocklist: list[str] = Field(default_factory=list)
     """Skill names refused everywhere (config key ``skillForge.blocklist``):
@@ -1290,11 +1255,8 @@ class SkillForgeRouterConfig(_Base):
     a same-named skill across sources into one slot; ``"qualified_id"``
     keeps them as separate entries (useful for telemetry experiments)."""
 
-    top_k: int = 2
-    """Final top-K returned from ``SkillForgeRouter.select``. Also the no-gate
-    injection size: each hit is rendered in full into the system prefix, so
-    this defaults to match the gate's ``max_select`` rather than widening the
-    prompt whenever the gate happens to be unwired."""
+    top_k: int = 5
+    """Final top-K returned from ``SkillForgeRouter.select``."""
 
     hub: HubSourceConfig = Field(default_factory=HubSourceConfig)
 
@@ -1376,92 +1338,6 @@ class TracingConfig(_Base):
 # ---------------------------------------------------------------------------
 
 
-class SessionTitleConfig(_Base):
-    """The model call that names a new session.
-
-    Fired once per session, concurrently with the first turn, and never on the
-    turn's critical path: the mechanical title ``SessionManager.save`` derives
-    from the first user message is already in place, so every refusal here --
-    disabled, too short an opening message, timeout, an answer that ignored the
-    instruction -- simply leaves that title standing.
-    """
-
-    enabled: bool = True
-    """On by default. The cost is one short call per *session* (not per turn),
-    against a first message that is already in context; the alternative default
-    leaves every session named by a raw truncated first line, which is what the
-    session picker looks like today."""
-
-    model: str | None = None
-    """Model for the naming call. None inherits the session's own model. Set a
-    cheaper tier here: the task is one short line of output and does not need
-    the model answering the conversation."""
-
-    timeout_seconds: float = 8.0
-    """Wall clock for the call. Past this the fallback title stands. Chosen
-    against the front end's placeholder, which waits a little longer than this
-    and then gives up on its own -- a placeholder outliving the call it waits
-    for is the one failure mode a user cannot recover from by waiting."""
-
-    budget: int = 24
-    """Codepoints the model is asked, and clamped, to fit. A runaway guard, not
-    a layout rule: measured titles run 2-21 codepoints, and how a title fits a
-    row is decided by each surface's own truncation."""
-
-    min_input_width: int = 6
-    """Below this many display columns in the first message, skip the call.
-
-    Columns rather than code points, because one threshold has to be fair to
-    both scripts: at 6 code points "nihao" is skipped but the far more nameable
-    "你能做什么" would be too, while at 6 columns the greetings fall below and the
-    questions do not. Measured against 246 real openings, 6 columns separates
-    "?", "rpc", "hi", "nihao" and "你好" from "你是谁" and everything longer.
-
-    A message under the gate is not left waiting: `turn.send` reports that it
-    did not start a namer, and the front end fills the mechanical title in at
-    once instead of holding a placeholder until its grace period runs out."""
-
-
-class SubagentDagConfig(_Base):
-    """Judging a finished DAG node, and adjudicating the ones that did not succeed.
-
-    A node is otherwise `completed` the moment its backend returns without raising,
-    which is a claim about the transport rather than about the work. Every field
-    here bounds a cost that judgement introduces: one extra model call per node,
-    and a graph that can now pause waiting for the main agent to decide.
-    """
-
-    verdict_enabled: bool = True
-    """On by default. Off restores the previous behaviour exactly: a node that
-    returns is completed, whatever it returned."""
-
-    verdict_model: str | None = None
-    """Model for the judge call. None inherits the agent's own. Set a cheaper tier
-    here: the task is one enum plus a sentence, not the reasoning the conversation
-    needs."""
-
-    verdict_timeout_seconds: float = 30.0
-    """Wall clock for one judge call. Past this the node is treated as having
-    accomplished its task, which is what the previous behaviour was."""
-
-    evidence_budget_chars: int = 8000
-    """Characters of the node's transcript, taken from the end, shown to the judge.
-    A bound rather than a preference: a node with dozens of tool rounds would
-    otherwise cost more to judge than it did to run. The end is where a failure's
-    evidence sits -- the last failing tool call, then the closing statement."""
-
-    adjudication_timeout_seconds: float = Field(default=600.0, le=3600.0)
-    """How long a suspended node waits for the main agent's decision before falling
-    back to the ordinary failure path. Long, and capped at an hour, because the
-    decision may require asking the user something only the user knows -- a missing
-    credential, a missing piece of the request."""
-
-    max_continuations: int = 2
-    """Continuations allowed per node, so three attempts in all. Past this the node
-    fails and its dependents are skipped. Deliberately per node and not per graph: a
-    wide graph may suspend many times, each waiting out its own timeout."""
-
-
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1475,8 +1351,6 @@ class RavenConfig(_Base):
     skill_forge: SkillForgeConfig = Field(default_factory=SkillForgeConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
-    session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
-    subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)

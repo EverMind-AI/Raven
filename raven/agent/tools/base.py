@@ -2,54 +2,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 from raven.utils.helpers import ContentPart
-
-
-@dataclass(frozen=True)
-class FileChange:
-    """One file's whole content before and after a write.
-
-    Whole contents rather than a rendered diff, because a surface that draws its
-    own -- an editor with a diff view -- needs the two versions, and cannot
-    recover them from a unified diff whose context is limited and which is
-    dropped entirely past 400 lines.
-
-    ``before`` is ``None`` when the file did not exist. That is a distinction, not
-    a missing value: a client shows a new file differently from a rewritten one,
-    and collapsing the two makes every creation look like a full replacement.
-    """
-
-    path: str
-    after: str
-    before: str | None = None
-
-
-#: What a call the model wrote beside a blocked one is told. Every loop that
-#: cancels siblings says this, and it has to be one string: it reaches the model,
-#: so two versions of it are two different instructions.
-SKIPPED_AFTER_BLOCKED_CALL = "Error: Tool call was not executed because a prior safety decision terminated this action."
-
-
-class Continuation(StrEnum):
-    """What should happen to the turn after this tool call.
-
-    Separate from ``ToolResult.blocks_call``, which is about the call: a blocked
-    call does not run and neither do the siblings the model wrote beside it in
-    the same response, because a refused operation must not be reachable through
-    a call written before the answer was known. That much is settled where the
-    call is handled. Whether the turn survives it is a different judgement, and
-    this is where it is made.
-
-    ``ABORT_TURN`` is what every refusal asks for today; the single flag these
-    two replaced could not say anything else, which is how one over-broad
-    refusal came to end a whole turn.
-    """
-
-    CONTINUE = "continue"
-    ABORT_TURN = "abort_turn"
 
 
 @dataclass
@@ -63,10 +18,8 @@ class ToolResult:
     built from the tool's own execution data, not by re-parsing ``model_text``.
 
     ``retryable=False`` suppresses the registry's generic change-approach hint.
-    ``blocks_call=True`` tells the agent loop this call did not run and the
-    sibling calls in the same model response must not either; ``continuation``
-    says what becomes of the turn afterwards. Two fields because they are two
-    decisions -- see :class:`Continuation`.
+    ``abort_action=True`` tells the agent loop not to execute sibling calls or
+    ask the model for another approach.
 
     ``blocks`` carries multimodal content parts (OpenAI-shaped ``text`` /
     ``image_url`` dicts) for tools whose result is not expressible as text — a
@@ -77,37 +30,13 @@ class ToolResult:
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
-
-    ``diff`` is a unified diff of what the call changed on disk, for a UI that
-    renders the change itself. Only a writing tool can produce it -- by the time
-    anyone else looks, the content it replaced is gone -- and it never reaches
-    the model, so ``model_text`` still has to say what happened on its own.
-
-    ``file_change`` is the same change unrendered: the path and the whole file
-    before and after. A surface that draws its own diff needs the contents rather
-    than somebody else's rendering of them, and it cannot recover them from the
-    unified form -- ``_unified`` emits limited context and drops a rewrite over
-    400 lines entirely. Set beside ``diff`` by the same tools, from the same two
-    strings they already hold; ``before`` is ``None`` only when the file did not
-    exist, which is a distinction a client renders differently.
     """
 
     model_text: str
     display_text: str | None = None
     retryable: bool = True
-    blocks_call: bool = False
-    continuation: Continuation = Continuation.CONTINUE
-    ok: bool = True
-    """Whether the tool call succeeded, as the tool itself knows it.
-
-    ``False`` is a verdict, not a presentation: a refused command and a failing
-    command both read as failures to a surface drawing the row, so a tool must
-    set it for a failure it reports in words rather than by raising. Defaulted
-    true because a bare ``str`` result carries no such signal at all.
-    """
+    abort_action: bool = False
     blocks: list[ContentPart] | None = None
-    diff: str | None = None
-    file_change: "FileChange | None" = None
 
 
 class ToolOutput(str):
@@ -126,12 +55,8 @@ class ToolOutput(str):
 
     display_text: str | None
     retryable: bool
-    blocks_call: bool
-    continuation: Continuation
-    ok: bool
+    abort_action: bool
     blocks: list[ContentPart] | None
-    diff: str | None
-    file_change: "FileChange | None"
 
     def __new__(
         cls,
@@ -139,22 +64,14 @@ class ToolOutput(str):
         display_text: str | None = None,
         *,
         retryable: bool = True,
-        blocks_call: bool = False,
-        continuation: Continuation = Continuation.CONTINUE,
-        ok: bool = True,
+        abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
-        diff: str | None = None,
-        file_change: "FileChange | None" = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
-        out.blocks_call = blocks_call
-        out.continuation = continuation
-        out.ok = ok
+        out.abort_action = abort_action
         out.blocks = blocks
-        out.diff = diff
-        out.file_change = file_change
         return out
 
 
@@ -177,43 +94,6 @@ class Tool(ABC):
     # registry does NOT wrap them in a timeout — they manage their own
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
-
-    # Channels this tool works on; None means every channel. One gateway process
-    # serves the web channel and every enabled IM channel from a single registry,
-    # so a tool whose effect exists on only one of them (deliver_files needs the
-    # web UI's download box) would otherwise be advertised everywhere and refuse
-    # only once called. Declaring the set withholds it from the schema instead,
-    # per turn -- see ToolRegistry.set_channel.
-    channels: frozenset[str] | None = None
-
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        """This call's blocking verdict. Defaults to the class flag.
-
-        Overridden by a tool that forwards to another tool (``tool_call``), where
-        the verdict belongs to the target named in ``params`` — reading the
-        forwarder's own flag would both double-wrap the target in a ceiling it
-        opted out of and misreport the call to a turn stream.
-        """
-        return self.blocking_interaction
-
-    def metadata_owner(self, params: dict[str, Any]) -> "Tool":
-        """The tool holding this call's metadata. Defaults to self.
-
-        Overridden by a tool that forwards to another tool (``tool_call``), where
-        the result — and so the metadata — is produced by the target named in
-        ``params``. Without this the forwarded tool's payload is stranded and the
-        UI silently renders nothing.
-        """
-        return self
-
-    def take_metadata(self) -> dict[str, Any] | None:
-        """Structured payload for this call's turn-stream event, consumed once.
-
-        Opt-in: ``execute`` returns only a string, so a tool whose result also
-        has to reach a UI (rather than the model) hands it back here and the loop
-        attaches it to the emitted ToolEvent.
-        """
-        return None
 
     _TYPE_MAP = {
         "string": str,

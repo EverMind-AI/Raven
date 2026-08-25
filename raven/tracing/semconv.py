@@ -305,7 +305,7 @@ def subagent(span, bound: dict[str, Any], result: Any, exc: BaseException | None
         {
             "subagent.task_id": bound.get("task_id"),
             "subagent.task": _preview(bound.get("task"), 300),
-            "subagent.label": bound.get("task_summary"),
+            "subagent.label": bound.get("label"),
             "subagent.origin_session": origin.get("session_key") if isinstance(origin, dict) else None,
         }
     )
@@ -431,7 +431,6 @@ def skill_gate(span, bound: dict[str, Any], result: Any, exc: BaseException | No
             "task": bound.get("task"),
             "candidates": [_hit_ref(h) for h in candidates],
             "available_tools": bound.get("available_tools"),
-            "available_subagents": bound.get("available_subagents"),
         },
     )
     span.artifact("skill.gate.output", {"selected": [_hit_ref(h) for h in selected]})
@@ -573,14 +572,9 @@ def _turn_input(bound: dict[str, Any]) -> Any:
 
 
 def turn_seed(bound: dict[str, Any]) -> dict[str, Any]:
-    """Seed the root turn span's session identity so every child span inherits it.
-
-    ``surface`` rides along when the request's connection declared one (see
-    ``Source.surface``); ``None`` leaves the span on the process-wide fallback.
-    """
+    """Seed the root turn span's session identity so every child span inherits it."""
     sk, channel, chat_id = _turn_ids(bound)
-    surface = getattr(getattr(_turn_request(bound), "source", None), "surface", None)
-    return {"session_key": sk, "channel": channel, "chat_id": chat_id, "surface": surface}
+    return {"session_key": sk, "channel": channel, "chat_id": chat_id}
 
 
 def turn_open(span, bound: dict[str, Any]) -> None:

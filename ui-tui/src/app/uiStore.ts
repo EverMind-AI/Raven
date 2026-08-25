@@ -13,7 +13,6 @@ const buildUiState = (): UiState => ({
   busyInputMode: 'queue',
   compact: false,
   escapeArmed: false,
-  escClearArmed: false,
   detailsMode: 'collapsed',
   detailsModeCommandOverride: false,
   indicatorStyle: DEFAULT_INDICATOR_STYLE,

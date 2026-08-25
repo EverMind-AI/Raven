@@ -174,13 +174,7 @@ export function composerPromptWidth(promptText: string) {
 // Both gutters derive from their glyph's display width plus the same gap, so a
 // user line and an assistant line start their text in the same column (a
 // hardcoded non-user width silently drifted one cell off the `❯` gutter).
-//
-// The default must stay the same glyph as `ThemeBrand.tool` (theme.ts), which is
-// what the transcript actually draws: every caller here omits the argument, and
-// a default that disagreed with the theme would size the gutter for a glyph
-// nobody renders. The `transcript reply gutter` tests in messages.test.ts pin
-// the two together.
-export function transcriptGutterWidth(role: Role, userPrompt: string, toolGlyph = '●') {
+export function transcriptGutterWidth(role: Role, userPrompt: string, toolGlyph = '┊') {
   return composerPromptWidth(role === 'user' ? userPrompt : toolGlyph)
 }
 

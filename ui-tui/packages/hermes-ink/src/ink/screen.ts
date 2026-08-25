@@ -98,9 +98,8 @@ const INVERSE_CODE: AnsiCode = {
   endCode: '\x1b[27m'
 }
 
-// Bold (SGR 1) — stacks cleanly, no reflow in monospace. endCode 22 also
-// cancels dim (SGR 2), which themes DO use: see `intensitySafePrefix` for the
-// transition that has to account for the two sharing one end code.
+// Bold (SGR 1) — stacks cleanly, no reflow in monospace. endCode 22
+// also cancels dim (SGR 2); harmless here since we never add dim.
 const BOLD_CODE: AnsiCode = {
   type: 'ansi',
   code: '\x1b[1m',
@@ -129,42 +128,6 @@ const YELLOW_FG_CODE: AnsiCode = {
 }
 
 const MAX_TRANSITION_CACHE = 32768
-
-const SGR_BOLD = '\x1b[1m'
-const SGR_DIM = '\x1b[2m'
-const SGR_INTENSITY_OFF = '\x1b[22m'
-
-/**
- * The codes `diffAnsiCodes` cannot work out on its own, for intensity.
- *
- * That diff drops an undo whenever `to` carries a code with the same end code,
- * on the reasoning that the new code overwrites the old one. True for the
- * foreground -- a second `38;2;...m` replaces the first -- and false for
- * intensity: bold (`1m`) and dim (`2m`) are separate attributes that merely
- * share the `22m` that ends either, so writing bold over a dim cell leaves the
- * dim switched on. On screen that is gold bold text rendering grey from
- * whichever character the transition happened at, until something repaints the
- * row -- which is why it healed on scroll or on any edit that moved the line.
- *
- * Only a swap needs fixing. Dropping intensity entirely is already correct
- * (`to` has no `22m` end code, so the undo survives the filter), and keeping
- * the same intensity needs nothing. A swap gets an explicit reset, then the
- * target's own intensity codes re-applied on top of it -- `22m` clears both, so
- * re-applying is what keeps the half that should stay.
- */
-const intensitySafePrefix = (from: AnsiCode[], to: AnsiCode[]): string => {
-  const mask = (codes: AnsiCode[]) =>
-    (codes.some(c => c.code === SGR_BOLD) ? 1 : 0) | (codes.some(c => c.code === SGR_DIM) ? 2 : 0)
-
-  const fromMask = mask(from)
-  const toMask = mask(to)
-
-  if (fromMask === 0 || toMask === 0 || fromMask === toMask) {
-    return ''
-  }
-
-  return SGR_INTENSITY_OFF + (toMask & 1 ? SGR_BOLD : '') + (toMask & 2 ? SGR_DIM : '')
-}
 
 export class StylePool {
   private ids = new Map<string, number>()
@@ -222,10 +185,7 @@ export class StylePool {
         this.transitionCache.clear()
       }
 
-      const from = this.get(fromId)
-      const to = this.get(toId)
-
-      str = intensitySafePrefix(from, to) + ansiCodesToString(diffAnsiCodes(from, to))
+      str = ansiCodesToString(diffAnsiCodes(this.get(fromId), this.get(toId)))
       this.transitionCache.set(key, str)
     }
 

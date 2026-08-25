@@ -29,7 +29,6 @@ every block that gets a ``cache_control`` marker.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -41,13 +40,7 @@ _CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
-    """Model-string fallback, used when no provider probe was injected.
-
-    Asked of ``providers.prompt_cache`` -- see it for why (wire x family). It is
-    the weaker of the two answers: it cannot see the gateway, so a Claude-looking
-    model routed through a non-caching one resolves True here and False at the
-    provider that has to send it.
-    """
+    """Asked of ``providers.prompt_cache`` -- see it for why (wire x family)."""
     from raven.providers.prompt_cache import accepts_cache_control
 
     return accepts_cache_control(model)
@@ -104,21 +97,10 @@ class CacheOptimizer(TokenStrategy):
 
     name = "cache_optimizer"
 
-    def __init__(
-        self,
-        max_breakpoints: int = 4,
-        *,
-        supports_caching: "Callable[[str], bool] | None" = None,
-    ):
-        """``supports_caching`` overrides the model-string lookup.
-
-        Pass the provider's own :meth:`supports_prompt_caching` so the decision
-        is made by the object that knows which endpoint terminates the request.
-        """
+    def __init__(self, max_breakpoints: int = 4):
         if max_breakpoints < 1:
             raise ValueError("max_breakpoints must be >= 1")
         self.max_breakpoints = max_breakpoints
-        self._supports_caching = supports_caching or _supports_cache_control
 
     async def before_llm_call(
         self,
@@ -126,7 +108,7 @@ class CacheOptimizer(TokenStrategy):
         tools: list[dict[str, Any]] | None,
         model: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None, str]:
-        if not self._supports_caching(model):
+        if not _supports_cache_control(model):
             return messages, tools, model
 
         budget = self.max_breakpoints

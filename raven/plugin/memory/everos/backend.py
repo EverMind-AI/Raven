@@ -28,10 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import re
 import time
-from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
@@ -130,14 +128,8 @@ _MEMORIZE_TIMEOUT_S: float = 360.0
 # sized by what the caller loses when they run out: a read that overruns costs
 # the turn its recalled memory, a write that overruns costs that turn's memory
 # permanently, and neither is worth a minute of the user's time.
-_RECALL_TIMEOUT_S: float = 4.0
+_RECALL_TIMEOUT_S: float = 8.0
 _STORE_TIMEOUT_S: float = 10.0
-
-# Shutdown's total budget for flushing every session left with buffered-but-
-# unflushed turns. One shared budget for the whole sweep, not per session: the
-# process is already on its way out, and a wedged server must not turn "quit"
-# into a multi-minute hang across N sessions.
-_SHUTDOWN_FLUSH_BUDGET_S: float = 5.0
 
 
 class ServiceState(Enum):
@@ -176,13 +168,10 @@ _SPAWNABLE_STATES = frozenset({ServiceState.UNKNOWN})
 # stop a task per turn from piling up, not to schedule anything.
 _PROBE_MIN_INTERVAL_S: float = 2.0
 
-# States where there is no memory subsystem at all, so a write that does not
-# happen loses nothing. Reporting a failure here would make the caller retry a
-# write that cannot succeed and then tell an install that never configured a
-# memory LLM that it dropped turns of memory it never had. BAD_IDENTITY is
-# deliberately not one of these: that service works, the config is wrong, and
-# the turns it refuses really are lost.
-_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+# States where no write was ever going to land, so nothing was lost. Reporting
+# a loss here would tell an install that never configured a memory LLM that it
+# dropped turns of memory it never had.
+_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 
 class _HttpEverosAdapter:
@@ -330,23 +319,17 @@ class _HttpEverosAdapter:
         app_id: str | None = None,
         project_id: str | None = None,
     ) -> None:
-        if payload_messages:
-            body: dict[str, Any] = {
-                "session_id": session_id,
-                "messages": payload_messages,
-            }
-            if app_id is not None:
-                body["app_id"] = app_id
-            if project_id is not None:
-                body["project_id"] = project_id
-            url = f"{self._base_url}/api/v2/memory/add"
-            r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
-            r.raise_for_status()
-        elif not is_final:
-            return
-        # An empty slice with is_final is a flush-only call: everos rejects an
-        # add with no messages (``MemorizeAddRequest.messages`` is min_length=1),
-        # and raising there would skip the flush that was the whole point.
+        body: dict[str, Any] = {
+            "session_id": session_id,
+            "messages": payload_messages,
+        }
+        if app_id is not None:
+            body["app_id"] = app_id
+        if project_id is not None:
+            body["project_id"] = project_id
+        url = f"{self._base_url}/api/v2/memory/add"
+        r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
+        r.raise_for_status()
         if is_final:
             flush_body: dict[str, Any] = {"session_id": session_id}
             if app_id is not None:
@@ -383,29 +366,10 @@ class EverosBackend:
         self._agent_id: str = self._services.agent_id
         self._user_id: str = self._services.user_id
         self._warn_stale_identity_keys()
-        # Every turn, because a flush no longer costs the turn anything: the
-        # write left the turn's critical path, so the minute-scale extraction
-        # it triggers runs behind the answer. Batching it instead would leave
-        # a session that ends before the boundary unextracted, and the turn
-        # counter is per-process, so "before the boundary" includes every
-        # short run.
         self._flush_every_turns: int = int(
             self._config.get("flush_every_turns", 1),
         )
         self._turn_counts: dict[str, int] = {}
-        # The is_final decision made for a session's most recent turn. A
-        # caller-reported retry of that same turn (metadata["attempt"] > 0)
-        # reuses it instead of asking ``_turn_counts`` to advance again --
-        # otherwise a retried attempt could land on the flush boundary a
-        # fresh turn never reached, or a flush's 360s budget could be handed
-        # to an attempt that was never meant to get it.
-        self._last_is_final: dict[str, bool] = {}
-        # Sessions whose buffer on the server may hold content no flush has
-        # confirmed. Marked before the request goes out and cleared only when a
-        # flush returns, so a call that is cancelled or times out -- which is
-        # what a two-second teardown budget does to a seven-second flush --
-        # leaves the session marked rather than looking finished.
-        self._unflushed: set[str] = set()
         self._feedback_noop_logged = False
         # An injected adapter comes from a caller supplying its own transport,
         # which is also a caller that owns whatever is on the other end: there
@@ -421,10 +385,7 @@ class EverosBackend:
         self._probe_task: asyncio.Task | None = None
         self._last_probe_at: float = 0.0
         self._store_inflight: set[asyncio.Task] = set()
-        # Set once `stop` has closed the adapter. A write still on the wire then
-        # fails because we shut its transport, which says nothing about the
-        # service and must not be classified as if it did.
-        self._stopping = False
+        self._dropped_writes = 0
 
         if adapter is not None:
             self._adapter: _Adapter | None = adapter
@@ -786,13 +747,19 @@ class EverosBackend:
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")
-        self._stopping = True
         if self._probe_task is not None and not self._probe_task.done():
             self._probe_task.cancel()
-        # Reporting a dropped write to the user is the AgentLoop's job now
-        # (its ``_store_dropped`` is the only count that survives a retry
-        # succeeding) -- this backend only still flushes what it buffered.
-        await self._flush_unflushed_sessions()
+        if self._dropped_writes:
+            # Said out loud, once, at the only moment it is still actionable.
+            # A dropped write is a conversation the user will never be able to
+            # recall, and until now that fact lived only in a log file the TUI
+            # does not even print to the terminal.
+            from rich.console import Console
+
+            Console(stderr=True).print(
+                f"[yellow]{self._dropped_writes} turn(s) were not written to long-term memory "
+                "because the memory service was unavailable.[/yellow]"
+            )
         aclose = getattr(self._adapter, "aclose", None)
         if aclose is not None:
             try:
@@ -802,47 +769,6 @@ class EverosBackend:
                     "EverosBackend: adapter.aclose failed: %s",
                     e,
                 )
-
-    async def _flush_unflushed_sessions(self) -> None:
-        """Give every session with unextracted content one last flush.
-
-        Only a flush makes EverOS extract, so a session whose content reached
-        the server buffer without one leaves that content there with no
-        extraction ever triggered. Which sessions those are is read from what
-        a flush actually confirmed, not from where the turn counter says the
-        boundary should have fallen: a flush that was cancelled mid-flight --
-        a seven-second request against a two-second teardown budget -- leaves
-        the counter looking finished while the buffer is not.
-        """
-        if self._adapter is None or self._state is not ServiceState.READY:
-            return
-        pending = sorted(self._unflushed)
-        if not pending:
-            return
-
-        async def _sweep() -> None:
-            while pending:
-                session_id = pending[0]
-                try:
-                    await self._adapter.memorize(session_id, [], is_final=True)
-                    self._unflushed.discard(session_id)
-                except Exception as e:
-                    self._logger.warning(
-                        "EverosBackend.stop: final flush failed for session %s: %s",
-                        session_id,
-                        e,
-                    )
-                pending.pop(0)
-
-        try:
-            await asyncio.wait_for(_sweep(), timeout=_SHUTDOWN_FLUSH_BUDGET_S)
-        except asyncio.TimeoutError:
-            self._logger.warning(
-                "EverosBackend.stop: final-flush sweep hit its %ss budget with %d session(s) still unflushed: %s",
-                _SHUTDOWN_FLUSH_BUDGET_S,
-                len(pending),
-                pending,
-            )
 
     # ── MemoryBackend Protocol ─────────────────────────────────────
 
@@ -942,42 +868,28 @@ class EverosBackend:
             return True
         if self._adapter is None:
             return False
-        if self._state in _NO_MEMORY_TO_LOSE:
-            # Not a failed write: there is no memory service to fail. Saying
-            # otherwise makes the AgentLoop retry for a minute per turn and
-            # then announce lost turns to an install that never had any.
-            return True
         if self._state is not ServiceState.READY:
+            # Counted rather than logged and forgotten: a dropped write is a
+            # turn the user will never be able to recall, and the only place
+            # that fact can still be told to them is the end of the session.
+            # Not counted when the service was never configured or installed --
+            # there was no memory to lose, and saying otherwise tells a fresh
+            # install it lost something it never had.
+            if self._state not in _NEVER_HAD_MEMORY:
+                self._dropped_writes += 1
             self._kick_probe()
             return False
         if metadata and "is_final" in metadata:
             is_final = bool(metadata["is_final"])
         else:
-            # ``attempt`` is the caller's own retry count for this exact
-            # record (0 on the first try). Only the first attempt advances
-            # the turn counter and decides is_final; a retry reuses that
-            # decision instead of asking the counter to advance again --
-            # otherwise a record stuck retrying could cross the flush
-            # boundary (or land on it) on an attempt a fresh turn never
-            # would have reached, drifting the flush cadence and handing a
-            # plain retry the 360s extraction budget meant for one flush.
-            attempt = int(metadata.get("attempt", 0)) if metadata else 0
-            if attempt == 0 or session_id not in self._last_is_final:
-                n = self._turn_counts.get(session_id, 0) + 1
-                self._turn_counts[session_id] = n
-                is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
-                self._last_is_final[session_id] = is_final
-            else:
-                is_final = self._last_is_final[session_id]
+            n = self._turn_counts.get(session_id, 0) + 1
+            self._turn_counts[session_id] = n
+            is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
 
         # A per-turn append must not hold a turn open; a final flush is the call
         # that makes EverOS extract, which is what the six-minute budget was
         # sized for. One number for both silently overrode the other.
         budget = _MEMORIZE_TIMEOUT_S if is_final else _STORE_TIMEOUT_S
-        # Marked before the call, not after: if this is cancelled mid-flight
-        # the add may already have landed, and the safe direction is one
-        # redundant flush rather than content that is never extracted.
-        self._unflushed.add(session_id)
         try:
             await asyncio.wait_for(
                 self._adapter.memorize(
@@ -993,33 +905,21 @@ class EverosBackend:
             # Deliberately not a demotion: an extraction that outran its budget
             # is slow, not absent, and demoting would drop the next write too --
             # turning one slow batch into the loss of the batch behind it.
+            self._dropped_writes += 1
             self._logger.warning(
                 "EverosBackend.store timed out after %ss; this turn was not indexed",
                 budget,
             )
             return False
         except Exception as e:
-            if self._stopping:
-                # Our own teardown closed the transport out from under a write
-                # that was still on the wire. The loss is still reported -- the
-                # False return is what StorePipeline counts -- but the service
-                # was never asked to answer for it, and demoting here would
-                # blame it for our exit, leaving the next session to open
-                # against a state this process invented.
-                self._logger.info(
-                    "EverosBackend.store abandoned at shutdown (%s); this turn was not indexed",
-                    type(e).__name__,
-                )
-                return False
             self._demote_from_exception(e)
+            self._dropped_writes += 1
             self._logger.warning(
                 "EverosBackend.store failed (%s); state=%s; this turn was not indexed",
                 e,
                 self._state.value,
             )
             return False
-        if is_final:
-            self._unflushed.discard(session_id)
         return True
 
     async def feedback(self, signals: dict[str, Any]) -> None:
@@ -1136,101 +1036,61 @@ class EverosBackend:
         agent_id: str,
         user_id: str = "default",
     ) -> list[dict[str, Any]]:
-        return convert_messages(messages, agent_id=agent_id, user_id=user_id)
+        """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
 
+        AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
+        "user", "assistant", "tool"} and ``content`` either ``str`` or
+        a list of multimodal parts.
 
-def as_ms_epoch(value: Any) -> int | None:
-    """A message's timestamp as everos's DTO wants it, or ``None`` if unreadable.
+        EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
+        epoch, required), "content"}`` with role ∈ {"user",
+        "assistant", "tool"} (no ``"system"``).
 
-    Public because ``subagent_memory`` needs it too, for the same reason
-    ``convert_messages`` is: reaching across a module boundary for a private
-    helper would work and would be the wrong shape.
+        Owner mapping (EverOS derives the memory owner from ``sender_id``):
+        - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
+          agent track (cases / skills) accrues under the configured,
+          stable agent identity — and ``recall(agent_id=…)`` finds it.
+        - ``user`` → keep the caller's ``sender_id`` (the user identity);
+          ``recall(user_id=<X>)`` must use that same ``<X>``.
 
-    Accepts the three spellings that reach here: a ms-epoch int, a seconds-epoch
-    int, and an ISO 8601 string (which is what ``instance_log.build_turn``
-    stamps rows with). The seconds/ms split is by magnitude -- a seconds value
-    stays below the threshold until the year 5138, and a ms value clears it
-    only once the date reaches 1973-03-03.
-    """
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        if not math.isfinite(number) or number <= 0:
-            return None
-        return int(number * 1000) if number < 100_000_000_000 else int(number)
-    if isinstance(value, str):
-        try:
-            ms = int(datetime.fromisoformat(value).timestamp() * 1000)
-        except ValueError:
-            return None
-        return ms if ms > 0 else None
-    return None
-
-
-def convert_messages(
-    messages: list[dict[str, Any]],
-    *,
-    agent_id: str,
-    user_id: str = "default",
-) -> list[dict[str, Any]]:
-    """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
-
-    AgentLoop: ``{"role", "content", ...}`` with role ∈ {"system",
-    "user", "assistant", "tool"} and ``content`` either ``str`` or
-    a list of multimodal parts.
-
-    EverOS: ``{"sender_id" (required), "role", "timestamp" (ms
-    epoch, required), "content"}`` with role ∈ {"user",
-    "assistant", "tool"} (no ``"system"``).
-
-    Owner mapping (EverOS derives the memory owner from ``sender_id``):
-    - ``assistant`` / ``tool`` → ``sender_id = agent_id`` so the
-      agent track (cases / skills) accrues under the configured,
-      stable agent identity — and ``recall(agent_id=…)`` finds it.
-    - ``user`` → keep the caller's ``sender_id`` (the user identity);
-      ``recall(user_id=<X>)`` must use that same ``<X>``.
-
-    Other conversions: drop ``system``; missing ``sender_id`` on a
-    user message → ``user_id``; missing or unreadable ``timestamp`` ->
-    now (ms); an ISO 8601 string or a seconds-epoch number -> ms epoch
-    (everos's DTO takes only ms, and ``build_turn`` stamps ISO);
-    multimodal ``content`` → space-joined text; empty text → drop.
-    """
-    now_ms = int(time.time() * 1000)
-    out: list[dict[str, Any]] = []
-    for m in messages:
-        role = m.get("role")
-        if role not in ("user", "assistant", "tool"):
-            continue
-        content = m.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(
-                str(part.get("text", "")).strip()
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ).strip()
-        if not isinstance(content, str):
-            content = str(content)
-        # An assistant message may carry tool_calls with empty text —
-        # keep it (the tool result downstream references its id). The
-        # host's tool_calls are already in everos's ToolCallDTO shape
-        # (``to_openai_tool_call``); tool messages carry tool_call_id.
-        tool_calls = m.get("tool_calls") if role == "assistant" else None
-        if not content and not tool_calls:
-            continue
-        entry: dict[str, Any] = {
-            "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
-            "role": role,
-            "timestamp": as_ms_epoch(m.get("timestamp")) or now_ms,
-            "content": content,
-        }
-        if tool_calls:
-            entry["tool_calls"] = tool_calls
-        if role == "tool" and m.get("tool_call_id"):
-            entry["tool_call_id"] = m["tool_call_id"]
-        out.append(entry)
-    return out
+        Other conversions: drop ``system``; missing ``sender_id`` on a
+        user message → ``user_id``; missing ``timestamp`` → now (ms);
+        multimodal ``content`` → space-joined text; empty text → drop.
+        """
+        now_ms = int(time.time() * 1000)
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role")
+            if role not in ("user", "assistant", "tool"):
+                continue
+            content = m.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text", "")).strip()
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ).strip()
+            if not isinstance(content, str):
+                content = str(content)
+            # An assistant message may carry tool_calls with empty text —
+            # keep it (the tool result downstream references its id). The
+            # host's tool_calls are already in everos's ToolCallDTO shape
+            # (``to_openai_tool_call``); tool messages carry tool_call_id.
+            tool_calls = m.get("tool_calls") if role == "assistant" else None
+            if not content and not tool_calls:
+                continue
+            entry: dict[str, Any] = {
+                "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
+                "role": role,
+                "timestamp": m.get("timestamp") or now_ms,
+                "content": content,
+            }
+            if tool_calls:
+                entry["tool_calls"] = tool_calls
+            if role == "tool" and m.get("tool_call_id"):
+                entry["tool_call_id"] = m["tool_call_id"]
+            out.append(entry)
+        return out
 
 
 # EverOS accumulates the profile monotonically over an install's life with no
@@ -1327,4 +1187,4 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     return EverosBackend(ctx)
 
 
-__all__ = ["EverosBackend", "as_ms_epoch", "convert_messages", "make_backend"]
+__all__ = ["EverosBackend", "make_backend"]

@@ -322,28 +322,14 @@ def test_only_the_media_family_borrows(tmp_path: Path) -> None:
         assert borrowable_credential(cap, config) == "", cap.tool
 
 
-def _on_offer(loop, tool: str) -> bool:
-    """What the agent is actually handed: registered, and not withheld now.
-
-    Registry membership alone is not the answer here -- a disabled tool stays
-    registered and is dropped when the tool array is built.
-    """
-    return loop.tools.has(tool) and tool not in loop._withheld_tool_names()
-
-
 def test_a_switched_off_tool_is_configured_and_still_not_offered(workspace, tmp_path: Path) -> None:
     """The combination the report used to get wrong.
 
     A key is set, so the credential gate is satisfied and saying "unconfigured"
-    would send the deployer to set it again. What decides whether the agent is
-    offered the tool is `tools.disabledTools` -- so the predicate that has to
-    agree with the loop is `is_offered`, not `is_configured`.
-
-    Upstream compared `is_offered` against registry membership, because there a
-    disabled tool is unregistered at startup. This loop keeps it registered and
-    withholds it per request (`_withheld_tool_names`), so that a switch flipped
-    now takes effect on the next turn instead of destroying its own subject.
-    What the agent is offered is therefore "registered and not withheld".
+    would send the deployer to set it again. What decides whether the agent
+    holds the tool is `tools.disabledTools`, applied after registration -- so
+    the predicate that has to agree with the registry is `is_offered`, not
+    `is_configured`.
     """
     config = _config(tmp_path)
     config.tools.web.search.api_key = "sk-serper"
@@ -353,10 +339,10 @@ def test_a_switched_off_tool_is_configured_and_still_not_offered(workspace, tmp_
     loop = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
 
-    assert _on_offer(loop, "web_search") is False
+    assert loop.tools.has("web_search") is False
     assert is_configured(cap, config) is True
     assert is_disabled(cap, config) is True
-    assert is_offered(cap, config) is _on_offer(loop, "web_search")
+    assert is_offered(cap, config) is loop.tools.has("web_search")
 
 
 @pytest.mark.parametrize("cap", CAPABILITIES, ids=lambda c: c.tool)
@@ -374,9 +360,9 @@ def test_being_offered_matches_the_registry_for_every_capability(cap, workspace,
     config.providers.openrouter.api_key = "sk-or-test"
 
     on = _loop(workspace, config, brave_api_key="sk-serper")
-    assert is_offered(cap, config) is _on_offer(on, cap.tool)
+    assert is_offered(cap, config) is on.tools.has(cap.tool)
 
     config.tools.disabled_tools = [cap.tool]
     off = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
-    assert is_offered(cap, config) is _on_offer(off, cap.tool)
-    assert _on_offer(off, cap.tool) is False
+    assert is_offered(cap, config) is off.tools.has(cap.tool)
+    assert off.tools.has(cap.tool) is False

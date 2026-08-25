@@ -43,10 +43,6 @@ def tmp_config(tmp_path: Path) -> Path:
 
 TOP_LEVEL_COMMANDS = [
     "onboard",
-    # The owner's machine registry (`raven ops connection add/list/doctor`),
-    # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
-    # what the host registers here is which machines exist and how to reach them.
-    "ops",
     "gateway",
     "agent",
     "status",
@@ -171,10 +167,6 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
 # Full set of top-level commands + subcommand groups registered on the root
 # app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
 REGISTERED_COMMAND_NAMES = {
-    # The ACP agent server: an editor spawns `raven acp` and speaks
-    # JSON-RPC to its stdio. Distinct from the client direction, which is
-    # not a command -- raven spawns those agents itself.
-    "acp",
     "agent",
     "channels",
     "cron",
@@ -183,19 +175,10 @@ REGISTERED_COMMAND_NAMES = {
     "gateway",
     "import",
     "onboard",
-    # The owner's machine registry (`raven ops connection add/list/doctor`),
-    # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
-    # what the host registers here is which machines exist and how to reach them.
-    "ops",
-    "playbook",
-    # Singular: per-server actions (`plugin auth <server>`). Distinct from the
-    # plural listing below, which answers "what is installed".
-    "plugin",
     "plugins",
     "provider",
     "sandbox",
     "sentinel",
-    "serve",
     "sessions",
     "skill",
     "status",
@@ -203,9 +186,6 @@ REGISTERED_COMMAND_NAMES = {
     "trajectory",
     "tui",
     "upgrade",
-    # The page, beside `serve`, which is the gateway. `web` attaches to a
-    # gateway already running rather than starting a second one.
-    "web",
 }
 
 

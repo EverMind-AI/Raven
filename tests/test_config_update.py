@@ -17,7 +17,6 @@ from raven.config.update import (
     reset_cron_config,
     set_default_model,
     set_memory_backend,
-    set_playbook_disabled,
     set_sandbox_backend,
     set_sentinel_nudge_quota,
     update_cron_config,
@@ -359,37 +358,3 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     with pytest.raises(ConfigReadError):
         set_default_model("openrouter/x", config_path=cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == original
-
-
-# ---------------------------------------------------------------------------
-# set_playbook_disabled
-# ---------------------------------------------------------------------------
-
-
-def test_playbook_disable_adds_the_name(cfg_path: Path) -> None:
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["weekly-feedback"]
-
-
-def test_playbook_disable_is_idempotent(cfg_path: Path) -> None:
-    set_playbook_disabled("weekly-feedback", True, config_path=cfg_path)
-    before = cfg_path.read_text(encoding="utf-8")
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is False
-    assert cfg_path.read_text(encoding="utf-8") == before
-
-
-def test_playbook_enable_removes_only_that_name(cfg_path: Path) -> None:
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    set_playbook_disabled("b", True, config_path=cfg_path)
-    assert set_playbook_disabled("a", False, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["b"]
-    # enabling a name that is not on the list is a no-op, not an error
-    assert set_playbook_disabled("ghost", False, config_path=cfg_path) is False
-
-
-def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
-    cfg_path.write_text('{"playbooks": {"enabled": true, "dir": "/x"}}', encoding="utf-8")
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    data = _read(cfg_path)["playbooks"]
-    assert data["enabled"] is True and data["dir"] == "/x"
-    assert data["disabled"] == ["a"]

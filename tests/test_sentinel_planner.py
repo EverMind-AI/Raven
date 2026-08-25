@@ -17,10 +17,6 @@ from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 class StubProvider(LLMProvider):
     """Returns a pre-configured response, recording last inputs for inspection."""
 
-    # No retry backoff: a stubbed error must reach the caller as-is, not after
-    # burning the real 1+2+4s ladder.
-    _CHAT_RETRY_DELAYS = ()
-
     def __init__(self, response: LLMResponse):
         super().__init__(api_key="test")
         self._response = response

@@ -21,9 +21,6 @@ class TraceCtx:
     session_key: str | None = None
     channel: str | None = None
     chat_id: str | None = None
-    # Which front end this turn came in from, when the connection declared one
-    # (see raven.tracing.spans.set_surface for the process-wide fallback).
-    surface: str | None = None
     parent_span_id: str | None = None
     # Name of the nearest enclosing non-model span — the purpose a model call is
     # made on behalf of (turn / memory.extract / skill.gate / ...). Model-kind
@@ -84,6 +81,31 @@ def current_attempt(session_key: str | None) -> str | None:
     return _ATTEMPTS.get(session_key)
 
 
+@contextlib.contextmanager
+def turn_scope(
+    *,
+    session_key: str | None,
+    channel: str | None,
+    chat_id: str | None,
+    root_span_id: str,
+) -> Iterator[TraceCtx]:
+    """Open a fresh trace for one turn; child spans parent onto ``root_span_id``."""
+    trace_id = new_trace_id()
+    ctx = TraceCtx(
+        trace_id=trace_id,
+        session_key=session_key,
+        channel=channel,
+        chat_id=chat_id,
+        parent_span_id=root_span_id,
+        attempt_id=current_attempt(session_key) or trace_id,
+    )
+    token = _CTX.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _CTX.reset(token)
+
+
 def push(
     *,
     trace_id: str,
@@ -93,7 +115,6 @@ def push(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
-    surface: str | None = None,
     attempt_id: str | None = None,
 ):
     """Set the active ctx so descendants parent onto ``span_id``; returns a reset token.
@@ -114,7 +135,6 @@ def push(
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
-            surface=surface,
             parent_span_id=span_id,
             source=source,
             attempt_id=attempt_id,
@@ -124,23 +144,6 @@ def push(
 
 def reset(token) -> None:
     _CTX.reset(token)
-
-
-@contextlib.contextmanager
-def use(ctx: TraceCtx | None) -> Iterator[TraceCtx | None]:
-    """Re-establish a context captured earlier with :func:`current`.
-
-    For work that outlives the turn that scheduled it: a long-lived worker
-    keeps the contextvars snapshot taken when ``asyncio.create_task`` forked
-    it, so without this every span it opens would land in whichever turn
-    happened to spawn it. Passing ``None`` clears the context, which makes the
-    next span a root rather than a child of a stale parent.
-    """
-    token = _CTX.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _CTX.reset(token)
 
 
 @contextlib.contextmanager

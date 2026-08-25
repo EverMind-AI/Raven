@@ -128,11 +128,10 @@ describe('GatewayClientCompat', () => {
     mock.setHandler((socket, frame) => {
       if (frame.method === 'system.hello') {
         helloSeen = true
-        const params = frame.params as { client_version?: string; client_capabilities?: string[]; surface?: string }
+        const params = frame.params as { client_version?: string; client_capabilities?: string[] }
 
         expect(params.client_version).toBe('0.0.2')
         expect(params.client_capabilities).toContain('cli-dispatch')
-        expect(params.surface).toBe('tui')
         const resp = {
           jsonrpc: '2.0',
           id: frame.id,

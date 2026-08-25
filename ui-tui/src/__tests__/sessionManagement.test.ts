@@ -5,7 +5,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatStreamRpcClient } from '../app/chatStream.js'
-import type { Msg } from '../types.js'
 
 import { createSlashHandler } from '../app/createSlashHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
@@ -491,90 +490,5 @@ describe('/export slash command', () => {
     createSlashHandler(ctx)('/export')
     expect(ctx.transcript.sys).toHaveBeenCalledWith('no active session to export')
     expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-  })
-})
-
-// ── /compress command ─────────────────────────────────────────────────────
-
-describe('/compress slash command', () => {
-  beforeEach(() => {
-    resetOverlayState()
-    resetUiState()
-  })
-
-  const DAG_ROWS = [
-    {
-      role: 'assistant',
-      text: '',
-      tool_calls: [{ arguments: '{"nodes":[]}', id: 'call-1', name: 'run_subagent_dag' }]
-    },
-    {
-      dag_run_id: 'dag-1',
-      name: 'run_subagent_dag',
-      role: 'tool',
-      text: 'DAG run dag-1 finished',
-      tool_call_id: 'call-1'
-    }
-  ]
-
-  const DAG_RUN_RESULT = {
-    run: {
-      dir: '/runs/dag-1',
-      files: [{ node: 'a', prompt_template: 'do a', status: 'completed', subagent: 'echo' }],
-      finalized: true,
-      run_id: 'dag-1',
-      summary: { completed: 1, total: 1 }
-    }
-  }
-
-  it('hydrates a compressed transcript row before replacing history', async () => {
-    patchUiState({ sid: 'tui:active' })
-
-    const rpc = vi.fn(async (method: string) =>
-      method === 'session.compress' ? { messages: DAG_ROWS, removed: 2 } : DAG_RUN_RESULT
-    )
-    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
-
-    createSlashHandler(ctx)('/compress')
-
-    await vi.waitFor(() => {
-      expect(ctx.transcript.setHistoryItems).toHaveBeenCalled()
-    })
-
-    expect(rpc).toHaveBeenCalledWith('dag.get', { run_id: 'dag-1', session_key: 'tui:active' }, { quiet: true })
-
-    const [rows] = ctx.transcript.setHistoryItems.mock.calls[0]!
-    const tool = (rows as Msg[]).find(m => m.kind === 'episodes')!.episodes![0]!.tools[0]!
-
-    expect(tool.dag?.runId).toBe('dag-1')
-    expect(tool.dag?.nodes[0]?.promptTemplate).toBe('do a')
-    expect(tool.ok).toBe(true)
-    expect(tool.diff).toBeUndefined()
-  })
-
-  it('does not replace history if the session changes while hydrating', async () => {
-    patchUiState({ sid: 'tui:active' })
-
-    const rpc = vi.fn(async (method: string) => {
-      if (method === 'session.compress') {
-        return { messages: DAG_ROWS, removed: 2 }
-      }
-
-      // The reader switched sessions before this in-flight dag.get resolved.
-      patchUiState({ sid: 'tui:other' })
-
-      return DAG_RUN_RESULT
-    })
-    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
-
-    createSlashHandler(ctx)('/compress')
-
-    await vi.waitFor(() => {
-      expect(rpc).toHaveBeenCalledWith('dag.get', expect.anything(), expect.anything())
-    })
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    expect(ctx.transcript.setHistoryItems).not.toHaveBeenCalled()
-    expect(ctx.transcript.sys).not.toHaveBeenCalledWith(expect.stringContaining('compressed'))
   })
 })

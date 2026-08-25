@@ -3,17 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { DagEvent } from '../domain/dagRun.js'
 import type { SessionInterruptResponse, SubagentEventPayload } from '../gatewayTypes.js'
-import type { DagRunSnapshot, SubagentStatusEvent } from '../rpc/index.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
-import {
-  EPISODE_REASONING_KEEP_CHARS,
-  EPISODE_REASONING_MAX_CHARS,
-  REASONING_KEEP_CHARS,
-  REASONING_MAX_CHARS
-} from '../config/limits.js'
 import {
   REASONING_PULSE_MS,
   STREAM_BATCH_MS,
@@ -21,8 +13,6 @@ import {
   STREAM_SCROLL_BATCH_MS,
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
-import { foldDagEvent, foldDagSnapshot, withPromptTemplates } from '../domain/dagRun.js'
-import { foldSpawnStatus, spawnRunSettled } from '../domain/spawnRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
@@ -31,10 +21,8 @@ import {
   estimateTokensRough,
   isTransientTrailLine,
   sameToolTrailGroup,
-  toolResultPreview,
   toolTrailLabel
 } from '../lib/text.js'
-import { disarmEscape } from './directChatStore.js'
 import { resetFlowOverlays } from './overlayStore.js'
 import { pushSnapshot } from './spawnHistoryStore.js'
 import { archiveDoneTodos, getTurnState, patchTurnState, resetTurnState } from './turnStore.js'
@@ -146,13 +134,9 @@ const clear = (t: Timer): null => {
   return null
 }
 
-let foldSeq = 0
-
 class TurnController {
   bufRef = ''
-  private dagPromptsByCall = new Map<string, Record<string, string>>()
   episodes: Episode[] = []
-  private turnFoldId = ''
   private lastEpisodeStartMs = 0
   interrupted = false
   lastStatusNote = ''
@@ -216,20 +200,7 @@ class TurnController {
     this.episodes = []
     this.lastEpisodeStartMs = 0
 
-    patchTurnState(state => ({
-      ...state,
-      // A finished graph is already pinned onto its tool row, so it goes with
-      // the turn. A running one cannot: `run_subagent_dag` returns as soon as
-      // the run is scheduled, so most graphs are still working at this point and
-      // every later frame folds against this list. Dropping them here left the
-      // pinned copy frozen at whatever the graph looked like when the reply
-      // committed -- "0 done" forever. They are released at the next idle, by
-      // which time `done` is set.
-      dagRuns: state.dagRuns.filter(run => !run.done),
-      // A spawn outlives its turn the same way: the tool returns as soon as the
-      // run is scheduled, so a settled run goes with the turn and a working one
-      // stays for the frames still coming.
-      spawnRuns: state.spawnRuns.filter(run => !spawnRunSettled(run)),
+    patchTurnState({
       episodes: [],
       streamPendingTools: [],
       streamSegments: [],
@@ -237,13 +208,8 @@ class TurnController {
       subagents: [],
       tools: [],
       turnTrail: []
-    }))
-    patchUiState({ busy: false })
-    // The main lane's arm only. This runs at a main turn's end, and a direct
-    // turn's cancel may be out at the same moment: clearing the flag globally
-    // would drop that arm too, so the user's second Ctrl+C in the direct view
-    // would re-send a cancel instead of forcing the pane back.
-    disarmEscape(null)
+    })
+    patchUiState({ busy: false, escapeArmed: false })
     resetFlowOverlays()
   }
 
@@ -253,22 +219,7 @@ class TurnController {
   // diverge on what survives a cancel. `appendMessage`/`sys` are optional:
   // callers without a transcript sink (older/no-op cases) get the idle-only
   // teardown with nothing appended.
-  finalizeInterruptedTurn(deps: FinalizeInterruptDeps) {
-    this.finalizeAbortedTurn(deps, 'interrupted')
-  }
-
-  // A turn the server ended with an error keeps what it streamed the same way
-  // an interrupted one does. Dropping it here (the earlier behaviour) left a
-  // reader with the prompt and the error line and nothing of the minutes of
-  // steps, prose and graphs in between -- which is exactly what the reader
-  // needs to see to judge what the failure cost.
-  finalizeFailedTurn(deps: FinalizeInterruptDeps) {
-    this.finalizeAbortedTurn(deps, 'failed')
-    this.clearStatusTimer()
-    this.persistedToolLabels.clear()
-  }
-
-  private finalizeAbortedTurn({ appendMessage, sys }: FinalizeInterruptDeps, marker: 'failed' | 'interrupted') {
+  finalizeInterruptedTurn({ appendMessage, sys }: FinalizeInterruptDeps) {
     // A re-entrant call (e.g. a second Ctrl+C force-reset racing the server's
     // cancel error) finds turn state already drained: it must not re-emit the
     // bare interrupted indicator that the first call already surfaced.
@@ -299,20 +250,14 @@ class TurnController {
       return
     }
 
-    const interruptedText = partial ? `${partial}\n\n*[${marker}]*` : `*[${marker}]*`
+    const interruptedText = partial ? `${partial}\n\n*[interrupted]*` : '*[interrupted]*'
 
     // Episodes mode: never dump the raw expanded segments. Commit the accrued
     // steps as one collapsed episodes message (mirrors recordMessageComplete);
     // with nothing accrued yet, fall back to the bare interrupted indicator.
     if (episodesMode) {
       if (workEpisodes.length) {
-        appendMessage({
-          episodes: workEpisodes,
-          foldId: this.turnFoldId,
-          kind: 'episodes',
-          role: 'assistant',
-          text: interruptedText
-        })
+        appendMessage({ kind: 'episodes', role: 'assistant', text: interruptedText, episodes: workEpisodes })
 
         return
       }
@@ -338,9 +283,7 @@ class TurnController {
       if (partial) {
         appendMessage({ role: 'assistant', text: interruptedText })
       } else if (!reentrant) {
-        if (marker === 'interrupted') {
-          sys?.('interrupted')
-        }
+        sys?.('interrupted')
       }
 
       return
@@ -361,9 +304,7 @@ class TurnController {
         ...(tools.length && { tools })
       })
     } else if (!reentrant) {
-      if (marker === 'interrupted') {
-        sys?.('interrupted')
-      }
+      sys?.('interrupted')
     }
   }
 
@@ -581,8 +522,14 @@ class TurnController {
     })
   }
 
-  recordError(deps: FinalizeInterruptDeps = {}) {
-    this.finalizeFailedTurn(deps)
+  recordError() {
+    this.idle()
+    this.clearReasoning()
+    this.clearStatusTimer()
+    this.pendingSegmentTools = []
+    this.segmentMessages = []
+    this.turnTools = []
+    this.persistedToolLabels.clear()
   }
 
   recordMessageComplete(payload: { rendered?: string; reasoning?: string; text?: string }) {
@@ -652,13 +599,7 @@ class TurnController {
       const workEpisodes = this.episodes.filter(ep => ep.tools.length > 0 || hasMeaningfulReasoning(ep.reasoning ?? ''))
 
       if (workEpisodes.length) {
-        finalMessages.push({
-          episodes: workEpisodes,
-          foldId: this.turnFoldId,
-          kind: 'episodes',
-          role: 'assistant',
-          text: finalText
-        })
+        finalMessages.push({ kind: 'episodes', role: 'assistant', text: finalText, episodes: workEpisodes })
       } else if (segments.length || hasDetails(finalDetails)) {
         // No episode boundaries arrived (e.g. an older gateway that doesn't emit
         // episode.start) but the turn did run tools/reasoning — fall back to the
@@ -812,15 +753,8 @@ class TurnController {
     this.reasoningText += text
     this.activeReasoningText += text
 
-    if (this.reasoningText.length > REASONING_MAX_CHARS) {
-      this.reasoningText = this.reasoningText.slice(-REASONING_KEEP_CHARS)
-    }
-
-    // The segment's copy needs the same trim, not just the turn's: this is the
-    // string syncReasoningSegment publishes and the transcript renders, so left
-    // unbounded it is what a long thinking phase grows without limit.
-    if (this.activeReasoningText.length > REASONING_MAX_CHARS) {
-      this.activeReasoningText = this.activeReasoningText.slice(-REASONING_KEEP_CHARS)
+    if (this.reasoningText.length > 80_000) {
+      this.reasoningText = this.reasoningText.slice(-60_000)
     }
 
     const ep = this.currentEpisode()
@@ -828,14 +762,14 @@ class TurnController {
     if (ep) {
       ep.reasoning = (ep.reasoning ?? '') + text
 
-      if (ep.reasoning.length > EPISODE_REASONING_MAX_CHARS) {
-        ep.reasoning = ep.reasoning.slice(-EPISODE_REASONING_KEEP_CHARS)
+      if (ep.reasoning.length > 20_000) {
+        ep.reasoning = ep.reasoning.slice(-16_000)
       }
     }
 
-    // Batched, not published here: a delta arrives about once per frame and each
-    // of these rebuilds the segment list and rewrites the whole turn state.
     this.scheduleReasoning()
+    this.syncReasoningSegment()
+    this.pulseReasoningStreaming()
   }
 
   recordToolComplete(
@@ -872,7 +806,7 @@ class TurnController {
       if (et) {
         et.ok = !error
         et.done = true
-        et.resultPreview = toolResultPreview(error || summary || '') || undefined
+        et.resultPreview = (error || summary || '').slice(0, 200) || undefined
         // Fall back to the client-measured span: the typed RPC path does not
         // carry a duration, and leaving it unset made the row's live timer keep
         // ticking after the step had moved on.
@@ -1007,7 +941,6 @@ class TurnController {
     this.clearStatusTimer()
     this.idle()
     this.bufRef = ''
-    this.dagPromptsByCall.clear()
     this.interrupted = false
     this.lastStatusNote = ''
     this.activeReasoningText = ''
@@ -1018,10 +951,7 @@ class TurnController {
     this.turnTools = []
     this.toolTokenAcc = 0
     this.persistedToolLabels.clear()
-    // Unlike idle(), which hands a still-running graph to the next turn, this is
-    // a teardown: the only caller is the gateway exiting, which takes every run
-    // with it, and nothing will ever fold another frame into them.
-    patchTurnState({ activity: [], dagRuns: [], outcome: '' })
+    patchTurnState({ activity: [], outcome: '' })
   }
 
   fullReset() {
@@ -1040,13 +970,6 @@ class TurnController {
         reasoning: this.reasoningText,
         reasoningTokens: estimateTokensRough(this.reasoningText)
       })
-      // Only while a segment is still open: closeReasoningSegment drains this
-      // on the paths that end a turn, and a pulse landing after one of those
-      // would re-light the thinking indicator on a turn already committed.
-      if (this.activeReasoningText) {
-        this.syncReasoningSegment()
-        this.pulseReasoningStreaming()
-      }
       // Episodes mode: push the growing reasoning so the running step streams
       // its thought live instead of only revealing it once the step completes.
       if (getUiState().transcript === 'episodes') {
@@ -1069,10 +992,6 @@ class TurnController {
   }
 
   startMessage() {
-    // Minted per turn rather than taken from `turn_id`: this is a fold
-    // namespace, and both message.start handlers reach here without a typed
-    // payload. Uniqueness within the session is all a namespace needs.
-    this.turnFoldId = `t${++foldSeq}`
     this.endReasoningPhase()
     this.clearReasoning()
     this.activeTools = []
@@ -1083,196 +1002,7 @@ class TurnController {
     this.interrupted = false
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
-    patchTurnState({
-      activity: [],
-      foldId: this.turnFoldId,
-      outcome: '',
-      subagents: [],
-      toolTokens: 0,
-      tools: [],
-      turnTrail: []
-    })
-  }
-
-  /**
-   * Fold one `run_subagent_dag` progress frame into the turn's graphs.
-   *
-   * The graph is written twice on purpose: into the live store, which drives the
-   * in-flight panel and is cleared at turn end, and onto the tool row that
-   * produced it, which is what survives into the transcript. Pinning it here
-   * rather than at tool-complete keeps the two from diverging if the run's last
-   * frame and the tool result arrive out of order.
-   */
-  recordDagEvent(event: DagEvent) {
-    const callId = event.payload.tool_call_id
-    const templates = callId ? this.dagPromptsByCall.get(callId) : undefined
-
-    patchTurnState(state => {
-      const at = state.dagRuns.findIndex(run => run.runId === event.payload.run_id)
-      const folded = foldDagEvent(at === -1 ? null : state.dagRuns[at]!, event, templates)
-
-      // A frame for a run we never saw start: nothing to draw (see foldDagEvent).
-      if (folded === null) {
-        return state
-      }
-
-      return {
-        ...state,
-        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
-      }
-    })
-
-    // Spent: the templates now live on the nodes, which is what the transcript
-    // keeps. Holding the call's whole prompt set past that would grow with every
-    // graph the session runs.
-    if (callId && event.type === 'dag.run_started') {
-      this.dagPromptsByCall.delete(callId)
-    }
-
-    this.pinDagToEpisodeTool(event.payload.run_id)
-  }
-
-  /**
-   * Remember a `run_subagent_dag` call's per-node prompts until its run starts.
-   *
-   * Kept here rather than on the tool row because the graph is built from
-   * `dag.run_started`, which is the only frame that carries the node list. The
-   * two are matched by tool call id; a host that does not correlate the two
-   * sends none, and those rows fall back to naming their node id.
-   *
-   * `dag.run_started` releases an entry, but not every call reaches one: a graph
-   * rejected by validation returns its error before any `dag.*` frame, so its
-   * entry would sit for the life of the process. Insertion order therefore
-   * bounds the map as well -- and it is the only thing that can, because the
-   * obvious alternative of releasing on the call's completion races the
-   * background path, where the tool returns as soon as the runner is scheduled
-   * and so can complete before `dag.run_started` is emitted.
-   */
-  recordDagPrompts(toolCallId: string, templates: Record<string, string>) {
-    if (Object.keys(templates).length === 0) {
-      return
-    }
-
-    // The run may already be open: this frame and `dag.run_started` travel on
-    // different channels, so either arrives first. Storing for the fold below
-    // only serves the order where this one leads; a run already built needs the
-    // prompts put on it here, or the order decides whether its rows expand.
-    // Re-pinned because the episode row holds the state object by reference and
-    // the backfill replaces it.
-    if (getTurnState().dagRuns.some(run => run.toolCallId === toolCallId)) {
-      patchTurnState(state => ({
-        ...state,
-        dagRuns: state.dagRuns.map(run => (run.toolCallId === toolCallId ? withPromptTemplates(run, templates) : run))
-      }))
-
-      for (const run of getTurnState().dagRuns.filter(item => item.toolCallId === toolCallId)) {
-        this.pinDagToEpisodeTool(run.runId)
-      }
-    }
-
-    // Generous next to how many graphs a turn runs, so eviction only ever
-    // reaches calls that never started a run.
-    const LIMIT = 8
-
-    this.dagPromptsByCall.set(toolCallId, templates)
-
-    while (this.dagPromptsByCall.size > LIMIT) {
-      const oldest = this.dagPromptsByCall.keys().next()
-
-      if (oldest.done) {
-        break
-      }
-
-      this.dagPromptsByCall.delete(oldest.value)
-    }
-  }
-
-  /**
-   * Replace a run with a snapshot read back off disk (`dag.get`).
-   *
-   * The repair path for a graph whose live frames were lost -- a gateway that
-   * restarted mid-run leaves its nodes pinned to `running` forever. A run the
-   * client never saw start is appended rather than dropped: the snapshot carries
-   * the topology, so it is drawable on its own.
-   */
-  applyDagSnapshot(snapshot: DagRunSnapshot) {
-    patchTurnState(state => {
-      const at = state.dagRuns.findIndex(run => run.runId === snapshot.run_id)
-      const folded = foldDagSnapshot(at === -1 ? null : state.dagRuns[at]!, snapshot)
-
-      return {
-        ...state,
-        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
-      }
-    })
-    this.pinDagToEpisodeTool(snapshot.run_id)
-  }
-
-  private pinDagToEpisodeTool(runId: string) {
-    const run = getTurnState().dagRuns.find(item => item.runId === runId)
-
-    // No tool_call_id means the host does not correlate progress with a row, so
-    // there is no row to pin to -- the live panel is all this run ever gets.
-    if (!this.episodes.length || !run?.toolCallId) {
-      return
-    }
-
-    for (const ep of this.episodes) {
-      const et = ep.tools.find(tool => tool.id === run.toolCallId)
-
-      if (et) {
-        et.dag = run
-        this.publishEpisodes()
-        break
-      }
-    }
-  }
-
-  /**
-   * Fold one `subagent.status` frame into the turn's spawn runs.
-   *
-   * The single-run counterpart of `recordDagEvent`, with the same double write:
-   * the live list drives the in-flight panel and survives to the next idle, and
-   * the copy pinned onto the tool row is what the transcript keeps. Only frames
-   * carrying a `tool_call_id` land here -- one without names no row of this
-   * turn (an older gateway, or a spawn another surface dispatched), and
-   * `$liveAgents` already tracks it for the strip.
-   */
-  recordSpawnStatus(payload: SubagentStatusEvent['payload']) {
-    if (!payload.tool_call_id) {
-      return
-    }
-
-    patchTurnState(state => {
-      const at = state.spawnRuns.findIndex(run => run.taskId === payload.task_id)
-      const folded = foldSpawnStatus(at === -1 ? null : state.spawnRuns[at]!, payload)
-
-      return {
-        ...state,
-        spawnRuns:
-          at === -1 ? [...state.spawnRuns, folded] : state.spawnRuns.map((run, i) => (i === at ? folded : run))
-      }
-    })
-
-    this.pinSpawnToEpisodeTool(payload.task_id)
-  }
-
-  private pinSpawnToEpisodeTool(taskId: string) {
-    const run = getTurnState().spawnRuns.find(item => item.taskId === taskId)
-
-    if (!this.episodes.length || !run?.toolCallId) {
-      return
-    }
-
-    for (const ep of this.episodes) {
-      const et = ep.tools.find(tool => tool.id === run.toolCallId)
-
-      if (et) {
-        et.spawn = run
-        this.publishEpisodes()
-        break
-      }
-    }
+    patchTurnState({ activity: [], outcome: '', subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
   }
 
   upsertSubagent(

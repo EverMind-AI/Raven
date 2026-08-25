@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.checkpoint import CheckpointService
 from raven.agent.loop.recovery import RecoveryLimits
@@ -33,15 +32,6 @@ from raven.providers.base import LLMProvider, LLMResponse
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
-
-
-async def _run_turn_body(agent: AgentLoop, workspace: Path):
-    """Drive ``_run_agent_loop`` the way ``run_turn`` does: inside the
-    working-directory binding. The per-turn checkpoint reads that binding, so
-    an unbound call would snapshot nothing at all.
-    """
-    with workdir.bind(workspace):
-        return await agent._run_agent_loop([{"role": "user", "content": "go"}])
 
 
 # =============================================================================
@@ -242,9 +232,8 @@ def test_d3_repeated_stash_latest_wins(workspace):
 
     out1 = TurnOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
     out2 = TurnOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
-    with workdir.bind(workspace):
-        agent._stash_recovery("s", out1)
-        agent._stash_recovery("s", out2)
+    agent._stash_recovery("s", out1)
+    agent._stash_recovery("s", out2)
     pending = agent._pending_recovery["s"]
     assert pending["checkpoint_id"] == "new"
     assert pending["files"] == ["fresh.py"]
@@ -321,7 +310,9 @@ async def test_d2_loop_unaffected_when_shadow_blocked(workspace):
     the loop still returns cleanly — the safety net never breaks the turn."""
     (workspace / ".raven").write_text("blocker", encoding="utf-8")
     agent = _agent_with_checkpoint(workspace)
-    final, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    final, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     # _NoopProvider returns no tool calls → natural completion.
     assert outcome.status == "completed"
     assert outcome.checkpoint_id is None  # shadow blocked → degrade
@@ -353,9 +344,8 @@ def test_d6_policy_never_disables_checkpoint(workspace):
     interactive. Loop is byte-identical to the pre-checkpoint baseline."""
     a_inter = _agent(workspace, policy="never", interactive=True)
     a_one_shot = _agent(workspace, policy="never", interactive=False)
-    with workdir.bind(workspace):
-        assert a_inter._turn_checkpoint() is None
-        assert a_one_shot._turn_checkpoint() is None
+    assert a_inter._checkpoint is None
+    assert a_one_shot._checkpoint is None
 
 
 def test_d6_policy_always_overrides_interactive(workspace):
@@ -363,9 +353,8 @@ def test_d6_policy_always_overrides_interactive(workspace):
     Useful for users who want the safety net everywhere."""
     a_inter = _agent(workspace, policy="always", interactive=True)
     a_one_shot = _agent(workspace, policy="always", interactive=False)
-    with workdir.bind(workspace):
-        assert a_inter._turn_checkpoint() is not None
-        assert a_one_shot._turn_checkpoint() is not None
+    assert a_inter._checkpoint is not None
+    assert a_one_shot._checkpoint is not None
 
 
 def test_d6_policy_interactive_gated_by_call_site(workspace):
@@ -374,9 +363,8 @@ def test_d6_policy_interactive_gated_by_call_site(workspace):
     to inject recovery into anyway)."""
     a_inter = _agent(workspace, policy="interactive", interactive=True)
     a_one_shot = _agent(workspace, policy="interactive", interactive=False)
-    with workdir.bind(workspace):
-        assert a_inter._turn_checkpoint() is not None
-        assert a_one_shot._turn_checkpoint() is None
+    assert a_inter._checkpoint is not None
+    assert a_one_shot._checkpoint is None
 
 
 def test_d6_default_policy_is_interactive(workspace):
@@ -519,7 +507,9 @@ async def test_d8_one_shot_mode_creates_no_shadow_dir(workspace):
     ``raven agent -m "..."`` leaves no ``.raven/`` artifact on disk —
     one-shot commands don't pay the shadow-git cost."""
     agent = _agent(workspace, policy="interactive", interactive=False)
-    _f, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    _f, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "completed"
     assert outcome.checkpoint_id is None
     assert not (workspace / ".raven").exists()
@@ -596,9 +586,10 @@ async def test_d9_agent_loop_degrades_when_shadow_dir_invalid(workspace):
         runtime_config=bad_cfg,
         interactive=True,
     )
-    with workdir.bind(workspace):
-        assert agent._turn_checkpoint() is None, "bad config should degrade to no checkpoint"
-    final, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    assert agent._checkpoint is None, "bad config should degrade to no checkpoint"
+    final, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "completed"
     assert outcome.checkpoint_id is None  # no shadow → no checkpoint id
     # And no escaped directory was created either.
@@ -719,15 +710,16 @@ async def test_d8_interactive_mode_with_user_gitignore_end_to_end(workspace):
     (workspace / "src.py").write_text("ok\n", encoding="utf-8")
 
     agent = _agent(workspace, policy="interactive", interactive=True)
-    _f, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    _f, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     # The (no-op provider) turn still completes; the workspace files get
     # snapshotted by the end-of-turn commit_turn.
     assert outcome.status == "completed"
     assert outcome.checkpoint_id is not None
 
     # Verify the snapshot's contents directly via the shadow git.
-    with workdir.bind(workspace):
-        svc = agent._turn_checkpoint()
+    svc = agent._checkpoint
     rc, out, _ = await svc._git("ls-tree", "-r", "--name-only", "HEAD")
     assert rc == 0
     tracked = out.splitlines()

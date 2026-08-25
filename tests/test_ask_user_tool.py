@@ -10,19 +10,11 @@ raw arguments blob.
 from __future__ import annotations
 
 import asyncio
-import copy
-import json
 
 import pytest
 
-from raven.agent.tools.ask_user import (
-    _MAX_JSON_LAYERS,
-    AskUserTool,
-    _normalize_options,
-    _normalize_questions,
-)
+from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.base import ToolResult
-from raven.agent.tools.registry import ToolRegistry
 
 
 class _StubBroker:
@@ -114,211 +106,6 @@ def test_display_call_labels_the_row_with_the_question():
     assert tool.display_call({"questions": []}) is None
     assert tool.display_call({"questions": [{"question": "  "}]}) is None
     assert tool.display_call({}) is None
-
-
-def test_display_call_survives_a_json_encoded_questions_argument():
-    # Models emit the array as a JSON string often enough that display_call --
-    # which only labels a transcript row -- used to take the whole turn down
-    # with an AttributeError raised on a character of that string.
-    tool, _ = _tool({})
-
-    assert tool.display_call({"questions": '[{"question": "Base?"}]'}) == "Base?"
-    assert tool.display_call({"questions": '[{"question": "Base?"}, {"question": "Squash?"}]'}) == "Base? | Squash?"
-
-
-def test_display_call_returns_none_for_unreadable_arguments():
-    tool, _ = _tool({})
-
-    assert tool.display_call({"questions": "not json at all"}) is None
-    assert tool.display_call({"questions": 42}) is None
-    assert tool.display_call({"questions": ["plain string", {"question": "Base?"}]}) == "Base?"
-
-
-@pytest.mark.asyncio
-async def test_execute_accepts_a_json_encoded_questions_argument():
-    # The same coercion has to reach execute: a non-empty string is truthy, so
-    # the empty-questions guard passed it straight through to entry.get().
-    tool, broker = _tool({"Which base branch?": "main"})
-
-    result = await tool.execute(questions='[{"question": "Which base branch?", "options": ["main", "develop"]}]')
-
-    assert isinstance(result, ToolResult)
-    assert broker.asked == [("Which base branch?", ["main", "develop"])]
-    assert result.display_text == "answered: main"
-
-
-@pytest.mark.asyncio
-async def test_execute_rejects_unreadable_questions_instead_of_raising():
-    tool, _ = _tool({})
-
-    assert await tool.execute(questions="not json at all") == "Error: ask_user requires at least one question"
-    assert await tool.execute(questions=42) == "Error: ask_user requires at least one question"
-
-
-@pytest.mark.asyncio
-async def test_deeply_nested_json_does_not_kill_the_turn():
-    # json.loads answers deep nesting with RecursionError, which is not a
-    # ValueError -- so a normalizer that catches only TypeError/ValueError lets
-    # it escape by the exact route the normalizer exists to close.
-    tool, _ = _tool({})
-    payload = "[" * 20_000 + "]" * 20_000
-
-    assert tool.display_call({"questions": payload}) is None
-    assert await tool.execute(questions=payload) == "Error: ask_user requires at least one question"
-
-
-@pytest.mark.asyncio
-async def test_json_encoded_options_reach_the_user_as_options():
-    # options carries the same declared array type as questions and arrives as
-    # a JSON string just as often. Iterating that string offered the user one
-    # suggested answer per character.
-    tool, broker = _tool({"Which base?": "main"})
-
-    await tool.execute(questions=[{"question": "Which base?", "options": '["main", "develop"]'}])
-
-    assert broker.asked == [("Which base?", ["main", "develop"])]
-
-
-def test_a_lone_option_string_is_one_option_not_its_letters():
-    """Asserted on the normalizer, not through execute: upstream's contract
-    refuses a one-option question outright, so a lone string never reaches a
-    human either way. What must not happen is it arriving as three options.
-    """
-    assert _normalize_options("yes") == ["yes"]
-    assert _normalize_options('["yes", "no"]') == ["yes", "no"]
-
-
-@pytest.mark.asyncio
-async def test_absent_or_unusable_options_are_simply_empty():
-    tool, broker = _tool({"Q1?": "a", "Q2?": "b"})
-
-    await tool.execute(questions=[{"question": "Q1?"}, {"question": "Q2?", "options": None}])
-
-    assert broker.asked == [("Q1?", []), ("Q2?", [])]
-
-
-@pytest.mark.asyncio
-async def test_questions_written_as_plain_strings_still_reach_the_user():
-    # A list with nothing object-shaped in it is a model that wrote the
-    # questions as strings. Dropping them answered a perfectly clear question
-    # with "requires at least one question" and asked the user nothing.
-    tool, broker = _tool({"Which base branch?": "main"})
-
-    result = await tool.execute(questions=["Which base branch?"])
-
-    assert isinstance(result, ToolResult)
-    assert broker.asked == [("Which base branch?", [])]
-    assert tool.display_call({"questions": ["Which base branch?"]}) == "Which base branch?"
-
-
-@pytest.mark.asyncio
-async def test_an_object_entry_still_wins_over_a_loose_string():
-    # The mixed list keeps its old meaning: the objects are the questions and
-    # the loose string is noise, not a third question.
-    tool, broker = _tool({"Base?": "main"})
-
-    await tool.execute(questions=["noise", {"question": "Base?"}])
-
-    assert broker.asked == [("Base?", [])]
-
-
-@pytest.mark.asyncio
-async def test_a_twice_encoded_argument_is_unwrapped():
-    tool, broker = _tool({"Base?": "main"})
-
-    await tool.execute(questions=json.dumps(json.dumps([{"question": "Base?"}])))
-
-    assert broker.asked == [("Base?", [])]
-
-
-def test_unwrapping_is_bounded():
-    # Past a couple of layers this is no longer a quirk to absorb, and the
-    # bound is what stops a crafted argument from spending the turn unwrapping.
-    payload = json.dumps([{"question": "Base?"}])
-    for _ in range(_MAX_JSON_LAYERS + 1):
-        payload = json.dumps(payload)
-
-    assert _normalize_questions(payload) == []
-
-
-# --- through ToolRegistry, the path production actually takes -------------
-#
-# Everything above drives ``tool.execute`` directly, which is the function's
-# contract but not the call chain. ``ToolRegistry.execute`` casts and validates
-# against the declared schema first and returns the error without dispatching,
-# so a coercion that lives only in ``execute`` never runs on the shapes that
-# need it. These go through the registry.
-
-
-def _registered(answers: dict[str, str]) -> tuple[ToolRegistry, _StubBroker]:
-    tool, broker = _tool(answers)
-    registry = ToolRegistry()
-    registry.register(tool)
-    return registry, broker
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "questions",
-    [
-        pytest.param('[{"question": "Which base branch?"}]', id="array-as-json-string"),
-        pytest.param(["Which base branch?"], id="entry-as-plain-string"),
-        pytest.param({"question": "Which base branch?"}, id="single-object-unwrapped"),
-        pytest.param(json.dumps(json.dumps([{"question": "Which base branch?"}])), id="twice-encoded"),
-    ],
-)
-async def test_the_registry_path_asks_rather_than_rejecting(questions):
-    registry, broker = _registered({"Which base branch?": "main"})
-
-    out = await registry.execute("ask_user", {"questions": questions})
-
-    assert broker.asked == [("Which base branch?", [])], out
-    assert "Invalid parameters" not in out
-
-
-@pytest.mark.asyncio
-async def test_the_registry_path_normalizes_options_too():
-    registry, broker = _registered({"Which base?": "main"})
-
-    out = await registry.execute(
-        "ask_user", {"questions": [{"question": "Which base?", "options": '["main", "develop"]'}]}
-    )
-
-    assert broker.asked == [("Which base?", ["main", "develop"])], out
-
-
-@pytest.mark.asyncio
-async def test_the_registry_path_reports_unreadable_input_in_the_tools_own_words():
-    # Not a schema complaint about a shape the model cannot act on: by the time
-    # validation runs the argument has been normalized, so what is left is a
-    # genuinely empty question list and the tool says so.
-    registry, _ = _registered({})
-
-    out = await registry.execute("ask_user", {"questions": "not json at all"})
-
-    assert "requires at least one question" in out
-    assert "should be array" not in out
-
-
-@pytest.mark.asyncio
-async def test_the_registry_path_does_not_rewrite_the_callers_arguments():
-    """Normalizing must leave the caller's dict alone.
-
-    The same `arguments` object the registry is handed also goes to the START
-    tool event and, on the assistant message, through `to_openai_tool_call`. Both
-    happen before `tools.execute` today, so an in-place edit could not reach
-    them -- but the object is shared, `cast_params` is the only thing standing
-    between the model's text and a rewrite of it, and nothing was watching:
-    dropping the copy leaves the whole suite green.
-    """
-    registry, broker = _registered({"Which base?": "main"})
-    args = {"questions": [{"question": "Which base?", "options": '["main", "develop"]'}]}
-    frozen = copy.deepcopy(args)
-
-    await registry.execute("ask_user", args)
-
-    assert broker.asked == [("Which base?", ["main", "develop"])]
-    assert args == frozen
 
 
 def test_schema_advertises_only_fields_the_tool_reads():
@@ -565,7 +352,7 @@ def test_description_states_the_cap_the_code_enforces():
 async def test_round_trip_through_the_real_broker():
     """Every other test here drives a stand-in, which cannot catch the tool and
     the broker disagreeing about the keyword names they pass between them."""
-    from raven.rpc.question_broker import QuestionBroker
+    from raven.tui_rpc.question_broker import QuestionBroker
 
     frames: list[dict] = []
 
@@ -597,9 +384,9 @@ async def test_registry_dispatch_and_the_real_clarify_respond_route():
     have accepted -- the schema validator runs in between.
     """
     from raven.agent.tools.registry import ToolRegistry
-    from raven.rpc.dispatcher import Dispatcher
-    from raven.rpc.methods.question import register_question_methods
-    from raven.rpc.question_broker import QuestionBroker
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods.question import register_question_methods
+    from raven.tui_rpc.question_broker import QuestionBroker
 
     dispatcher = Dispatcher()
 

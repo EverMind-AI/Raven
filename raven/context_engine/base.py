@@ -82,15 +82,6 @@ class AssemblyContext:
     prefix: AssembledPrefix | None = None
     can_see_images: bool = True
     describe_tool: str | None = None
-    surface: str | None = None
-    """Which front end the turn came from, when the connection declared one.
-
-    Distinct from ``channel`` because the terminal and the served page share the
-    ``tui`` channel on purpose (see ``Source.surface``), so the channel alone
-    cannot say whether the reader is at a prompt or in a browser.
-    """
-    scent_text: str = ""
-    """Pull-mode skill hint for this turn; rendered into the user envelope."""
 
 
 @dataclass

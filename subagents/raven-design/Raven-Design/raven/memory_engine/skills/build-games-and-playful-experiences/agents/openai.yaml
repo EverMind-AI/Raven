@@ -1,4 +1,0 @@
-interface:
-  display_name: "游戏与趣味体验构建"
-  short_description: "构建循环、状态、音画、性能与可访问性完整的游戏和互动玩具"
-  default_prompt: "使用 $build-games-and-playful-experiences 从玩家承诺与核心循环出发，构建并试玩验收一个主题明确的浏览器游戏或趣味体验。"

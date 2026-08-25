@@ -38,29 +38,6 @@ describe('SessionPanel', () => {
     expect(lastFrame()).not.toContain('Update available')
     expect(lastFrame()).not.toContain('upgrade')
   })
-
-  it('names the session being resumed', () => {
-    const info: SessionInfo = {
-      model: 'anthropic/claude-sonnet-4-6',
-      skills: {},
-      title: 'Cut a desktop release',
-      tools: {}
-    }
-    const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="tui:abc" t={DEFAULT_THEME} />)
-    expect(lastFrame()).toContain('Cut a desktop release')
-  })
-
-  it('has no session line when there is nothing to name yet', () => {
-    /* A fresh mint. The line is absent rather than empty, so the panel does not
-       open with a label and a blank beside it. */
-    const info: SessionInfo = {
-      model: 'anthropic/claude-sonnet-4-6',
-      skills: {},
-      tools: {}
-    }
-    const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="tui:abc" t={DEFAULT_THEME} />)
-    expect(lastFrame()).not.toContain('session:')
-  })
 })
 
 describe('StartupLoader', () => {

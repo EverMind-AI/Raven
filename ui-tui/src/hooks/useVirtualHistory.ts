@@ -181,10 +181,8 @@ export function useVirtualHistory(
   }, [scrollRef])
 
   // Quantized snapshot: same-bin scrolls (most wheel ticks) produce the same
-  // value → React.Object.is short-circuits the commit entirely. Include the
-  // viewport height because prompt/composer/agent-strip changes can resize a
-  // scrolled-up transcript without moving scrollTop; the mounted range must
-  // still be recomputed for the new physical window.
+  // number → React.Object.is short-circuits the commit entirely. sticky state
+  // is folded in via the sign bit so sticky→broken transitions also trigger.
   // Uses the TARGET (committed + pendingDelta), not committed scrollTop, so
   // scrollBy notifications immediately remount for the destination before
   // Ink's drain frames need the children.
@@ -205,7 +203,7 @@ export function useVirtualHistory(
       const target = s.getScrollTop() + s.getPendingDelta()
       const bin = Math.floor(target / QUANTUM)
 
-      return `${s.isSticky() ? 1 : 0}:${bin}:${s.getViewportHeight()}`
+      return s.isSticky() ? ~bin : bin
     },
     () => NaN
   )

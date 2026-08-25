@@ -1,6 +1,6 @@
 """Spine wiring for the gateway daemon: build_gateway assembles the scheduler,
 the delivery hub with a per-channel outbound outlet, and a teardown — the third
-assembly point, mirroring build_repl / build_rpc_spine. The gateway's host sources
+assembly point, mirroring build_repl / build_tui. The gateway's host sources
 (cron / sentinel / heartbeat, and channel replies) submit through it.
 
 spine never imports cli; cli imports spine.
@@ -88,7 +88,7 @@ def _make_gateway_sink(
     parked-wake signal), and on a non-cancelled failure deliver a user-visible
     error reply to the originating channel. A cancelled turn (/stop) fires the
     wake but sends no reply — mirroring the bus path (CancelledError re-raises
-    without the "Sorry" message) and build_rpc_spine's cancelled-gated emit_error.
+    without the "Sorry" message) and build_tui's cancelled-gated emit_error.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel), a
     superset of the bus drainer's user-turn-only _dispatch — benign and slightly

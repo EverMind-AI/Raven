@@ -18,8 +18,6 @@ from raven.spine import (
     OriginPools,
     Scheduler,
     Text,
-    ToolEvent,
-    ToolPhase,
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
@@ -114,7 +112,7 @@ def _render_summary_line(line: str) -> None:
 
 class CliOutlet:
     """Renders a turn's deliverables to the terminal. Runs non-streaming (run_turn
-    stream=False), so the reply arrives as one Text; MediaOut is eaten.
+    stream=False), so the reply arrives as one Text; ToolEvent/MediaOut are eaten.
 
     ``render_notice`` is opt-in progress rendering: when set, a Notice (and the
     Reasoning a long tool like deep_research streams, see ``deliver``) renders as
@@ -159,16 +157,6 @@ class CliOutlet:
             # model itself never emits Reasoning here (this path runs non-streaming).
             if self._render_notice is not None and self._send_progress and out.content:
                 self._render_notice(out.content)
-        elif isinstance(out, ToolEvent) and out.phase is ToolPhase.COMPLETE:
-            delivery = (out.metadata or {}).get("raven_delivery")
-            if not isinstance(delivery, dict):
-                return
-            files = [item for item in delivery.get("files") or [] if isinstance(item, dict)]
-            if not files:
-                return
-            message = str(delivery.get("message") or "").strip()
-            lines = [f"- {item.get('name') or item.get('path') or 'file'}: {item.get('path') or ''}" for item in files]
-            self._render("\n".join([part for part in [message, "Delivered files:", *lines] if part]))
         # Other Notice kinds / ToolEvent / MediaOut are eaten (render-can't path).
 
 

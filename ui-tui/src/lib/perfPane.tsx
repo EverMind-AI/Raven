@@ -19,19 +19,14 @@
 import type { FrameEvent } from '@hermes/ink'
 
 import { scrollFastPathStats } from '@hermes/ink'
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react'
 
-import { markWriteLog } from './writeLog.js'
-
 const ENABLED = /^(?:1|true|yes|on)$/i.test((process.env.RAVEN_DEV_PERF ?? '').trim())
 const THRESHOLD_MS = Number(process.env.RAVEN_DEV_PERF_MS ?? '2') || 0
-// RAVEN_HOME first: a second install (its own state dir) would otherwise write
-// its samples into the default one, where they read as the other install's.
-const STATE_HOME = process.env.RAVEN_HOME?.trim() || join(homedir(), '.raven')
-const LOG_PATH = process.env.RAVEN_DEV_PERF_LOG?.trim() || join(STATE_HOME, 'perf.log')
+const LOG_PATH = process.env.RAVEN_DEV_PERF_LOG?.trim() || join(homedir(), '.raven', 'perf.log')
 
 let logReady = false
 
@@ -115,35 +110,3 @@ export const logFrameEvent = ENABLED
 
 export const PERF_ENABLED = ENABLED
 export const PERF_LOG_PATH = LOG_PATH
-
-/**
- * Write one screen dump next to the perf log and return its path.
- *
- * Unlike the frame log this is not gated on RAVEN_DEV_PERF: it is taken by hand
- * (`/paintdump`) at the moment a paint looks wrong, which is the only moment
- * that carries the evidence. Each dump gets its own file so a before/after pair
- * around `/redraw` can be diffed.
- *
- * Follows RAVEN_HOME when set, so a second install writes into its own state
- * directory rather than the default one.
- */
-export const writePaintDump = (dump: null | string): null | string => {
-  if (dump === null) {
-    return null
-  }
-
-  const path = join(STATE_HOME, 'paint-dumps', `${new Date().toISOString().replace(/[:.]/g, '-')}.txt`)
-
-  try {
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, `${dump}\n`)
-  } catch {
-    return null
-  }
-
-  // Same instant in the write log, so a replay can be cut where this dump was
-  // taken and the two halves compared at that exact frame.
-  markWriteLog(`paintdump ${path}`)
-
-  return path
-}

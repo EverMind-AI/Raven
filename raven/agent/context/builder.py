@@ -87,7 +87,7 @@ class ContextBuilder:
         if always_skills:
             cfg = getattr(self.skills, "_config", None)
             always_max = getattr(cfg, "always_max", 5) or 5
-            always_content = self.skills.load_always_block(
+            always_content = self.skills.load_skills_for_context(
                 always_skills,
                 max_inject=always_max,
             )

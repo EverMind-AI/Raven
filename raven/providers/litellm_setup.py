@@ -45,28 +45,9 @@ def _point_oauth_tokens_at_raven() -> None:
     os.environ.setdefault("CHATGPT_TOKEN_DIR", str(oauth_dir / "chatgpt"))
 
 
-def _use_local_model_cost_map() -> None:
-    """Read the model catalogue from the installed wheel, not over the network.
-
-    ``litellm/__init__`` fetches the catalogue by HTTP on the way up (a 5s
-    timeout, then the wheel's copy as fallback), and it reads this variable
-    while doing so, so it has to be set before litellm is imported at all.
-    Every raven import of litellm sits on a startup path, where a slow or
-    blocked network becomes a slow start, and it is what the test suite already
-    pins (``tests/conftest.py``). The catalogue carries pricing as well as
-    context windows, so this also freezes ``cost_usd`` to the installed wheel:
-    a model repriced upstream reads stale until the wheel is bumped. That is
-    the trade -- the fetch it removes is one every start paid for, and the
-    fallback it lands on is the file a slow network already produced. An
-    explicit setting by the user wins.
-    """
-    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-
-
 def import_litellm():
     """Import litellm with its banner disabled and its terminal handler detached."""
     _point_oauth_tokens_at_raven()
-    _use_local_model_cost_map()
     loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
     prev_levels = [lg.level for lg in loggers]
     for lg in loggers:
