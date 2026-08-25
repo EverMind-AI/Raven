@@ -921,7 +921,10 @@ class TestConfigOptions:
         assert [o["id"] for o in response["result"]["configOptions"]] == ["model"]
         written = rig.stack.params_for("config.set")
         assert written["key"] == "model"
-        assert written["value"] == "anthropic/opus-5"
+        # The slug leaves the wire value and becomes its own field: config.set
+        # model requires the provider rather than deriving it from the id.
+        assert written["value"] == "opus-5"
+        assert written["provider"] == "anthropic"
 
     async def test_the_session_key_is_passed_so_a_running_turn_can_refuse_it(self, rig):
         await rig.handshake()
@@ -940,9 +943,14 @@ class TestConfigOptions:
         Was written against -32009, the refusal for a switch attempted during a
         turn. That code went with the per-session binding: a switch now lands on
         the session's next turn, so nothing refuses it. The property is about the
-        boundary, not that one code, so it is asserted on an error the
-        `config.set model` path still raises -- -32011, which `_set_model` returns
-        for a value it will not write.
+        boundary rather than that one code, so it is asserted on -32011, which
+        `_set_model` raises for a value it will not write.
+
+        The stub is the point here: this asserts only that a code survives the
+        hop. That a switch this adapter emits is one the runtime accepts is a
+        different question, and a stub cannot answer it --
+        `test_acp_config_options.py::TestAgainstTheRealSetter` drives the real
+        setter for that.
         """
         from raven.rpc.errors import ConfigValidationError
 
