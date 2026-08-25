@@ -220,6 +220,27 @@ describe('DagPanel node rows', () => {
     lines.forEach(line => expect(line.length).toBeLessThanOrEqual(60))
   })
 
+  it('prefers the summary the node was dispatched with over the template heuristic', () => {
+    // Both fields share the same `string | undefined` type, so a swapped
+    // argument order at the call site would not be a type error -- only a
+    // render test can catch it.
+    const run: DagRunState = {
+      runId: 'dag-5',
+      done: false,
+      nodes: [
+        {
+          ...node('summarize', 'running', [], 'Coder'),
+          nodeSummary: 'audit the skills directory',
+          promptTemplate: 'Do something else entirely, elaborated at length.'
+        }
+      ]
+    }
+    const f = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('Coder: audit the skills directory')
+    expect(f).not.toContain('Do something else entirely')
+  })
+
   it('shows the full prompt and the node id once the row is expanded', () => {
     toggleDagNode(dagNodeKey('dag-2', 'inspect_i18n_messages_20260820'))
 

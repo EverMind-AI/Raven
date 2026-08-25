@@ -140,6 +140,25 @@ and is only the fallback for a dispatch that supplied nothing.
 _Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
 raven's own memory instead of the user's checkout, and says nothing about having done so.
 
+**Task summary** (`task_summary`, on `spawn`, `run_subagent_dag` and `PlaybookSpec`):
+the one line stating what is being dispatched, written before the prompt it summarises.
+Only `spawn`'s reaches the user, naming the dispatch in instance handles, sub-agent rows,
+spawn records and announcements, and never reaching the sub-agent's own input. The other
+two are captured, not shown: `run_subagent_dag`'s becomes `SubAgentDagSpec.task_summary`,
+persisted into `graph.json` and read by nobody, and a playbook's dead-ends into that same
+field once the playbook dispatches. On a playbook it still sits beside `description`,
+which answers a different question: `description` is matched against to decide whether to
+run the playbook at all, `task_summary` says what running it dispatches.
+_Avoid_: `label` for this on the spawn path — the tool parameter is gone. The wire field
+`SubagentCall.label` and the span attribute `subagent.label` (`raven/tracing/semconv.py`)
+keep the name and are filled from the summary.
+
+**Node summary** (`node_summary`, on `DagNodeSpec`):
+the same obligation for one node of a graph, and the node row's subject. Blank survives
+parsing so a playbook can leave it for the model to fill, and `validate_and_order` refuses
+it before any node runs. It replaces the first-line-of-the-template guess a row used to
+make.
+
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
 `execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,

@@ -1050,7 +1050,13 @@ class TestDagProgressSink:
                 "tool_call_id": "call-a",
                 "nodes": [
                     {"id": "a", "subagent": "echo", "depends_on": [], "instance": None},
-                    {"id": "b", "subagent": "echo", "depends_on": ["a"], "instance": "shared"},
+                    {
+                        "id": "b",
+                        "subagent": "echo",
+                        "depends_on": ["a"],
+                        "instance": "shared",
+                        "node_summary": "read the pricing pages",
+                    },
                 ],
             },
         )
@@ -1060,9 +1066,17 @@ class TestDagProgressSink:
         assert key == "tui:c1"
         assert event["payload"]["run_id"] == "dag-1"
         assert event["payload"]["tool_call_id"] == "call-a"
+        # "a" carries no node_summary in the input and must carry none on the wire
+        # (absent, not null); "b" proves the field survives the live path at all.
         assert event["payload"]["nodes"] == [
             {"id": "a", "subagent": "echo", "depends_on": []},
-            {"id": "b", "subagent": "echo", "depends_on": ["a"], "instance": "shared"},
+            {
+                "id": "b",
+                "subagent": "echo",
+                "depends_on": ["a"],
+                "instance": "shared",
+                "node_summary": "read the pricing pages",
+            },
         ]
 
     async def test_node_updated_carries_status_and_timestamps(self):

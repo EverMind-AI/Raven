@@ -29,6 +29,7 @@ def _write_md(root: Path, name: str, description: str) -> None:
         f"---\nname: {name}\ndescription: {description}\n---\n\nbody\n\n"
         "```yaml playbook-spec\n"
         "version: 1\nmode: prompt\nconfirm: true\n"
+        "taskSummary: research the named topic and report back\n"
         f"triggers:\n  keywords: [{name}]\n"
         "prompts: one research node\n"
         "```\n",
@@ -127,9 +128,17 @@ class _FakeGenerator:
         spec = PlaybookSpec(
             name="placeholder",
             description="generated from: " + user_input.splitlines()[0][:40],
+            task_summary="scan the named target and report findings",
             mode="dag",
             triggers=Triggers(keywords=["weekly scan"]),
-            nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="scan ${params.target}")],
+            nodes=[
+                NodeSpec(
+                    id="scan",
+                    subagent="research-raven",
+                    node_summary="scan the target",
+                    prompt_template="scan ${params.target}",
+                )
+            ],
             params={"target": ParamSpec(required=True, description="what to scan?")},
         )
         return GeneratedPlaybook(spec=spec, notes=["Assumption: weekly cadence", "Missing capability: mcp[fs]"])

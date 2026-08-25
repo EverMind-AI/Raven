@@ -550,6 +550,7 @@ class DagRunStartedNode(_Strict):
     subagent: str
     depends_on: list[str]
     instance: str | None = None
+    node_summary: str | None = None
 
 
 class DagRunStartedPayload(_Strict):
@@ -628,6 +629,7 @@ class DagSnapshotNode(_Strict):
     output_file: str | None = None
     error: str | None = None
     prompt_template: str | None = None
+    node_summary: str | None = None
     inputs: dict[str, Any] | None = Field(
         default=None,
         description=(

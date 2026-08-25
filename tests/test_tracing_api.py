@@ -244,7 +244,10 @@ def test_subagent_children_nest(trace_dir):
     # A subagent span; its inner primitives nest under it via context propagation.
     with trace.span("subagent.run") as sa:
         semconv.subagent(
-            sa, {"task_id": "t1", "task": "do x", "label": "worker", "origin": {"session_key": "cli:p"}}, None, None
+            sa,
+            {"task_id": "t1", "task": "do x", "task_summary": "worker", "origin": {"session_key": "cli:p"}},
+            None,
+            None,
         )
         with trace.span("llm.call", {"llm.provider": "p", "llm.model": "m"}) as inner:
             inner_parent = inner._parent

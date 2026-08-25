@@ -82,7 +82,7 @@ class ProactiveSpawn:
         try:
             task_id = await self.subagent_manager.spawn(
                 task=decision.spawn_task,
-                label=label,
+                task_summary=label,
                 origin_channel=channel,
                 origin_chat_id=chat_id,
                 session_key=target,

@@ -1048,6 +1048,10 @@ export interface DagSnapshotNode {
   error?: string;
   prompt_template?: string;
   /**
+   * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
+   */
+  node_summary?: string;
+  /**
    * What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.
    */
   inputs?: {
@@ -1115,6 +1119,10 @@ export interface DagRunStartedEvent {
        * Shared stateful handle. Nodes naming the same one run sequentially.
        */
       instance?: string;
+      /**
+       * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
+       */
+      node_summary?: string;
     }[];
   };
 }

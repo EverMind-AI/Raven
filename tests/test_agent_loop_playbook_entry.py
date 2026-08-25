@@ -193,7 +193,7 @@ def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
         "---\nname: weekly-feedback\ndescription: weekly user-feedback analysis\n---\n\n"
         "body\n\n"
         "```yaml playbook-spec\n"
-        "version: 1\nmode: prompt\nconfirm: true\n"
+        "version: 1\nmode: prompt\ntaskSummary: weekly user-feedback analysis for the team\nconfirm: true\n"
         "triggers:\n  keywords: [weekly feedback]\n"
         "prompts: one research node\n"
         "```\n",

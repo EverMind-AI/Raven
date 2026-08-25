@@ -504,7 +504,7 @@ class SubagentManager:
     async def spawn(
         self,
         task: str,
-        label: str | None = None,
+        task_summary: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
@@ -549,7 +549,7 @@ class SubagentManager:
                 f"be looping; reconsider the approach instead of spawning again."
             )
         task_id = str(uuid.uuid4())[:8]
-        display_label = label or task[:30] + ("..." if len(task) > 30 else "")
+        display_summary = task_summary or task[:30] + ("..." if len(task) > 30 else "")
         # Computed once and carried in `origin` so the concurrency index below
         # and the registry rows this spawn later writes can never drift from
         # each other, or from `CliAgentBackend`'s own handle derivation.
@@ -578,12 +578,12 @@ class SubagentManager:
         # landing in that window would hand this task an endpoint the user
         # chose after asking for it.
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
+            self._run_subagent(task_id, task, display_summary, origin, self.provider, self.model)
         )
         self._track(task_id, bg_task, session_key, instance_key)
 
-        logger.info("Spawned subagent [{}]: {}", task_id, display_label)
-        return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+        logger.info("Spawned subagent [{}]: {}", task_id, display_summary)
+        return f"Subagent [{display_summary}] started (id: {task_id}). I'll notify you when it completes."
 
     def _require_addressable(self, agent: str, *, doing: str) -> None:
         """Raise unless ``agent`` can hold a direct chat at all.
@@ -849,13 +849,13 @@ class SubagentManager:
         self,
         task_id: str,
         task: str,
-        label: str,
+        task_summary: str,
         origin: dict[str, Any],
         provider: LLMProvider,
         model: str,
     ) -> None:
         """Execute the subagent task and announce the result."""
-        logger.info("Subagent [{}] starting task: {}", task_id, label)
+        logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
 
         effective_workspace = origin.get("workspace") or self.workspace
         try:
@@ -869,11 +869,11 @@ class SubagentManager:
                     self._home_volume(effective_workspace),
                 )
                 async with executor:
-                    await self._run_subagent_inner(task_id, task, label, origin, executor, provider, model)
+                    await self._run_subagent_inner(task_id, task, task_summary, origin, executor, provider, model)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
-            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+            await self._announce_result(task_id, task_summary, task, error_msg, origin, "error")
 
     def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
         """Mount agent home into the sub-agent's VM unless the run's own mount covers it.
@@ -906,7 +906,7 @@ class SubagentManager:
         self,
         task_id: str,
         task: str,
-        label: str,
+        task_summary: str,
         origin: dict[str, Any],
         executor: Any,
         provider: LLMProvider,
@@ -928,7 +928,7 @@ class SubagentManager:
                 "call_id": task_id,
                 "session_key": session_key,
                 "agent": agent,
-                "label": label,
+                "task_summary": task_summary,
                 "instance": origin.get("instance"),
                 "instance_auto": origin.get("instance_auto", False),
                 "handle": handle,
@@ -992,7 +992,7 @@ class SubagentManager:
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 record.finish(status="completed", output=final_result, activity=did)
                 await self._announce_result(
-                    task_id, label, task, final_result, origin, "ok", record_dir=str(record.dir)
+                    task_id, task_summary, task, final_result, origin, "ok", record_dir=str(record.dir)
                 )
             except asyncio.CancelledError:
                 cancelled = True
@@ -1004,7 +1004,7 @@ class SubagentManager:
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
                 await self._announce_result(
-                    task_id, label, task, ABORTED_ACTION_RESULT, origin, "error", record_dir=str(record.dir)
+                    task_id, task_summary, task, ABORTED_ACTION_RESULT, origin, "error", record_dir=str(record.dir)
                 )
             except Exception as e:
                 await _write_spawn_status(session_key, agent, handle, "failed")
@@ -1012,7 +1012,7 @@ class SubagentManager:
                 logger.error("Subagent [{}] failed: {}", task_id, e)
                 record.finish(status="failed", error=error_msg, activity=did)
                 await self._announce_result(
-                    task_id, label, task, error_msg, origin, "error", record_dir=str(record.dir)
+                    task_id, task_summary, task, error_msg, origin, "error", record_dir=str(record.dir)
                 )
             finally:
                 # Not for a cancelled call: this poller would be created after
@@ -1058,7 +1058,7 @@ class SubagentManager:
     async def _announce_result(
         self,
         task_id: str,
-        label: str,
+        task_summary: str,
         task: str,
         result: str,
         origin: dict[str, Any],
@@ -1088,7 +1088,7 @@ class SubagentManager:
             else ""
         )
         record_line = f"\n\nRecord: {record_dir}" if record_dir else ""
-        announce_content = f"""[Subagent '{label}' {status_text}]
+        announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {task}
 {handle_line}
@@ -1098,7 +1098,7 @@ Result:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
 
         assert self._submit is not None
-        mark = {"kind": "spawn", "label": label, "status": status}
+        mark = {"kind": "spawn", "label": task_summary, "status": status}
         self._inject(announce_content, origin, mark)
         # `content` is the text that was injected, verbatim. A client draws the
         # reader-facing part of it by dropping everything outside the untrusted

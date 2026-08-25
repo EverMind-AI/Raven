@@ -36,6 +36,9 @@ export interface DagRunNode {
   /** The prompt as submitted, which names what the node was asked. Absent when
    * neither the call args nor the run dir supplied one. */
   promptTemplate?: string
+  /** One line, for the user, on what this node was asked to do. Absent on a run
+   * that predates the field. */
+  nodeSummary?: string
   outputFile?: string
   error?: string
 }
@@ -69,6 +72,7 @@ const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Rec
     dependsOn: [...node.depends_on],
     ...(node.instance ? { instance: node.instance } : {}),
     ...(promptTemplates?.[node.id] ? { promptTemplate: promptTemplates[node.id] } : {}),
+    ...(node.node_summary ? { nodeSummary: node.node_summary } : {}),
     status: 'pending' as const
   }))
 })
@@ -183,8 +187,9 @@ export const foldDagEvent = (
  * `prev` contributes two things the snapshot may not have. The tool call the
  * graph was pinned to, which it never knows -- without carrying that over, a
  * repaired graph is orphaned from the transcript row that draws it. And a node's
- * prompt template, which an older run dir did not record: letting the snapshot
- * win outright there would blank a row that was reading fine a moment earlier.
+ * prompt template or summary, which an older run dir did not record: letting
+ * the snapshot win outright there would blank a row that was reading fine a
+ * moment earlier.
  */
 export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapshot): DagRunState => ({
   runId: snapshot.run_id,
@@ -194,6 +199,7 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
   summary: { ...snapshot.summary },
   nodes: snapshot.files.map(file => {
     const template = file.prompt_template ?? prev?.nodes.find(node => node.id === file.node)?.promptTemplate
+    const summary = file.node_summary ?? prev?.nodes.find(node => node.id === file.node)?.nodeSummary
 
     return {
       id: file.node,
@@ -202,6 +208,7 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
       ...(file.instance ? { instance: file.instance } : {}),
       status: file.status,
       ...(template ? { promptTemplate: template } : {}),
+      ...(summary ? { nodeSummary: summary } : {}),
       ...(file.output_file ? { outputFile: file.output_file } : {}),
       ...(file.error ? { error: file.error } : {})
     }
