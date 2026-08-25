@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from raven.agent import workdir
-from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy, executable_text
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
@@ -340,7 +340,10 @@ class ExecTool(Tool):
         return ToolResult(
             model_text=message + cls._STOP_INSTRUCTION,
             retryable=False,
-            abort_action=True,
+            blocks_call=True,
+            # Every refusal still ends the turn. Which of them should not is
+            # the next change, and it needs somewhere to say so first.
+            continuation=Continuation.ABORT_TURN,
             ok=False,
         )
 

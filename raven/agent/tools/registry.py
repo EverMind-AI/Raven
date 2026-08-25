@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
@@ -410,14 +410,16 @@ class ToolRegistry:
             # string and multimodal blocks (which ride along on ToolOutput).
             if isinstance(result, ToolResult):
                 model_text, display_text = result.model_text, result.display_text
-                retryable, abort_action = result.retryable, result.abort_action
+                retryable, blocks_call = result.retryable, result.blocks_call
+                continuation = result.continuation
                 ok = result.ok
                 blocks = result.blocks
                 diff = result.diff
                 file_change = result.file_change
             else:
                 model_text, display_text = str(result), None
-                retryable, abort_action = True, False
+                retryable, blocks_call = True, False
+                continuation = Continuation.CONTINUE
                 ok = bool(getattr(result, "ok", True))
                 blocks = None
                 diff = None
@@ -436,14 +438,16 @@ class ToolRegistry:
                     model_text + suffix,
                     display_text,
                     retryable=retryable,
-                    abort_action=abort_action,
+                    blocks_call=blocks_call,
+                    continuation=continuation,
                     ok=False,
                 )
             return ToolOutput(
                 model_text,
                 display_text,
                 retryable=retryable,
-                abort_action=abort_action,
+                blocks_call=blocks_call,
+                continuation=continuation,
                 ok=ok,
                 blocks=blocks,
                 diff=diff,

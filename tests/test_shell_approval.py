@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.base import ToolResult
+from raven.agent.tools.base import Continuation, ToolResult
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -177,7 +177,8 @@ async def test_direct_delete_without_responder_is_denied(tmp_path) -> None:
 
     assert isinstance(result, ToolResult)
     assert result.retryable is False
-    assert result.abort_action is True
+    assert result.blocks_call is True
+    assert result.continuation is Continuation.ABORT_TURN
     assert "requires user approval" in result.model_text
     assert "Do not retry" in result.model_text
     assert executor.commands == []
@@ -194,7 +195,8 @@ async def test_denied_command_is_not_prompted_again_in_same_turn(tmp_path) -> No
 
     assert isinstance(first, ToolResult)
     assert first.retryable is False
-    assert first.abort_action is True
+    assert first.blocks_call is True
+    assert first.continuation is Continuation.ABORT_TURN
     assert "denied" in first.model_text.lower()
     assert isinstance(second, ToolResult)
     assert "denied" in second.model_text.lower()
@@ -245,7 +247,8 @@ async def test_hard_denied_command_never_requests_approval(tmp_path) -> None:
 
     assert isinstance(result, ToolResult)
     assert result.retryable is False
-    assert result.abort_action is True
+    assert result.blocks_call is True
+    assert result.continuation is Continuation.ABORT_TURN
     assert "blocked" in result.model_text
     assert "Do not retry" in result.model_text
     assert responder.requests == []

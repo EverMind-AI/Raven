@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers.base import RunMeta, TruncationInfo
@@ -27,12 +27,14 @@ class _Split(Tool):
         display_text: str | None,
         *,
         retryable: bool = True,
-        abort_action: bool = False,
+        blocks_call: bool = False,
+        continuation: Continuation = Continuation.CONTINUE,
     ) -> None:
         self._model_text = model_text
         self._display_text = display_text
         self._retryable = retryable
-        self._abort_action = abort_action
+        self._blocks_call = blocks_call
+        self._continuation = continuation
 
     @property
     def name(self) -> str:
@@ -51,7 +53,8 @@ class _Split(Tool):
             model_text=self._model_text,
             display_text=self._display_text,
             retryable=self._retryable,
-            abort_action=self._abort_action,
+            blocks_call=self._blocks_call,
+            continuation=self._continuation,
         )
 
 
@@ -122,7 +125,8 @@ async def test_non_retryable_error_omits_hint_and_preserves_abort_signal():
             "Error: denied by safety policy",
             None,
             retryable=False,
-            abort_action=True,
+            blocks_call=True,
+            continuation=Continuation.ABORT_TURN,
         )
     )
 
@@ -130,7 +134,8 @@ async def test_non_retryable_error_omits_hint_and_preserves_abort_signal():
 
     assert "try a different approach" not in result
     assert result.retryable is False  # type: ignore[attr-defined]
-    assert result.abort_action is True  # type: ignore[attr-defined]
+    assert result.blocks_call is True  # type: ignore[attr-defined]
+    assert result.continuation is Continuation.ABORT_TURN  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

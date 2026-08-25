@@ -20,6 +20,7 @@ from raven.agent.subagent.backends.base import (
     SubagentActionAbortedError,
     SubagentNoAnswerError,
 )
+from raven.agent.tools.base import Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
@@ -327,7 +328,7 @@ class RavenLoopBackend:
                     # once the answer does is not a live view of anything. Same
                     # reason the acp lane republishes on every update.
                     activity.note_transcript(messages[own_turns_from:])
-                    if getattr(result, "abort_action", False):
+                    if getattr(result, "continuation", None) is Continuation.ABORT_TURN:
                         raise SubagentActionAbortedError
             else:
                 final_result = response.content

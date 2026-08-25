@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from raven.utils.helpers import ContentPart
@@ -26,6 +27,25 @@ class FileChange:
     before: str | None = None
 
 
+class Continuation(StrEnum):
+    """What should happen to the turn after this tool call.
+
+    Separate from ``ToolResult.blocks_call``, which is about the call: a blocked
+    call does not run and neither do the siblings the model wrote beside it in
+    the same response, because a refused operation must not be reachable through
+    a call written before the answer was known. That much is settled where the
+    call is handled. Whether the turn survives it is a different judgement, and
+    this is where it is made.
+
+    ``ABORT_TURN`` is what every refusal asks for today; the single flag these
+    two replaced could not say anything else, which is how one over-broad
+    refusal came to end a whole turn.
+    """
+
+    CONTINUE = "continue"
+    ABORT_TURN = "abort_turn"
+
+
 @dataclass
 class ToolResult:
     """A tool's output split into the model-facing text and an optional
@@ -37,8 +57,10 @@ class ToolResult:
     built from the tool's own execution data, not by re-parsing ``model_text``.
 
     ``retryable=False`` suppresses the registry's generic change-approach hint.
-    ``abort_action=True`` tells the agent loop not to execute sibling calls or
-    ask the model for another approach.
+    ``blocks_call=True`` tells the agent loop this call did not run and the
+    sibling calls in the same model response must not either; ``continuation``
+    says what becomes of the turn afterwards. Two fields because they are two
+    decisions -- see :class:`Continuation`.
 
     ``blocks`` carries multimodal content parts (OpenAI-shaped ``text`` /
     ``image_url`` dicts) for tools whose result is not expressible as text — a
@@ -67,7 +89,8 @@ class ToolResult:
     model_text: str
     display_text: str | None = None
     retryable: bool = True
-    abort_action: bool = False
+    blocks_call: bool = False
+    continuation: Continuation = Continuation.CONTINUE
     ok: bool = True
     """Whether the tool call succeeded, as the tool itself knows it.
 
@@ -97,7 +120,8 @@ class ToolOutput(str):
 
     display_text: str | None
     retryable: bool
-    abort_action: bool
+    blocks_call: bool
+    continuation: Continuation
     ok: bool
     blocks: list[ContentPart] | None
     diff: str | None
@@ -109,7 +133,8 @@ class ToolOutput(str):
         display_text: str | None = None,
         *,
         retryable: bool = True,
-        abort_action: bool = False,
+        blocks_call: bool = False,
+        continuation: Continuation = Continuation.CONTINUE,
         ok: bool = True,
         blocks: list[ContentPart] | None = None,
         diff: str | None = None,
@@ -118,7 +143,8 @@ class ToolOutput(str):
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
-        out.abort_action = abort_action
+        out.blocks_call = blocks_call
+        out.continuation = continuation
         out.ok = ok
         out.blocks = blocks
         out.diff = diff
