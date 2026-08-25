@@ -436,7 +436,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
-        ensure_tool_reasoning = bool(tools) and self._requires_tool_reasoning_replay(original_model, model)
+        ensure_tool_reasoning = self._requires_tool_reasoning_replay(original_model, model)
 
         if self._supports_cache_control(original_model):
             if not self.disable_auto_cache_control:
@@ -546,7 +546,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
-        ensure_tool_reasoning = bool(tools) and self._requires_tool_reasoning_replay(original_model, model)
+        ensure_tool_reasoning = self._requires_tool_reasoning_replay(original_model, model)
 
         if self._supports_cache_control(original_model):
             if not self.disable_auto_cache_control:

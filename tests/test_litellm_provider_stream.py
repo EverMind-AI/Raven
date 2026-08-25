@@ -279,11 +279,13 @@ async def test_chat_stream_forwards_api_key_to_acompletion(monkeypatch: pytest.M
         ("openrouter/deepseek/deepseek-v4-pro", "openrouter"),
     ],
 )
+@pytest.mark.parametrize("declare_tools", [True, False], ids=["declared", "omitted"])
 @pytest.mark.asyncio
 async def test_chat_replays_empty_reasoning_for_deepseek_v4_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
     provider_name: str,
+    declare_tools: bool,
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -307,7 +309,7 @@ async def test_chat_replays_empty_reasoning_for_deepseek_v4_tool_calls(
         },
         {"role": "tool", "content": "done", "tool_call_id": "call_1"},
     ]
-    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}]
+    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}] if declare_tools else None
     provider = LiteLLMProvider(api_key="test-key", provider_name=provider_name, default_model=model)
 
     await provider.chat(messages=messages, tools=tools)
@@ -315,9 +317,11 @@ async def test_chat_replays_empty_reasoning_for_deepseek_v4_tool_calls(
     assert captured["messages"][0]["reasoning_content"] == ""
 
 
+@pytest.mark.parametrize("declare_tools", [True, False], ids=["declared", "omitted"])
 @pytest.mark.asyncio
 async def test_chat_stream_replays_empty_reasoning_for_deepseek_v4_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
+    declare_tools: bool,
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -328,7 +332,7 @@ async def test_chat_stream_replays_empty_reasoning_for_deepseek_v4_tool_calls(
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
 
     messages = [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]
-    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}]
+    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}] if declare_tools else None
     provider = LiteLLMProvider(
         api_key="test-key",
         provider_name="deepseek",
