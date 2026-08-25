@@ -15,12 +15,14 @@ optional banner fields actually populated by the stub.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, default_channel_root
 from raven.config.loader import load_config
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import TurnInProgressError
@@ -201,6 +203,137 @@ async def test_session_resume_loads_n_stored_messages(tmp_path: Path, monkeypatc
     assert msgs[1]["text"] == "hi there"
     assert msgs[2]["role"] == "user"
     assert msgs[2]["text"] == "how are you"
+
+
+def _loop_with_resolver(tmp_path: Path, *, explicit: Path | None = None) -> SimpleNamespace:
+    """A stand-in loop that answers ``peek_session_workdir`` the way the real one
+    does: through a ``WorkdirResolver`` built the way ``raven serve`` builds it."""
+    resolver = WorkdirResolver(
+        WorkdirPolicy.PER_CHANNEL,
+        agent_home=tmp_path / "home",
+        sessions=SessionManager(tmp_path),
+        **({"explicit_workdir": explicit} if explicit else {}),
+    )
+    return SimpleNamespace(
+        peek_session_workdir=lambda key: resolver.resolve(key, create=False),
+        # The rest of what the init bundle reads off a loop. Present so the
+        # bundle builds; this stand-in is about one question only.
+        tools=SimpleNamespace(tool_names=[]),
+        context=SimpleNamespace(skills=SimpleNamespace(list_skills=lambda **_: [])),
+        model=None,
+        strategies=SimpleNamespace(get=lambda _name: None),
+    )
+
+
+async def test_session_resume_reports_where_the_session_actually_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session pinned to its own directory resumes reporting THAT as ``info.cwd``.
+
+    The served page shortens every path it shows against this value, so the
+    launch directory is the wrong answer for a session started elsewhere.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    pinned = tmp_path / "elsewhere"
+    pinned.mkdir()
+    session_key = "tui:20260610_143052_workdir"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.metadata["workdir"] = str(pinned)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: _loop_with_resolver(tmp_path))
+
+    assert result["info"]["cwd"] == str(pinned)
+
+
+async def test_session_resume_reports_the_policy_default_not_the_launch_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway's own case: nothing pinned, and its turns still do not run here.
+
+    ``raven serve`` resolves per channel, so a ``tui:`` session lands under the
+    channel root -- a sibling of agent home. Reading the session's stored
+    ``workdir`` alone answered ``os.getcwd()`` for every such session, which is
+    the case the page hits most.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_policy"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "hello"}])
+
+    result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: _loop_with_resolver(tmp_path))
+
+    expected = default_channel_root(tmp_path / "home") / "tui"
+    assert result["info"]["cwd"] == str(expected)
+    assert result["info"]["cwd"] != os.getcwd()
+
+
+async def test_session_resume_lets_an_explicit_workdir_outrank_the_stored_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``-w`` beats the persisted override, because that is what the resolver does.
+
+    Reading the metadata directly reported a directory the session's turns were
+    not using -- a new wrong answer rather than a missing one.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    stored = tmp_path / "stored"
+    stored.mkdir()
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    session_key = "tui:20260610_143052_explicit"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.metadata["workdir"] = str(stored)
+    mgr.save(session)
+
+    result = await session_resume(
+        {"session_id": session_key},
+        agent_loop_factory=lambda: _loop_with_resolver(tmp_path, explicit=explicit),
+    )
+
+    assert result["info"]["cwd"] == str(explicit)
+
+
+async def test_session_create_reports_where_the_new_session_will_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new session's ``cwd`` is its own directory, not the gateway's."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    result = await session_create({}, agent_loop_factory=lambda: _loop_with_resolver(tmp_path))
+
+    expected = default_channel_root(tmp_path / "home") / "tui"
+    assert result["info"]["cwd"] == str(expected)
+
+
+async def test_session_resume_keeps_the_launch_dir_with_no_loop_to_ask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No loop, no resolver: the answer stays this process's own directory."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_noloop"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "hello"}])
+
+    result = await session_resume({"session_id": session_key})
+
+    assert result["info"]["cwd"] == os.getcwd()
 
 
 async def test_session_resume_joins_text_blocks_of_list_content(
@@ -1954,6 +2087,53 @@ async def test_session_compress_hands_back_what_the_caller_must_redraw(
     assert [m["text"] for m in result["messages"]] == ["m3", "m4"]
     assert result["info"]["model"]
     assert isinstance(result["usage"], dict)
+
+
+async def test_session_compress_reports_the_same_session_as_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The redraw bundle answers for THIS session, not for no session at all.
+
+    The TUI adopts it wholesale, and ``info.cwd`` drives its status-bar
+    directory and the git branch beside it -- so a bundle built without the key
+    read as ``/compress`` moving the session to the launch directory, with the
+    configured default model in place of the one it runs on, until the next
+    resume put both back.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_same_session"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": f"m{i}"} for i in range(5)])
+
+    class _Consolidator:
+        async def maybe_consolidate_by_tokens(self, session, force=False):
+            session.last_consolidated = 3
+            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+
+    resolver = WorkdirResolver(
+        WorkdirPolicy.PER_CHANNEL,
+        agent_home=tmp_path / "home",
+        sessions=SessionManager(tmp_path),
+    )
+    loop = SimpleNamespace(
+        memory_consolidator=_Consolidator(),
+        sessions=SessionManager(tmp_path),
+        context=SimpleNamespace(skills=SimpleNamespace(list_skills=lambda **_kw: [])),
+        tools=SimpleNamespace(tool_names=[], get=lambda _n: None),
+        model="configured/default",
+        session_model=lambda key: f"chosen/for-{key}",
+        peek_session_workdir=lambda key: resolver.resolve(key, create=False),
+    )
+
+    result = await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
+    resumed = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert result["info"]["cwd"] == resumed["info"]["cwd"]
+    assert result["info"]["cwd"] == str(default_channel_root(tmp_path / "home") / "tui")
+    assert result["info"]["cwd"] != os.getcwd()
+    assert result["info"]["model"] == f"chosen/for-{session_key}"
 
 
 async def test_session_create_persists_the_workdir_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

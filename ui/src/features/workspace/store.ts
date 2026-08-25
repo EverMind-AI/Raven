@@ -2,11 +2,12 @@ import { createRoot } from 'react-dom/client'
 
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
+import * as deliveries from './deliveries'
 import { ds, shell, t } from '../../shell/bridge'
 import { copy } from '../../shell/clipboard'
 import { md } from '../../shell/prose'
 
-import type { FtEntry, FtKids, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
+import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 import type { Shell } from '../../shell/bridge'
@@ -47,6 +48,7 @@ export function snapshot(): WorkspaceSnapshot {
     file: workspace.file,
     turn: workspace.turn,
     unseen: workspace.unseen,
+    deliveries: deliveries.snapshot(),
   }
 }
 
@@ -56,10 +58,11 @@ export function restore(next: WorkspaceSnapshot): void {
   workspace.file = next.file
   workspace.turn = next.turn
   workspace.unseen = next.unseen
+  deliveries.restore(next.deliveries || [])
 }
 
 function resetShared(): void {
-  restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0 })
+  restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
 }
 
 export const getState = (): WsIslandState => state
@@ -271,15 +274,6 @@ export function _resetAppsForTests(): void {
   apps = null
 }
 
-/* Which icon colour a tree row gets, from the name alone. */
-export const ftKindOf = (name: string): string => {
-  const k = fileKind(name)
-  if (k === 'md') return 'md'
-  if (k === 'img' || k === 'svg' || k === 'pdf') return 'img'
-  if (/\.(json|ya?ml|toml|ini|cfg|conf|lock|env)$/i.test(name)) return 'cfg'
-  return k === 'code' || k === 'html' || k === 'csv' ? 'code' : 'doc'
-}
-
 export function relToWorkspace(p: string): string | null {
   const s = String(p || '')
   const m = s.match(/(?:^|\/)(?:\.raven\/)?workspace\/(.+)$/)
@@ -322,11 +316,34 @@ export function openDelivery(p: string, downloadPath: string): void {
   else src.openPath?.(p)
 }
 
+/* Re-exported so the viewer does not have to know where the registry lives;
+   the store is what it already talks to. */
+export const markDeliveryMissing = (path: string): void => deliveries.markMissing(path)
+
+/* For the kinds that never read text: an <img> or a frame that failed to load
+   says nothing about WHY, and "gone" is one of several answers -- the viewer
+   caps a render at 25 MB and refuses a path outside what the agent may read,
+   and a file served 200 that the browser cannot decode fails here too. So the
+   status is asked for, and only 404 marks the shelf. The transcript's tile
+   probes the same way. */
+export async function probeDeliveryMissing(path: string): Promise<void> {
+  try {
+    const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+    if (r.status === 404) deliveries.markMissing(path)
+  } catch {
+    /* No answer at all is not an answer about the file. */
+  }
+}
+
 export async function loadFileText(f: WsFile): Promise<void> {
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
     if (!r.ok) {
+      /* Only 404 says the file is gone. A refusal (403) or a file too big to
+         render (413) is the viewer's limit, not the file's absence, and marking
+         a deliverable missing for either would put a lie on the shelf. */
+      if (r.status === 404) deliveries.markMissing(f.path)
       throw new Error(r.status === 403 ? t('gui.ws.file_denied')
         : r.status === 404 ? t('gui.ws.file_gone')
           : r.status === 413 ? t('gui.ws.file_big') : `HTTP ${r.status}`)
@@ -340,237 +357,8 @@ export async function loadFileText(f: WsFile): Promise<void> {
   }
 }
 
-/* ── file tree ─────────────────────────────────────────────────────────
-   The legacy live layer's tree, state and crawler intact: listings are
-   fetched per folder on first open and kept, one promise per directory is
-   shared by the tree and the search crawler, and the whole thing resets
-   with the session. */
-export const FT: {
-  open: Set<string>
-  kids: Map<string, FtKids>
-  q: string
-  w: number
-  hide: boolean
-  run: number
-  crawling: boolean
-  capped: boolean
-  root: string
-} = {
-  open: new Set(['']), kids: new Map(), q: '', w: 208, hide: false,
-  run: 0, crawling: false, capped: false, root: '',
-}
-export const FTW_KEY = 'raven.gui.ftw'
-try {
-  FT.w = Math.max(150, Math.min(460, parseFloat(localStorage.getItem(FTW_KEY) || '') || FT.w))
-} catch { /* storage denied: keep the default width */ }
-
-export const isErr = (k: FtKids): k is { err: string } => !Array.isArray(k)
-
-function ftReset(): void {
-  FT.open = new Set([''])
-  FT.kids.clear()
-  FT.q = ''
-  FT.run += 1
-  FT.crawling = false
-  FT.capped = false
-  FT.root = ''
-}
-
-/* A different session is a different workspace state: keep no listing that
-   was read before the switch. Called by the demo shell's wsReset. */
+/* A different session is a different workspace state. Called by the demo
+   shell's wsReset. */
 export function reset(): void {
   resetShared()
-  ftReset()
-}
-
-export const ftJoin = (dir: string, name: string): string => (dir ? `${dir}/${name}` : name)
-export const ftAbs = (full: string): string => (FT.root ? `${FT.root}/${full}` : full)
-export const relToRoot = (p: string): string | null => {
-  const s = String(p || '')
-  return FT.root && s.startsWith(FT.root + '/') ? s.slice(FT.root.length + 1) : null
-}
-
-const ftPending = new Map<string, Promise<FtKids>>()
-export function ftFetch(dir: string): Promise<FtKids> {
-  const hit = FT.kids.get(dir)
-  if (hit !== undefined) return Promise.resolve(hit)
-  const pending = ftPending.get(dir)
-  if (pending) return pending
-  const list = source().list
-  if (!list) return Promise.resolve({ err: 'no source' })
-  const p = list(dir)
-    .then((r) => {
-      if (r.root) FT.root = r.root
-      const kids = [...r.entries].sort((a, b) =>
-        (b.dir ? 1 : 0) - (a.dir ? 1 : 0) || a.name.localeCompare(b.name))
-      FT.kids.set(dir, kids)
-      return kids as FtKids
-    })
-    .catch((e: unknown) => {
-      const bad = { err: (e as Error).message || String(e) }
-      FT.kids.set(dir, bad)
-      return bad
-    })
-    .finally(() => ftPending.delete(dir))
-  ftPending.set(dir, p)
-  return p
-}
-
-export function ftLoad(dir: string): void {
-  if (FT.kids.has(dir)) return
-  void ftFetch(dir).then(() => redraw())
-}
-
-/* Rendering shows a loading leaf for a folder whose listing has not landed;
-   this effect (run by the tree pane after every render) asks for each of
-   them -- the render itself stays free of fetches. */
-export function ftLoadVisible(): void {
-  const walk = (dir: string): void => {
-    const kids = FT.kids.get(dir)
-    if (kids === undefined) {
-      ftLoad(dir)
-      return
-    }
-    if (isErr(kids)) return
-    for (const e of kids) {
-      if (!e.dir) continue
-      const full = ftJoin(dir, e.name)
-      if (FT.open.has(full)) walk(full)
-    }
-  }
-  walk('')
-}
-
-const FT_SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__',
-  '.mypy_cache', '.ruff_cache', '.pytest_cache', '.cache', 'dist', 'build', 'target', '.next'])
-const FT_CRAWL_DIRS = 600
-const FT_CRAWL_PAR = 4
-export const FT_SHOW_MAX = 120
-
-/* Streams land many at a time; one repaint per frame is enough. */
-let drawQueued = false
-function redrawSoon(): void {
-  if (drawQueued) return
-  drawQueued = true
-  requestAnimationFrame(() => {
-    drawQueued = false
-    redraw()
-  })
-}
-
-export async function ftCrawl(run: number): Promise<void> {
-  FT.crawling = true
-  FT.capped = false
-  let budget = FT_CRAWL_DIRS
-  const queue = ['']
-  const seen = new Set(queue)
-  const worker = async (): Promise<void> => {
-    while (queue.length) {
-      if (FT.run !== run) return
-      const dir = queue.shift() as string
-      let kids = FT.kids.get(dir)
-      if (kids === undefined) {
-        if (budget <= 0) {
-          FT.capped = true
-          continue
-        }
-        budget -= 1
-        kids = await ftFetch(dir)
-        if (FT.run === run) redrawSoon()
-      }
-      if (!kids || isErr(kids)) continue
-      kids.forEach((e) => {
-        if (!e.dir || FT_SKIP.has(e.name)) return
-        const full = ftJoin(dir, e.name)
-        if (!seen.has(full)) {
-          seen.add(full)
-          queue.push(full)
-        }
-      })
-    }
-  }
-  await Promise.all(Array.from({ length: FT_CRAWL_PAR }, worker))
-  if (FT.run !== run) return
-  FT.crawling = false
-  redraw()
-}
-
-export interface FtHit {
-  e: FtEntry
-  full: string
-  at: number
-}
-
-export function ftMatches(): FtHit[] {
-  const out: FtHit[] = []
-  const walk = (dir: string): void => {
-    const kids = FT.kids.get(dir)
-    if (!kids || isErr(kids)) return
-    kids.forEach((e) => {
-      if (e.dir && FT_SKIP.has(e.name)) return
-      const full = ftJoin(dir, e.name)
-      const at = e.name.toLowerCase().indexOf(FT.q)
-      if (at >= 0) out.push({ e, full, at })
-      if (e.dir) walk(full)
-    })
-  }
-  walk('')
-  /* Name-starts-with beats name-contains, files beat folders (opening one is
-     the usual intent), shallow beats deep. */
-  const depth = (p: string): number => p.split('/').length
-  out.sort((a, b) => (a.at === 0 ? 0 : 1) - (b.at === 0 ? 0 : 1)
-    || (a.e.dir ? 1 : 0) - (b.e.dir ? 1 : 0)
-    || depth(a.full) - depth(b.full)
-    || a.e.name.localeCompare(b.e.name))
-  return out
-}
-
-export function ftOpenTo(full: string): void {
-  let acc = ''
-  full.split('/').slice(0, -1).forEach((p) => {
-    acc = ftJoin(acc, p)
-    FT.open.add(acc)
-    ftLoad(acc)
-  })
-}
-
-export function ftReveal(full: string, isDir: boolean): void {
-  ftOpenTo(full)
-  if (isDir) {
-    FT.open.add(full)
-    ftLoad(full)
-  }
-  FT.q = ''
-  FT.run += 1
-  FT.crawling = false
-  const inp = document.querySelector<HTMLInputElement>('#wsBody .ftq input')
-  if (inp) inp.value = ''
-  redraw()
-  requestAnimationFrame(() => {
-    const row = document.querySelector(`#wsBody .ftlist [data-p="${CSS.escape(full)}"]`)
-    if (row) row.scrollIntoView({ block: 'center' })
-  })
-}
-
-let ftDebounce: ReturnType<typeof setTimeout> | undefined
-export function ftQuery(v: string): void {
-  FT.q = v.trim().toLowerCase()
-  FT.run += 1
-  clearTimeout(ftDebounce)
-  /* What is already cached answers immediately; the crawl for the rest waits
-     out the keystroke burst. */
-  redraw()
-  if (FT.q) ftDebounce = setTimeout(() => void ftCrawl(FT.run), 220)
-  else FT.crawling = false
-}
-
-/* Open a folder where folders live: the file tab's tree, unfolded down to
-   it. The root listing is fetched first because tree entries are
-   root-relative and the root is only learned from fs.list's answer. */
-export function openDir(p: string): void {
-  verb('showWorkspace')('file')
-  ftFetch('').then(() => {
-    const rel = relToRoot(p)
-    ftReveal(rel != null ? rel : String(p).replace(/^\/+/, ''), true)
-  }).catch(() => {})
 }

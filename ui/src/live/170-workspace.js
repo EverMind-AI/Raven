@@ -12,9 +12,12 @@ function relToWorkspace(p) {
   return s.replace(/^\.\//, '');
 }
 
-/* The session's working directory, learned from fs.list's answers -- the
-   server resolves it and this side has no way to guess. */
+/* The session's working directory, taken from the session's own init bundle
+   (`info.cwd`, set by wsSetRoot below). It used to be learned from fs.list's
+   answers, which meant the shortener only worked once something had browsed
+   the tree; the resume that opens the session has always carried it. */
 let wsRoot = '';
+const wsSetRoot = (cwd) => { wsRoot = typeof cwd === 'string' ? cwd.replace(/\/+$/, '') : ''; };
 const relToWsRoot = (p) => {
   const s = String(p || '');
   return wsRoot && s.startsWith(wsRoot + '/') ? s.slice(wsRoot.length + 1) : null;
@@ -49,8 +52,18 @@ const liveLinkTargetOf = (u) => {
      silently dropped every one of those back to plain text. */
   const shaped = /^(?:\/|~\/)/.test(t) || /^[^\s/\\]+(?:\/[^\s/\\]+)+$/.test(t);
   if (!shaped) return null;
-  return { p: t, dir: dirMark || !/\.\w{1,8}$/.test(t) };
+  const dir = dirMark || !/\.\w{1,8}$/.test(t);
+  /* A directory link only reaches the host's file manager, which is only there
+     when the gateway is this desktop. Anywhere else it would open nothing, and
+     plain text beats a link that does nothing. */
+  if (dir && !hostIsLocal()) return null;
+  return { p: t, dir };
 };
+
+/* Whether an application launched on the gateway's host would appear on the
+   reader's own screen. `open` and `reveal` run where the gateway runs, so on a
+   remote serve they would drive somebody else's machine. */
+const hostIsLocal = () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
 
 /* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
    seam by the time this runs, and replacing it before the first paint is the
@@ -58,27 +71,24 @@ const liveLinkTargetOf = (u) => {
 DS.prose = {
   pathOf: livePathOf,
   linkTargetOf: liveLinkTargetOf,
-  open: ({ p, dir }) => (dir ? RavenIslands.workspace.openDir(p) : RavenIslands.workspace.showFile(p)),
+  /* A folder is not something the page can show any more -- the file tree went
+     with the deliverables shelf -- so it goes to the host's own file manager,
+     and only while that host is this desktop. Everywhere else `linkTargetOf`
+     stops calling a directory a link at all (see the dir check there). */
+  open: ({ p, dir }) => (dir
+    ? rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
+    : RavenIslands.workspace.showFile(p)),
 };
 
 DS.workspace = {
   hostPlatform: () => HOST_PLATFORM,
   canBrowse: true,
-  list: (dir) => rpc.call('fs.list', { path: dir, session: sessionCurrent() || '' }).then((r) => {
-    /* The root rides on every answer: it is the session's working directory,
-       which shortPath below needs for every row the island asks about. */
-    if (r.root) wsRoot = r.root;
-    return r;
-  }),
   reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
   /* The other half of the viewer: a kind the page cannot render goes to the
      host's own application for it. `app` is a name the reader picked, or
      absent for the host default. Only offered while the gateway IS this
-     desktop -- see hostIsLocal below. */
+     desktop -- see hostIsLocal above. */
   openIn: (p, app) => rpc.call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
-  /* Whether an application launched on the gateway's host would appear on the
-     reader's own screen. `open` runs where the gateway runs, so on a remote
-     serve these actions would start programs on somebody else's machine. */
-  hostIsLocal: () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname),
+  hostIsLocal,
   shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
 };

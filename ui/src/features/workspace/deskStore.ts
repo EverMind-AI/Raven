@@ -44,7 +44,11 @@ export interface DeskSaved {
   splits: DeskSplits
 }
 
-const KEPT = slot<DeskSaved>('desk', 1)
+/* Version 2: the `file` tab this note used to be able to name is retired, and a
+   stored copy carries no way to say which bundle wrote it. Read back under v1 it
+   restored a tab that no longer exists -- the palette then drew no tab as
+   selected and fell through to the agents list. */
+const KEPT = slot<DeskSaved>('desk', 2)
 
 /* The desk this conversation had before the page was replaced, if it had one. */
 export const saved = (key: string): DeskSaved | null => KEPT.read(key)
@@ -221,8 +225,14 @@ export function toggleDesk(): void {
   update({ paletteOpen })
 }
 
+const TABS: readonly DeskTab[] = ['diff', 'deliverables', 'agents']
+
+/* The callers are the legacy shell's untyped `wsPick`/`showWorkspace`, which
+   forward whatever view name they were given. An unknown one used to fall
+   through the palette's own switch and draw the agents list, so it is stopped
+   here instead: the tab does not change and the palette still opens. */
 export function openDeskTab(tab: DeskTab): void {
-  commit({ paletteOpen: true, tab })
+  commit({ paletteOpen: true, ...(TABS.includes(tab) ? { tab } : {}) })
 }
 
 export function openDeskFile(path: string, downloadPath?: string): void {
@@ -270,20 +280,6 @@ export function closePane(id: string): void {
   if (!panes.length) shell().workspaceSetOpen?.(false)
 }
 
-export function replacePaneFile(id: string, path: string): void {
-  const nextId = `file:${path}`
-  const panes = state.panes
-    .filter((pane) => pane.id === id || pane.id !== nextId)
-    .map((pane) => pane.id === id && pane.kind === 'file'
-      ? { ...pane, id: nextId, file: workspace.makeFile(path) }
-      : pane)
-  commit({
-    panes,
-    active: state.active === id ? nextId : state.active,
-    solo: state.solo === id ? nextId : state.solo,
-  })
-}
-
 export function setActive(id: string): void {
   if (state.active !== id) commit({ active: id })
 }
@@ -309,7 +305,11 @@ const pct = (v: unknown, fallback: number): number =>
 export function applyLayout(kept: DeskSaved): void {
   const here = (id: string | null): boolean => !!id && state.panes.some((pane) => pane.id === id)
   update({
-    tab: kept.tab,
+    /* Checked as well as versioned: the version bump covers the bundle that
+       wrote it, this covers a note that arrived any other way -- edited by hand,
+       or written by a build the reader rolled back to and forward from. This is
+       the one door into the tab that does not go through `openDeskTab`. */
+    tab: TABS.includes(kept.tab) ? kept.tab : state.tab,
     /* Only onto a pane that actually came back. A solo id naming a pane whose
        intent could not be replayed would leave the desk fullscreen on nothing --
        `DeskSurface` draws the soloed pane and only it. */
