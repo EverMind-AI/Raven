@@ -204,15 +204,23 @@ def _name_session(
     failure in it may reach a client that asked for a turn.
     """
     try:
-        from raven.config import load_config
+        from raven.config.raven import load_raven_config
         from raven.rpc.methods.session import _manager_for, _safe_invoke_factory
         from raven.rpc.session_naming import name_session_alongside_turn
 
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         if agent_loop is None:
             return
-        config = load_config()
-        settings = config.raven.session_title
+        # One read for both. The extension blocks live in their own model, and
+        # `Config` has no attribute for them at all: `config.raven.session_title`
+        # raised AttributeError, which the except below turned into silence, and
+        # that is exactly how this shipped inert. `RavenConfig.base` is the very
+        # object `load_config()` would return, so reading it from here rather
+        # than calling that too keeps this path at one config load instead of
+        # two -- loader.py notes that this caller reloads on every turn.
+        raven_config = load_raven_config()
+        config = raven_config.base
+        settings = raven_config.session_title
         name_session_alongside_turn(
             session_key=parsed.session_key,
             text=parsed.content or "",
@@ -225,8 +233,18 @@ def _name_session(
             min_input_chars=settings.min_input_chars,
             timeout_seconds=settings.timeout_seconds,
         )
-    except Exception as exc:
-        logger.debug("turn.send: session naming not started ({})", exc)
+    except Exception:
+        # Warning, not debug. Every *refusal* to name a session is a decision
+        # this code makes deliberately and reports at debug; reaching here means
+        # the wiring itself is broken, and the first version of this logged that
+        # at debug too, so a feature that never once ran looked exactly like one
+        # that had nothing to name.
+        #
+        # `opt(exception=True)`, not `exc_info=True`: loguru has no such kwarg
+        # and would file it under `record["extra"]`, which the sinks in
+        # cli/_log_file.py do not format -- leaving a warning with no exception
+        # type, message or frame in it at all.
+        logger.opt(exception=True).warning("turn.send: session naming could not start")
 
 
 async def turn_send(

@@ -169,6 +169,60 @@ def _write_config(tmp_path: Path, body: dict) -> Path:
     return p
 
 
+class TestSessionTitleSection:
+    """The block was declared on RavenConfig but never lifted out of the file.
+
+    Absent from EXTENSION_KEYS it is worse than ignored: the base loader forbids
+    extras, so a config carrying it failed validation and took the whole config
+    down -- including the only documented way to turn session naming off.
+    """
+
+    def test_session_title_is_an_extension_key_in_both_spellings(self) -> None:
+        assert "sessionTitle" in EXTENSION_KEYS
+        assert "session_title" in EXTENSION_KEYS
+
+    def test_camel_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(
+            tmp_path,
+            {"sessionTitle": {"enabled": False, "budget": 40, "timeoutSeconds": 2.5, "model": "cheap/tier"}},
+        )
+
+        st = load_raven_config(path).session_title
+
+        # Every field, not just one: a key that reaches the model but drops its
+        # contents would pass a single-field check.
+        assert st.enabled is False
+        assert st.budget == 40
+        assert st.timeout_seconds == 2.5
+        assert st.model == "cheap/tier"
+
+    def test_snake_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(tmp_path, {"session_title": {"enabled": False}})
+
+        assert load_raven_config(path).session_title.enabled is False
+
+    def test_a_config_carrying_the_block_still_loads_as_a_base_config(self, tmp_path: Path) -> None:
+        """The failure that mattered: the block used to brick `load_config`."""
+        from raven.config import load_config
+
+        path = _write_config(tmp_path, {"sessionTitle": {"enabled": False}})
+
+        base = load_config(path)
+
+        assert base is not None
+
+    def test_an_absent_block_leaves_the_defaults(self, tmp_path: Path) -> None:
+        path = _write_config(tmp_path, {})
+
+        st = load_raven_config(path).session_title
+
+        assert st.enabled is True
+        assert st.budget == 24
+        assert st.timeout_seconds == 8.0
+        assert st.min_input_chars == 8
+        assert st.model is None
+
+
 class TestLoaderIntegration:
     def test_loads_new_sections_from_file(self, tmp_path: Path) -> None:
         path = _write_config(

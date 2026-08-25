@@ -204,4 +204,10 @@ async def generate_title(
         logger.debug("session title: generation call failed ({}); keeping fallback", exc)
         return None
     raw = extract_title(response)
-    return clean_model_title(raw, budget=budget) if raw else None
+    if not raw:
+        # Said out loud for the same reason every other refusal here is: a
+        # provider that never emits tool calls leaves the feature inert, and
+        # without this line there is nothing anywhere saying why.
+        logger.debug("session title: the model answered without calling the tool; keeping fallback")
+        return None
+    return clean_model_title(raw, budget=budget)

@@ -80,7 +80,11 @@ class LazyProvider(LLMProvider):
         try:
             callback()
         except Exception:
-            logger.debug("LazyProvider.on_built callback raised", exc_info=True)
+            # `opt(exception=True)`, not `exc_info=True`: that is a stdlib kwarg
+            # and loguru files unknown ones under `record["extra"]`, which the
+            # sinks do not format -- so the traceback this line exists to keep
+            # was never reaching the log.
+            logger.opt(exception=True).debug("LazyProvider.on_built callback raised")
 
     def prewarm(self) -> None:
         """Build the real provider in a daemon thread so the ~2-7s litellm import

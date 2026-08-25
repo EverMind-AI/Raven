@@ -117,7 +117,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
         if (el) (el as HTMLElement & { _ctx?: () => Array<MenuItem | '-'> })._ctx = () => sessItems(s)
       }}
     >
-      <div className="t">
+      <div className={s.naming && !editing ? 't skel' : 't'}>
         {live && !tail ? <span className={'dot ' + live} /> : null}
         {editing ? (
           <input
@@ -141,14 +141,17 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
             }}
           />
         ) : s.naming ? (
-          /* The title is being generated. A fixed width, not a per-row one:
-             there is a single bar here and a varying width would make it jump
-             sideways as the real title replaces it. The shimmer is the rail's
-             own loading primitive, which already stands still under
-             prefers-reduced-motion. */
-          <span className="skel">
-            <span className="sk" style={{ width: '40%', height: '11px' }} aria-label={t('gui.sess.naming')} />
-          </span>
+          /* The title is being generated. Pixels and `flex: none`, not a
+             percentage: `.sess .t` is a flex row, so a bar sized in percent
+             resolves against a shrink-to-fit item whose own width comes from
+             this bar -- it collapsed to zero and the row read as simply empty.
+             The shimmer is the rail's own loading primitive and already holds
+             still under prefers-reduced-motion. */
+          <span
+            className="sk"
+            style={{ flex: 'none', width: '116px', maxWidth: '62%', height: '11px' }}
+            aria-label={t('gui.sess.naming')}
+          />
         ) : (
           <span>{plainTitle(s.title)}</span>
         )}
