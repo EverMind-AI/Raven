@@ -177,7 +177,10 @@ describe('fitTraceTail', () => {
 
   it('shows everything when it all fits, hiding nothing', () => {
     const msgs = [line('a'), line('b')]
-    const fit = fitTraceTail(msgs, 8, 60)
+    // 12, not 8: the filled prompt block costs a user row four rows of padding
+    // and margin, so two of them no longer fit in the old budget and the
+    // premise this states -- everything fits -- would not hold.
+    const fit = fitTraceTail(msgs, 12, 60)
 
     expect(fit.shown).toEqual(msgs)
     expect(fit.hidden).toBe(0)

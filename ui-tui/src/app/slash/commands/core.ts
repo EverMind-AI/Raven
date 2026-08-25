@@ -24,7 +24,7 @@ import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
 import { HOTKEYS } from '../../../content/hotkeys.js'
 import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
 import { getLocale, isLocale, setLocale } from '../../../i18n/index.js'
-import { writeClipboardText } from '../../../lib/clipboard.js'
+import { copyResultNotice, graphemeCount, writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { writePaintDump } from '../../../lib/perfPane.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
@@ -490,15 +490,15 @@ export const coreCommands: SlashCommand[] = [
       const { sys } = ctx.transcript
 
       if (!arg && ctx.composer.hasSelection) {
-        const text = await ctx.composer.selection.copySelection()
+        const { text, path } = await ctx.composer.selection.copySelection()
 
-        if (text) {
-          return sys(`copied ${text.length} characters`)
-        } else {
-          return sys(
-            'clipboard copy failed — try RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence; RAVEN_TUI_DEBUG_CLIPBOARD=1 for details'
-          )
+        if (text && path) {
+          return sys(copyResultNotice(graphemeCount(text), path))
         }
+
+        return sys(
+          'clipboard copy failed — try RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence; RAVEN_TUI_DEBUG_CLIPBOARD=1 for details'
+        )
       }
 
       if (arg && Number.isNaN(parseInt(arg, 10))) {

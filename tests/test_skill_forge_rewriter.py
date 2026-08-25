@@ -99,13 +99,10 @@ async def test_analyze_finish_reason_error_defaults_to_retrieval() -> None:
     assert result.need_retrieval is True
 
 
-async def test_analyze_passes_model_to_provider() -> None:
-    provider = _StubProvider(json.dumps({"need_retrieval": False}))
-    await QueryRewriter(provider, model="gpt-4o").analyze("hello there")
-    assert provider.calls[0]["model"] == "gpt-4o"
-
-
-async def test_analyze_no_model_passes_none() -> None:
+async def test_analyze_names_no_model_of_its_own() -> None:
+    """The rewriter follows the conversation, so it sends the turn's provider
+    and no model at all -- which lands on that provider's default. Naming one
+    here is how a bare id ends up posted on another vendor's key."""
     provider = _StubProvider(json.dumps({"need_retrieval": False}))
     await QueryRewriter(provider).analyze("hello there")
-    assert provider.calls[0]["model"] is None
+    assert "model" not in provider.calls[0]

@@ -80,6 +80,65 @@ class TestClientSearch:
         assert [it["name"] for it in items] == ["Alpha"]
         await c.aclose()
 
+    async def test_long_query_is_trimmed_to_the_edge_limit(self) -> None:
+        """A prompt-sized query must not blow the hub edge's query-string cap.
+
+        The deployed hub sits behind a load balancer that answers 403 to a
+        query string over 2048 bytes, so an untrimmed query loses discovery
+        outright instead of searching on a prefix.
+        """
+        seen: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen["query"] = req.url.query
+            seen["q"] = req.url.params.get("q")
+            return httpx.Response(200, json=_envelope({"items": []}))
+
+        long_q = "分析这个项目的源码并输出报告。" * 200
+        c = _client(handler)
+        await c.search(long_q, limit=20)
+        assert len(seen["query"]) <= 2048
+        assert long_q.startswith(seen["q"])
+        await c.aclose()
+
+    async def test_trim_measures_encoded_width_not_characters(self) -> None:
+        """Trimming counts encoded bytes: one CJK char costs 9, an ASCII one 1.
+
+        A character-count cap is off by up to 9x, which either still 403s or
+        throws away most of a query that would have fit.
+        """
+        seen: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen["query"] = req.url.query
+            seen["q"] = req.url.params.get("q")
+            return httpx.Response(200, json=_envelope({"items": []}))
+
+        c = _client(handler)
+        await c.search("中" * 500, limit=20)
+        cjk_kept = len(seen["q"])
+        cjk_bytes = len(seen["query"])
+        await c.search("a" * 500, limit=20)
+        ascii_kept = len(seen["q"])
+        await c.aclose()
+
+        assert cjk_bytes <= 2048
+        assert cjk_bytes > 1900, "trimmed far below the budget -- counting chars, not bytes"
+        assert cjk_kept < 250, f"kept {cjk_kept} CJK chars, which cannot fit 2048 bytes"
+        assert ascii_kept == 500, "an ASCII query well inside the budget must pass whole"
+
+    async def test_trim_budget_leaves_room_for_the_other_params(self) -> None:
+        seen: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen["query"] = req.url.query
+            return httpx.Response(200, json=_envelope({"items": []}))
+
+        c = _client(handler)
+        await c.search("中" * 500, limit=100, category="operations", sort="quality")
+        assert len(seen["query"]) <= 2048
+        await c.aclose()
+
     async def test_non_ok_envelope_raises(self) -> None:
         def handler(req):
             return httpx.Response(200, json=_envelope({}, error="bad", status=7))

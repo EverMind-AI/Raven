@@ -631,7 +631,15 @@ leave a free slot; only four conversations blocked at once exhaust the pool.
 The default timeout bounds the worst case, so a forgotten question cannot wedge
 the gateway indefinitely.
 
-The `ask_user` tool schema accepts `multiple` / `custom` per question, but the
-`clarify.request` wire payload carries only `{question, choices}`, so the
-frontend ClarifyPrompt renders a single-select prompt — multi-select and
-free-form answers degrade to a single choice for now.
+The `clarify.request` wire payload carries `{question, choices, header,
+recommended, timeout_s, index, total, batch}`. `header` is a short chip label,
+`recommended` names the option the agent would pick, and `index` / `total` /
+`batch` place the question in its call so a surface can show the whole set and
+its progress while still collecting one answer at a time. ClarifyPrompt renders
+a single-select prompt, marks the recommended option, counts the budget down,
+and takes a free-form answer or a note alongside a selection; multi-select is
+not offered.
+
+One `ask_user` call shares one budget (`tools.ask_user.timeout`, 600s by
+default) across every question in it, so the paragraph above holds for a batch
+too -- a three-question call cannot hold a lane for three timeouts.

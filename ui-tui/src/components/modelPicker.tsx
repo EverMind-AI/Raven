@@ -74,7 +74,7 @@ type EndpointField = 'label' | 'api_key' | 'api_base'
 
 const ENDPOINT_FIELD_ORDER: EndpointField[] = ['label', 'api_key', 'api_base']
 
-export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspend, t }: ModelPickerProps) {
+export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId, suspend, t }: ModelPickerProps) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([])
   const [currentModel, setCurrentModel] = useState('')
   const [err, setErr] = useState('')
@@ -1423,7 +1423,9 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">
-        scope: global
+        {scope === 'default'
+          ? 'scope: the default new conversations start on'
+          : 'scope: this conversation  ·  /model <provider> <id> --default sets the new-session default'}
       </Text>
       <OverlayHint t={t}>
         {models.length
@@ -1439,6 +1441,9 @@ interface ModelPickerProps {
   launcher: (args: string[]) => Promise<LaunchResult>
   onCancel: () => void
   onSelect: (model: string, providerSlug: string) => void
+  // What the selection will do. Shown, rather than assumed, because the two
+  // scopes answer different questions and the picker looks identical either way.
+  scope: 'default' | 'session'
   sessionId: string | null
   suspend: (run: RunExternalProcess) => Promise<void>
   t: Theme

@@ -6,6 +6,8 @@
 
 import { useContext, useMemo, useSyncExternalStore } from 'react'
 
+import type { SelectionCopy } from '../ink.js'
+
 import StdinContext from '../components/StdinContext.js'
 import instances from '../instances.js'
 import { type FocusMove, type SelectionState, shiftAnchor } from '../selection.js'
@@ -15,9 +17,9 @@ import { type FocusMove, type SelectionState, shiftAnchor } from '../selection.j
  * Returns no-op functions when fullscreen mode is disabled.
  */
 export function useSelection(): {
-  copySelection: () => Promise<string>
+  copySelection: () => Promise<SelectionCopy>
   /** Copy without clearing the highlight (for copy-on-select). */
-  copySelectionNoClear: () => Promise<string>
+  copySelectionNoClear: () => Promise<SelectionCopy>
   clearSelection: () => void
   hasSelection: () => boolean
   /** Read the raw mutable selection state (for drag-to-scroll). */
@@ -56,8 +58,8 @@ export function useSelection(): {
   return useMemo(() => {
     if (!ink) {
       return {
-        copySelection: async () => '',
-        copySelectionNoClear: async () => '',
+        copySelection: async () => ({ text: '', path: null }),
+        copySelectionNoClear: async () => ({ text: '', path: null }),
         clearSelection: () => {},
         hasSelection: () => false,
         getState: () => null,

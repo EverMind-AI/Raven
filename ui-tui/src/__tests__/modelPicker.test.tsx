@@ -109,6 +109,8 @@ interface MountExtras {
   launch?: { code: null | number; error?: string }
   /** The provider list every `model.options` call after the first one returns. */
   nextProviders?: ModelOptionProvider[]
+  /** Which scope the selection will apply. Defaults to the session-scoped open. */
+  scope?: 'default' | 'session'
 }
 
 interface Harness {
@@ -181,6 +183,7 @@ const mount = (
       launcher={launcher as never}
       onCancel={onCancel}
       onSelect={onSelect}
+      scope={extras?.scope ?? 'session'}
       sessionId="tui:session-1"
       suspend={suspend as never}
       t={DEFAULT_THEME}
@@ -248,6 +251,33 @@ describe('ModelPicker', () => {
     expect(frame).toContain('deepseek/m1')
     expect(frame).not.toContain('openrouter/m1')
     h.unmount()
+  })
+
+  it('says which scope the selection will apply', async () => {
+    // The two scopes look identical in this list, so the footer is the only
+    // thing that says whether Enter moves this conversation or what new ones
+    // start on. It also carries the spelling that works -- `<provider> <id>
+    // --default`, which this picker cannot itself produce -- so a footer stuck
+    // on one branch teaches a command the parser refuses.
+    //
+    // Matched on `--default sets` rather than the whole sentence: ink emits CSI
+    // sequences mid-word and `normalize` turns each into a space, so a long
+    // phrase does not survive the frame intact.
+    const session = mount([anthropic])
+    await delay(80)
+    await session.type(ENTER) // step 2 -- the footer belongs to the model list
+    const sessionFrame = session.frame()
+    session.unmount()
+
+    const asDefault = mount([anthropic], undefined, { scope: 'default' })
+    await delay(80)
+    await asDefault.type(ENTER)
+    const defaultFrame = asDefault.frame()
+    asDefault.unmount()
+
+    expect(sessionFrame).toContain('--default sets')
+    expect(defaultFrame).not.toContain('--default sets')
+    expect(defaultFrame).not.toBe(sessionFrame)
   })
 
   it('lists what is set up, and puts the rest behind one row', async () => {

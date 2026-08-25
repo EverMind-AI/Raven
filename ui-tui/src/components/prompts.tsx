@@ -16,6 +16,20 @@ import { TextInput } from './textInput.js'
 
 const CMD_PREVIEW_LINES = 10
 
+// 90 -> "1m 30s", 45 -> "45s". Seconds are padded so the line keeps its
+// width as the countdown runs and the prompt below it does not jitter.
+//
+// The payload is a remaining-time subtraction, so it arrives fractional: a
+// 90-second budget shows up as 89.99999912502244. Ceil before the branch, not
+// inside it -- 59.7 belongs to the minutes shape, and rounding after the test
+// would render it as "60s". Ceil rather than round keeps the last second on
+// screen until the deadline has actually passed.
+const clarifyRemainingText = (secs: number): string => {
+  const whole = Math.ceil(secs)
+
+  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, '0')}s`
+}
+
 export function ApprovalPrompt({ onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
   const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
@@ -112,23 +126,63 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
   const [sel, setSel] = useState(0)
   const [custom, setCustom] = useState('')
   const [typing, setTyping] = useState(false)
+  // The option a note is being attached to. Distinct from `typing`, which
+  // replaces the selection with free text rather than annotating it.
+  const [noting, setNoting] = useState<null | string>(null)
+  const [note, setNote] = useState('')
+  const [remaining, setRemaining] = useState(req.timeoutS ?? 0)
   const choices = req.choices ?? []
+  const total = req.total ?? 1
+  const position = (req.index ?? 0) + 1
+  const others = (req.batch ?? []).filter((_, i) => i !== (req.index ?? 0))
+
+  useEffect(() => {
+    if (!req.timeoutS) {
+      return
+    }
+
+    setRemaining(req.timeoutS)
+    const timer = setInterval(() => setRemaining(s => (s > 0 ? s - 1 : 0)), 1000)
+
+    return () => clearInterval(timer)
+  }, [req.requestId, req.timeoutS])
 
   const heading = (
     <Text bold>
       <Text color={t.color.accent}>ask</Text>
+      {total > 1 ? <Text color={t.color.muted}> ({position}/{total})</Text> : null}
+      {req.header ? <Text color={t.color.label}> [{req.header}]</Text> : null}
       <Text color={t.color.text}> {req.question}</Text>
     </Text>
   )
 
+  // The rest of the batch, so the user can see how much is still coming rather
+  // than discovering it one prompt at a time.
+  const rest =
+    others.length > 0 ? (
+      <Box flexDirection="column" paddingLeft={1}>
+        <Text color={t.color.muted} dimColor>
+          also asking: {others.map(q => q.question).join(' · ')}
+        </Text>
+      </Box>
+    ) : null
+
+  const budget = req.timeoutS ? `${clarifyRemainingText(remaining)} left · ` : ''
+
   useInput((ch, key) => {
     if (key.escape) {
+      if (noting !== null) {
+        setNoting(null)
+
+        return
+      }
+
       typing && choices.length ? setTyping(false) : onCancel()
 
       return
     }
 
-    if (typing || !choices.length) {
+    if (typing || noting !== null || !choices.length) {
       return
     }
 
@@ -140,6 +194,13 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
       setSel(s => s + 1)
     }
 
+    if (key.tab && sel < choices.length && choices[sel]) {
+      setNote('')
+      setNoting(choices[sel]!)
+
+      return
+    }
+
     if (key.return) {
       sel === choices.length ? setTyping(true) : choices[sel] && onAnswer(choices[sel]!)
     }
@@ -148,13 +209,44 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
 
     if (n >= 1 && n <= choices.length) {
       onAnswer(choices[n - 1]!)
+    } else if (n === choices.length + 1) {
+      // The Other row is drawn with a number like every other row, so its
+      // number has to reach it too; Enter on the row already does.
+      setTyping(true)
     }
   })
+
+  if (noting !== null) {
+    return (
+      <Box flexDirection="column">
+        {heading}
+
+        <Text color={t.color.label}>
+          {'  '}note for {noting}
+        </Text>
+
+        <Box>
+          <Text color={t.color.label}>{'> '}</Text>
+          <TextInput
+            columns={Math.max(20, cols - 6)}
+            onChange={setNote}
+            onSubmit={v => onAnswer(v.trim() ? `${noting} (note: ${v.trim()})` : noting)}
+            value={note}
+          />
+        </Box>
+
+        <Text color={t.color.muted}>
+          {budget}Enter send · Esc back
+        </Text>
+      </Box>
+    )
+  }
 
   if (typing || !choices.length) {
     return (
       <Box flexDirection="column">
         {heading}
+        {rest}
 
         <Box>
           <Text color={t.color.label}>{'> '}</Text>
@@ -162,7 +254,7 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
         </Box>
 
         <Text color={t.color.muted}>
-          Enter send · Esc {choices.length ? 'back' : 'cancel'} ·{' '}
+          {budget}Enter send · Esc {choices.length ? 'back' : 'cancel'} ·{' '}
           {isMac ? 'Cmd+C copy · Cmd+V paste · Ctrl+C cancel' : 'Ctrl+C cancel'}
         </Text>
       </Box>
@@ -172,17 +264,21 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
   return (
     <Box flexDirection="column">
       {heading}
+      {rest}
 
       {[...choices, 'Other (type your answer)'].map((c, i) => (
         <Text key={i}>
           <Text bold={sel === i} color={sel === i ? t.color.label : t.color.muted} inverse={sel === i}>
             {sel === i ? '▸ ' : '  '}
             {i + 1}. {c}
+            {req.recommended && c === req.recommended ? ' (recommended)' : ''}
           </Text>
         </Text>
       ))}
 
-      <Text color={t.color.muted}>↑/↓ select · Enter confirm · 1-{choices.length} quick pick · Esc/Ctrl+C cancel</Text>
+      <Text color={t.color.muted}>
+        {budget}↑/↓ select · Enter confirm · Tab add note · 1-{choices.length + 1} quick pick · Esc/Ctrl+C cancel
+      </Text>
     </Box>
   )
 }

@@ -196,6 +196,31 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     return None
 
 
+def _fresh_openrouter_models() -> dict[str, dict]:
+    """The gateway's own table, but only while it is still current.
+
+    Deliberately not :func:`_cache_only_openrouter_models`. That one answers with
+    a copy of any age, which is right for sizing a window -- a stale window is
+    still this model's window, roughly. It is wrong for the price tier that runs
+    ahead of LiteLLM: a copy old enough to have expired is not better evidence
+    than the router's table, and letting it answer would suppress the refetch
+    that the expiry exists to trigger.
+
+    Never fetches, for the same reason the any-age reader does not: this is read
+    after every completion, on the event loop.
+    """
+    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
+
+    if not _OPENROUTER_CACHE:
+        disk = model_catalog_cache.load()
+        if disk is None:
+            return {}
+        _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME = disk
+    if _OPENROUTER_CACHE and (time.time() - _OPENROUTER_CACHE_TIME) < _OPENROUTER_CACHE_TTL:
+        return _OPENROUTER_CACHE
+    return {}
+
+
 def _cache_only_openrouter_models() -> dict[str, dict]:
     """Whatever OpenRouter table is already on hand, without a network call.
 
@@ -426,7 +451,7 @@ def _dotted_version_variants(key: str) -> list[str]:
     return variants
 
 
-def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | None:
+def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True, table: dict | None = None) -> dict | None:
     """This model's row in OpenRouter's catalogue, or None.
 
     Only for ids that name OpenRouter. The table was once consulted for every id,
@@ -445,7 +470,8 @@ def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | 
     if not model.startswith("openrouter/"):
         return None
     key = model.removeprefix("openrouter/")
-    table = _fetch_openrouter_models() if allow_fetch else _cache_only_openrouter_models()
+    if table is None:
+        table = _fetch_openrouter_models() if allow_fetch else _cache_only_openrouter_models()
     for candidate in (key, *_dotted_version_variants(key)):
         entry = table.get(candidate)
         if entry is None and "/" in candidate:
@@ -455,9 +481,15 @@ def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | 
     return None
 
 
-def _try_openrouter_rates(model: str) -> tuple[float, float] | None:
-    """Look up live OpenRouter per-token rates. Returns rates or None."""
-    entry = _lookup_openrouter_entry(model)
+def _try_openrouter_rates(model: str, *, table: dict | None = None) -> tuple[float, float] | None:
+    """Look up live OpenRouter per-token rates. Returns rates or None.
+
+    ``table`` supplies an already-resolved catalogue, which is what the ladder's
+    first tier passes: pricing runs after every completion, on the event loop, and
+    must not be the thing that blocks a turn on an HTTP round-trip. Omitted, this
+    fetches as before.
+    """
+    entry = _lookup_openrouter_entry(model, table=table)
     if not entry:
         return None
     pricing = entry.get("pricing") or {}
@@ -492,12 +524,21 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
 
     Ladder, most authoritative first:
 
+    0. OpenRouter's own catalogue while it is still current, and only for ids
+       that name OpenRouter. Ahead of LiteLLM because the two questions come
+       apart here: LiteLLM routes the request, but OpenRouter is the party
+       *billing* it, and who sends is not who charges. Measured, they disagree --
+       LiteLLM files ``openrouter/z-ai/glm-4.6`` at 0.40/1.75 per million where
+       OpenRouter's own current table says 0.50/2.00, so the ladder under-reported
+       a real bill by a fifth. Fresh-only and never fetching: an expired copy is
+       not better evidence than the router's table, and answering from one would
+       suppress the refetch the expiry exists to trigger -- while a blocking fetch
+       here would be paid by the turn;
     1. LiteLLM's own table -- it also routes the request, so its answer and the
        call agree by construction;
-    2. OpenRouter's live catalogue, and only for ids that name OpenRouter. Ahead
-       of the snapshot because for those ids OpenRouter is the party doing the
-       billing, and its table is current where a bundled copy is from whenever it
-       was refreshed;
+    2. OpenRouter's live catalogue, fetching if needed, and still only for ids
+       that name OpenRouter. Ahead of the snapshot for the tier-0 reason, behind
+       LiteLLM because reaching the network is worse than a slightly stale row;
     3. the bundled models.dev snapshot, keyed by provider, which reaches vendors
        LiteLLM has not indexed without reading another vendor's row;
     4. the manual table above, for a model too new for all three.
@@ -520,7 +561,8 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
     rate for a 200k-token prompt is not always the rate for a short one.
     """
     return (
-        _try_litellm_rates(model, input_tokens, output_tokens)
+        _try_openrouter_rates(model, table=_fresh_openrouter_models())
+        or _try_litellm_rates(model, input_tokens, output_tokens)
         or _try_openrouter_rates(model)
         or _try_snapshot_rates(model)
         or _FALLBACK_PRICING.get(model.removeprefix("openrouter/"))

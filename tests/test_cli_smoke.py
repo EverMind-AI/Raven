@@ -192,6 +192,7 @@ REGISTERED_COMMAND_NAMES = {
     "skill",
     "status",
     "tracing",
+    "trajectory",
     "tui",
     "upgrade",
     # The page, beside `serve`, which is the gateway. `web` attaches to a

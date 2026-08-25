@@ -744,3 +744,460 @@ class TestTheInstallationSection:
         payload = json.loads(r.stdout[r.stdout.index("{") :])
         assert payload["install"]["complete"] is False
         assert payload["install"]["missing"] == ["the page"]
+
+
+# ── raven doctor --fix ──────────────────────────────────────────────────
+#
+# The migrations run at load, so nothing is ever "pending" by the time this
+# command looks. What is left to ask about is what they deliberately do not
+# decide: a window the user pinned below what the model holds, and a provider
+# nothing could resolve. Both are legitimate configurations, which is why they
+# are reported and only written with --fix.
+
+
+def _pinned_config(home: Path, **defaults: object) -> Path:
+    cfg = home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps(
+            {
+                "providers": {"anthropic": {"apiKey": "sk-a"}},
+                "agents": {
+                    "defaults": {
+                        "model": "anthropic/claude-opus-4-5",
+                        "provider": "anthropic",
+                        **defaults,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_doctor_reports_a_pin_that_caps_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("32,768" in f and "1,000,000" in f for f in health.findings)
+    assert health.fixes and not health.applied
+    # Reported only: no consent, no write.
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_doctor_fix_removes_the_pin_and_keeps_the_file_mode(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    cfg.chmod(0o600)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert health.applied and not health.fixes
+    assert "contextWindowTokens" not in json.loads(cfg.read_text())["agents"]["defaults"]
+    # config.json holds providers.*.apiKey, so a replacing writer owns the mode.
+    assert cfg.stat().st_mode & 0o777 == 0o600
+
+
+def test_doctor_says_nothing_about_a_pin_that_matches_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=1_000_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    assert _inspect_config_health(load_config(cfg), fix=False).findings == []
+
+
+def test_doctor_fix_reports_a_write_it_could_not_make(tmp_path, monkeypatch) -> None:
+    """A read-only home is a reason to say so, not to crash the health check --
+    the rest of the report is still worth printing."""
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+    monkeypatch.setattr(
+        "raven.cli.doctor_commands._write_config_preserving_mode",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("read-only file system")),
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert any("could not write the fix" in f for f in health.findings)
+    assert health.applied == []
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_the_fix_writer_survives_a_mode_it_cannot_read(tmp_path, monkeypatch) -> None:
+    """Preserving the mode is best-effort: a filesystem that will not answer
+    `stat` is not a reason to leave the fix unwritten."""
+    from raven.cli.doctor_commands import _write_config_preserving_mode
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("os.chmod", lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+
+    _write_config_preserving_mode(cfg, {"agents": {"defaults": {"model": "x/y"}}})
+
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["model"] == "x/y"
+
+
+def test_doctor_reports_a_config_that_names_no_provider(tmp_path) -> None:
+    """The check that had to wait for the explicit-provider rule.
+
+    Before it, ``provider`` defaulted to ``auto`` and blank never happened. After
+    it, blank means the load-time migration could not resolve the vendor -- so
+    every call falls back to deriving it from the model id, which is the guess
+    the rule exists to end.
+
+    The fixture has to be genuinely unresolvable, which is the check's whole
+    scope: with a configured vendor that serves the model, the migration fills
+    the blank in during ``load_config`` and there is nothing left to report.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": ""}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    # Reported, never fixed: the migration already tried the derivation and had
+    # no answer, so only the user knows which vendor they meant to pay.
+    assert not health.fixes
+
+
+def test_doctor_reads_a_leftover_auto_as_unset_not_as_a_typo(tmp_path) -> None:
+    """`auto` is the state this check exists for, and it is reachable.
+
+    `_migrate_auto_provider` leaves the literal in place when it cannot resolve a
+    vendor, so a config can still say `auto` after `load_config` -- and
+    `Config._match_provider` already treats it as unset (`forced != "auto"`).
+    Read as a name instead, it is unroutable, and the user is told to fix a typo
+    they did not make while the advice that would help goes unsaid.
+
+    Neither of the checks around this one used a literal `auto`, which is how
+    the gap survived to review.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": "auto"}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    assert any("retired spelling of unset" in f for f in health.findings)
+    assert not any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
+def test_doctor_reports_a_provider_nothing_routes_to(tmp_path) -> None:
+    """A typo written before `provider use` started checking the name. Every
+    call then resolves against a vendor that does not exist.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "antropic"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
+def test_doctor_accepts_a_vendor_only_litellm_knows(tmp_path) -> None:
+    """The counterweight. Raven carries no spec for mistral, so "no spec of
+    ours" cannot be the test -- reporting it as broken would be worse than
+    saying nothing.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "mistral"
+    raw["agents"]["defaults"]["model"] = "mistral/mistral-large-latest"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert health.findings == []
+
+
+def test_doctor_prints_the_config_section_it_found(tmp_path, monkeypatch, capsys) -> None:
+    """The renderer, not just the check: a finding nothing prints is a finding
+    the user never gets."""
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(
+            findings=["contextWindowTokens is pinned to 32,768"],
+            fixes=["remove agents.defaults.contextWindowTokens"],
+        ),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "Config" in out
+    assert "pinned to 32,768" in out
+    assert "raven doctor --fix" in out
+    assert "remove agents.defaults.contextWindowTokens" in out
+
+
+def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(applied=["remove agents.defaults.contextWindowTokens"]),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "fixed" in out
+    assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"
+
+
+# ------------------------------------------------------- tool capabilities
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These credentials resolve from the environment too, so a developer who
+    exported one would see these assert the wrong branch.
+
+    ``OPENROUTER_API_KEY`` counts as much as the search key: it is what the
+    media family falls back to, so exporting it turns the "nothing to borrow"
+    rows into "borrowing from the environment" rows.
+    """
+    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) -> None:
+    """The reason this section exists: an unconfigured tool is not registered,
+    so without it nothing in the running system says the capability is there."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Tool capabilities" in result.stdout
+    assert "web_search" in result.stdout
+    assert "serper.dev" in result.stdout, "a deployer cannot act without being told where to go"
+    assert "tools.web.search.apiKey" in result.stdout
+
+
+def test_doctor_says_a_paid_capability_bills_before_it_is_switched_on(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Billed per image." in result.stdout
+    assert "prepaid OpenRouter credit" in result.stdout, "video cannot run at all without it"
+
+
+def test_doctor_reports_a_configured_capability_and_where_its_key_came_from(tmp_config: Path, tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.providers.openrouter.api_key = "sk-or-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrowed" in result.stdout, "the deployer should see it reused a key, not that it needs one"
+
+
+def test_doctor_does_not_offer_a_borrow_it_cannot_make(healthy_config: Path) -> None:
+    """This config has no OpenRouter key, so "reuse the one you have" is false.
+
+    It is false in the expensive direction: acting on it means setting a model,
+    getting a registered tool -- a model alone counts -- and every call failing
+    on a credential the deployer was told they already had.
+    """
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrow" not in result.stdout, "claimed a reuse with nothing to reuse"
+    assert "tools.media.image.apiKey" in result.stdout, "must name the key it actually needs"
+    assert "OPENROUTER_API_KEY" in result.stdout
+
+
+def test_doctor_flags_a_capability_registered_without_a_key(tmp_config: Path, tmp_path: Path) -> None:
+    """A media model with no key from any source is offered to the model and
+    fails on every call. A satisfied row is the one thing that must not say."""
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "no key resolves" in result.stdout
+    assert "tools.media.image.apiKey" in result.stdout
+    # Warned, not failed. Unlike a memory role the server could not build, this
+    # failure is loud where it happens -- the tool returns its missing-key error
+    # to the model -- so the section stays advisory, as the rest of it is.
+    assert result.exit_code == 0
+
+    # Two fields rather than one, because collapsing them is what hid this
+    # state: registered *and* unusable is not reachable through either alone.
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    image = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "image_generate")
+    assert image["configured"] is True and image["has_credential"] is False
+
+
+def test_an_unconfigured_capability_is_not_a_failure(healthy_config: Path) -> None:
+    """An install without image generation is a choice, not a fault."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+
+
+def test_tool_capabilities_reach_the_json_output(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    payload = json.loads(result.stdout)
+    tools = payload["tools"]["capabilities"]
+    by_name = {c["tool"]: c for c in tools}
+    assert "web_search" in by_name and "web_fetch" in by_name
+    assert by_name["web_search"]["configured"] is False
+    assert by_name["web_search"]["obtain_from"] == "https://serper.dev"
+    assert by_name["web_fetch"]["configured"] is True
+    assert by_name["image_generate"]["key_path"] == "tools.media.image.apiKey", (
+        "the key path is not the model path this row switches on"
+    )
+
+
+def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None:
+    """These rows exist to be copied. A key wrapped mid-path is unusable, which
+    is why each fact is printed on its own line rather than in a sentence."""
+    result = runner.invoke(app, ["doctor"])
+
+    for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
+        assert path in result.stdout, f"{path} was broken across a line wrap"
+
+
+def _search_config(tmp_path: Path, *, key: bool, off: bool) -> None:
+    """One cell of the web_search state matrix, persisted.
+
+    ``key`` and ``off`` are independent in production -- a deployment can set
+    neither, either, or both -- so they are independent here.
+    """
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    if key:
+        cfg.tools.web.search.api_key = "sk-serper"
+    if off:
+        cfg.tools.disabled_tools = ["web_search"]
+    save_config(cfg)
+
+
+def _switched_off_search(tmp_path: Path) -> None:
+    """A credentialed web_search that the deployment has switched off by name."""
+    _search_config(tmp_path, key=True, off=True)
+
+
+def test_doctor_says_a_capability_is_switched_off_rather_than_ticking_it(tmp_config: Path, tmp_path: Path) -> None:
+    """A key plus `disabledTools` used to print a green tick for a tool the
+    agent does not hold -- the report claiming a capability is on offer when
+    Raven has removed it."""
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+    # Not the unconfigured path: the key is set, and telling them to set it
+    # again is how a report sends someone in a circle.
+    assert "switch on:" not in result.stdout.split("web_search")[-1][:200]
+
+
+def test_the_switched_off_state_reaches_the_json_output(tmp_config: Path, tmp_path: Path) -> None:
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(result.stdout)
+
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+    assert row["configured"] is True, "the key is set; calling it unconfigured is the wrong repair"
+    assert row["disabled"] is True
+
+
+@pytest.mark.parametrize("key", [True, False], ids=["keyed", "keyless"])
+def test_the_off_switch_is_named_whether_or_not_a_key_is_set(key: bool, tmp_config: Path, tmp_path: Path) -> None:
+    """The cell the first version of this rendering got wrong.
+
+    With no key, the row used to print only the credential advice -- so a
+    deployer could set `tools.web.search.apiKey`, restart, and still not have
+    search, because `_apply_disabled_tools` removes it either way.
+    """
+    _search_config(tmp_path, key=key, off=True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("key", "off", "configured", "disabled"),
+    [(True, True, True, True), (True, False, True, False), (False, True, False, True), (False, False, False, False)],
+    ids=["keyed-off", "keyed-on", "keyless-off", "keyless-on"],
+)
+def test_the_json_row_reports_the_two_states_independently(
+    key: bool, off: bool, configured: bool, disabled: bool, tmp_config: Path, tmp_path: Path
+) -> None:
+    """Both flags, all four combinations. Collapsing either into the other is
+    what made the report tell a deployer to set a key that was already set."""
+    _search_config(tmp_path, key=key, off=off)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["configured"] is configured
+    assert row["disabled"] is disabled
