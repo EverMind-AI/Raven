@@ -1,0 +1,7 @@
+# One sha256 per vendored subagent checkout, over its tracked paths
+# and their contents. Written by scripts/check_vendored_subagents.py
+# --update, and only for a deliberate upgrade of that fork.
+raven-code 691ea34e242bc67d85e981ecc0b103443c1af1b06fab654e24ea751123f91f51
+raven-oncall 802a144b4469bf8a8d49f2ca54f83dbd15fac1973b71a248e4e197e475b22826
+raven-ppt 1933eefffcf954d284fa343e640665998f086c61b1c4dafe4bbd6e91f0cfc3af
+raven-research e213029d01650f28deb53d7dba424e7be4e656294584672f6a0ddd9c655804e9

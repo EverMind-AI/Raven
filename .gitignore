@@ -113,6 +113,7 @@ subagents/*
 !subagents/raven-ppt/
 !subagents/README.md
 !subagents/install.sh
+!subagents/TREE_HASHES
 
 # Report assets AGENTS.md bars from the repo whatever carries them. The
 # vendored upstream trees ship benchmark PDFs, doc diagrams and a demo
