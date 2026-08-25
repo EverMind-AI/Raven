@@ -35,7 +35,12 @@ from raven.providers.registry import (
     find_by_name,
     find_gateway,
 )
-from raven.providers.transport_failure import flag_transport_failure, prompt_chars, transport_failure_message
+from raven.providers.transport_failure import (
+    flag_transport_failure,
+    native_finish_reason,
+    prompt_chars,
+    transport_failure_message,
+)
 from raven.providers.wire import wire_model
 
 litellm = import_litellm()
@@ -839,6 +844,10 @@ class LiteLLMProvider(LLMProvider):
             content=content,
             reasoning=reasoning_content,
             tool_calls=tool_calls,
+            # Read off the first choice even though the merge above can adopt a
+            # later choice's reason: it only does so for a choice that carried
+            # tool calls, and a delivered call already stops this verdict.
+            native_finish_reason=native_finish_reason(choice),
             usage=usage,
             sent_chars=sent_chars,
         )
