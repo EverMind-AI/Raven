@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.13"
+version = "0.1.12"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -34,7 +34,7 @@ dependencies = [
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.2.3",
+    "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
     # UTS-46 host mapping for the browser's navigation check. Already present
     # transitively (httpx), declared here because the check is security-load-

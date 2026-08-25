@@ -122,6 +122,21 @@ describe('browser island, links shape (the fixture source)', () => {
 })
 
 describe('browser island, embedded shape (the rpc source)', () => {
+  /* Every other test here calls store.onFrame directly, which is what a pushed
+     frame ends up doing -- but only once hook() has put that handler on the
+     source. Nothing asserted the wiring, so cutting it left the island deaf to
+     the live layer with the suite green. */
+  it('subscribes to pushed frames, and only when the source is embedded', () => {
+    const { source } = chromium()
+    expect(source.onFrame).toBeNull()
+    store.hook()
+    expect(source.onFrame).toBe(store.onFrame)
+
+    const { source: plain } = links([])
+    store.hook()
+    expect((plain as { onFrame?: unknown }).onFrame).toBeUndefined()
+  })
+
   it('says the surface is absent on -32601 and stops asking', async () => {
     chromium({
       frame: async () => {
