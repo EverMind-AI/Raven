@@ -7,6 +7,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -406,6 +407,66 @@ async def test_cli_backend_timeout_raises(tmp_path: Path) -> None:
     be = CliAgentBackend(name="slow", command="sleep 5", timeout=0.2)
     with pytest.raises(RuntimeError):
         await be.run("x", task_id="t5", workspace=tmp_path, executor=None)
+
+
+async def test_cli_backend_publishes_stdout_to_the_live_console(tmp_path: Path) -> None:
+    """A text-format CLI's stdout is what a human watching it would see, so the
+    live console carries it -- that is the only in-flight account this lane has."""
+    from raven.agent.subagent import activity
+
+    be = CliAgentBackend(name="echo", command="cat")
+    with activity.collecting(live_key="cli-console") as did:
+        out = await be.run("watch me work", task_id="t6", workspace=tmp_path, executor=None)
+
+    assert out == "watch me work"
+    assert "watch me work" in did.console
+
+
+async def test_cli_backend_publishes_stderr_logs_to_the_live_console(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    be = CliAgentBackend(name="logs", command="sh -c 'echo progress-line >&2; echo answer'")
+    with activity.collecting() as did:
+        out = await be.run("x", task_id="t7", workspace=tmp_path, executor=None)
+
+    assert out == "answer", "stderr is a log lane now, not part of the reply"
+    assert "progress-line" in did.console
+    assert "answer" in did.console
+
+
+async def test_cli_backend_stderr_stands_in_when_stdout_is_empty(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    be = CliAgentBackend(name="quiet", command="sh -c 'echo only-logs >&2'")
+    with activity.collecting():
+        out = await be.run("x", task_id="t7b", workspace=tmp_path, executor=None)
+
+    assert out == "only-logs"
+
+
+async def test_cli_backend_keeps_machine_stdout_off_the_console(tmp_path: Path) -> None:
+    """A format with no delta reader puts nothing readable on stdout mid-run;
+    raw JSONL on the console would be noise wearing a transcript's clothes."""
+    from raven.agent.subagent import activity
+
+    line = '{"type":"text","sessionID":"ses_1","part":{"messageID":"m1","type":"text","text":"done"}}'
+    be = CliAgentBackend(name="machine", command=f"printf %s {shlex.quote(line)}", transcript_format="opencode_json")
+    with activity.collecting() as did:
+        out = await be.run("task", task_id="t8", workspace=tmp_path, executor=None)
+
+    assert out == "done"
+    assert did.console == ""
+
+
+def test_note_console_keeps_only_the_tail() -> None:
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        activity.note_console("a" * 9000)
+        activity.note_console("tail")
+
+    assert len(did.console) <= 8000
+    assert did.console.endswith("tail")
 
 
 # --- OpenAI-API backend (against a local stub) ---------------------------

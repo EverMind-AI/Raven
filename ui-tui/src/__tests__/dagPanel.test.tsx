@@ -35,15 +35,21 @@ const DIAMOND: DagRunState = {
 }
 
 describe('DagPanel', () => {
-  it('draws one row per node with its status glyph', () => {
-    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+  it('names the agent in its box, and does not repeat it on the row', () => {
+    const named: DagRunState = {
+      ...DIAMOND,
+      nodes: DIAMOND.nodes.map((item, index) => ({ ...item, subagent: `agent-${index + 1}` }))
+    }
+    const f = frame(<DagPanel run={named} t={DEFAULT_THEME} />)
 
-    expect(f).toContain('fetch')
-    expect(f).toContain('parse_a')
-    expect(f).toContain('parse_b')
-    expect(f).toContain('report')
+    for (const agent of ['agent-1', 'agent-2', 'agent-3', 'agent-4']) {
+      // Once, in its box. These nodes carry neither a summary nor a template,
+      // so their rows fall back to the node id -- the agent column only earns
+      // its cells on a row that has something to say beside it.
+      expect(f.split(agent).length - 1).toBe(1)
+    }
+
     expect(f).toContain('✓')
-    expect(f).toContain('●')
     expect(f).toContain('○')
   })
 
@@ -51,39 +57,33 @@ describe('DagPanel', () => {
     expect(frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)).toContain('4 nodes · 1 done · 1 running')
   })
 
-  it('draws the topology as a graph above the rows', () => {
+  it('draws the topology as a graph under the header', () => {
     const lines = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />).split('\n')
 
     expect(lines.some(line => line.includes('\u256d') && line.includes('\u256e'))).toBe(true)
-    expect(lines.findIndex(line => line.includes('\u25b8'))).toBeLessThan(
-      lines.findIndex(line => line.includes('parse_a'))
+    expect(lines.findIndex(line => line.includes('\u25b8'))).toBeGreaterThan(
+      lines.findIndex(line => line.includes('4 nodes'))
     )
   })
 
-  it('numbers the rows so a box can be matched to one', () => {
+  it('numbers the boxes so a detail block can be matched to one', () => {
     const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
 
-    expect(f).toMatch(/1 .*fetch/)
-    expect(f).toMatch(/4 .*report/)
+    expect(f).toMatch(/1 .*echo/)
+    expect(f).toMatch(/4 .*echo/)
   })
 
-  it('stops naming a dependency the picture drew', () => {
-    // Saying it twice is the state this graph replaced.
-    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
-
-    // Paired with the positives: a panel that rendered nothing at all would
-    // satisfy the absence on its own.
-    expect(f).toContain('\u256d')
-    expect(f).toContain('report')
-    expect(f).not.toContain('parse_a, parse_b')
-  })
-
-  it('still names a dependency from an earlier run, which has no box', () => {
+  it('names a dependency from an earlier run in the detail, which has no box', () => {
+    // The picture can only draw an edge between two of its own boxes. That
+    // dependency used to survive on the node's row; the detail block is the
+    // only place left for it.
     const run: DagRunState = {
       runId: 'dag-x',
       done: false,
       nodes: [node('only', 'pending', ['from_an_earlier_run'])]
     }
+
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-x', 'only')]))
 
     expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('from_an_earlier_run')
   })
@@ -97,11 +97,19 @@ describe('DagPanel', () => {
     expect(f).toContain('parse_a, parse_b')
   })
 
-  it('keeps sibling rows adjacent and their join below them', () => {
-    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
-    // parse_a is running, so its own stream line adds an extra line between the
-    // two rows; filtered out here since it names no node and would throw off
-    // the count.
+  it('keeps the rows when the picture fits but cannot name its boxes', () => {
+    // The compact label style is boxes of bare ordinals: it draws the shape and
+    // names nothing, so the rows are still the only place a node is identified.
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} width={40} />)
+
+    expect(f).toContain('\u256d')
+    expect(f).toContain('parse_a')
+  })
+
+  it('keeps sibling boxes adjacent and their join below them', () => {
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} width={24} />)
+    // parse_a is running, so its own stream line sits between the two rows;
+    // filtered out here since it names no node and would throw off the count.
     const lines = f
       .split('\n')
       .map(line => line.trim())
@@ -119,7 +127,9 @@ describe('DagPanel', () => {
     expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('claude')
   })
 
-  it("reports a failed node's error", () => {
+  it("reports a failed node's error without a click", () => {
+    // An error is the one thing a reader must not have to open a node to read,
+    // and a red box can only say that something went wrong somewhere.
     const run: DagRunState = {
       runId: 'dag-1',
       done: true,
@@ -158,7 +168,9 @@ describe('DagPanel', () => {
       ]
     }
 
-    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('author')
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-1', 'revise')]))
+
+    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('claude@author')
   })
 })
 
@@ -179,31 +191,52 @@ describe('DagPanel node rows', () => {
     ]
   }
 
-  it('reads a node as the agent and what it was asked', () => {
-    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+  // Wide enough for a picture, too narrow for it to fit `Coder` inside a box --
+  // the compact label style, where the row is the only place the agent is named.
+  const rowFrame = (run: DagRunState) => frame(<DagPanel run={run} t={DEFAULT_THEME} width={12} />)
 
-    expect(f).toContain('Coder: Inspect the i18n messages for dag.* keys')
+  it('reads a node as the agent and what it was asked', () => {
+    // Columns, not a sentence: the agent is padded to the run's widest name so
+    // the summaries all start on one offset a reader can scan down.
+    expect(rowFrame(WITH_PROMPTS)).toContain('Coder  Inspect the i18n messag')
   })
 
-  it('names the agent and its instance handle in parentheses', () => {
-    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+  it('keeps the instance handle off the collapsed row', () => {
+    // Forty cells for a generated suffix, against a row whose point is the
+    // words. The agent half of it is already the row's own second column.
+    expect(rowFrame(WITH_PROMPTS)).not.toContain('inspect-i18n-messages-20260820-1a4a53')
+  })
 
-    expect(f).toContain('(Coder@inspect-i18n-messages-20260820-1a4a53)')
+  it('names the instance handle in the expanded block, beside the node id', () => {
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-2', 'inspect_i18n_messages_20260820')]))
+
+    expect(frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)).toContain(
+      'Coder@inspect-i18n-messages-20260820-1a4a53'
+    )
+  })
+
+  it('puts the status mark in the margin column, ahead of the ordinal', () => {
+    const row = rowFrame(WITH_PROMPTS)
+      .split('\n')
+      .find(line => line.includes('Inspect the i18n'))!
+
+    // The same margin the transcript's reply marker and the reasoning rule take.
+    // The mark itself is a spinner frame while the node runs, so this asserts
+    // the columns after it rather than the glyph.
+    expect(row.slice(1)).toMatch(/^ 1 {2}Coder/)
   })
 
   it('keeps the node id off the collapsed row', () => {
     // The id is machine-generated and the widest thing on the row; what the node
     // was asked is what a reader is scanning for. The id is one click away.
-    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
-
-    expect(f).not.toContain('inspect_i18n_messages_20260820')
+    expect(rowFrame(WITH_PROMPTS)).not.toContain('inspect_i18n_messages_20260820')
   })
 
   it('falls back to the node id when no prompt reached the client', () => {
     // An older run dir writes no template and a host that does not correlate
     // progress with a tool row supplies no call args. A row named after nothing
     // would be worse than a row named after its id.
-    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} width={40} />)
 
     expect(f).toContain('fetch')
     expect(f).not.toContain('echo: ')
@@ -213,7 +246,7 @@ describe('DagPanel node rows', () => {
     const run: DagRunState = {
       runId: 'dag-3',
       done: false,
-      nodes: [{ ...node('a', 'running', [], 'Coder'), promptTemplate: 'x'.repeat(400) }]
+      nodes: [{ ...node('a', 'running', [], 'a-name-too-long-for-a-box'), promptTemplate: 'x'.repeat(400) }]
     }
     const lines = frame(<DagPanel run={run} t={DEFAULT_THEME} width={60} />).split('\n')
 
@@ -237,7 +270,9 @@ describe('DagPanel node rows', () => {
     }
     const f = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
 
-    expect(f).toContain('Coder: audit the skills directory')
+    // Columns, not `agent: summary` -- the agent is padded to the run's widest
+    // name so every summary starts on one offset (see the row-shape test above).
+    expect(f).toContain('Coder  audit the skills directory')
     expect(f).not.toContain('Do something else entirely')
   })
 
@@ -268,20 +303,32 @@ describe('DagPanel node rows', () => {
     expect(f).not.toContain('BBB_BODY')
   })
 
-  it('has nothing to expand for a pending node with no template', () => {
-    // Such a node has neither a template nor a trace yet, so an expanded block
-    // would add nothing -- the row is left unclickable rather than swallowing
-    // a click. A node that has started is a different story: see the node-slot
-    // tests below.
-    // No running node in this fixture: one's stream line carries a spinner that
-    // picks a new random frame on every mount, which would make two renders of
-    // it differ for a reason that has nothing to do with this toggle.
-    const run: DagRunState = { ...DIAMOND, nodes: [node('later', 'pending')] }
-    const closed = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
+  it('still opens a node with no template, which is where its id now lives', () => {
+    // It used to open nothing, on the grounds that its row already showed the
+    // id. With the graph replacing the rows the box shows an ordinal and an
+    // agent, and the detail block is the only place the id survives.
+    toggleDagNode(dagNodeKey(DIAMOND.runId, 'fetch'))
 
-    toggleDagNode(dagNodeKey(DIAMOND.runId, 'later'))
+    expect(frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)).toContain('fetch')
+  })
 
-    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toBe(closed)
+  it('shows one node at a time, closing whatever the run had open', () => {
+    const run: DagRunState = {
+      runId: 'dag-5',
+      done: false,
+      nodes: [
+        { ...node('a', 'running', [], 'Coder'), promptTemplate: 'first\nAAA_BODY' },
+        { ...node('b', 'pending', [], 'Coder'), promptTemplate: 'second\nBBB_BODY' }
+      ]
+    }
+
+    toggleDagNode(dagNodeKey('dag-5', 'a'))
+    toggleDagNode(dagNodeKey('dag-5', 'b'))
+
+    const f = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('BBB_BODY')
+    expect(f).not.toContain('AAA_BODY')
   })
 
   it('keys expansion by run as well as node, so two runs cannot share a toggle', () => {
@@ -333,10 +380,11 @@ describe('dagSpanToggleKey', () => {
     expect(dagSpanToggleKey('dag-6', { kind: 'wire', text: '\u2500\u252c\u2500' }, nodes)).toBeNull()
   })
 
-  it('opens nothing for a node with no template, rather than swallowing the click', () => {
-    // Such a box has nothing to reveal; a dead affordance that eats a click is
-    // worse than no affordance.
-    expect(dagSpanToggleKey('dag-6', { kind: 'label', nodeId: 'b', text: '2 \u25cb Coder' }, nodes)).toBeNull()
+  it('opens a node with no template too, which is where its id now lives', () => {
+    // It used to return null here, on the grounds that the node's row already
+    // printed the id. The graph replaced that row, so the box is the only way
+    // in and the detail block is the only way out.
+    expect(dagSpanToggleKey('dag-6', { kind: 'label', nodeId: 'b', text: '2 \u25cb Coder' }, nodes)).toBe('dag-6/b')
   })
 
   it('opens nothing for a node absent from the run', () => {
@@ -346,6 +394,18 @@ describe('dagSpanToggleKey', () => {
 
 describe('DagPanel node slot', () => {
   it('draws a stream line under a running node without a click', () => {
+    // The slot hangs off a node's row, so only the layout that draws rows has
+    // one: at 40 columns the picture goes compact and the rows stay.
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} width={40} />)
+
+    expect(f).toContain('working…')
+  })
+
+  it('draws the stream line under a labelled picture too', () => {
+    // The rows were dropped under a labelled picture for a while, and this line
+    // went with them. They are back, because a box has no room for the summary a
+    // node was dispatched with -- so a running node has a row to hang its live
+    // line off again at every width.
     const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
 
     expect(f).toContain('working…')
@@ -357,10 +417,6 @@ describe('DagPanel node slot', () => {
     const bare: DagRunState = { ...DIAMOND, nodes: [node('solo', 'completed')] }
 
     expect(dagNodeToggleKey('r1', bare.nodes[0]!)).toBe(dagNodeKey('r1', 'solo'))
-  })
-
-  it('still refuses a pending node with nothing to show', () => {
-    expect(dagNodeToggleKey('r1', node('later', 'pending'))).toBeNull()
   })
 
   it('expands a pending node that does carry a template', () => {

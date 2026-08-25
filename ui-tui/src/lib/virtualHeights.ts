@@ -3,6 +3,8 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { stringWidth } from '@hermes/ink'
+
 import type { EpisodeTool, Msg } from '../types.js'
 
 import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
@@ -43,7 +45,7 @@ export const messageHeightKey = (msg: Msg) => {
   // without `foldedPreviewRows` noticing, so it gets its own signature too.
   const dagSig = (dag: EpisodeTool['dag']) =>
     dag
-      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}`
+      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}`
       : ''
   const epSig =
     msg.episodes
@@ -63,8 +65,32 @@ export const messageHeightKey = (msg: Msg) => {
 export const wrappedLines = (text: string, width: number) => {
   const w = Math.max(1, width)
 
-  return text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / w)), 0)
+  return text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(stringWidth(line) / w)), 0)
 }
+
+const QUOTE_PREFIX_RE = /^\s*(?:>\s*)+/
+
+/**
+ * Wrapped row count for markdown prose, where a quote line does not get the
+ * whole body width: `markdown.tsx` draws it inside a box whose left border and
+ * padding spend two cells on every row, two more per nesting level. Measuring
+ * one at the full width under-counts a quote that wraps -- and a low estimate is
+ * the stale-cell symptom the rest of this file is careful about. The `>` markers
+ * themselves are not drawn, so they come off the measured text.
+ */
+const wrappedProseLines = (text: string, width: number) =>
+  text.split('\n').reduce((n, line) => {
+    const prefix = line.match(QUOTE_PREFIX_RE)?.[0]
+
+    if (prefix === undefined) {
+      return n + Math.max(1, Math.ceil(stringWidth(line) / Math.max(1, width)))
+    }
+
+    const depth = (prefix.match(/>/g) ?? []).length
+    const room = Math.max(1, width - 2 - Math.max(0, depth - 1) * 2)
+
+    return n + Math.max(1, Math.ceil(stringWidth(line.slice(prefix.length)) / room))
+  }, 0)
 
 // Mirrors episodeView.tsx's own INDENT/STEP. Kept local rather than shared
 // across the lib/component boundary -- this estimator is the only other place
@@ -73,11 +99,16 @@ const INDENT = 2
 const STEP = 2
 
 /**
- * Row count for one DAG call's panel: a header, the optional ascii picture,
- * one row per node, each node's live slot, and an outputs line once the run
- * is done -- exactly `DagPanel`'s own structure. Reuses the same layout
+ * Row count for one DAG call's panel: a header, the ascii picture when one fits,
+ * a row per node, each of those rows' live slot, and an outputs line once the
+ * run is done. Exactly `DagPanel`'s own structure, and it reuses the same layout
  * function the panel renders from, so the estimate cannot drift from what it
  * actually draws.
+ *
+ * The rows are unconditional. They were dropped for a while under a labelled
+ * picture, on the grounds that the boxes already named every node -- which
+ * stopped being true once a node carried the summary it was dispatched with,
+ * something no box has room for.
  */
 const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open: ReadonlySet<string>): number => {
   if (run.nodes.length === 0) {
@@ -86,13 +117,11 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
 
   const picture = layoutDagGraph(run.nodes, { width })
 
-  // What `DagNodeSlot` draws under each row: a box when expanded, one live
-  // line while it runs, nothing otherwise. `dagNodeToggleKey` is reused
-  // rather than restated because it is also the rule for what a click can
-  // open -- a pending node with no template is never expandable, whatever
-  // `open` holds. The box is a constant because it is a fixed height; reading
-  // its real height here would make this estimator depend on the fold it is
-  // estimating.
+  // What `DagNodeSlot` draws under each row: a box when expanded, one live line
+  // while it runs, nothing otherwise. `dagNodeToggleKey` is reused rather than
+  // restated because it is also the rule for what a click can open. The box is a
+  // constant because it is a fixed height; reading its real height here would
+  // make this estimator depend on the fold it is estimating.
   const slots = run.nodes.reduce((rows, node) => {
     const toggle = dagNodeToggleKey(run.runId, node)
 
@@ -187,17 +216,17 @@ export const estimatedMsgHeight = (
 
       // reasoning row (+ its own blank line above the prose)
       h += hasMeaningfulReasoning(reasoning) ? 2 : 0
-      h += narration ? wrappedLines(narration, bodyWidth) : 0
+      h += narration ? wrappedProseLines(narration, bodyWidth) : 0
     }
 
     if (msg.text) {
-      h += 1 + wrappedLines(msg.text, bodyWidth)
+      h += 1 + wrappedProseLines(msg.text, bodyWidth)
     }
 
     return Math.max(1, h)
   }
   const text = msg.role === 'assistant' && limitHistory ? boundedHistoryRenderText(msg.text) : msg.text
-  let h = wrappedLines(text || ' ', bodyWidth)
+  let h = wrappedProseLines(text || ' ', bodyWidth)
 
   if (!compact && msg.role === 'assistant') {
     h += Math.min(6, (text.match(/\n\s*\n/g) ?? []).length)

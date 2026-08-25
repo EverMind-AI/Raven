@@ -108,6 +108,46 @@ describe('turnController DAG runs', () => {
     expect(tool.dag?.nodes.find(n => n.id === 'a')?.status).toBe('completed')
   })
 
+  it('keeps a still-running graph across the end of its turn', () => {
+    // `run_subagent_dag` returns as soon as the run is scheduled, so the reply
+    // commits while nodes are still working and every remaining frame arrives
+    // after idle(). Clearing the list there dropped those frames on the floor
+    // -- foldDagEvent has nothing to fold against -- and the pinned copy read
+    // "0 done" for the rest of the session.
+    turnController.reset()
+    turnController.recordDagEvent(runStarted('dag-1', 'call-a'))
+    turnController.idle()
+
+    expect(getTurnState().dagRuns.map(run => run.runId)).toEqual(['dag-1'])
+
+    turnController.recordDagEvent({
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'a', status: 'completed' }
+    })
+
+    expect(getTurnState().dagRuns[0]!.nodes.find(n => n.id === 'a')?.status).toBe('completed')
+  })
+
+  it('releases a graph that finished before the turn ended', () => {
+    turnController.reset()
+    turnController.recordDagEvent(runStarted('dag-1', 'call-a'))
+    turnController.recordDagEvent({
+      type: 'dag.run_completed',
+      payload: {
+        run_id: 'dag-1',
+        dir: '/tmp/dag-1',
+        summary: { total: 2, completed: 2 },
+        files: [
+          { node: 'a', status: 'completed' },
+          { node: 'b', status: 'completed' }
+        ]
+      }
+    })
+    turnController.idle()
+
+    expect(getTurnState().dagRuns).toEqual([])
+  })
+
   it('leaves other tool rows without a graph', () => {
     patchUiState({ transcript: 'episodes' })
     turnController.reset()

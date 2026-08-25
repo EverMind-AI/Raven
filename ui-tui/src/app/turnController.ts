@@ -205,10 +205,16 @@ class TurnController {
     this.episodes = []
     this.lastEpisodeStartMs = 0
 
-    patchTurnState({
-      // The live graphs go with the turn; a finished one is already pinned onto
-      // its tool row by recordDagEvent, which is what the transcript renders.
-      dagRuns: [],
+    patchTurnState(state => ({
+      ...state,
+      // A finished graph is already pinned onto its tool row, so it goes with
+      // the turn. A running one cannot: `run_subagent_dag` returns as soon as
+      // the run is scheduled, so most graphs are still working at this point and
+      // every later frame folds against this list. Dropping them here left the
+      // pinned copy frozen at whatever the graph looked like when the reply
+      // committed -- "0 done" forever. They are released at the next idle, by
+      // which time `done` is set.
+      dagRuns: state.dagRuns.filter(run => !run.done),
       episodes: [],
       streamPendingTools: [],
       streamSegments: [],
@@ -216,7 +222,7 @@ class TurnController {
       subagents: [],
       tools: [],
       turnTrail: []
-    })
+    }))
     patchUiState({ busy: false, escapeArmed: false })
     resetFlowOverlays()
   }
@@ -960,7 +966,10 @@ class TurnController {
     this.turnTools = []
     this.toolTokenAcc = 0
     this.persistedToolLabels.clear()
-    patchTurnState({ activity: [], outcome: '' })
+    // Unlike idle(), which hands a still-running graph to the next turn, this is
+    // a teardown: the only caller is the gateway exiting, which takes every run
+    // with it, and nothing will ever fold another frame into them.
+    patchTurnState({ activity: [], dagRuns: [], outcome: '' })
   }
 
   fullReset() {

@@ -383,6 +383,12 @@ now does it (`!181`), which is the prerequisite this section should have named.
 
 ## Endgame, once Axis 1 is empty and Axis 2 is deliberate
 
+**The first two are blocked, and the condition above is not the one that
+blocks them: see `2026-08-25-build-wrapup-precondition.md`.** This section's
+own precondition is now satisfiable -- Axis 1 and Axis 3 read 0 and every
+surviving verb has a verdict -- so re-measuring, as this document's header
+tells you to, gives a green light that the argument in that file overrides.
+
 - Delete the concat manifests; fold `ui/build.py` into Vite. The single-file
   dist contract survives as a Vite config rather than a Python script.
 - Retire `count-shared-globals.mjs` and `tests/test_ui_language_repaint.py`.

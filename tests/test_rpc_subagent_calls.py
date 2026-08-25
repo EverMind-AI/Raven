@@ -353,6 +353,43 @@ async def test_a_run_in_flight_serves_the_transcript_being_collected(workspace: 
     assert ctx2["messages"][-1]["text"] == "done"
 
 
+async def test_a_run_in_flight_serves_its_console_tail(workspace: Path) -> None:
+    """The cli lane streams no transcript; its only in-flight account is its
+    own output. The context read carries that tail as a `console` entry while
+    the run is live, and drops it once the record's answer takes over."""
+    from raven.agent.subagent import activity
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _ConsoleBackend:
+        async def run(self, task: str, **_kw: Any) -> str:
+            activity.note_console("searching the web...\n")
+            activity.note_console("reading 3 sources\n")
+            started.set()
+            await release.wait()
+            return "done"
+
+    mgr = _manager(workspace)
+    mgr.registry.set_builtin_builder(lambda _row, _build, _b=_ConsoleBackend(): _b)
+    await mgr.spawn("research it", task_summary="researching", session_key=SESSION)
+    await asyncio.wait_for(started.wait(), timeout=5)
+    try:
+        row = (await subagent_list({"session_id": SESSION}))["items"][0]
+        ctx = await subagent_context({"id": row["id"], "session_id": SESSION})
+        console = [m for m in ctx["messages"] if m["role"] == "console"]
+        assert len(console) == 1
+        assert "searching the web..." in console[0]["text"]
+        assert "reading 3 sources" in console[0]["text"]
+    finally:
+        release.set()
+        await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+    ctx2 = await subagent_context({"id": row["id"], "session_id": SESSION})
+    assert [m for m in ctx2["messages"] if m["role"] == "console"] == []
+    assert ctx2["messages"][-1]["text"] == "done"
+
+
 async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace: Path) -> None:
     """A backend that saw the run's steps (acp) leaves transcript.jsonl, and
     the context read splices those turns between the prompt and the answer in

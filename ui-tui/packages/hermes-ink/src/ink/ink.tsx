@@ -1177,6 +1177,70 @@ export default class Ink {
   }
 
   /**
+   * The screen buffer the renderer believes the terminal is showing, as text.
+   *
+   * For diagnosing a paint that looks wrong: the buffer is what the diff writes
+   * from, so comparing a dump taken while the screen looks corrupt against one
+   * taken after `forceRedraw()` says which side is at fault. Same rows and
+   * styles across both means the buffer was right and the writes lost
+   * something; different means the buffer itself was already wrong (a stale
+   * blit, an overlay that poisoned the previous frame).
+   *
+   * Style ids are the pool's, printed per cell run, with a legend of the codes
+   * each id sets -- a run boundary is exactly where the terminal gets an SGR
+   * change, which is what a "half the line is grey" report is about.
+   */
+  dumpScreen(): string {
+    const screen = this.frontFrame.screen
+    const rows: string[] = []
+    const legend = new Map<number, string>()
+
+    for (let y = 0; y < screen.height; y++) {
+      let text = ''
+      let runs = ''
+      let runStyle = -1
+      let runLength = 0
+
+      const closeRun = () => {
+        if (runLength > 0) {
+          runs += `${runStyle}x${runLength} `
+        }
+      }
+
+      for (let x = 0; x < screen.width; x++) {
+        const cell = cellAt(screen, x, y)
+        const styleId = cell?.styleId ?? 0
+
+        text += cell?.char ?? ' '
+
+        if (styleId !== runStyle) {
+          closeRun()
+          runStyle = styleId
+          runLength = 0
+        }
+
+        runLength++
+
+        if (!legend.has(styleId)) {
+          legend.set(styleId, JSON.stringify(this.stylePool.transition(this.stylePool.none, styleId)))
+        }
+      }
+
+      closeRun()
+      rows.push(`${String(y).padStart(3)} |${text.replace(/\s+$/, '')}|\n    styles: ${runs.trim()}`)
+    }
+
+    const legendRows = [...legend.entries()].sort((a, b) => a[0] - b[0]).map(([id, code]) => `  ${id}: ${code}`)
+
+    return [
+      `screen ${screen.width}x${screen.height} contaminated=${this.prevFrameContaminated}`,
+      ...rows,
+      'style legend (id: SGR that sets it)',
+      ...legendRows
+    ].join('\n')
+  }
+
+  /**
    * Mark the previous frame as untrustworthy for blit, forcing the next
    * render to do a full-damage diff instead of the per-node fast path.
    *

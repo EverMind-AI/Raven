@@ -7,7 +7,15 @@ import { describe, expect, it } from 'vitest'
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { DagNodeDetail } from '../rpc/index.js'
 
-import { DAG_STATUS_GLYPH, dagNodeNames, dagNodeSummary, dagRunHeadline, formatDagNodeDetail } from '../lib/dagStatus.js'
+import {
+  DAG_STATUS_GLYPH,
+  dagNodeDeps,
+  dagNodeHandle,
+  dagNodeSummary,
+  dagRunHeadline,
+  dagSharedInstances,
+  formatDagNodeDetail
+} from '../lib/dagStatus.js'
 
 // Derived from DAG_STATUS_GLYPH's own keys, not hand-copied: its `Record<DagRunNodeStatus, …>`
 // type already forces that object to have exactly one entry per status, so this can never
@@ -273,30 +281,45 @@ describe('formatDagNodeDetail trace', () => {
   })
 })
 
-describe('dagNodeNames', () => {
+
+describe('dagNodeDeps', () => {
   const joined = { dependsOn: ['a', 'b'], id: 'c', subagent: 'raven-code' }
 
-  it('drops the parenthetical when the node has no instance', () => {
-    // The row already opens with the agent name and the picture's box carries it
-    // a second time; a third copy is noise.
-    expect(dagNodeNames(joined, null).parens).toBe('')
-  })
-
-  it('keeps the parenthetical when there is an instance to name', () => {
-    expect(dagNodeNames({ ...joined, instance: 'sess1' }, null).parens).toBe('(raven-code@sess1)')
-  })
-
   it('names every dependency when no picture was drawn', () => {
-    expect(dagNodeNames(joined, null).deps).toContain('a, b')
+    expect(dagNodeDeps(joined, null)).toContain('a, b')
   })
 
   it('names only the dependencies the picture could not draw', () => {
     // An edge to a node from an earlier run has no box, so the picture cannot
     // show it and the row is the only place it survives.
-    expect(dagNodeNames(joined, new Set(['a>c'])).deps.trim()).toBe('\u2190 b')
+    expect(dagNodeDeps(joined, new Set(['a>c'])).trim()).toBe('\u2190 b')
   })
 
   it('says nothing when the picture drew every edge', () => {
-    expect(dagNodeNames(joined, new Set(['a>c', 'b>c'])).deps).toBe('')
+    expect(dagNodeDeps(joined, new Set(['a>c', 'b>c']))).toBe('')
+  })
+})
+
+describe('dagNodeHandle', () => {
+  it('is empty when the node ran on no stateful handle', () => {
+    expect(dagNodeHandle({ subagent: 'raven-code' })).toBe('')
+  })
+
+  it('joins the agent to its instance for the expanded block', () => {
+    expect(dagNodeHandle({ instance: 'sess1', subagent: 'raven-code' })).toBe('raven-code@sess1')
+  })
+})
+
+describe('dagSharedInstances', () => {
+  it('reports a handle two nodes ran on, which forced them into sequence', () => {
+    expect([...dagSharedInstances([{ instance: 'author' }, { instance: 'author' }])]).toEqual(['author'])
+  })
+
+  it('ignores a handle only one node used, which constrains nothing', () => {
+    expect(dagSharedInstances([{ instance: 'author' }, { instance: 'editor' }]).size).toBe(0)
+  })
+
+  it('ignores nodes with no handle at all', () => {
+    expect(dagSharedInstances([{}, {}]).size).toBe(0)
   })
 })

@@ -40,13 +40,10 @@ import type { Theme } from '../theme.js'
 
 import { Md } from './markdown.js'
 
-// Count ``` / ~~~ AND `$$` / `\[…\]` fence toggles in `s` up to `end`. Odd
-// = currently inside a fenced block; splitting the prefix there would
-// orphan the fence and let the unstable suffix re-render as broken
-// markdown. Math fences only toggle when the code fence is closed so
-// snippets like ` ```\n$$x$$\n``` ` (math example inside a code block)
-// don't double-count. A `$$x$$` line that opens AND closes on its own
-// produces zero net toggles; that's `len >= 4` plus `endsDollar`.
+// Track ``` / ~~~ and `$$` / `\[…\]` fences in one forward scan. Splitting
+// inside one would orphan the opener and let the unstable suffix render as
+// broken markdown. Math fences only toggle while code is closed, so examples
+// containing math syntax inside code do not affect the boundary.
 //
 // NB: this is INTENTIONALLY more conservative than `markdown.tsx`'s
 // parser, which falls back to paragraph rendering when an `$$` opener
@@ -59,16 +56,25 @@ import { Md } from './markdown.js'
 // as still-open keeps the boundary parked behind it until the closer
 // arrives (or the stream ends and the non-streaming `<Md>` takes over,
 // at which point the renderer's fallback kicks in correctly).
-const fenceOpenAt = (s: string, end: number) => {
+// Find the last exact "\n\n" boundary outside a fenced block. This is O(n):
+// the former backwards search re-scanned the whole prefix for every candidate
+// boundary and became quadratic for long streaming responses.
+export const findStableBoundary = (text: string) => {
   let codeOpen = false
   let mathOpen = false
   let mathOpener: '$$' | '\\[' | null = null
+  let lastSafe = -1
   let i = 0
 
-  while (i < end) {
-    const nl = s.indexOf('\n', i)
-    const lineEnd = nl < 0 || nl > end ? end : nl
-    const line = s.slice(i, lineEnd).trim()
+  while (i < text.length) {
+    const nl = text.indexOf('\n', i)
+
+    if (nl < 0) {
+      break
+    }
+
+    const rawLine = text.slice(i, nl)
+    const line = rawLine.trim()
 
     if (/^(?:`{3,}|~{3,})/.test(line)) {
       codeOpen = !codeOpen
@@ -96,41 +102,17 @@ const fenceOpenAt = (s: string, end: number) => {
       }
     }
 
-    if (nl < 0 || nl >= end) {
-      break
+    // An exact blank separator is represented by an empty physical line;
+    // preserve the old `\n\n` semantics (whitespace-only lines are not a
+    // stable boundary) while recording only candidates outside fences.
+    if (rawLine.length === 0 && i > 0 && text[i - 1] === '\n' && !codeOpen && !mathOpen) {
+      lastSafe = nl + 1
     }
 
     i = nl + 1
   }
 
-  return codeOpen || mathOpen
-}
-
-// Find the last "\n\n" boundary before `end` that is OUTSIDE a fenced code
-// block. Returns the index AFTER the second newline (start of the next
-// block), or -1 if no safe boundary exists yet.
-export const findStableBoundary = (text: string) => {
-  let idx = text.length
-
-  while (idx > 0) {
-    const boundary = text.lastIndexOf('\n\n', idx - 1)
-
-    if (boundary < 0) {
-      return -1
-    }
-
-    // Boundary candidate: end of stable prefix is boundary + 2 (start of
-    // next block). Check fence balance up to that point.
-    const splitAt = boundary + 2
-
-    if (!fenceOpenAt(text, splitAt)) {
-      return splitAt
-    }
-
-    idx = boundary
-  }
-
-  return -1
+  return lastSafe
 }
 
 export const StreamingMd = memo(function StreamingMd({ compact, t, text }: StreamingMdProps) {

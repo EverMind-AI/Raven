@@ -24,15 +24,24 @@ type Rpc = <T extends object>(
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
-// The intro row is the opening cover -- wordmark plus session panel, 35 rows of
-// it -- and it stays in `historyItems` because the late `session.info` event
-// patches itself onto that row. Only the chat view drops it, and only once a
-// turn has happened: startup notices and slash output are not a conversation,
-// so a box that warns about its credentials on boot still gets its cover.
-export const hideIntroAfterFirstTurn = (items: Msg[]): Msg[] =>
-  items[0]?.kind === 'intro' && items.some(msg => msg.role === 'assistant' || msg.role === 'user')
-    ? items.slice(1)
-    : items
+/**
+ * Whether the transcript shows the user has already driven this session: a
+ * typed prompt (`role: 'user'`, which `!cmd` also lands as) or the echo of a
+ * slash command. Plain system rows are startup notices, not the user's doing,
+ * so they do not count.
+ */
+const userHasActed = (rows: Msg[]): boolean => rows.some(m => m.role === 'user' || m.kind === 'slash')
+
+/**
+ * Drops the intro banner once the session is under way. It is a first-paint
+ * affordance -- it tells an empty transcript what this session is -- and after
+ * the first command it only costs scrollback the conversation wants back.
+ *
+ * View-only: `historyItems` keeps the intro row, so /export, session save and
+ * the `session.info` patch that fills it in all still see it.
+ */
+export const withoutSpentIntro = (rows: Msg[]): Msg[] =>
+  userHasActed(rows) ? rows.filter(m => m.kind !== 'intro') : rows
 
 export const imageTokenMeta = (info?: ImageMeta | null) => {
   const { width, height, token_estimate: t } = info ?? {}

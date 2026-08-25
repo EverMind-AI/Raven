@@ -2,9 +2,9 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 
-import { activeColorTier, Box, NoSelect, Text } from '@hermes/ink'
+import { activeColorTier, Box, NoSelect, stringWidth, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, type ReactNode, useEffect, useMemo, useState } from 'react'
 
 import type { Segment } from '../domain/episodeSummary.js'
 import type { Theme } from '../theme.js'
@@ -25,19 +25,21 @@ import {
 } from '../domain/episodeSummary.js'
 import { fmtDuration } from '../domain/messages.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
-import { boundedLiveRenderText, compactPreview, tailPreview } from '../lib/text.js'
+import { boundedLiveRenderText, compactPreview, tailPreview, clipToWidthFromEnd } from '../lib/text.js'
 import { DagPanel } from './dagPanel.js'
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { Spinner } from './thinking.js'
 
 // Everything the transcript renders sits one step in from the edge, which is
-// also where a normal assistant message's body starts (messageLine reserves a
-// `┊ ` gutter that this view does not draw). Activity shares that margin with
-// prose on purpose: inventing a second left edge would misalign this message
-// kind from every other one. Depth steps in from there.
+// also where a normal assistant message's body starts (the width messageLine
+// reserves for its gutter). Prose spends that step on the same reply marker;
+// activity leaves it blank. Either way the body column is shared on purpose:
+// inventing a second left edge would misalign this message kind from every
+// other one. Depth steps in from there.
 const INDENT = 2
 const STEP = 2
+const MIN_TAIL = 12
 
 // A detail block paints a background so the argument and its output read as one
 // object rather than more transcript rows. Below 256 colors there is no shade
@@ -156,6 +158,123 @@ const DetailBlock = memo(function DetailBlock({
           </Box>
         </Box>
       ))}
+    </Box>
+  )
+})
+
+// The reasoning row. It is an ActivityRow in spirit but not in layout: the
+// spinner sits out in the margin column rather than inline, so the label lands
+// on the same column as the block underneath it and as the answer -- one left
+// edge for the text, one for the markers.
+//
+// While the model is still reasoning and the block is closed, the row spends
+// whatever columns it has left on a live tail of the reasoning. That is the
+// only view of it in that state, and a bare label plus a ticking clock says
+// nothing about whether the model is getting anywhere.
+const ReasoningRow = memo(function ReasoningRow({
+  onToggle,
+  running,
+  t,
+  tail,
+  time,
+  width
+}: {
+  onToggle?: () => void
+  running?: boolean
+  t: Theme
+  tail?: string
+  time?: string
+  width: number
+}) {
+  const head = `reasoning${time ? ` (${time})` : ''}`
+  // ` \u00b7 ` costs 3, and a tail shorter than this is more ellipsis than text.
+  const room = width - INDENT - stringWidth(head) - 3
+  const trail = tail && room >= MIN_TAIL ? clipToWidthFromEnd(tail, room) : ''
+
+  return (
+    <Box width={width}>
+      <Box flexShrink={0} width={INDENT}>
+        {running ? (
+          <NoSelect fromLeftEdge>
+            <Text>
+              <Spinner color={t.color.accent} variant="tool" />
+            </Text>
+          </NoSelect>
+        ) : null}
+      </Box>
+
+      <Box flexGrow={1} minWidth={0} onClick={onToggle}>
+        <Text color={t.color.muted} dim wrap="truncate-end">
+          {head}
+          {trail ? ` \u00b7 ${trail}` : ''}
+        </Text>
+      </Box>
+    </Box>
+  )
+})
+
+// A left-only hairline. `single` would draw the same U+2502 the tree rails
+// used, and this view retired that glyph on purpose; the thinner bar also tells
+// an aside apart from a real blockquote inside the answer, which does use
+// `single`. Only `left` is ever drawn, so the rest is filler.
+const ASIDE_RULE = {
+  bottom: ' ',
+  bottomLeft: ' ',
+  bottomRight: ' ',
+  left: '\u258f',
+  right: ' ',
+  top: ' ',
+  topLeft: ' ',
+  topRight: ' '
+} as const
+
+// The model's scratch work, rendered as an aside instead of as a payload: a
+// left rule and muted prose, the same shape a markdown blockquote gets. It
+// deliberately does not reuse DetailBlock's filled ground -- that ground reads
+// as "tool output" everywhere else in the transcript, and a slab behind ten
+// lines of prose outweighs the answer it was only leading up to. The rule is a
+// border rather than a glyph in the text so it spans every wrapped row.
+//
+// Rule and padding together spend exactly INDENT, so the body lands on the
+// transcript's own prose column: the reasoning reads as the same column of text
+// as the answer under it, with the rule out in the margin the reply marker
+// occupies. Indenting the block instead left two ragged left edges.
+const ReasoningBlock = memo(function ReasoningBlock({
+  onToggle,
+  t,
+  text,
+  width
+}: {
+  onToggle?: () => void
+  t: Theme
+  text: string
+  width: number
+}) {
+  const body = Math.max(8, width - 2)
+
+  return (
+    <Box
+      borderBottom={false}
+      borderColor={t.color.muted}
+      borderLeft
+      borderRight={false}
+      borderStyle={ASIDE_RULE}
+      borderTop={false}
+      marginBottom={1}
+      onClick={onToggle}
+      paddingLeft={1}
+      width={width}
+    >
+      <Box width={body}>
+        {/* `wrap` is the only mode this ink measures: wrap-char/wrap-trim
+            render wrapped but leave the box one row tall, so the text
+            overflowed the block. No `dim` on top of `muted` -- the rule is
+            already doing the separating, and doubling it up made this the
+            lowest-contrast text in the UI. */}
+        <Text color={t.color.muted} wrap="wrap">
+          {text}
+        </Text>
+      </Box>
     </Box>
   )
 })
@@ -395,9 +514,12 @@ const WorkSegment = memo(function WorkSegment({
 })
 
 // Renders a turn as an alternating stream of what the model said and what the
-// machine did. Prose keeps the transcript's normal margin and color; activity
-// shares the margin but is dim and carries an inline duration -- that pairing,
-// not a column of glyphs, is what separates the two voices.
+// machine did. Prose carries the transcript's reply marker in the margin it
+// already had; activity shares that margin unmarked, dim, with an inline
+// duration. The marker is the same one a plain assistant row draws, so a reply
+// reads the same whichever renderer produced it -- previously only prose colour
+// and weight separated the two voices here, which left a streaming reply
+// unmarked until the turn settled into a history row.
 export const EpisodeView = memo(function EpisodeView({
   closedKeys,
   cols,
@@ -450,6 +572,24 @@ export const EpisodeView = memo(function EpisodeView({
   const liveIndex = live ? episodes[lastIdx]?.index : undefined
   const openCalls = new Set([...seeded.open].filter(k => k.startsWith('call:')).map(k => k.slice(5)))
 
+  // The model's prose carries the same reply marker `messageLine` draws in its
+  // gutter (`ROLE.assistant`). Drawn here because this view owns the live turn:
+  // without it a reply stayed unmarked until the turn settled into a plain
+  // history row, so the marker looked like something the turn earned by
+  // finishing. The glyph sits inside the INDENT the prose already had, so the
+  // body column does not move and activity rows still line up with it.
+  const prose = (node: ReactNode) => (
+    <Box>
+      <Box flexShrink={0} width={INDENT}>
+        <Text color={t.color.muted}>{t.brand.tool}</Text>
+      </Box>
+
+      <Box flexDirection="column" width={proseWidth}>
+        {node}
+      </Box>
+    </Box>
+  )
+
   const renderTalk = (ep: Episode) => {
     const reasoning = (ep.reasoning ?? '').trim()
     const hasReasoning = hasMeaningfulReasoning(reasoning)
@@ -461,42 +601,42 @@ export const EpisodeView = memo(function EpisodeView({
     const thinking = live && running && !narration && ep.tools.length === 0 && !text
     const reasoningMs =
       ep.reasoningMs ?? ep.durationMs ?? (thinking && ep.startedAt ? Math.max(0, now - ep.startedAt) : undefined)
-    const rsnOpen = (thinking && hasReasoning) || seeded.open.has(`rsn:${ep.index}`)
+    // Open by default while the model is still reasoning, but through foldOpen
+    // so a reader who closes it mid-run stays closed -- the old expression
+    // ignored `closed` outright, which made the row's live tail unreachable.
+    const rsnOpen = foldOpen(`rsn:${ep.index}`, thinking && hasReasoning)
 
     return (
       <Box flexDirection="column" key={`t:${ep.index}`}>
         {hasReasoning ? (
           <>
-            <ActivityRow
-              depth={INDENT}
-              label="reasoning"
+            <ReasoningRow
               onToggle={() => toggle(`rsn:${ep.index}`)}
               running={thinking}
               t={t}
+              tail={thinking && !rsnOpen ? reasoning : ''}
               time={durationLabel(reasoningMs, Boolean(thinking))}
-              width={Math.max(8, width - INDENT)}
+              width={width}
             />
             {rsnOpen ? (
-              <Box paddingLeft={INDENT + STEP}>
-                <DetailBlock
-                  argument=""
-                  compact={compact}
-                  onToggle={() => toggle(`rsn:${ep.index}`)}
-                  output={[(thinking ? tailPreview : compactPreview)(reasoning, 4000)]}
-                  t={t}
-                  width={Math.max(12, width - INDENT - STEP)}
-                />
-              </Box>
+              <ReasoningBlock
+                onToggle={() => toggle(`rsn:${ep.index}`)}
+                t={t}
+                text={(thinking ? tailPreview : compactPreview)(reasoning, 4000)}
+                width={width}
+              />
             ) : null}
           </>
         ) : null}
 
         {narration || (live && running && text) ? (
-          <Box marginTop={hasReasoning ? 1 : 0} paddingLeft={INDENT}>
-            {narration ? (
-              <Md avail={proseWidth} compact={compact} t={t} text={narration} />
-            ) : (
-              <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text ?? '')} />
+          <Box marginTop={hasReasoning ? 1 : 0}>
+            {prose(
+              narration ? (
+                <Md avail={proseWidth} compact={compact} t={t} text={narration} />
+              ) : (
+                <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text ?? '')} />
+              )
             )}
           </Box>
         ) : null}
@@ -557,11 +697,13 @@ export const EpisodeView = memo(function EpisodeView({
       ))}
 
       {text && (!live || !liveTalk) ? (
-        <Box marginTop={segments.length > 0 ? 1 : 0} paddingLeft={INDENT}>
-          {live ? (
-            <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text)} />
-          ) : (
-            <Md avail={proseWidth} compact={compact} t={t} text={text} />
+        <Box marginTop={segments.length > 0 ? 1 : 0}>
+          {prose(
+            live ? (
+              <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text)} />
+            ) : (
+              <Md avail={proseWidth} compact={compact} t={t} text={text} />
+            )
           )}
         </Box>
       ) : null}
