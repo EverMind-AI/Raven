@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as desk from './deskStore'
 
 import type { Shell } from '../../shell/bridge'
+import type { InstanceRow } from '../subagents/types'
 
 /* Recorded rather than ignored: the panel the desk lives in is legacy chrome,
    so telling it to open and to shut is the desk's only way to be seen. It was
@@ -37,24 +38,56 @@ afterEach(() => {
 })
 
 describe('desk store', () => {
-  it('re-opening a pane that is already up changes nothing', () => {
-    desk.openDeskFile('/workspace/a.ts')
-    desk.openDeskFile('/workspace/b.ts')
+  const agentRow = (handle: string): InstanceRow =>
+    ({ sessionKey: 's1', agent: 'hermes', kind: 'cli', handle }) as InstanceRow
+
+  it('re-opening the agent pane that is already up changes nothing', () => {
+    /* An agent pane re-finds its row in the live stores on every render, so the
+       object held here is never staler -- which is what makes replacing it pure
+       churn: a re-tile and a remount to arrive at the screen already showing. */
+    desk.openDeskAgent(agentRow('a'))
+    desk.openDeskAgent(agentRow('b'))
     split().dataset.open = 'true'
-    desk.toggleSolo('file:/workspace/a.ts')
-    const before = desk.getState()
-    const panesBefore = before.panes
+    desk.toggleSolo('agent:hermes:a')
+    const panesBefore = desk.getState().panes
     panelCalls.length = 0
 
-    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskAgent(agentRow('a'))
 
     const after = desk.getState()
-    /* The same pane objects, not equal copies: replacing them re-tiled the grid
-       and repainted panes to arrive at the screen that was already there. */
     expect(after.panes).toBe(panesBefore)
     expect(after.panes[0]).toBe(panesBefore[0])
-    expect(after.solo).toBe('file:/workspace/a.ts')
-    expect(after.active).toBe('file:/workspace/a.ts')
+    expect(after.solo).toBe('agent:hermes:a')
+    expect(after.active).toBe('agent:hermes:a')
+  })
+
+  it('leaves fullscreen when a DIFFERENT already-open pane is asked for', () => {
+    /* `DeskSurface` draws only the soloed pane while solo is set, so a path that
+       moves `active` and leaves `solo` alone puts the reader in front of the
+       pane they did not ask for, with no way out but the fullscreen toggle. */
+    desk.openDeskAgent(agentRow('a'))
+    desk.openDeskAgent(agentRow('b'))
+    desk.toggleSolo('agent:hermes:a')
+
+    desk.openDeskAgent(agentRow('b'))
+
+    expect(desk.getState().active).toBe('agent:hermes:b')
+    expect(desk.getState().solo).toBeNull()
+  })
+
+  it('still replaces a file pane, because that is how it re-reads', () => {
+    /* `FileView` renders the file object directly. Re-opening is what picks up a
+       download path the first caller did not pass, and what makes `FileBody`
+       (keyed on `seq`, fetching only while `text` is null) read the file again
+       after the agent rewrote it. Keeping the old object silently froze both. */
+    desk.openDeskFile('/workspace/a.ts')
+    const before = desk.getState().panes[0]
+
+    desk.openDeskFile('/workspace/a.ts', '/dl/a.ts')
+
+    const after = desk.getState().panes[0]!
+    expect(after).not.toBe(before)
+    expect(after.kind === 'file' && after.file.downloadPath).toBe('/dl/a.ts')
   })
 
   it('does not re-open a workspace that is already showing', () => {

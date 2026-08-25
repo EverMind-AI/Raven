@@ -57,14 +57,28 @@ function revealWorkspace(): void {
    ends up with two panes showing one node. */
 function addPane(pane: DeskPane, supersedes?: string | null): void {
   const same = state.panes.findIndex((item) => item.id === pane.id)
-  /* Already on the desk: bring it forward, and nothing else. Re-opening it
-     replaced the pane object, re-tiled the grid and re-revealed the workspace
-     to arrive at exactly the screen that was already there -- a click that
-     looked inert but was not. What the pane draws is read from the live stores
-     (state.instances, state.rows), so the object held here has nothing staler
-     in it than the one that would replace it. */
-  if (same >= 0 && !supersedes) {
-    if (state.active !== pane.id) update({ active: pane.id })
+  /* Already on the desk, and holding nothing a replacement could refresh: bring
+     it forward and stop. Re-opening it replaced the pane object and re-tiled the
+     grid to arrive at exactly the screen that was already there, remounting the
+     pane body on the way -- a click that looked inert but was not.
+
+     Narrowed to these two kinds because only their payload is re-read: an
+     `agent` pane re-finds its row in `state.instances` on every render and an
+     `agent-record` pane in `state.rows` (SubagentsPage.tsx), so the object held
+     here is never staler than the one that would replace it. A `file` pane is
+     the opposite -- `FileView` renders `workspace.makeFile(...)` directly, so
+     the replacement is how a re-open picks up a download path the first caller
+     did not pass and how the body re-reads a file the agent has since rewritten
+     (`FileBody` is keyed on `seq` and fetches only while `text` is null). A
+     `diff` pane likewise holds its own change. Both fall through. */
+  if (same >= 0 && !supersedes && (pane.kind === 'agent' || pane.kind === 'agent-record')) {
+    /* The fullscreen still has to give way when it is showing a DIFFERENT pane,
+       or the one just asked for stays hidden behind it with no way out but the
+       toggle -- `DeskSurface` draws only the soloed pane while solo is set.
+       Same rule the full path applies below, and it has to be applied here too:
+       returning before it is what made the click genuinely inert. */
+    const solo = state.solo === pane.id ? state.solo : null
+    if (state.active !== pane.id || solo !== state.solo) update({ active: pane.id, solo })
     revealWorkspace()
     return
   }
