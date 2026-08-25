@@ -184,10 +184,7 @@ async def test_delivered_file_uses_its_capability_route_without_the_viewer_cap(
     path.write_bytes(b"0123456789")
     store = DeliverableStore(tmp_path / "deliverables.json")
     record = store.register(
-        path=str(path),
-        name=path.name,
-        media_type="application/octet-stream",
-        size=path.stat().st_size,
+        path=str(path), name=path.name, media_type="application/octet-stream", size=path.stat().st_size,
         conversation="tui:default",
     )
     gateway = WsGateway()

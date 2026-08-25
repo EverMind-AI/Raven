@@ -42,6 +42,7 @@ class ScriptedProvider:
 GOOD_DAG = {
     "name": "weekly-feedback",
     "description": "weekly user-feedback analysis",
+    "taskSummary": "pull this week's feedback and write the report",
     "mode": "dag",
     "confirm": True,
     "triggers": {"keywords": ["user feedback", "feedback weekly"]},
@@ -50,12 +51,14 @@ GOOD_DAG = {
         {
             "id": "pull",
             "subagent": "data-raven",
+            "nodeSummary": "pull this week's feedback from slack",
             "promptTemplate": "pull the feedback for ${params.week_of}",
             "skills": ["sql-queries"],
         },
         {
             "id": "report",
             "subagent": "content-raven",
+            "nodeSummary": "write the weekly report from the pulled feedback",
             "promptTemplate": "write the weekly report from {{ pull.output }}",
             "dependsOn": ["pull"],
         },

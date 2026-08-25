@@ -52,17 +52,30 @@ const SECTION_LABEL_RE =
 /**
  * What a node is being asked, as one line no wider than `room`.
  *
- * The first line of the prompt template that says something: a DAG prompt opens
- * with its instruction and elaborates below it, so that line is the query and
- * the rest is detail. Blank lines, bare markdown markers, lone placeholders and
- * section labels are stepped over -- each would summarise to nothing, or to
- * punctuation, and leave the row unable to say what its node is for.
+ * `nodeSummary` is the line the node was dispatched with and wins whenever the
+ * run carried one -- it was written for a reader, not sliced out of a prompt.
+ * The template heuristic below is the fallback for a run whose graph predates
+ * the field: the first line of the prompt template that says something, since a
+ * DAG prompt opens with its instruction and elaborates below it. Blank lines,
+ * bare markdown markers, lone placeholders and section labels are stepped over
+ * -- each would summarise to nothing, or to punctuation, and leave the row
+ * unable to say what its node is for.
  *
- * Empty when no template reached the client -- an older run dir wrote none, and
- * a host that does not correlate progress with a tool row supplies no call args.
- * The row then falls back to the node id, the only other thing that names it.
+ * Empty when neither reached the client -- an older run dir wrote no template
+ * and no summary, and a host that does not correlate progress with a tool row
+ * supplies no call args. The row then falls back to the node id, the only
+ * other thing that names it.
  */
-export const dagNodeSummary = (promptTemplate: string | undefined, room: number): string => {
+export const dagNodeSummary = (
+  nodeSummary: string | undefined,
+  promptTemplate: string | undefined,
+  room: number
+): string => {
+  const given = (nodeSummary ?? '').trim()
+  if (given) {
+    return clipToWidth(given, room)
+  }
+
   const first = (promptTemplate ?? '')
     .split('\n')
     .map(line => line.trim().replace(LINE_FURNITURE_RE, '').replace(PLACEHOLDER_RE, '…').trim())

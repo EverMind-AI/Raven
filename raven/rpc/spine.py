@@ -80,7 +80,7 @@ def _dag_payload(name: str, payload: dict) -> dict:
                 "id": node.get("id"),
                 "subagent": node.get("subagent"),
                 "depends_on": list(node.get("depends_on") or []),
-                **_present(node, ("instance",)),
+                **_present(node, ("instance", "node_summary")),
             }
             for node in payload.get("nodes") or []
         ]

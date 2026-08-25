@@ -279,6 +279,7 @@ async def run_dag(
                     {
                         "id": node.id,
                         "subagent": node.subagent,
+                        "node_summary": node.node_summary,
                         "depends_on": node.depends_on,
                         "instance": node.instance,
                     }

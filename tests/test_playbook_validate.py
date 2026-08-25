@@ -9,13 +9,14 @@ from raven.playbook.validate import (
 
 
 def _node(nid, subagent="research-raven", template="do it", **over):
-    return NodeSpec(id=nid, subagent=subagent, prompt_template=template, **over)
+    return NodeSpec(id=nid, subagent=subagent, node_summary=f"step {nid}", prompt_template=template, **over)
 
 
 def _spec(nodes, params=None):
     return PlaybookSpec(
         name="t",
         description="d",
+        task_summary="run the nodes under test",
         mode="dag",
         triggers=Triggers(keywords=["k"]),
         nodes=nodes,
@@ -44,6 +45,17 @@ def test_reference_must_be_inside_depends_on():
     assert any("not in its dependsOn" in e for e in errors)
     ok = [_node("a"), _node("b", template="use {{ a.output }}", depends_on=["a"])]
     assert validate_graph_nodes(ok, set()) == []
+
+
+def test_a_blank_node_summary_is_rejected_here_not_only_at_dispatch():
+    """``_compose``'s repair loop calls this directly (no ``known_agents``), so a
+    composed graph must fail here rather than reach dag dispatch, whose error
+    ("call load_playbook again with fills") does not apply to a graph that was
+    never loaded from a playbook.
+    """
+    nodes = [NodeSpec(id="a", subagent="research-raven", node_summary="", prompt_template="do it")]
+    errors = validate_graph_nodes(nodes, set())
+    assert any("node_summary" in e for e in errors)
 
 
 def test_param_refs_must_be_declared():
@@ -134,6 +146,7 @@ def test_prompt_mode_checks_param_refs_in_prompts():
     spec = PlaybookSpec(
         name="p",
         description="d",
+        task_summary="compose a graph for the named param",
         mode="prompt",
         triggers=Triggers(keywords=["k"]),
         prompts="compose for ${params.ghost}",

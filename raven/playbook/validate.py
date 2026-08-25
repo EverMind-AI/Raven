@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from raven.agent.subagent_dag._graph import _REQUIRED_NON_BLANK
 from raven.playbook.types import NodeSpec, PlaybookSpec
 
 _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
@@ -76,6 +77,9 @@ def validate_graph_nodes(
     known_ids = set(ids)
 
     for node in nodes:
+        blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
+        if blank:
+            errors.append(f"node {node.id!r}: missing {sorted(blank)} -- a node cannot run without them")
         if agents is not None and node.subagent not in agents:
             errors.append(f"node {node.id!r}: agent {node.subagent!r} is not registered (known: {sorted(agents)})")
         for dep in node.depends_on:

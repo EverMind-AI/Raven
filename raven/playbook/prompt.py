@@ -107,6 +107,9 @@ ${params.<key>}. Anything fixable at generation time must not be a param.
 # nodes (dag mode)
 
 - `subagent` must come from the available-agents list below.
+- `nodeSummary` is one line, for the user, telling them what this step is
+  asked to do -- write it before the prompt, around 200 characters at most.
+  It is the node's row while the run happens.
 - Configuration hangs on the node, not the role: `skills`/`mcps` are what
   this step injects; the same agent on several steps may differ per step.
   Skills may only reference names from the candidate list.
@@ -288,7 +291,7 @@ def build_compose_prompt(prompts_filled: str, agent_roster: dict[str, str], para
     return (
         "Assemble a task graph following the guidance below and submit the "
         "node list through emit_graph (camelCase fields:\n"
-        "id / subagent / promptTemplate / dependsOn / inputs / instance).\n"
+        "id / subagent / nodeSummary / promptTemplate / dependsOn / inputs / instance).\n"
         "Rules: subagent must come from the available list; every "
         "{{ <upstreamId>.output }} reference must have that upstream in the "
         "node's dependsOn;\n"

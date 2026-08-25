@@ -197,7 +197,17 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
     That is why the empty-list rewrite is scoped to nodes carrying it rather than
     applied everywhere -- on a current file ``skills: []`` is a deliberate
     instruction, and rewriting it would silently widen what that step may reach.
+
+    ``taskSummary`` is required now, and a stored playbook written before it
+    existed does not carry it; such a file loads with its summary taken from
+    ``description``, which every frontmatter carries. Left alone, the missing
+    key would fail validation and the playbook would vanish from the library
+    -- the same invisible failure as the rewrites above.
     """
+    # ``taskSummary`` is required now and a stored file predates it. Every
+    # frontmatter carries a ``description``, which is the closest honest answer
+    # for a display line.
+    data.setdefault("taskSummary", data.get("description"))
     nodes = data.get("nodes")
     if not isinstance(nodes, list):
         return data

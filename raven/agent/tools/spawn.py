@@ -123,13 +123,18 @@ class SpawnTool(Tool):
     @property
     def parameters(self) -> dict[str, Any]:
         props: dict[str, Any] = {
+            "task_summary": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "One line telling the user what you are dispatching, written before the task. "
+                    "Around 200 characters at most. They read it in listings and announcements and "
+                    "the sub-agent never does, so write it for them -- no ids, no internal shorthand."
+                ),
+            },
             "task": {
                 "type": "string",
                 "description": "The task for the subagent to complete",
-            },
-            "label": {
-                "type": "string",
-                "description": "Optional short label for the task (for display)",
             },
         }
         agents = self._agents()
@@ -159,7 +164,7 @@ class SpawnTool(Tool):
         return {
             "type": "object",
             "properties": props,
-            "required": ["task", "subagent"] if names else ["task"],
+            "required": ["task_summary", "task", "subagent"] if names else ["task_summary", "task"],
         }
 
     def _is_stateful(self, agent: str | None) -> bool:
@@ -198,8 +203,8 @@ class SpawnTool(Tool):
 
     async def execute(
         self,
+        task_summary: str,
         task: str,
-        label: str | None = None,
         subagent: str | None = None,
         instance: str | None = None,
         **kwargs: Any,
@@ -224,7 +229,7 @@ class SpawnTool(Tool):
         if minted:
             from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 
-            instance = mint_handle(label or task, fallback=subagent or GENERIC_AGENT)
+            instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
         org = self._cur()
         # Cleared before the call rather than only on the stateless path: an earlier
         # stateful call whose metadata went uncollected (no tool-event sink on this
@@ -233,7 +238,7 @@ class SpawnTool(Tool):
         self._pending.pop(org.session_key, None)
         result = await self._manager.spawn(
             task=task,
-            label=label,
+            task_summary=task_summary,
             origin_channel=org.channel,
             origin_chat_id=org.chat_id,
             session_key=org.session_key,

@@ -1384,6 +1384,10 @@ export interface DagSnapshotNode {
   error?: string;
   prompt_template?: string;
   /**
+   * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
+   */
+  node_summary?: string;
+  /**
    * What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.
    */
   inputs?: {
@@ -1460,6 +1464,10 @@ export interface DagRunStartedEvent {
        * Shared stateful handle. Nodes naming the same one run sequentially.
        */
       instance?: string;
+      /**
+       * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
+       */
+      node_summary?: string;
     }[];
   };
 }
@@ -2153,9 +2161,6 @@ export interface ConfigGetResult {
 export interface ConfigSetParams {
   key: string;
   value: JsonValue;
-  session_id?: string;
-  provider?: string;
-  scope?: 'session' | 'default';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2164,10 +2169,6 @@ export interface ConfigSetParams {
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
-  value?: string;
-  scope?: 'session' | 'default';
-  session_id?: string;
-  applies_to_session?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

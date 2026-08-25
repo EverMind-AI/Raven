@@ -131,7 +131,7 @@ const NodeRow = ({
     24,
     width - head.length - style.glyph.length - 1 - node.subagent.length - 2 - (parens ? parens.length + 1 : 0)
   )
-  const summary = dagNodeSummary(node.promptTemplate, room)
+  const summary = dagNodeSummary(node.nodeSummary, node.promptTemplate, room)
 
   // A row still pending with no template has nothing to expand to; any node
   // that has started has a trace to show even without one. Asked of the same
@@ -164,7 +164,7 @@ const NodeRow = ({
               {node.subagent}: {summary}
             </Text>
           ) : (
-            // No template reached the client, so the id is all this row has.
+            // Neither a summary nor a template reached the client, so the id is all this row has.
             <Text color={node.status === 'pending' ? t.color.muted : t.color.text}>{node.id}</Text>
           )}
           {parens && (

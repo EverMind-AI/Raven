@@ -196,7 +196,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         c
         for c in merged_all
         if getattr(c, "kind", None) != "builtin"
-        and not (is_builtin_agent_name(getattr(c, "name", "") or "") and getattr(c, "kind", None) in ("cli", "openai"))
+        and not (
+            is_builtin_agent_name(getattr(c, "name", "") or "") and getattr(c, "kind", None) in ("cli", "openai")
+        )
     ]
     configured_names = {canonical_agent_name(getattr(c, "name", "")) for c in configured}
 

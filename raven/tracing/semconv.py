@@ -183,7 +183,6 @@ def _llm_output_payload(resp: Any) -> Any:
             for t in (getattr(resp, "tool_calls", None) or [])
         ],
         "reasoning_content": getattr(resp, "reasoning_content", None),
-        "thinking_blocks": getattr(resp, "thinking_blocks", None),
         "usage": getattr(resp, "usage", None),
     }
 
@@ -305,7 +304,7 @@ def subagent(span, bound: dict[str, Any], result: Any, exc: BaseException | None
         {
             "subagent.task_id": bound.get("task_id"),
             "subagent.task": _preview(bound.get("task"), 300),
-            "subagent.label": bound.get("label"),
+            "subagent.label": bound.get("task_summary"),
             "subagent.origin_session": origin.get("session_key") if isinstance(origin, dict) else None,
         }
     )

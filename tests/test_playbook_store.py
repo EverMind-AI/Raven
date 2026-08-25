@@ -30,9 +30,17 @@ def _spec(description: str) -> PlaybookSpec:
     return PlaybookSpec(
         name="competitor-scan",
         description=description,
+        task_summary="research the named competitor and report what was found",
         mode="dag",
         triggers=Triggers(keywords=[_CJK_WORD]),
-        nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="research ${params.target}")],
+        nodes=[
+            NodeSpec(
+                id="scan",
+                subagent="research-raven",
+                node_summary="research the target",
+                prompt_template="research ${params.target}",
+            )
+        ],
         params={"target": ParamSpec(required=True, description="which competitor should be scanned?")},
     )
 
@@ -116,6 +124,7 @@ def test_hand_written_directory_loads(tmp_path):
         "free-form body the machine never parses\n\n"
         "```yaml playbook-spec\n"
         "version: 1\nmode: prompt\nconfirm: true\n"
+        "taskSummary: research the topic, then write it up in one note\n"
         "triggers:\n  keywords: [handmade]\n"
         "prompts: one research node, then one content node depending on it\n"
         "```\n",
@@ -137,6 +146,7 @@ def _write_md(root, name: str, description: str) -> None:
         f"---\nname: {name}\ndescription: {description}\n---\n\nbody\n\n"
         "```yaml playbook-spec\n"
         "version: 1\nmode: prompt\nconfirm: true\n"
+        "taskSummary: research the named topic and report back\n"
         f"triggers:\n  keywords: [{name}]\n"
         "prompts: one research node\n"
         "```\n",
@@ -278,6 +288,7 @@ def test_a_playbook_saved_by_the_previous_release_still_loads(tmp_path: Path) ->
     assert spec.nodes[0].skills is None, "an old empty list meant 'all', so it must read as unset"
     assert spec.nodes[0].mcps is None
     assert spec.confirm is True  # the graph-level gate is untouched
+    assert spec.task_summary == "written by the previous release"
 
 
 def test_an_empty_skills_list_written_today_is_left_alone(tmp_path: Path) -> None:
@@ -298,6 +309,7 @@ def test_an_empty_skills_list_written_today_is_left_alone(tmp_path: Path) -> Non
         "```yaml playbook-spec\n"
         "version: 1\n"
         "mode: dag\n"
+        "taskSummary: run the current node and report its result\n"
         "triggers:\n"
         "  keywords: [current run]\n"
         "nodes:\n"
@@ -335,6 +347,7 @@ def test_a_step_naming_a_retired_builtin_agent_is_repointed_at_raven(tmp_path: P
         "```yaml playbook-spec\n"
         "version: 1\n"
         "mode: dag\n"
+        "taskSummary: scan a target, then write a brief from what was found\n"
         "triggers:\n"
         "  keywords: [old run]\n"
         "nodes:\n"
@@ -372,6 +385,7 @@ def test_an_external_agent_whose_name_ends_in_raven_is_left_alone(tmp_path: Path
         "```yaml playbook-spec\n"
         "version: 1\n"
         "mode: dag\n"
+        "taskSummary: run one step with a custom agent\n"
         "triggers:\n"
         "  keywords: [mine]\n"
         "nodes:\n"

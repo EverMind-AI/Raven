@@ -128,7 +128,7 @@ def _row(directory: Path) -> dict[str, Any]:
     # its answer is a call that ended. Trusting an unreadable meta instead would
     # leave a finished run pulsing as live forever.
     status = _WIRE_STATUS.get(str(meta.get("status") or "")) or ("ok" if finished else "run")
-    label = str(meta.get("label") or "") or _label_from_prompt(directory)
+    label = str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(directory)
     tools = meta.get("tool_calls")
     return {
         "id": directory.name,
@@ -149,7 +149,7 @@ def _row(directory: Path) -> dict[str, Any]:
 
 
 def _label_from_prompt(directory: Path) -> str:
-    """First line of the prompt, for a call that was spawned without a label.
+    """First line of the prompt, for a call whose meta carries no summary.
 
     Read only in that case: one extra file per row would otherwise be paid on
     every poll of a panel that is polling every few seconds.
@@ -287,7 +287,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
                     "kind": "dag",
                     "run_id": run.name,
                     "node": nid,
-                    "label": nid,
+                    "label": str(node.get("node_summary") or "") or nid,
                     "status": _DAG_WIRE_STATUS.get(status, "run"),
                     "agent": entry.get("subagent") or node.get("subagent"),
                     "instance": entry.get("instance", node.get("instance")),
@@ -433,7 +433,7 @@ async def subagent_context(
         "id": call_id,
         "messages": _map_to_wire(stored, f"subagent:{call_id}"),
         "status": _WIRE_STATUS.get(str(meta.get("status") or "")) or ("ok" if finished else "run"),
-        "label": str(meta.get("label") or "") or _label_from_prompt(directory),
+        "label": str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(directory),
         "agent": meta.get("agent"),
         "started_at": _iso(meta.get("started_at_ms")),
         "ended_at": _iso(meta.get("ended_at_ms")),

@@ -1,17 +1,17 @@
-# Playbook 文件格式
+# Playbook file format
 
-> **实现状态（2026-08-20，`refactor/unified_agent_registry`）**：节点定义已与 dag 收成一份
-> （`DagNodeSpec`，camelCase 与 snake_case 两种 wire 拼写都留）。相对本文的三处变化：
-> 节点级 `confirm` **字段删除**（闸只在图级）；`skills` / `mcps` 成为 **playbook 独有、引擎消费**
-> 的字段（dag 工具已无此参数，`skills` 派发前折进 `promptTemplate`），三态
-> （不写与 `[]` 都是"没有要推荐的" / 列表 = 在 prompt 里点出这几个相关）；
-> `instance` **真的生效**了（内置 agent 恒 stateful），而"同句柄的非链头节点不得写 skills"那条
-> 限制随旧机制一起删除（`skills` 现在落在每节点都追加的 user message 上）。`triggers` 与顶层 `confirm` 的职责改造（J 组）**也已落地**：漏斗与 LLM 门控
-> 删除，入口是 `load_playbook` 一个工具，`confirm` 落在 dag 的图级参数上。
-> 另外本文之外的新增：`subagent` / `promptTemplate` 可以留空，由调用方用 `fills` 补齐，
-> 见 §5 末。
+> **Implementation status (2026-08-20, `refactor/unified_agent_registry`)**: node definitions are now one with dag's
+> (`DagNodeSpec`; both camelCase and snake_case wire spellings kept). Three changes relative to this doc:
+> node-level `confirm` **field deleted** (the gate exists only at graph level); `skills` / `mcps` become **playbook-only,
+> engine-consumed** fields (the dag tool no longer has these params; `skills` folds into `promptTemplate` before dispatch),
+> a three-state (omitted and `[]` both mean "nothing to recommend" / a list = point out these relevant ones in the prompt);
+> `instance` **actually takes effect** now (built-in agents are always stateful), and the "non-head nodes of the same handle must
+> not write skills" restriction is deleted with the old mechanism (`skills` now lands on the user message appended to every node).
+> The `triggers` and top-level `confirm` responsibilities rework (group J) **has also landed**: funnel and LLM gating deleted;
+> the entry is the single tool `load_playbook`; `confirm` sits on dag's graph-level parameter. Also new beyond this doc:
+> `subagent` / `nodeSummary` / `promptTemplate` may be left blank, filled in by the caller with `fills`; see the end of section 5.
 
-一个 playbook = 一个目录，目录里一个 `playbook.md`，分三区。
+A playbook = one directory; inside it, a single `playbook.md`, split into three zones.
 
 ```
 ~/.raven/playbooks/
@@ -21,221 +21,223 @@
 
 ````markdown
 ---
-name / description                     # 身份信封
+name / description                     # identity envelope
 ---
 
-正文：给人读的说明书，机器不解析，两种 mode 一致
+Prose: the manual for humans; the machine does not parse it; identical across both modes
 
 ```yaml playbook-spec
-全部机器字段
+all machine fields
 ```
 ````
 
-**判别靠路径，不靠字段**：在 `playbooks/` 扫描根下就是 playbook。不复用 skill 的 `SKILL.md`，所以不需要 `metadata: '{"raven": {"playbook": true}}'` 这类标记——同一件事有两个判据，就会出现"放在 skills 下却声明是 playbook""放在 playbooks 下却漏了声明"两种矛盾，而这两条规则本不需要存在。
+**Recognition is by path, not by field**: anything under the `playbooks/` scan root is a playbook. The skill `SKILL.md` is not reused, so no marker like `metadata: '{"raven": {"playbook": true}}'` is needed -- two criteria for the same thing would breed two contradictions, "placed under skills yet declared a playbook" and "placed under playbooks yet missing the declaration", and neither rule needed to exist.
 
-**分三区而不是全塞 frontmatter**，理由是阅读顺序：正文说明书通常十几行，机器字段带上 `promptTemplate` 动辄上百行，短的在前长的在后才读得顺。
+**Three zones instead of cramming everything into the frontmatter**, for reading order: the prose manual is usually a dozen-odd lines, while the machine fields, once `promptTemplate` is included, often run into the hundreds; short first, long after, reads smoothly.
 
-块内命名 camelCase。
+Naming inside the block is camelCase.
 
 ---
 
 ## 1. frontmatter
 
-两个字段，不可再加。放这里是为了索引器只读文件头就能建列表，不必解析全文。
+Two fields, no more may be added. They sit here so the indexer can build its listing from the file head alone, without parsing the whole document.
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | 是 | 全局唯一 id，= 目录名，`^[a-z0-9][a-z0-9-]*$` |
-| `description` | string | 是 | 一句话意图，写"什么时候该用我"，≤200 字 |
+| `name` | string | yes | Globally unique id, = directory name, `^[a-z0-9][a-z0-9-]*$` |
+| `description` | string | yes | One-sentence intent, written as "when should I use me", <= 200 chars |
 
 ---
 
-## 2. 块 · 顶层字段
+## 2. Block -- top-level fields
 
-| 字段 | 类型 | 必填/默认 | 说明 |
+| Field | Type | Required/Default | Description |
 |---|---|---|---|
-| `version` | integer | 默认 `1` | 格式版本，非内容版本 |
-| `mode` | enum | 必填 | 图从哪来：`dag` 图写死在 `nodes` ｜ `prompt` 图由模型按 `prompts` 当场组装 |
-| `confirm` | boolean | 默认 `true` | 派发前是否要用户确认。**它是 dag 的图级参数**，本文件写的值随节点一起注入进去并被锁死（模型不可改）；闸在派发口上，不在发现路径上——模型选了剧本不等于用户同意跑它 |
-| `triggers` | object | 必填 | 见 §3 |
-| `params` | map | 可选 | 运行时入参，见 §4 |
-| `nodes` | list | dag 必填 ≥1 / prompt 禁止 | 见 §5 |
-| `prompts` | string | prompt 必填 / dag 禁止 | 组图指导：告诉模型怎么拼出一张图——用哪些 agent、分几层、谁依赖谁 |
+| `taskSummary` | string | Required | One sentence on what running this playbook dispatches, shown to the user; it and `description` (section 1) answer two different questions -- `description` answers "when should I use me", this one answers "what does running it do" |
+| `version` | integer | default `1` | The format version, not a content version |
+| `mode` | enum | Required | Where the graph comes from: `dag` graph is fixed in `nodes`; `prompt` graph is assembled on the spot by the model from `prompts` |
+| `confirm` | boolean | default `true` | Whether the user must confirm before dispatch. **It is a dag graph-level parameter**: the value written in this file is injected together with the nodes and locked (the model cannot change it); the gate is at the dispatch point, not on the discovery path -- the model picking a playbook is not the user agreeing to run it |
+| `triggers` | object | Required | see section 3 |
+| `params` | map | Optional | run-time inputs, see section 4 |
+| `nodes` | list | required for dag, >= 1 / forbidden for prompt | see section 5 |
+| `prompts` | string | required for prompt / forbidden for dag | Graph-assembly guidance: tells the model how to assemble a graph -- which agents, how many layers, who depends on whom |
 
-`mode` 与 `nodes` / `prompts` 双向校验，违反即加载失败。
+`mode` and `nodes` / `prompts` are mutually validated; a violation fails loading.
 
-**两种 mode 只在"图从哪来"这一步不同，拿到图之后完全同一条链路**：过校验（§8）→ 确认闸 → 后台异步执行 → 回执 run_id → 完成后回注。所以 `confirm`、`instance` 规则、占位符对两种 mode 一致生效，不设执行形态字段。
+**The two modes differ only at the "where does the graph come from" step; once the graph is in hand, it is exactly the same pipeline**: validation (section 8) -> confirm gate -> background async execution -> run_id receipt -> write-back on completion. So `confirm`, the `instance` rules, and the placeholders apply identically to both modes; no execution-shape field is defined.
 
-`prompt` 模式组出来的图必须符合 §5 的 `nodes[]` 结构，跑之前过同一套校验，组不出合法图就报错而不是硬跑。
+A graph assembled in `prompt` mode must match the `nodes[]` structure of section 5; it passes the same validation before running, and if no valid graph can be assembled it errors rather than running anyway.
 
 ---
 
 ## 3. triggers
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `keywords` | list[string] | 是，≥1 | 归一化后子串匹配：小写、全半角折叠、空白压缩；中文不分词。长词短语都放这里 |
+| `keywords` | list[string] | yes, >= 1 | Substring match after normalization: lowercase, full/half-width folding, whitespace compression; Chinese is not word-segmented. Long words and short phrases both go here |
 
-`keywords` 决定**这一轮把哪个剧本列到模型面前**——它是检索线索，不是触发器。库大了走 top-K 召回（照抄技能检索的做法），所以关键词的作用是提高召回率，不是保证被使用。命中不等于会跑：
-剧本连同它的描述与参数表进入 `load_playbook` 工具的可选清单，用不用由模型带着整个会话上下文决定，
-和技能检索里关键词的角色一致。库小的时候全部列出（`playbooks.router.topK` 默认 5，库不超过它就全列），
-keywords 只影响排序与召回。
+`keywords` decides **which playbook is placed in front of the model this round** -- it is a retrieval cue, not a trigger. A large library uses top-K recall (copying the skill-retrieval approach), so keywords serve to raise recall, not to guarantee use. A hit does not mean it will run:
+the playbook, together with its description and parameter table, enters the optional list of the `load_playbook` tool; whether to use it is decided by the model with the entire session context,
+the same role keywords play in skill retrieval. With a small library, everything is listed (`playbooks.router.topK` defaults to 5; a library at or below that lists everything),
+and keywords only affect ordering and recall.
 
-**两种成本分开处理**：`name` 的 `enum` 是**全库**（一个名字几个 token，召回漏了用户仍能点名叫），
-而描述 + 参数表 + 留空字段清单**只渲染 top-K**（这才是贵的那部分，随 K 固定、不随库增长）。
+**The two costs are handled separately**: the `enum` of `name` covers **the whole library** (a name is a few tokens; even if recall misses it, the user can still call it by name),
+while the description + parameter table + blank-field list **renders only top-K** (that is the expensive part; fixed with K, it does not grow with the library).
 
-**两种 mode 走同一条发现路径。** 不因 `mode` 分流——否则用户眼里同样是 playbook，一种会被自动触发、一种只能靠检索找到，这是能被直接感知的行为差异。
+**Both modes share the same discovery path.** No branching by `mode` -- otherwise, though they look the same as playbooks to the user, one would be auto-triggered and the other only findable by retrieval, a directly perceivable behavioral difference.
 
 ---
 
-## 4. params.&lt;键&gt;
+## 4. params.&lt;key&gt;
 
-声明每次运行时可变的入参。`promptTemplate` / `prompts` 里用 `${params.<键>}` 引用。
+Declares the inputs that vary per run. Referenced in `promptTemplate` / `prompts` as `${params.<key>}`.
 
-| 字段 | 类型 | 必填/默认 | 说明 |
+| Field | Type | Required/Default | Description |
 |---|---|---|---|
-| `type` | enum | 默认 `string` | `string` / `integer` / `number` / `boolean` / `enum` / `path` |
-| `required` | boolean | 默认 `false` | 为真且没有值时追问，追问对象是模型（它去问用户） |
-| `default` | any | 可选 | 有默认值则永不追问 |
-| `enum` | list | `type: enum` 时必填非空 | 取值表。给模型做选择题，比填空准 |
-| `description` | string | 必填 | 参数说明，同时用作缺参追问的话术 |
+| `type` | enum | default `string` | `string` / `integer` / `number` / `boolean` / `enum` / `path` |
+| `required` | boolean | default `false` | When true and no value is present, ask; the one asked is the model (which then asks the user) |
+| `default` | any | Optional | With a default value, never ask |
+| `enum` | list | required and non-empty when `type: enum` | The value table. Gives the model a multiple-choice question, more accurate than fill-in-the-blank |
+| `description` | string | Required | The parameter description; also used as the wording for the missing-parameter follow-up |
 
-三个消费方：**执行入口的参数表**（这一整块要渲染进 `load_playbook` 的工具描述，模型靠它知道该传什么键——不渲染出去，模型只能猜键名，而猜错的键会被静默丢弃）、缺参追问、编译期替换 `${params.x}`。
+Three consumers: **the parameter table at the execution entry** (this whole block renders into the `load_playbook` tool description; the model relies on it to know which keys to pass -- without the render-out, the model can only guess key names, and wrongly guessed keys are silently dropped), the missing-parameter follow-up, and compile-time substitution of `${params.x}`.
 
-`type: path` 编译期过 `check_confined`，不许逃逸出会话工作目录。
+`type: path` passes `check_confined` at compile time and may not escape the session working directory.
 
-没有可变入参的 playbook（如"每周拉一次 issue 分诊"）整块省略。
+A playbook with no variable inputs (e.g. "pull an issue triage once a week") omits the entire block.
 
 ---
 
 ## 5. nodes[]
 
-| 字段 | 类型 | 必填/默认 | 说明 |
+| Field | Type | Required/Default | Description |
 |---|---|---|---|
-| `id` | string | 必填 | `^[A-Za-z0-9_-]+$`，图内唯一，会成为产物文件名 |
-| `subagent` | string | 必填 | agent 注册表里的 name。接入方式（cli / acp / 进程内）、密钥、能力元数据全住注册表，playbook 不重复声明 |
-| `promptTemplate` | string | 必填 | 本步任务书，占位符见 §6 |
-| `dependsOn` | list[string] | 默认 `[]` | 依赖的节点 id，同时是引用白名单 |
-| `skills` | list[string] | 可选 | 跟这一步**相关**的 skills，供跑这一步的 agent 优先考虑（只能从本机已有目录里挑）。**playbook 独有、引擎消费**：派发前折进这一步的 `promptTemplate`，dag 工具没有这个参数。不是"只能看见这几个"，也不是"必须用" |
-| `mcps` | list[string] | 可选 | 这一步想挂的 mcp。**playbook 独有,且今天不生效**：subagent 没有 mcp 通路，派发时明确回报被忽略，不写进 prompt（写了就是一句它没工具可执行的假指令） |
-| `instance` | string | 可选 | 会话句柄，同句柄的节点共享一个 agent 会话 |
-| `inputs` | map | 可选 | 每键为字面量字符串、`{file: 路径}` 或 `{node: id}`——**只有这三种，没有 run 限定符**（钉住某一次运行用 `{{ ref:@runs/<run_id>/… }}` 的文件形式，见 §6）。价值是**结构化**而非独有能力：`{{ inputs.k }}` 引用的 key 必须先声明（default-deny，内联的 `{{ ref: }}` 校验不了这一层），且看节点定义就知道它读什么，不必通读 prompt |
+| `id` | string | Required | `^[A-Za-z0-9_-]+$`, unique within the graph, becomes the artifact file name |
+| `subagent` | string | Required | The `name` in the agent registry. The access method (cli / acp / in-process), credentials, and capability metadata all live in the registry; the playbook does not redeclare them |
+| `nodeSummary` | string | Required | One sentence on what this step does, written before the `promptTemplate`; it is this step's line in the run, for the people watching the graph, not the model's own memo |
+| `promptTemplate` | string | Required | This step's task brief; placeholders in section 6 |
+| `dependsOn` | list[string] | default `[]` | The ids of the nodes it depends on; also the reference whitelist |
+| `skills` | list[string] | Optional | The skills **relevant** to this step, for the agent running it to consider first (only pickable from the directories already present on this machine). **Playbook-only, engine-consumed**: folded into this step's `promptTemplate` before dispatch; the dag tool has no such parameter. Neither "can only see these" nor "must use them" |
+| `mcps` | list[string] | Optional | The mcps this step wants to attach. **Playbook-only, and not in effect today**: subagent has no mcp channel; dispatch explicitly reports them ignored and does not write them into the prompt (writing them in would be a fake instruction the agent has no tools to execute) |
+| `instance` | string | Optional | The session handle; nodes with the same handle share one agent session |
+| `inputs` | map | Optional | Each key is a literal string, `{file: path}` or `{node: id}` -- **only these three, no run qualifier** (to pin a specific run, use the file form `{{ ref:@runs/<run_id>/... }}`, see section 6). The value is **structure**, not a unique capability: a key referenced by `{{ inputs.k }}` must be declared first (default-deny; inline `{{ ref: }}` cannot be validated at this level), and reading the node definition tells you what it reads without going through the prompt |
 
-**这张表就是 dag 工具的节点 schema，不是 playbook 另定的一套。** per-node 配置是 dag 本身的能力，
-playbook 加载后节点直接注入 dag 工具，所以模型直接调 dag 时也能写这些字段。
+**This table is the dag tool's node schema, not a separate set defined by the playbook.** Per-node configuration is a dag capability itself;
+once a playbook is loaded, its nodes are injected directly into the dag tool, so the model can write these fields when calling dag directly too.
 
-"同一份"指字段集与语义，有两处形态差异不算另定一套：模型面的 JSON Schema 用 snake_case（`prompt_template` / `depends_on`），这张表是写在文件里的 camelCase；以及派发时 `id` 会被加上 `<playbook 名>-<随机 6 位>-` 前缀，`dependsOn` 与 `{{ id.output }}` 同步改写——因为 dag 侧的 id 是**会话内唯一**，不改写的话同一个 playbook 在一个会话里跑第二次会被唯一性拒掉。前缀只活在运行时，不进文件。
+"The same set" refers to the field set and the semantics; two shape differences do not count as a separate set: the model-facing JSON Schema uses snake_case (`prompt_template` / `depends_on`) while this table is the camelCase written in the file; and at dispatch the `id` gets a `<playbook name>-<random 6 chars>-` prefix, with `dependsOn` and `{{ id.output }}` rewritten in sync -- because ids on the dag side are **unique within a session**, and without the rewrite, running the same playbook a second time in one session would be rejected by the uniqueness rule. The prefix lives only at run time; it never enters the file.
 
-`instance` 只管一件事：**要不要延续上下文**。`promptTemplate` 就是注入的那段 prompt，
-不另设字段，延续上下文时照样能注入新的一段。
+`instance` manages exactly one thing: **whether to carry the context forward**. `promptTemplate` is that injected prompt;
+no extra field exists, and a new prompt can still be injected when the context is carried forward.
 
-`skills` 折进这一步的 `promptTemplate`（每个节点都追加的 user message），所以 `instance` 链上
-任何一个节点写了都生效——早先"只允许写在头节点"那条限制随旧机制一起删了，见校验规则 9。
+`skills` folds into this step's `promptTemplate` (the user message appended to every node), so writing it on any node of an `instance` chain
+takes effect -- the old "only allowed on the head node" restriction was deleted together with the old mechanism, see validation rule 9.
 
-配置挂节点不挂角色，因为同一个 agent 可以在一张图里跑多步、每步任务不同——
-那只是两个任务、两份上下文，用了同一个 agent、同一份调用方式：
+Configuration hangs off nodes, not roles, because the same agent can run several steps in one graph, each with a different task --
+that is just two tasks, two contexts, using the same agent and the same calling convention:
 
 ```yaml
 nodes:
-  - {id: a1, subagent: research-raven, dependsOn: [],   skills: [市场调研]}
+  - {id: a1, subagent: research-raven, dependsOn: [],   skills: [market-research]}
   - {id: b,  subagent: code-raven,     dependsOn: [a1]}
-  - {id: a2, subagent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
+  - {id: a2, subagent: research-raven, dependsOn: [b],  skills: [code-audit], mcps: [github]}
 ```
 
-**加载只有一个工具 `load_playbook(name, params, fills?)`，`mode` 决定加载之后怎么走**（模型不需要分辨 mode，清单里两种混在一起列）。两条执行面的保证强度不同：
+**Loading is a single tool `load_playbook(name, params, fills?)`; `mode` decides what happens after loading** (the model does not need to distinguish modes; the list mixes both kinds together). The two execution surfaces guarantee different strengths:
 
-| mode | 加载之后 | 谁按下派发键 | 能锁住什么 |
+| mode | After loading | Who presses the dispatch button | What can be locked |
 |---|---|---|---|
-| `dag` | 引擎填参、注入节点，直接进 dag 链路；缺必填 `params` 或有留空字段就先回来问模型一轮 | **引擎** | **节点与闸全锁**。模型能传的只有 `params` 与 `fills`，没有语法表达"改一个已写字段"——结构性保证，不靠校验拦 |
-| `prompt` | 返回填好 `${params.x}` 的组图指导 | **模型**（它据此自己写 `nodes` 调 `run_subagent_dag`） | 换来**灵活**：同一份指导按当次情况组出不同的图，这就是它存在的理由。代价是顶层 `confirm` 与步骤没有附着点（没有原图可比），要靠指导文字写清 |
+| `dag` | The engine fills params and injects nodes, straight into the dag pipeline; missing required `params` or blank fields come back to ask the model one round first | **engine** | **Nodes and gates fully locked**. The model can pass only `params` and `fills`; there is no syntax to express "edit an already-written field" -- a structural guarantee, not enforced by validation |
+| `prompt` | Returns the graph-assembly guidance with `${params.x}` filled in | **model** (it writes its own `nodes` from it and calls `run_subagent_dag`) | Buys **flexibility**: the same guidance assembles different graphs per the situation at hand -- that is its reason to exist. The cost: the top-level `confirm` and the steps have no attachment point (there is no original graph to compare), so the guidance text must make them explicit |
 
-两种 mode 是一对取舍，不是"一个完整一个残缺"：要**确定性**（跑一百次同一张图、闸和步骤都锁住）写 `dag`；要**灵活**（流程本身看情况定）写 `prompt`。把 `prompt` 模式的灵活当缺陷去补，等于把它变成一个更差的 `dag` 模式。
+The two modes are a trade-off pair, not "one complete, one crippled": for **determinism** (the same graph a hundred times, gate and steps locked) write `dag`; for **flexibility** (the process itself decided case by case) write `prompt`. Patching `prompt` mode's flexibility as if it were a defect would turn it into a worse `dag` mode.
 
-### 5.1 留空与 `fills`（已实现）
+### 5.1 Blanks and `fills` (implemented)
 
-`subagent` 与 `promptTemplate` 可以留空，意思是"这一处我不定，由调用方按上下文写"。只有这两个算**缺口**——
-不写 `skills` 的意思是"用这个 agent 自己的菜单"，那是个完整答案，把它当缺口会让库里每张写得好的剧本
-都先弹一个问题。
+`subagent`, `nodeSummary` and `promptTemplate` may be left blank, meaning "this one I leave undecided; the caller writes it from context". Only these three count as **gaps** --
+omitting `skills` means "use this agent's own menu", which is a complete answer; treating it as a gap would make every well-written playbook in the library
+pop a question first.
 
-| | 行为 |
+| | Behavior |
 |---|---|
-| 缺口的报法 | 缺的 `params` 与留空的节点字段**一起报**，且**零派发**。分两轮报等于让调用方花两次往返学一件事 |
-| 补法 | `fills = {"<作者写的 node id>": {"promptTemplate": "..."}}`。键是**文件里的 id**，不是加了运行前缀的那个——前缀是之后加的，调用方从没见过它 |
-| 硬规矩 | **`fills` 指向一个已写字段就整体拒**。没有这条，`fills` 就是个通用字段编辑器：改任意 prompt、把节点指到别的 agent、把 skills 拿掉，git 里的文件就不再描述真正跑了什么 |
-| `skills: []` 仍不算留空 | 它对 `fills` 来说是**写过的**字段，所以调用方补不了它。语义上它已经与不写同义（见下节），但"作者写过"与"作者没写"是两件事：把它当留空，调用方就能往一个作者动过手的字段里塞东西 |
-| 回路上限 | 同一(会话, 剧本)最多报 2 轮缺口，超了返回终止语。"补不齐→再问→还是补不齐"是调用方能在一轮里空转掉的循环 |
-| CLI | 没有模型可补，所以 `raven playbook run` 加了 `--fill NODE.FIELD=VALUE`；不给就报"这张剧本要在运行时补值"，不静默跑一张缺字段的图 |
+| How gaps are reported | Missing `params` and blank node fields are reported **together**, with **zero dispatch**. Reporting in two rounds makes the caller spend two round trips to learn one thing |
+| How to fill them | `fills = {"<the node id the author wrote>": {"promptTemplate": "..."}}`. The key is the **id in the file**, not the one with the run prefix -- the prefix is added afterwards; the caller has never seen it |
+| Hard rule | **`fills` pointing at an already-written field rejects everything**. Without this rule, `fills` is a general-purpose field editor: change any prompt, point a node at another agent, strip the skills -- the file in git would no longer describe what actually ran |
+| `skills: []` still does not count as blank | For `fills` it is a **written** field, so the caller cannot fill it. Semantically it is already synonymous with omitting (see next section), but "the author wrote it" and "the author did not" are two different things: treating it as a blank lets the caller stuff values into a field the author deliberately touched |
+| Round-trip cap | The same (session, playbook) reports gaps at most 2 rounds; beyond that, a termination message is returned. "Cannot fill -> ask again -> still cannot fill" is a loop the caller could idle away round after round |
+| CLI | There is no model to fill, so `raven playbook run` gained `--fill NODE.FIELD=VALUE`; without it, it reports "this playbook needs values filled in at run time" and does not silently run a graph with missing fields |
 
-`params` 与留空字段是两种不同的变化点：`params` 是**值**（一处声明、多处引用，带类型与必填校验），留空是**整个字段没写**（模型按上下文自由填）。
+`params` and blank fields are two different variation points: `params` is a **value** (declared once, referenced in many places, with type and requiredness validation); a blank is **a whole field left unwritten** (the model fills it freely from context).
 
-**字段不全是常态，三层各管一段。** 生产一份 playbook 时不必写满所有字段：
+**Not every field present is the norm; three layers each own a segment.** You need not write every field when producing a playbook:
 
-| 谁提供 | 内容 | 缺了怎么办 |
+| Who provides | Content | What if missing |
 |---|---|---|
-| 本文件 | `nodes[]` 的编排与每步配置 | 字段集是 dag 节点的子集，但**必填性更松**：`promptTemplate` 可以留空交模型补。其余五个 optional，**"不写"不等于"空"**，见下表 |
-| 模型（读上下文） | `params` 的值 + 留空字段的 `fills` | `required: true` 且无 `default` 的必须有值；缺了由 `load_playbook` 结构化返回"还需要这些"、零派发，模型补齐后再调。**模型只能传 `params` 与 `fills`**——它没有语法表达"改一个已写字段" |
-| 调用方 | `background` 等运行级参数 | dag 独有，本文件从不声明 |
+| This file | The orchestration of `nodes[]` and the per-step configuration | The field set is a subset of the dag node fields, but **requiredness is looser**: `subagent` / `nodeSummary` / `promptTemplate` may be left blank for the model to fill. The other five are optional; **"not written" is not "empty"**, see the table below |
+| The model (reading context) | The values of `params` + the `fills` for blank fields | `required: true` without `default` must have a value; when missing, `load_playbook` returns structurally "still needs these" with zero dispatch, and the model calls again after filling them. **The model can pass only `params` and `fills`** -- it has no syntax to express "edit an already-written field" |
+| The caller | Run-level parameters such as `background` | dag-only; this file never declares them |
 
-| 字段 | 不写等于什么 |
+| Field | What omitting equals |
 |---|---|
-| `skills` | prompt 里不提技能。写了则在 prompt 里点出这几个相关、供优先考虑。`[]` 与不写同义（见下）|
-| `instance` | 运行时自动铸一个句柄、独立上下文，并在运行摘要里回报，后续可续用 |
-| `mcps` | 不挂额外 mcp |
-| `dependsOn` | 起点节点，与其他起点并发 |
-| `inputs` | 无声明输入（`promptTemplate` 里仍可用 `{{ ref: }}` 直接读文件） |
+| `skills` | No skills mentioned in the prompt. If written, the prompt points out these relevant ones for priority consideration. `[]` is synonymous with omitting (see below) |
+| `instance` | At run time a handle is automatically forged with an independent context, reported back in the run summary, and resumable later |
+| `mcps` | No extra mcp attached |
+| `dependsOn` | A start node, running concurrently with the other start nodes |
+| `inputs` | No declared inputs (`{{ ref: }}` in `promptTemplate` can still read files directly) |
 
-所以"这一步挂什么技能留给模型按上下文挑"不需要特殊写法——省略 `skills` 就是它。
+So "which skills this step gets, left for the model to pick from context" needs no special syntax -- omitting `skills` is exactly that.
 
-**`skills` 是一句建议，不是一道闸。** 它折进这一步的 `promptTemplate`，随任务描述一起交给跑这一步的
-agent，说的是"这几个跟这活相关，优先考虑"。它**不**表达"只能看见这几个"（菜单不再被过滤，其余技能照样
-在它眼前），也**不**表达"必须用某个"（用哪个始终是那个 agent 现场按上下文定的）。
+**`skills` is a suggestion, not a gate.** It folds into this step's `promptTemplate` and is handed, together with the task description, to the agent
+running this step, saying "these are relevant to the job, consider them first". It does **not** express "can only see these" (the menu is no longer filtered;
+the other skills stay in front of it), nor "must use a particular one" (which one is always decided on the spot by that agent from context).
 
-所以 `skills: []` 没有含义了 —— 它既不是"只看见零个"（限制），也不是"禁止用"（命令），就是"没有要
-推荐的"，与不写同义。**但不静默**：派发时明确回报一句，因为文件里写着 `skills: []` 看起来是提了要求的。
-真要表达"这一步别用技能"，写在 `promptTemplate` 里。
+So `skills: []` carries no meaning anymore -- it is neither "see zero" (a restriction) nor "forbidden to use" (a command); it is simply "nothing
+to recommend", synonymous with omitting. **But not silently**: dispatch explicitly reports it, because `skills: []` written in the file looks like
+a requirement was stated. To really express "no skills for this step", write it in `promptTemplate`.
 
-`mode: prompt` 是这套分层的极端情形：文件里一个节点都没有，全部节点字段由执行时那次 compose 调用产出，再过与 `mode: dag` 相同的校验（规则 12）。
+`mode: prompt` is the extreme case of this layering: the file holds no nodes at all; all node fields are produced by that run-time compose call, then pass the same validation as `mode: dag` (rule 12).
 
-**闸只有一级**，就是顶层 `confirm`：管"这个 playbook 要不要跑"。不设节点级闸——批准一张图本身是完整语义，审的时候看到的是全图。
+**There is only one gate level**, the top-level `confirm`: it governs "should this playbook run". No node-level gate -- approving a graph is complete semantics in itself; what the reviewer sees is the whole graph.
 
-实现上它就是 dag 的图级 `confirm`：本文件写的值随 nodes 一起注入，闸在 dag 工具的派发口上
-（校验之后、计费之前——用户按掉的图不该花预算）。这个参数是**删漏斗的前置条件**：在它存在之前，
-`confirm` 的唯一执行点在漏斗里，删掉漏斗等于让每张剧本都变成"模型一调就跑"。
+In implementation it is dag's graph-level `confirm`: the value written in this file is injected together with the nodes, and the gate sits at the
+dag tool's dispatch point (after validation, before billing -- a graph the user cancelled should not cost budget). This parameter is the **precondition
+for deleting the funnel**: before it existed, `confirm`'s only execution point was inside the funnel; deleting the funnel would have made every playbook "run the moment the model calls it".
 
-既然选剧本这件事由模型决定，这一级闸就是**用户**唯一的介入点，所以配套要求是必需项而非可选项：确认对话框要列出哪些步骤有对外副作用（发布、提单、发信），让"点头"是知情的。判据可从注册表推导——该节点 agent 的 mcp / tools 里是否含写操作。
+Since picking the playbook is the model's decision, this gate level is the **user's** only point of intervention, so the accompanying requirement is mandatory, not optional: the confirmation dialog must list which steps have external side effects (publishing, filing tickets, sending messages), making the "yes" an informed one. The criterion is derivable from the registry -- whether the step's agent has write operations among its mcp / tools.
 
 ---
 
-## 6. 占位符
+## 6. Placeholders
 
-| 语法 | 时刻 | 写在哪 | 含义 |
+| Syntax | Time | Where written | Meaning |
 |---|---|---|---|
-| `${params.x}` | 编译期 | `promptTemplate` / `prompts` | 参数值 |
-| `{{ dep.output }}` | 运行期 | `promptTemplate` | 依赖节点的输出全文 |
-| `{{ dep.output_path }}` | 运行期 | `promptTemplate` | 依赖节点输出的文件路径 |
-| `{{ inputs.k }}` | 运行期 | `promptTemplate` | 节点 `inputs` 的值（file 形态取内容） |
-| `{{ inputs.k.path }}` | 运行期 | `promptTemplate` | 节点 `inputs` 的文件路径（仅 file 形态） |
-| `{{ ref:路径 }}` | 运行期 | `promptTemplate` | 工作区文件内容 |
-| `{{ ref_path:路径 }}` | 运行期 | `promptTemplate` | 工作区文件路径 |
+| `${params.x}` | compile time | `promptTemplate` / `prompts` | The parameter value |
+| `{{ dep.output }}` | run time | `promptTemplate` | The full output text of the dependency node |
+| `{{ dep.output_path }}` | run time | `promptTemplate` | The file path of the dependency node's output |
+| `{{ inputs.k }}` | run time | `promptTemplate` | The value of the node's `inputs` (file form takes the content) |
+| `{{ inputs.k.path }}` | run time | `promptTemplate` | The file path of the node's `inputs` (file form only) |
+| `{{ ref:path }}` | run time | `promptTemplate` | The content of a workspace file |
+| `{{ ref_path:path }}` | run time | `promptTemplate` | The path of a workspace file |
 
-编译期只替换 `${…}`，`{{…}}` 原样透传给运行期。
+Compile time substitutes only `${...}`; `{{...}}` is passed through verbatim to run time.
 
-两种 mode 都用这七个：`prompt` 模式先把 `${params.x}` 替换进 `prompts` 交给模型，模型组出的图里照样带 `{{…}}`，由 runner 在运行期解析。
+Both modes use all seven: `prompt` mode first substitutes `${params.x}` into `prompts` and hands it to the model; the graph the model assembles still carries `{{...}}`, resolved by the runner at run time.
 
-`output` 与 `output_path` 的选择：本地 agent 传路径（自己去读，大产物不占上下文），远端 API agent 只能传内容。注册表里 `readsLocalFiles` 为假的 agent 用 `output_path` 会被预检拦下。
+The `output` vs `output_path` choice: local agents receive the path (they read it themselves; large artifacts do not occupy context); remote API agents can only receive content. An agent whose `readsLocalFiles` in the registry is false is stopped by the pre-check from using `output_path`.
 
 ---
 
-## 7. 图语言
+## 7. Graph language
 
-`dependsOn` 是全部的图语言，并行隐式——没有依赖关系就并行，不需要 parallel 语法。
+`dependsOn` is the entire graph language; parallelism is implicit -- no dependency means parallel, no `parallel` syntax needed.
 
-| 写法 | 含义 |
+| Spelling | Meaning |
 |---|---|
-| `dependsOn: []` 或省略 | 图的起点，立即开跑 |
-| `dependsOn: [a]` | 等 a 完成 |
-| `dependsOn: [a, b]` | 等 a 和 b 都完成，汇合 |
-| 两个节点写同一个上游 | 彼此无依赖，并行，分叉 |
+| `dependsOn: []` or omitted | A start of the graph, starts immediately |
+| `dependsOn: [a]` | Waits for a to finish |
+| `dependsOn: [a, b]` | Waits for both a and b to finish, merging |
+| Two nodes with the same upstream | No dependency between them; parallel, forking |
 
 ```yaml
 nodes:
@@ -246,178 +248,183 @@ nodes:
 ```
 
 ```
-scan_market ─┐
-             ├─→ merge ─→ selfcheck
-scan_tech ───┘
+scan_market -+
+              +-> merge --> selfcheck
+scan_tech ---+
 ```
 
-`dependsOn` 同时是引用授权：`{{ x.output }}` 里的 `x` 必须列在本节点的 `dependsOn` 里，否则编译期报错（default-deny）。
+`dependsOn` is also reference authorization: the `x` in `{{ x.output }}` must be listed in this node's `dependsOn`, otherwise a compile-time error (default-deny).
 
-`prompt` 模式组出来的图受同一套规则约束，不是逃逸口。
+Graphs assembled in `prompt` mode are bound by the same rules; it is not an escape hatch.
 
-**表达不了的三件事**：环（条件回退，如"审校不通过退回重写"）、条件跳过（无 `when:`）、per-playbook 并发上限（由 runner 全局配置管）。
+**Three things that cannot be expressed**: cycles (conditional fallback, e.g. "review fails, fall back to rewriting"), conditional skipping (no `when:`), per-playbook concurrency caps (governed by the runner's global config).
 
-注意 `mode: prompt` **不能**绕开这三条。它是图的生成器，不是运行时编排器——图组装一次就固定，跑到一半不能根据中间结果改图。所以"连续两轮无新增发现就停"这类循环，两种 mode 都做不到；`prompts` 里只能写"怎么拼这张图"，不能写"跑起来之后怎么判断"。
+Note that `mode: prompt` **cannot** bypass these three. It is a graph generator, not a run-time orchestrator -- a graph is fixed once assembled; mid-run it cannot be changed based on intermediate results. So loops like "stop after two consecutive rounds without new findings" are beyond both modes; `prompts` can only spell "how to assemble this graph", not "how to judge once it runs".
 
 ---
 
-## 8. 校验规则
+## 8. Validation rules
 
-加载时全跑，不过就进隔离区。
+All run at load time; anything failing goes to quarantine.
 
-| # | 规则 |
+| # | Rule |
 |---|---|
-| 1 | `mode: dag` → `nodes` 非空且无 `prompts`；`mode: prompt` → 有 `prompts` 且无 `nodes` |
-| 2 | `frontmatter.name` = 目录名，且目录位于 `playbooks/` 扫描根下 |
-| 3 | `nodes[].subagent` 必须在注册表里，缺失则报"需要先注册 X"，不等到跑那一步才炸 |
-| 4 | 图无环，且所有节点从起点可达 |
-| 5 | `{{ x.output }}` 的 `x` 必须在本节点 `dependsOn` 内 |
-| 6 | `${params.x}` 的 `x` 必须在 `params` 里声明 |
-| 7 | `instance` 仅注册表标 `stateful` 的 agent 可用。**这条今天名存实亡**：只有生成器与 `raven playbook validate` 跑它，手写后直接运行会被静默丢弃（见统一注册表方案 §9） |
-| 8 | 同 `instance` 的节点之间必须存在依赖链——共享会话不能并发，会互相踩上下文 |
-| 9 | **已删除**。它的依据是"会话启动后 system prompt 换不了，所以只有链头的 `skills` 生效"；而 `skills` 现在折进 `promptTemplate`，那是每个节点都追加的 user message，链上任何一个节点写了都生效。留着就是一条会拒掉合法图的假规则 |
-| 10 | 同一个 `instance` 的成员必须是**同一个 agent**——不同 agent 共用句柄根本不共享会话（现有规则，沿用） |
-| 11 | `{{ dep.output_path }}` 仅当注册表标该 agent `readsLocalFiles` 时可用 |
-| 12 | `mode: prompt` 组出的图，执行前过 4-11 全部规则；不合法则重组，仍不合法则报错，不降级硬跑 |
+| 1 | `mode: dag` -> `nodes` non-empty and no `prompts`; `mode: prompt` -> has `prompts` and no `nodes` |
+| 2 | `frontmatter.name` = the directory name, and the directory sits under the `playbooks/` scan root |
+| 3 | `nodes[].subagent` must be in the registry; when missing, report "X must be registered first", not blow up when that step runs |
+| 4 | The graph is acyclic, and every node is reachable from the starts |
+| 5 | The `x` in `{{ x.output }}` must be within this node's `dependsOn` |
+| 6 | The `x` in `${params.x}` must be declared in `params` |
+| 7 | `instance` is available only for agents marked `stateful` in the registry. **This rule is a dead letter today**: only the generator and `raven playbook validate` run it; hand-written input run directly is silently dropped (see unified registry plan, section 9) |
+| 8 | Nodes sharing an `instance` must have a dependency chain between them -- a shared session cannot run concurrently; they would stomp each other's context |
+| 9 | **Deleted**. Its rationale was "after a session starts the system prompt cannot be swapped, so only the head node's `skills` take effect"; but `skills` now folds into `promptTemplate`, which is the user message appended to every node, so writing it on any node of the chain takes effect. Keeping it would be a false rule that rejects valid graphs |
+| 10 | Members of the same `instance` must be **the same agent** -- different agents sharing a handle share no session at all (existing rule, carried over) |
+| 11 | `{{ dep.output_path }}` is usable only when the registry marks that agent `readsLocalFiles` |
+| 12 | A graph assembled in `mode: prompt` passes all of rules 4-11 before execution; if invalid, reassemble; if still invalid, error out -- no degraded run |
 
 ---
 
-## 9. 示例 · mode: dag
+## 9. Example -- mode: dag
 
 ````markdown
 ---
 name: competitor-scan
-description: 对一家竞品分头做市场面与技术面调研，合并出一份带信源的报告。想快速了解某家竞品时匹配。
+description: Research one competitor's market and tech sides in separate tracks, then merge into a report with cited sources. Matches when you want a quick read on a competitor.
 ---
 
-# 竞品快速扫描
+# Quick competitor scan
 
-市场面和技术面分两路并行查，合并成文后自查一轮。
-每条结论必须挂信源，拿不准的标"待证实"。
+The market and tech sides are researched in two parallel tracks; after merging into a document, self-check once.
+Every conclusion must carry a source; mark anything uncertain as "to be verified".
 
 ```yaml playbook-spec
 mode: dag
 confirm: true
+taskSummary: Concurrently research one competitor's market and tech sides, merge into a sourced report, and self-check to finalize
 
 triggers:
-  keywords: [竞品, 竞对, 对标, 竞争格局, 帮我看看这家公司]
+  keywords: [competitor, rival, benchmark, competitive landscape, help me look at this company]
 
 params:
   target:
     type: string
     required: true
-    description: 要扫描的竞品名称
+    description: Which competitor to scan
 
 nodes:
   - id: scan_market
     subagent: research-raven
+    nodeSummary: Research the market side: positioning, pricing, customer structure, competitive landscape
     dependsOn: []
     skills: [web-search, source-credibility-check]
     mcps: [exa]
     promptTemplate: |
-      调研 ${params.target} 的市场面：定位、定价、客户结构、竞争格局。
-      每个维度不超过 3 条要点，每条附来源。不碰技术细节。
+      Research ${params.target}'s market side: positioning, pricing, customer structure, competitive landscape.
+      At most 3 bullet points per dimension, each with a source. Do not touch technical details.
 
   - id: scan_tech
     subagent: research-raven
+    nodeSummary: Research the tech side: technical approach, open-source ecosystem, engineering maturity
     dependsOn: []
     skills: [web-search, repo-analysis]
     mcps: [exa, github]
     promptTemplate: |
-      调研 ${params.target} 的技术面：技术方案、开源生态、工程成熟度。
-      不碰商业面。
+      Research ${params.target}'s tech side: technical approach, open-source ecosystem, engineering maturity.
+      Do not touch the business side.
 
   - id: merge
-    agent: content-raven
+    subagent: content-raven
+    nodeSummary: Merge both tracks' findings into a conclusion-first report, every conclusion cited
     dependsOn: [scan_market, scan_tech]
     instance: w1
     promptTemplate: |
-      合并两路发现成一篇报告，结论先行，每条结论挂信源。
-      市场面：{{ scan_market.output }}
-      技术面：{{ scan_tech.output }}
+      Merge both tracks' findings into one report, conclusions first, every conclusion carrying its source.
+      Market side: {{ scan_market.output }}
+      Tech side: {{ scan_tech.output }}
 
   - id: selfcheck
-    agent: content-raven
+    subagent: content-raven
+    nodeSummary: Self-check to finalize by checklist: sources, no speculation, no duplication
     dependsOn: [merge]
     instance: w1
     promptTemplate: |
-      按 checklist 自查：每条结论有信源、无未标注推测、无重复。
-      改完输出定稿。
+      Self-check by checklist: every conclusion has a source, no unmarked speculation, no duplication.
+      After fixing, output the final version.
 ```
 ````
 
-`scan_market` 与 `scan_tech` 都是起点，并行；`merge` 等两者完成；`merge` 与 `selfcheck` 共享 `instance: w1`，跑在同一个 content 会话里，所以自查时记得刚才写了什么。
+`scan_market` and `scan_tech` are both start nodes, running in parallel; `merge` waits for both; `merge` and `selfcheck` share `instance: w1`, running in the same content session, so the self-check remembers what was just written.
 
 ---
 
-## 10. 示例 · mode: prompt
+## 10. Example -- mode: prompt
 
 ````markdown
 ---
 name: due-diligence
-description: 对一家标的公司做尽调，深度按发现动态调整。投资、收购、合作前的背景核查时匹配。
+description: Run due diligence on a target company, with depth adjusted dynamically by findings. Matches background checks before investing, acquiring, or partnering.
 ---
 
-# 尽调
+# Due diligence
 
-调查范围随 focus 变，图的形状不固定，所以不写死 nodes，给组图规则。
+The investigation scope varies with focus; the graph shape is not fixed, so instead of hard-coding nodes, give graph-assembly rules.
 
 ```yaml playbook-spec
 mode: prompt
 confirm: false
 
 triggers:
-  keywords: [尽调, 尽职调查, 背调, 查一下这家公司]
+  keywords: [due diligence, dd, background check, check this company out]
 
 params:
   target:
     type: string
     required: true
-    description: 标的公司名称
+    description: The target company name
   focus:
     type: enum
     enum: [tech, market, team, finance]
     default: market
-    description: 侧重方向
+    description: The area of emphasis
 
 prompts: |
-  为 ${params.target} 组一张三层的尽调图，侧重 ${params.focus}。
+  Assemble a three-layer due-diligence graph for ${params.target}, emphasizing ${params.focus}.
 
-  第一层，一个节点：
-    subagent: research-raven，skills: [web-search]
-    任务是广度扫描，产出"已知 / 未知 / 存疑"三栏。
+  Layer one, one node:
+    subagent: research-raven, skills: [web-search]
+    The task is a broad scan, producing the three columns "known / unknown / questionable".
 
-  第二层，按 focus 铺开，全部 dependsOn 第一层，彼此并行：
-    - 恒定一个 research-raven 节点查团队背景与公开风险记录
-    - focus 含 tech：加一个 code-raven 节点，mcps: [github]，扫开源仓库与技术博客
-    - focus 含 market 或 finance：加一个 data-raven 节点，做可比公司与市场规模测算
-    每个节点用 {{ 第一层节点id.output }} 拿到扫描结果，只深挖其中的"存疑"项。
-    不要给这些节点设同一个 instance——各自独立上下文，防止早期错误结论在分支间放大。
+  Layer two, spread by focus, all dependsOn layer one, parallel to each other:
+    - Always one research-raven node checking team background and public risk records
+    - focus includes tech: add a code-raven node, mcps: [github], scanning open-source repos and tech blogs
+    - focus includes market or finance: add a data-raven node doing comparable-company and market-size estimates
+    Each node takes the scan results via {{ first-layer-node-id.output }} and digs only into the "questionable" items.
+    Do not give these nodes the same instance -- each keeps an independent context, so early wrong conclusions do not amplify across branches.
 
-  第三层，一个 content-raven 汇总节点，dependsOn 全部第二层节点。
+  Layer three, one content-raven summary node, dependsOn all of layer two's nodes.
 
-  每个节点的 promptTemplate 都要写明：任何"该公司声称 X"必须标注信源与可信度，
-  不得与已验证事实混排；查不到的写"未公开"，拿不准的标"待证实"。
+  Every node's promptTemplate must state: any "the company claims X" must be tagged with its source and credibility,
+  not mixed in with verified facts; write "not disclosed" for what cannot be found, mark "to be verified" when unsure.
 ```
 ````
 
-`prompts` 写的是**怎么拼这张图**——分几层、每层用什么 agent 配什么 skills/mcps、谁 dependsOn 谁、节点间怎么传数据。不要写"跑起来之后怎么判断"，图组装完就固定了，运行期没有决策点。
+`prompts` spells out **how to assemble this graph** -- how many layers, which agent pairs with which skills/mcps at each layer, who dependsOn whom, how data flows between nodes. Do not write "how to judge once it runs": the graph is fixed once assembled; there are no decision points at run time.
 
 ---
 
-## 11. 全字段索引
+## 11. Full field index
 
 ```
-frontmatter   name · description
+frontmatter   name | description
 
-块顶层        version · mode · confirm · triggers · params · nodes · prompts
+block top-level taskSummary | version | mode | confirm | triggers | params | nodes | prompts
   triggers    keywords
-  params.<键> type · required · default · enum · description
-  nodes[]     id · agent · promptTemplate · dependsOn · skills · mcps ·
-              instance · inputs
+  params.<key> type | required | default | enum | description
+  nodes[]     id | subagent | nodeSummary | promptTemplate | dependsOn |
+              skills | mcps | instance | inputs
 
-占位符        ${params.x}
-              {{ dep.output }} · {{ dep.output_path }}
-              {{ inputs.k }} · {{ inputs.k.path }}
-              {{ ref:路径 }} · {{ ref_path:路径 }}（@runs/<run_id>/… 钉住某次运行）
+placeholders  ${params.x}
+              {{ dep.output }} | {{ dep.output_path }}
+              {{ inputs.k }} | {{ inputs.k.path }}
+              {{ ref:path }} | {{ ref_path:path }} (@runs/<run_id>/... pins a specific run)
 ```

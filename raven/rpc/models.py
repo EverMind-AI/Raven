@@ -550,6 +550,7 @@ class DagRunStartedNode(_Strict):
     subagent: str
     depends_on: list[str]
     instance: str | None = None
+    node_summary: str | None = None
 
 
 class DagRunStartedPayload(_Strict):
@@ -628,6 +629,7 @@ class DagSnapshotNode(_Strict):
     output_file: str | None = None
     error: str | None = None
     prompt_template: str | None = None
+    node_summary: str | None = None
     inputs: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -1274,11 +1276,6 @@ class ConfigGetResult(_Strict):
 class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
-    # Model-switch extras. ``scope`` decides the reach of a ``key="model"``
-    # switch: this conversation, or the default a new one starts on.
-    session_id: str | None = None
-    provider: str | None = None
-    scope: Literal["session", "default"] | None = None
 
 
 class ConfigSetResult(_Strict):
@@ -1288,14 +1285,6 @@ class ConfigSetResult(_Strict):
     # already includes ``null``; the schema's redundant ``oneOf: [JsonValue,
     # null]`` collapses to the same canonical "any" form.
     previous: JsonValue = Field(...)
-    # Present on a model switch: what was applied, and where it reached.
-    value: str | None = None
-    scope: Literal["session", "default"] | None = None
-    session_id: str | None = None
-    # Does the asking conversation now run this model? A default-scoped switch
-    # moves the sessions that never chose one, so scope alone cannot answer it
-    # and a client that guesses shows a model the conversation is not on.
-    applies_to_session: bool | None = None
 
 
 # ---------------------------------------------------------------------------

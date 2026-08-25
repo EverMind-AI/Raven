@@ -20,19 +20,17 @@ import { STARTUP_RESUME_ID } from '../config/env.js'
 import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
 import { dagRunsFromHistory } from '../domain/dagRun.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
-import { attachedImageNotice, hideIntroAfterFirstTurn, imageTokenMeta } from '../domain/messages.js'
+import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
 import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
-import { createCopyOnSelectReporter, graphemeCount } from '../lib/clipboard.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
-import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
 import { $dagOpenNodes } from '../lib/dagOpenNodes.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
-import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey } from '../lib/platform.js'
+import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../lib/platform.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
@@ -104,17 +102,6 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
 
   return t.muted
 }
-
-/** What a picker selection becomes on the command line.
- *
- * Its own function because the scope has to survive the trip: `/model --default`
- * opens the picker, and a callback that dropped the flag here sent a
- * session-scoped switch that looked like it had changed the default. The
- * overlay value is passed in rather than read, so the rule can be pinned
- * without mounting the app.
- */
-export const modelSelectCommand = (model: string, providerSlug: string, pending: boolean | 'default'): string =>
-  `/model ${model} --provider ${providerSlug}${pending === 'default' ? ' --default' : ''}`
 
 export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const { exit } = useApp()
@@ -193,10 +180,46 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   const hasSelection = useHasSelection()
   const selection = useSelection()
+  const lastCopiedVersionRef = useRef(-1)
 
   useEffect(() => {
     selection.setSelectionBgColor(ui.theme.color.selectionBg)
   }, [selection, ui.theme.color.selectionBg])
+
+  // macOS Terminal.app does not forward Cmd+C to fullscreen TUIs that enable
+  // mouse tracking, so the only reliable native-feeling path is iTerm-style
+  // copy-on-select: once a drag creates a stable TUI selection, write it to
+  // the system clipboard while keeping the highlight visible.
+  //
+  // Subscribe directly via the ink selection bus (not useSyncExternalStore)
+  // so React doesn't re-render MainApp on every drag-move tick. The version
+  // ref de-dupes against re-entrant notifications.
+  useEffect(() => {
+    if (!isMac) {
+      return
+    }
+
+    return selection.subscribe(() => {
+      if (!selection.hasSelection()) {
+        return
+      }
+
+      const state = selection.getState() as { isDragging?: boolean } | null
+
+      if (state?.isDragging) {
+        return
+      }
+
+      const version = selection.version()
+
+      if (version === lastCopiedVersionRef.current) {
+        return
+      }
+
+      lastCopiedVersionRef.current = version
+      void selection.copySelectionNoClear()
+    })
+  }, [selection])
 
   const clearSelection = useCallback(() => {
     selection.clearSelection()
@@ -244,20 +267,13 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     return next
   }, [])
 
-  // What the chat view shows, as opposed to what the session holds. The cover is
-  // transcript row 0 rather than a view of its own, so it has to be dropped here
-  // once a turn exists; `historyItems` keeps it, because the late session.info
-  // event patches itself onto that row and /export and the slash handlers read
-  // the session's own list, not whatever is on screen.
-  //
-  // Both the rows and the layout's copy come from this one array: appLayout
-  // compares `row.index` against indices it derives from `transcript.historyItems`,
-  // so filtering one and not the other moves the turn separator and the todo
-  // panel onto the wrong rows.
-  const visibleItems = useMemo(
-    () => visibleRows(directChat, hideIntroAfterFirstTurn(historyItems)),
-    [directChat, historyItems],
-  )
+  // Which transcript the chat view is showing. A direct chat takes the view
+  // over rather than mounting a second transcript component: useVirtualHistory
+  // measures by row key, so a wholesale source swap needs no other change.
+  // `historyItems` stays the main conversation's throughout -- session save,
+  // /export and the slash handlers all read it, and none of them mean "whatever
+  // is on screen".
+  const visibleItems = useMemo(() => visibleRows(directChat, historyItems), [directChat, historyItems])
 
   const virtualRows = useMemo<TranscriptRow[]>(
     () => visibleItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
@@ -361,31 +377,6 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const sys = useCallback((text: string) => appendMessage({ role: 'system', text }), [appendMessage])
-
-  // Terminals do not forward their own copy shortcut to a TUI that enables
-  // mouse tracking, so copy-on-select is what makes a transcript selection
-  // copyable at all. That holds on every platform, not just macOS.
-  //
-  // Nothing on screen changes when a drag ends, so the transcript line is the
-  // only confirmation the clipboard was written. Lives below `sys` because the
-  // dependency array is evaluated during render, while `sys` is still in its
-  // temporal dead zone further up.
-  //
-  // The path caveat is per session while this hook outlives any one session:
-  // `newSession()` and `resumeById()` replace `ui.sid` without remounting it,
-  // so which sessions have been told belongs to the reporter rather than to a
-  // flag here, which would stay set and drop the caveat from the next
-  // session's first copy. The sid is read through `getUiState()` so a session
-  // change does not tear down and rebuild the bus subscription.
-  const reportCopyOnSelect = useRef(createCopyOnSelectReporter())
-
-  useEffect(
-    () =>
-      subscribeCopyOnSelect(selection, (text, path) => {
-        sys(reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft'))
-      }),
-    [selection, sys]
-  )
 
   const page = useCallback(
     (text: string, title?: string) => patchOverlayState({ pager: { lines: text.split('\n'), offset: 0, title } }),
@@ -926,16 +917,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [overlay.confirm, respondWith]
   )
 
-  const onModelSelect = useCallback(
-    (model: string, providerSlug: string) => {
-      // Read the pending scope before clearing it -- clearing first would make
-      // every selection session-scoped.
-      const command = modelSelectCommand(model, providerSlug, overlay.modelPicker)
-      patchOverlayState({ modelPicker: false })
-      slashRef.current(command)
-    },
-    [overlay.modelPicker]
-  )
+  const onModelSelect = useCallback((model: string, providerSlug: string) => {
+    patchOverlayState({ modelPicker: false })
+    slashRef.current(`/model ${model} --provider ${providerSlug}`)
+  }, [])
 
   const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
 

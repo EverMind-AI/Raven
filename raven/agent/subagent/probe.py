@@ -455,7 +455,11 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
         # scheduling nothing is the correct degradation, not a missing feature.
         return None
     _SCHEDULED = True
-    rows = [row for row in registry.rows() if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
+    rows = [
+        row
+        for row in registry.rows()
+        if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)
+    ]
     if not rows:
         return None
     task = asyncio.create_task(_verify_missing_snapshots(manager, rows))

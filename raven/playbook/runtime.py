@@ -214,7 +214,7 @@ class PlaybookRuntime:
 def _blank_fields(spec: PlaybookSpec) -> list[tuple[str, str]]:
     """``(node_id, field)`` for every node field the author left for the model.
 
-    Only the two a node cannot run without. An absent ``skills`` is *not* a gap:
+    Only the three a node cannot run without. An absent ``skills`` is *not* a gap:
     it means "this agent's own menu", which is a complete answer -- treating it as
     something to fill would put a question in front of every well-formed playbook
     in the library.

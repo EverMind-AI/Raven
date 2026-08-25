@@ -31,7 +31,7 @@ _AGENT_PATTERN = r"^(?:\S(?:.*\S)?)?$"
 # Fields a node cannot run without. A playbook may leave one blank on purpose --
 # ``load_playbook`` reports it as a gap for the model to fill -- so "blank" has to
 # survive parsing and be caught here instead.
-_REQUIRED_NON_BLANK = ("subagent", "prompt_template")
+_REQUIRED_NON_BLANK = ("subagent", "prompt_template", "node_summary")
 
 
 class DagNodeSpec(BaseModel):
@@ -60,6 +60,11 @@ class DagNodeSpec(BaseModel):
             child of the calling turn. The table it indexes is spelled
             ``subagents.agents[]`` -- the container lists identities, this field
             says which one performs the step.
+        node_summary (`str`):
+            One line, for the user, on what this node is asked to do. Blank
+            survives the parse and is refused by ``validate_and_order`` for the
+            same reason the two fields above are: a playbook may leave it for
+            the model to fill.
         prompt_template (`str`):
             Template rendered into the node's prompt file.
         depends_on (`list[str]`):
@@ -93,6 +98,14 @@ class DagNodeSpec(BaseModel):
 
     id: str = Field(pattern=_ID_PATTERN)
     subagent: str = Field(default="", pattern=_AGENT_PATTERN)
+    node_summary: str = Field(
+        default="",
+        description=(
+            "One line telling the user what this node is asked to do, written before its "
+            "prompt. Around 200 characters at most. It is this node's row in the run, read "
+            "by someone watching the graph."
+        ),
+    )
     prompt_template: str = ""
     depends_on: list[str] = Field(default_factory=list)
     skills: list[str] | None = None
@@ -103,6 +116,11 @@ class DagNodeSpec(BaseModel):
 
 class SubAgentDagSpec(BaseModel):
     """A whole sub-agent DAG: a flat list of nodes with edges, plus its one gate.
+
+    ``task_summary`` is one line, for the user, on what the whole graph is for.
+    It has no gap-filling path the way a node's summary does -- it is always
+    written by the model through the tool schema or by the playbook executor --
+    so blank is refused at parse rather than deferred to a later check.
 
     ``confirm`` is graph-level and there is deliberately no node-level
     counterpart: a node-level gate would need the runner to pause and resume
@@ -117,6 +135,7 @@ class SubAgentDagSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
 
+    task_summary: str = Field(min_length=1)
     nodes: list[DagNodeSpec]
     confirm: bool = False
 
@@ -126,7 +145,7 @@ def parse_dag_spec(data: dict) -> SubAgentDagSpec:
 
     Args:
         data (`dict`):
-            The ``{"nodes": [...]}`` mapping submitted by the agent.
+            The ``{"task_summary": ..., "nodes": [...]}`` mapping submitted by the agent.
 
     Returns:
         `SubAgentDagSpec`:

@@ -162,6 +162,7 @@ def _spec(name: str, *, keywords: list[str], description: str = "does a thing") 
     return PlaybookSpec(
         name=name,
         description=description,
+        task_summary="does a thing",
         mode="dag",
         triggers=Triggers(keywords=keywords),
         nodes=[{"id": "a", "subagent": "raven", "promptTemplate": "go"}],

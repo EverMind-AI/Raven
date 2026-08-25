@@ -115,6 +115,18 @@ class PlaybookSpec(CamelBase):
     description: str = Field(min_length=1, max_length=200)
     """One-line intent, written for retrieval ("when to use me")."""
 
+    task_summary: str = Field(
+        min_length=1,
+        description=(
+            "One line telling the user what running this playbook dispatches. Around 200 "
+            "characters at most. Distinct from `description`, which is matched against to "
+            "decide whether to run the playbook at all."
+        ),
+    )
+    """One line, for the user, on what running this playbook dispatches. Distinct
+    from ``description``, which is matched against to decide whether to run it at
+    all."""
+
     version: int = SPEC_VERSION
     mode: Literal["dag", "prompt"]
     confirm: bool = True

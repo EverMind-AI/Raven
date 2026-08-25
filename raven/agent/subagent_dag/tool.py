@@ -163,6 +163,15 @@ _NODE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Name of the agent that runs this node, from the roster.",
         },
+        "node_summary": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "One line telling the user what this node is asked to do, written before its "
+                "prompt. Around 200 characters at most. It is this node's row in the run, read "
+                "by someone watching the graph."
+            ),
+        },
         "prompt_template": {
             "type": "string",
             "description": (
@@ -207,7 +216,7 @@ _NODE_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "required": ["id", "subagent", "prompt_template"],
+    "required": ["id", "subagent", "node_summary", "prompt_template"],
     "additionalProperties": False,
 }
 
@@ -577,6 +586,15 @@ class SubAgentDagTool(Tool):
         return {
             "type": "object",
             "properties": {
+                "task_summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "One line telling the user what this whole graph is for, written before "
+                        "the nodes. Around 200 characters at most. Summarise the goal, not a list "
+                        "of the nodes."
+                    ),
+                },
                 "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."},
                 "background": {
                     "type": "boolean",
@@ -596,7 +614,7 @@ class SubAgentDagTool(Tool):
                     ),
                 },
             },
-            "required": ["nodes"],
+            "required": ["task_summary", "nodes"],
         }
 
     def _node_schema(self) -> dict[str, Any]:
@@ -679,7 +697,9 @@ class SubAgentDagTool(Tool):
             nodes.append(node.model_copy(update={"instance": mint_handle(node.id)}))
         return spec.model_copy(update={"nodes": nodes}), frozenset(minted)
 
-    async def execute(self, nodes: list[dict], background: bool = True, confirm: bool = False, **kwargs: Any) -> str:
+    async def execute(
+        self, nodes: list[dict], task_summary: str = "", background: bool = True, confirm: bool = False, **kwargs: Any
+    ) -> str:
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
         # failure is a refusal rather than a silent recursive fan-out.
@@ -688,13 +708,14 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
-        return await self._execute(nodes, background, confirm=confirm)
+        return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
 
     async def _execute(
         self,
         nodes: list[dict],
         background: bool,
         confirm: bool = False,
+        task_summary: str = "",
     ) -> str:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
@@ -711,7 +732,7 @@ class SubAgentDagTool(Tool):
         # enough for the model to just fix and re-submit. Backgrounding must not
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
-            spec = parse_dag_spec({"nodes": nodes, "confirm": confirm})
+            spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
             notices = validate_capabilities(spec, capabilities)
             # ``run_dag`` checks the table too, but it does so inside the run --

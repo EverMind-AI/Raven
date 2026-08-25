@@ -116,45 +116,6 @@ def _build_deliverable_store(config):
     return DeliverableStore(get_deliverables_path())
 
 
-def _format_question_body(params: dict) -> str:
-    """Render one ``clarify.request`` as chat text.
-
-    A chat channel has no dialog to hold a batch, so the question's position in
-    it has to ride in the message body or the user cannot tell how many more are
-    coming.
-    """
-    body = str(params.get("question", ""))
-    total = int(params.get("total", 1) or 1)
-    if total > 1:
-        body = f"({int(params.get('index', 0)) + 1}/{total}) {body}"
-    choices = params.get("choices") or []
-    if choices:
-        body += "\n" + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(choices))
-    return body
-
-
-async def _deliver_question_to_channel(frame: dict, *, sources: dict, hub) -> None:
-    """Put a question on its conversation's channel, or say it cannot be put.
-
-    The live turn's real inbound Source is still in ``sources`` (keyed by
-    conversation id), so reuse it -- a topic / thread address is exact that way,
-    where one reconstructed from the conversation id is not.
-
-    Raises :class:`QuestionUndeliverableError` rather than returning when there is no
-    live source: a silent drop left the broker waiting out its whole budget on a
-    question that was never rendered.
-    """
-    from raven.rpc.question_broker import QuestionUndeliverableError
-    from raven.spine import Text
-
-    params = frame.get("params", {})
-    qcid = params.get("conversation_id", "")
-    source = sources.get(qcid)
-    if source is None:
-        raise QuestionUndeliverableError(f"conversation {qcid!r} has no live source")
-    await hub.dispatch(Text(content=_format_question_body(params), source=source))
-
-
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     """Answer any request with a 200 ``{"status":"ok"}`` liveness body."""
     try:
@@ -334,10 +295,7 @@ def register(app: typer.Typer) -> None:
         deliverables = _build_deliverable_store(config)
 
         # Create agent with cron service
-        from raven.providers.pool import ProviderPool
-
         agent = AgentLoop(
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,
@@ -353,7 +311,6 @@ def register(app: typer.Typer) -> None:
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
-            ask_user_config=config.tools.ask_user,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
@@ -710,14 +667,25 @@ def register(app: typer.Typer) -> None:
                 # (keyed by conversation id) — reuse it so a topic / thread address
                 # is exact, rather than reconstructing it from the conversation id.
                 from raven.rpc.question_broker import QuestionBroker
+                from raven.spine import Text as _Text
 
                 async def _question_to_channel(frame: dict) -> None:
-                    await _deliver_question_to_channel(frame, sources=gw_sources, hub=gw_hub)
+                    params = frame.get("params", {})
+                    qcid = params.get("conversation_id", "")
+                    source = gw_sources.get(qcid)
+                    if source is None:
+                        logger.warning(
+                            "ask_user question for {} has no live source — dropping",
+                            qcid,
+                        )
+                        return
+                    body = params.get("question", "")
+                    choices = params.get("choices") or []
+                    if choices:
+                        body += "\n" + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(choices))
+                    await gw_hub.dispatch(_Text(content=body, source=source))
 
-                question_broker = QuestionBroker(
-                    send_frame=_question_to_channel,
-                    timeout_s=config.tools.ask_user.timeout,
-                )
+                question_broker = QuestionBroker(send_frame=_question_to_channel)
                 # Wire the broker into the mid-turn askers. deep_research goes
                 # through the loop so a tool built later by promotion (a mid-session
                 # enable) inherits the broker too, not just the startup one.

@@ -211,7 +211,9 @@ class TestAnAcpRowCanReplaceTheSeed:
         return ThirdPartyAcpSubagentConfig.model_validate({"name": name, "kind": "acp", "command": ""})
 
     def test_the_row_takes_the_slot_with_the_host_command_filled(self, monkeypatch) -> None:
-        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        monkeypatch.setattr(
+            "raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp"
+        )
 
         merged = merge_builtin_seeds([self._acp()])
 
@@ -219,7 +221,9 @@ class TestAnAcpRowCanReplaceTheSeed:
         assert merged[0].command == "/usr/bin/raven acp"
 
     def test_the_legacy_spelling_resolves_onto_the_capitalised_row(self, monkeypatch) -> None:
-        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        monkeypatch.setattr(
+            "raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp"
+        )
 
         merged = merge_builtin_seeds([self._acp("raven")])
 
