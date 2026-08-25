@@ -953,6 +953,30 @@ function traceSummary(trace) {
   };
 }
 
+// The payload's tree carries spanId and nesting only; the spans arrive once, in
+// trace.spans. Rehydrate so the render path below keeps seeing whole spans.
+// Keyed on the trace object, which is replaced wholesale by each poll, so an
+// entry lives exactly as long as the payload it belongs to.
+const hydratedTrees = new WeakMap();
+
+function traceTree(trace) {
+  if (!trace) return [];
+  const cached = hydratedTrees.get(trace);
+  if (cached) return cached;
+  const spanById = new Map((trace.spans || []).map((span) => [span.spanId, span]));
+  const hydrate = (nodes) =>
+    (nodes || [])
+      .map((node) => {
+        const span = spanById.get(node.spanId);
+        if (!span) return null;
+        return { ...span, depth: node.depth || 0, children: hydrate(node.children) };
+      })
+      .filter(Boolean);
+  const tree = hydrate(trace.tree);
+  hydratedTrees.set(trace, tree);
+  return tree;
+}
+
 function buildDepthMap(nodes, depthMap = new Map()) {
   for (const node of nodes || []) {
     depthMap.set(node.spanId, node.depth || 0);
@@ -962,6 +986,8 @@ function buildDepthMap(nodes, depthMap = new Map()) {
 }
 
 function orderedVisibleSpans(trace) {
+  // Reads spanId and depth only, which the payload's tree already carries -- no
+  // need to resolve the spans behind it here.
   const depthMap = buildDepthMap(trace?.tree || []);
   return (trace?.spans || [])
     .filter((span) => !['skills.scan', 'skills.catalog_read', 'skills.cataloged'].includes(span.name))
@@ -1659,7 +1685,7 @@ function renderTraceList() {
   sortedTraces(session).forEach((trace, index) => {
     const summary = traceSummary(trace);
     const visibleSpans = orderedVisibleSpans(trace);
-    const visibleTree = visibleTraceTree(trace.tree || []);
+    const visibleTree = visibleTraceTree(traceTree(trace));
     const group = document.createElement('section');
     group.className = `trace-group${trace.traceKey === state.selectedTraceKey ? ' is-active' : ''}`;
     group.title = trace.traceKey || trace.traceId;

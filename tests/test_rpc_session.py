@@ -24,7 +24,7 @@ import pytest
 from raven.config.loader import load_config
 from raven.session.manager import SessionManager
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import TurnInProgressError
+from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (

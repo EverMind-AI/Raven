@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from raven.agent import workdir
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
-from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
+from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy, executable_text
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 
@@ -326,8 +326,15 @@ class ExecTool(Tool):
         )
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
-        """Best-effort safety guard for potentially destructive commands."""
-        cmd = command.strip()
+        """Best-effort safety guard for potentially destructive commands.
+
+        Reads the same lexical view the policy does. This gate searches raw
+        text, so it never hit the parse failure that sent the policy
+        fail-closed -- but a denied pattern written inside a comment blocked
+        the command here just the same, and a fix applied to one gate only
+        moves which message the user gets.
+        """
+        cmd = executable_text(command).strip()
         lower = cmd.lower()
 
         for pattern in self.deny_patterns:
@@ -345,9 +352,17 @@ class ExecTool(Tool):
         return None
 
     def _check_workspace_restriction(self, command: str, cwd: str) -> str | None:
-        """Check only the workspace boundary constraints (no deny/allow-list)."""
+        """Check only the workspace boundary constraints (no deny/allow-list).
+
+        Reads the executable view rather than trusting the caller to strip: the
+        traversal and absolute-path scans have no reason to see text the shell
+        discards, and there are two call sites -- the guard and the sandboxed
+        path -- so doing it here is what keeps them from diverging. Reading the
+        raw text refused ``ls -la  # see ../notes for why`` as path traversal.
+        """
         if not self.restrict_to_workspace:
             return None
+        command = executable_text(command)
 
         cmd = command.strip()
         if "..\\" in cmd or "../" in cmd:

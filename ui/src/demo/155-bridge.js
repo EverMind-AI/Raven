@@ -16,11 +16,8 @@ window.RavenShell = {
   wsView: () => wsView(),
   wsPick: (tab) => wsPick(tab),
   attNotes: () => Object.values(I18N.ui['gui.att.note'] || {}),
-  openCron: () => openCron(),
   navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]) }),
   openWebsearch: () => { openPlugins(); RavenIslands.plugins.openMarket('websearch'); },
-  openXa: () => openXa(),
-  openConn: () => openConn(),
   markNew: () => markNewCurrent(),
   plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
@@ -31,4 +28,3 @@ window.RavenShell = {
 if (typeof openSet === 'function') window.RavenShell.openSet = () => openSet();
 if (typeof closeSet === 'function') window.RavenShell.closeSet = () => closeSet();
 if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOpen();
-if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();

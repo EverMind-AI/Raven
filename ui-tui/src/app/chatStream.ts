@@ -343,6 +343,14 @@ const dispatch = (
       }
       return
     }
+    case 'session.titled':
+      // Deliberate no-op on this surface. The terminal shows a session's name in
+      // the panel it draws on resume, and there is nowhere for a name arriving
+      // mid-turn to land -- the panel for THIS session is already scrolled off
+      // above the turn that generated it. The stored title is what the next
+      // resume reads (`session.resume` carries it on `info`), so nothing is
+      // lost by not painting it now.
+      return
     case 'media':
       // Deliberate no-op, and the reason is not that the event is unimportant:
       // the terminal has no viewer to open a file in, and the reply text that
