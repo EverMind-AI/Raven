@@ -1,6 +1,7 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -176,7 +177,21 @@ class ToolRegistry:
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _hint
+            # A fault inside the tool, and two things were being lost here. The
+            # traceback, which is the only thing that can say where it happened --
+            # it went nowhere, so a crash could be seen from the outside and never
+            # located. And the difference between "your arguments were wrong" and
+            # "this tool is broken": the generic hint invited a retry, so one model
+            # met `unhashable type: 'list'`, read it as a statement about its own
+            # arguments, and spent six turns and 1.5M tokens rewriting a call that
+            # could not have worked.
+            logging.getLogger(__name__).exception("tool %s raised", name)
+            return (
+                f"Error executing {name}: {type(e).__name__}: {e}\n\n"
+                "[This is a fault inside the tool, not a problem with the arguments you sent, "
+                "so sending them again -- or sending different ones -- will not get past it. "
+                "Reach the same end another way, and say plainly what you could not do.]"
+            )
 
     @property
     def tool_names(self) -> list[str]:

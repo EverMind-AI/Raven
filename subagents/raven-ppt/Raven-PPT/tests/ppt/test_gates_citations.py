@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.services.gates.citations import (
     citation_findings,
     cited_labels,
@@ -67,7 +67,6 @@ def test_showing_five_while_citing_four_is_refused(deck: DeckBuilder, figures: P
     assert findings[0].page == 1
     assert findings[0].kind == "citation"
     assert findings[0].severity is Severity.BLOCKING
-    assert findings[0].audience is Audience.AUTHOR
     assert "shows Figure 5 but cites Figure 4" in findings[0].message
     assert findings[0].detail["disagreement"] == ("Figure 4", "Figure 5")
 

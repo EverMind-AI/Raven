@@ -73,6 +73,28 @@ def test_the_summary_reads_as_one_line_a_prompt_can_carry() -> None:
     assert "内部技术评审" in said and "中文" in said and "16-20" in said and "避免缩写" in said
 
 
+def test_a_brief_carries_what_the_user_ruled_out_across_a_reload(project: Project) -> None:
+    """A prohibition is agreed once and read off disk by every stage after it.
+
+    On the outline it would not survive: the next `ppt_outline` call rewrites that
+    file, and a deck would quietly regain the thing the user ruled out.
+    """
+    brief = _brief(forbidden=("no icons", "never name a competitor"))
+    write_brief(brief, brief_path(project))
+
+    reloaded = load_brief(brief_path(project))
+
+    assert reloaded == brief
+    assert reloaded is not None and reloaded.forbidden == ("no icons", "never name a competitor")
+
+
+def test_the_summary_names_what_may_not_be_used() -> None:
+    """The one line is what `ppt_prepare`, the deck state and the deck stage quote,
+    so a prohibition missing from it is invisible to all three."""
+    said = _brief(forbidden=("不要用 icon", "不要深色页")).summary()
+    assert "不要用 icon" in said and "不要深色页" in said
+
+
 # --- the tool -------------------------------------------------------------
 
 
@@ -117,6 +139,29 @@ async def test_a_bad_project_name_is_refused_before_anything_is_written(project:
 async def test_blank_notes_are_dropped_rather_than_recorded(project: Project) -> None:
     body = await _record(project, notes=["  ", "no acronyms"])
     assert body["brief"]["notes"] == ["no acronyms"]
+
+
+@pytest.mark.asyncio
+async def test_what_the_user_ruled_out_is_recorded_and_said_back(project: Project) -> None:
+    """The tool is the only way a user's "don't use icons" becomes structured, and
+    the reply repeats it because the author reads the reply, not the file."""
+    body = await _record(project, forbidden=["  ", "no icons", " no comparison tables "])
+
+    recorded = load_brief(brief_path(project))
+    assert recorded is not None
+    assert recorded.forbidden == ("no icons", "no comparison tables")
+    assert body["brief"]["forbidden"] == ["no icons", "no comparison tables"]
+    assert "no icons; no comparison tables" in body["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_a_deck_with_nothing_ruled_out_says_nothing_about_prohibitions(project: Project) -> None:
+    """Most decks forbid nothing, and an empty rule read back as one would have the
+    author designing against a constraint the user never set."""
+    body = await _record(project)
+
+    assert body["brief"]["forbidden"] == []
+    assert "every design call is told so" not in body["next_step"]
 
 
 # --- the page budget check ------------------------------------------------

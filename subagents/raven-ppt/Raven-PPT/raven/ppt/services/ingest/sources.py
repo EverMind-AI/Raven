@@ -71,6 +71,11 @@ class Source:
     """`mirror:<dir>` for a file from a directory the user has, `fetch:<url>` for a
     download, `attached` for a file they sent, `request` for the request text."""
     digest: str
+    caption: str = ""
+    """The source's own words about a fetched picture, when whatever fetched it was
+    given them. A picture off a web page has no caption of its own to read -- the
+    words sit in the HTML beside it, not in the bytes -- so they are recorded here at
+    fetch time or nowhere at all."""
 
     @property
     def name(self) -> str:
@@ -89,13 +94,20 @@ class Source:
         recorded = {"path": str(self.path), "content_sha256": self.digest, "origin": self.origin}
         if self.url:
             recorded["url"] = self.url
+        if self.caption:
+            recorded["caption"] = self.caption
         return recorded
 
 
 def held(project) -> tuple[Source, ...]:
     """Every source this deck holds, as recorded."""
     return tuple(
-        Source(path=Path(str(e["path"])), origin=str(e.get("origin") or ""), digest=str(e.get("content_sha256") or ""))
+        Source(
+            path=Path(str(e["path"])),
+            origin=str(e.get("origin") or ""),
+            digest=str(e.get("content_sha256") or ""),
+            caption=str(e.get("caption") or ""),
+        )
         for e in _read_manifest(project)
         if e.get("path")
     )
@@ -129,18 +141,26 @@ def write_source(project, name: str, text: str, origin: str) -> Source:
     return entry
 
 
-def receive(project, name: str, payload: bytes, origin: str) -> Source | None:
+def receive(project, name: str, payload: bytes, origin: str, *, caption: str | None = None) -> Source | None:
     """Put downloaded bytes into the deck's sources, or None if nothing can read them.
 
     Bytes rather than a path because a fetch holds the body and not a file, and
     writing it somewhere else first is how a second pile starts.
+
+    ``caption`` is the source's own words about a picture, which only the fetch ever
+    holds; recorded here so the ingest can put them in the figure catalogue.
     """
     if Path(name).suffix.lower() not in documents.SUPPORTED_SUFFIXES:
         return None
     folder = sources_dir(project)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / name).write_bytes(payload)
-    entry = Source(path=folder / name, origin=origin, digest=_digest(folder / name))
+    entry = Source(
+        path=folder / name,
+        origin=origin,
+        digest=_digest(folder / name),
+        caption=_kept_caption(project, folder / name, caption),
+    )
     _record(project, entry)
     return entry
 
@@ -154,11 +174,31 @@ def _kept(project, target: Path, origin: str) -> str:
     took its URL with it -- caught in a live run, one call after the attribution
     started working at all.
     """
+    prior = _prior(project, target)
+    return prior.origin if prior is not None and prior.origin else origin
+
+
+def _kept_caption(project, target: Path, caption: str | None) -> str:
+    """The caption to record: the one already held, when this fetch brought none.
+
+    Same reasoning as :func:`_kept`, and the same failure it prevents: fetching a URL
+    a second time -- a retry, or the same picture wanted for a second page -- is not
+    new information about these bytes, so it must not blank the words the first fetch
+    carried in. A caption passed now does win, because that one *is* new information.
+    """
+    if caption:
+        return caption
+    prior = _prior(project, target)
+    return prior.caption if prior is not None else ""
+
+
+def _prior(project, target: Path) -> Source | None:
+    """What the manifest already records about these exact bytes, if anything."""
     digest = _digest(target)
     for source in held(project):
-        if source.path.resolve() == target.resolve() and source.digest == digest and source.origin:
-            return source.origin
-    return origin
+        if source.path.resolve() == target.resolve() and source.digest == digest:
+            return source
+    return None
 
 
 @dataclass(frozen=True)

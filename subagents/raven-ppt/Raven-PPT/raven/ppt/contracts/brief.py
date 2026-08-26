@@ -9,10 +9,10 @@ paper entirely.
 
 The reason they are a contract rather than three prompt sentences: an agreed
 decision that binds nothing is prose. The page budget is checked against the built
-deck, the language is checked against what the pages actually say, and the audience
-reaches the design pass. Anything here that could not be checked has no business
-being confirmed with a user -- it would ask them to decide something and then
-ignore it.
+deck, the language is checked against what the pages actually say, and what the user
+ruled out is quoted back on every build. Anything here that could
+not be checked has no business being confirmed with a user -- it would ask them to
+decide something and then ignore it.
 """
 
 from __future__ import annotations
@@ -67,6 +67,23 @@ class DeckBrief:
     audience: str
     pages: PageBudget
     notes: tuple[str, ...] = field(default_factory=tuple)
+    forbidden: tuple[str, ...] = field(default_factory=tuple)
+    """What this deck may not use, one thing each: "no icons", "no comparison
+    tables", "never name a competitor", "no dark pages".
+
+    Here rather than on the outline because of what it has to outlive. A prohibition
+    is agreed once, before anything is drawn, and it still holds after the argument
+    is replanned -- on the outline it would be rewritten by the next `ppt_outline`
+    call and the deck would quietly regain the thing the user ruled out. It is not a
+    property of one page either: "no icons" is a statement about the deck.
+
+    Structured rather than left inside `notes`, because of how it binds. A rule
+    agreed once and never said again is a rule nothing is holding: this route has
+    already shipped that mistake, in the icon and theme summaries written for
+    "callers who cannot see the catalogue" and then never injected anywhere. So
+    `ppt_build` quotes these lines back on every build, which is the same way
+    `audience` binds -- by reaching the call that would otherwise decide without it.
+    """
 
     def __post_init__(self) -> None:
         if not self.language.strip():
@@ -81,11 +98,14 @@ class DeckBrief:
             "audience": self.audience,
             "pages": {"low": self.pages.low, "high": self.pages.high},
             "notes": list(self.notes),
+            "forbidden": list(self.forbidden),
         }
 
     def summary(self) -> str:
         """One line, for a prompt that has to carry the brief without a schema."""
         said = f"For {self.audience}, in {self.language}, {self.pages} slides."
+        if self.forbidden:
+            said += " Not to be used: " + "; ".join(self.forbidden) + "."
         return said + ("" if not self.notes else " " + " ".join(self.notes))
 
 
@@ -112,6 +132,7 @@ def load_brief(path: Path) -> DeckBrief | None:
             audience=str(raw.get("audience", "")),
             pages=PageBudget(low=int(pages.get("low", 1)), high=int(pages.get("high", 1))),
             notes=tuple(str(note) for note in (raw.get("notes") or [])),
+            forbidden=tuple(str(item) for item in (raw.get("forbidden") or [])),
         )
     except (TypeError, ValueError):
         return None

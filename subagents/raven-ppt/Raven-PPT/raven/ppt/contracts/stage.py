@@ -2,8 +2,8 @@
 
 Note what is *not* here: a uniform stage input. Stages differ too much for one
 signature to be honest about them -- ingest takes a materials directory, the
-design pass takes a page number and a program, publication takes a destination
--- and a `**kwargs` protocol would only pretend otherwise. What the pipeline
+build takes a program, publication takes a destination -- and a `**kwargs`
+protocol would only pretend otherwise. What the pipeline
 actually needs in common is the *output*: every stage reports findings the same
 way, so the gate flow and the feedback loop are written once. Backends do have
 one signature, and it is declared.

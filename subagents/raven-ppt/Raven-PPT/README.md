@@ -23,8 +23,8 @@ The model writes a python-pptx program rather than filling in slots, so the layo
 a page is chosen for what that page has to say. What keeps that from going wrong is
 measurement: after every build the engine renders each page, measures the file and the
 render, and hands back what it found — type below the floor, words overlapping words,
-copy off the canvas, a figure hidden under a card, a page citing a number the sources
-never state. Most of it goes back for another pass; some of it refuses to publish.
+copy off the canvas, a figure hidden under a card, a page crediting one figure while
+showing another. Most of it goes back for another pass; some of it refuses to publish.
 
 ## Requirements
 
@@ -115,16 +115,20 @@ For a single non-interactive turn: `uv run raven agent -m "..."`.
 Under the workspace (`~/.raven/workspace` by default):
 
 ```
-ppt_projects/<name>/
+deck/
   sources/     every document the deck stands on
   ingest/      extracted text, figures and tables
   build/       build.py — the program that draws the deck — and the deck it built
   review/      page renders
   state/       the brief and the outline
-exports/<name>/deck.pptx    what gets delivered
+out/deck.pptx    what gets delivered
 ```
 
-`build/build.py` is worth knowing about: it is the whole deck as code. Edit it and
+One deck per workspace, so the directory is `deck/` rather than a slug under
+`ppt_projects/`. `out/` rather than `exports/`, which is where raven writes a session
+transcript of its own.
+
+`deck/build/build.py` is worth knowing about: it is the whole deck as code. Edit it and
 rebuild and you get your edit; ask for a change in the conversation and this is what
 gets rewritten.
 
@@ -135,26 +139,41 @@ layouts and canvas.
 
 Its cover, contents, section divider and closing page are **cloned** — those are the
 pages a reader recognises a house style by, and most templates build them out of
-gradients, custom geometry and fills that no library can reproduce. Content pages are
-**composed**, inside the style measured off the template: its title row, its type
-ladder, its palette, its safe area. A template's own example content — stock photos,
-lorem text, the vendor's watermark — is reported if any of it survives into the deck.
+gradients, custom geometry and fills that no library can reproduce. Content pages start
+from the nearest example page too: every visible example comes back with its render and
+its decompiled source, and a page **adapts** one — replacing its words and pictures,
+deleting the repeated units it does not fill, moving and resizing what is left. Only a
+page whose information shape survives none of those edits is **composed** from scratch,
+and then inside the style measured off the template: its title row, its type ladder, its
+palette, its safe area. A template's own example content — stock photos, lorem text, the
+vendor's watermark — is reported if any of it survives into the deck.
 
 ## What refuses to publish
 
-Most measurements come back as warnings and go into the next pass. Seven refuse
+Most measurements come back as warnings and go into the next pass. Thirteen refuse
 outright, because no rearrangement fixes them:
 
 | | |
 | --- | --- |
-| `fact`, `citation` | a number or a figure reference the sources do not support |
+| `citation` | a page crediting one figure while showing another |
 | `page_budget`, `language` | not the deck that was agreed |
-| `band` | a filled colour bar carrying nothing — the loudest tell of a generated deck |
+| `unplaced_figure` | a picture the outline planned onto a page and the deck does not show |
 | `house_style` | the deck's theme is not the template's |
-| `unmapped_page` | a page the outline never planned |
+| `unmapped_page` | no per-page block in `build.py`, so no render traces back to the code that drew it |
+| `unseen_page` | a page nobody has looked at since the code that draws it was written |
 
-Plus, per page: text painted over text, a shape covering another shape's content,
-copy clipped by its own box, and an escape sequence printed as characters.
+Plus, per page: text painted over text (`word_collision`), a shape covering another
+shape's content (`covered_shape`), an escape sequence printed as characters
+(`literal_escape`), type a reader cannot make out against its background
+(`unreadable`), a cloned page still carrying the template's placeholder copy
+(`placeholder_copy`), and the template's own page used as a backdrop with new text
+laid over it (`template_underlay`).
+
+There is no gate on the numbers a page states. There was one — every number on a page
+had to appear verbatim in the source text — and across seven live runs it fired ten
+times and was wrong every time: nine of the numbers were in a figure the model had read
+correctly, and the tenth was a subtraction it had done right. It was deleted rather than
+downgraded.
 
 ## Configuration reference
 
@@ -168,8 +187,7 @@ nothing.
 | `tools.ppt.renderDpi` | `144` | what a page render is rasterised at before a model sees it |
 | `tools.ppt.renderConcurrency` | `2` | concurrent LibreOffice conversions |
 | `tools.ppt.deckName` | `deck.pptx` | the delivered filename |
-| `tools.ppt.designer.enabled` | `false` | a second pass that rearranges the finished deck. Off by default: measured over four runs it removed copy it was told to preserve and added decoration the gates then refused |
-| `tools.ppt.designer.model` | `""` | empty means the main model |
+| `tools.ppt.composerModel` | `""` | the model the per-page calls inside `ppt_outline` and `ppt_figure_inspect` run on; empty means the main one |
 | `agents.defaults.workspace` | `~/.raven/workspace` | |
 
 ## Licence and attribution

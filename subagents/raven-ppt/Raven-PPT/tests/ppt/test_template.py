@@ -28,6 +28,7 @@ from raven.ppt.services.template import (  # noqa: E402
     prepare,
     replace_picture,
     replace_text,
+    strip_hidden,
 )
 
 
@@ -74,6 +75,33 @@ def test_prepare_declines_what_is_not_a_template(tmp_path: Path):
     assert prepare(tmp_path / "notes.txt", tmp_path / "out.pptx") is None
     assert prepare(tmp_path / "missing.pptx", tmp_path / "out.pptx") is None
     assert not (tmp_path / "out.pptx").exists()
+
+
+def test_strip_hidden_removes_the_pages_a_render_will_not_have(template: Path):
+    """LibreOffice does not export a hidden slide, so it is in the file and not in
+    the PDF. Every reader downstream numbers pages off the file, and one live run
+    asked for thirteen pages of an eleven-page render, lost all eleven to the one
+    out-of-range number, and told the author renders were unavailable on the host.
+    119 of the 193 templates measured ship them."""
+    from pptx import Presentation
+
+    presentation = Presentation(str(template))
+    presentation.slides[0]._element.set("show", "0")
+    presentation.save(str(template))
+
+    assert strip_hidden(template) == 1
+
+    after = Presentation(str(template))
+    assert len(after.slides) == 1
+    assert "Section title" not in _texts(after.slides[0]), "the hidden page goes, not the last one"
+
+
+def test_strip_hidden_leaves_a_template_without_any_alone(template: Path):
+    """The common case is still a template with none, and it is not worth a rewrite."""
+    before = template.read_bytes()
+
+    assert strip_hidden(template) == 0
+    assert template.read_bytes() == before
 
 
 # --- reading it -----------------------------------------------------------
@@ -579,6 +607,131 @@ def test_the_arrangement_of_a_run_is_reported_not_reflowed(tmp_path: Path):
     assert [round(value, 2) for value in boxes(run)[0]] == [1.0, 5.0, 2.0, 1.0]
 
 
+def _layout_box(x0: float, y0: float, x1: float, y1: float):
+    """A `ppt_layout.Box`, taken from the projection an author's script imports.
+
+    The grid module reaches the author as a file beside their script rather than as an
+    import of this package, so the class that turns up at `place` is the projected one --
+    which is the reason `place` recognises a box by its corners and not by its type.
+    """
+    from raven.ppt.services.assets.layout import layout_module_source
+
+    namespace: dict = {}
+    exec(compile(layout_module_source(), "ppt_layout.py", "exec"), namespace)
+    return namespace["Box"].corners(x0, y0, x1, y1)
+
+
+def _run_of(path: Path):
+    from pptx import Presentation
+
+    from raven.ppt.services.template import clone_page, units
+
+    source = Presentation(str(path))
+    out = Presentation(str(path))
+    return max(units(clone_page(out, source.slides[0])), key=len)
+
+
+def test_a_layout_box_reaching_place_is_the_two_corners_it_is(tmp_path: Path):
+    """One word, two rectangles, and the wrong reading drew a frame off the page.
+
+    `place` takes (left, top, width, height) and `ppt_layout.Box` is (x0, y0, x1, y1),
+    and both are called `box`. Unpacked as a size,
+    `place(unit, Box.corners(0.72, 1.24, 12.6, 6.7))` made a 12.6x6.7in frame on a
+    13.33x7.5in page where those corners name an 11.88x5.46in one -- and it drew that
+    frame in silence, which no render reports, because a box that is wrong is still a box.
+
+    A Box says which of the two rectangles it is, so it is converted. Four bare numbers
+    cannot, so they stay a size -- which is what every python-pptx call beside them takes.
+    """
+    from raven.ppt.services.template import boxes, place
+
+    run = _run_of(_card_page(tmp_path / "cards.pptx"))
+
+    place(run[0], _layout_box(0.72, 1.24, 12.6, 6.7))
+    assert [round(value, 2) for value in boxes(run)[0]] == [0.72, 1.24, 11.88, 5.46]
+
+    place(run[1], (0.72, 1.24, 12.6, 6.7))
+    assert [round(value, 2) for value in boxes(run)[1]] == [0.72, 1.24, 12.6, 6.7]
+
+
+def test_a_rectangle_in_emu_is_refused_rather_than_placed(tmp_path: Path):
+    """`box.pptx()` is the third spelling of a rectangle and the only unreadable one.
+
+    Its four numbers are python-pptx lengths, so `place(unit, box.pptx())` set a 12.6in
+    frame to 11521440 inches and said nothing. A shape's own `.left` and `.width` arrive
+    the same way, which is how an author copies one unit's geometry onto another.
+    """
+    from raven.ppt.services.template import place
+
+    run = _run_of(_card_page(tmp_path / "cards.pptx"))
+
+    with pytest.raises(ValueError) as refused:
+        place(run[0], _layout_box(0.72, 1.24, 12.6, 6.7).pptx())
+    said = str(refused.value)
+    assert "EMU" in said and "914400" in said
+    assert "0.72, 1.24, 11.88, 5.46" in said, "the inches those lengths stand for"
+
+    other = run[1]
+    with pytest.raises(ValueError, match="EMU"):
+        place(run[0], (other.left, other.top, other.width, other.height))
+
+    for neither in ((0.72, 1.24, 12.6), 5, ("a", "b", "c", "d")):
+        with pytest.raises(ValueError, match="ppt_layout Box"):
+            place(run[0], neither)
+
+
+def test_the_boxes_of_a_run_are_sizes_and_say_so(tmp_path: Path):
+    """`boxes` hands back what `place` takes, and the docstring is where that is settled.
+
+    Read as corners, a 2.0in-wide unit at x=1.0 is a unit ending at x=2.0 -- 1.0in wide,
+    half of what is on the page -- and the two readings are the same four numbers. So the
+    order is written down where an author reads it rather than inferred from the values.
+    """
+    from raven.ppt.services.template import boxes, place
+
+    run = _run_of(_card_page(tmp_path / "cards.pptx"))
+    place(run[0], (1.0, 5.0, 2.0, 1.0))
+
+    spot = boxes(run)[0]
+    assert (round(spot[2], 2), round(spot[3], 2)) == (2.0, 1.0)
+    assert round(run[0].width / 914400, 2) == 2.0, "the third number is a width, not a far edge"
+    assert "(left, top, width, height)" in boxes.__doc__
+    assert "ppt_layout.Box" in boxes.__doc__, "the other rectangle the word names"
+
+
+def test_a_pictures_box_reshapes_the_frame_in_either_spelling(tmp_path: Path, image):
+    """The reshape a fitting refusal offers, given as a size and as two corners.
+
+    `pictures={n: (image, box)}` exists because a live run told its landscape figure
+    could not go in a portrait frame answered by permuting the shape number three times.
+    The box goes through the same reading as `place`: a Box is converted, four numbers are
+    a size. Stretch, so the frame stays exactly where it was put and the assertion is
+    about the box rather than about the fit.
+    """
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from pptx.util import Inches
+
+    from raven.ppt.services.template import adapt
+
+    path = _card_page(tmp_path / "cards.pptx")
+    once = Presentation(str(path))
+    once.slides[0].shapes.add_picture(str(image("shot.png", (90, 90, 90))), Inches(1), Inches(4), width=Inches(3))
+    once.save(str(path))
+
+    def framed(box):
+        source, out = Presentation(str(path)), Presentation(str(path))
+        slide = adapt(out, source.slides[0], pictures={1: (str(image("fig.png", (10, 20, 30))), box, "stretch")})
+        frame = next(s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE)
+        return [round(value / 914400, 2) for value in (frame.left, frame.top, frame.width, frame.height)]
+
+    assert framed(_layout_box(0.8, 1.6, 8.2, 5.8)) == [0.8, 1.6, 7.4, 4.2]
+    assert framed((0.8, 1.6, 7.4, 4.2)) == [0.8, 1.6, 7.4, 4.2]
+
+    with pytest.raises(ValueError, match="EMU"):
+        framed(_layout_box(0.8, 1.6, 8.2, 5.8).pptx())
+
+
 def _texts(slide) -> set[str]:
     from raven.ppt.services.measure.geometry import iter_shapes
 
@@ -758,6 +911,165 @@ def test_a_page_with_no_heading_row_says_so(tmp_path: Path) -> None:
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     with pytest.raises(KeyError, match="title"):
         adapt(deck, Presentation(str(template)).slides[0], title="没有地方放")
+
+
+def _written_slots(slide) -> dict:
+    """What each of the clone's placeholders ended up holding, keyed by its role."""
+    return {
+        shape.placeholder_format.type: shape.text_frame.text.strip()
+        for shape in slide.shapes
+        if shape.is_placeholder and shape.has_text_frame
+    }
+
+
+def test_a_cover_heading_is_found_where_the_template_centred_it(tmp_path: Path) -> None:
+    """The geometry of a real cover, and what reading the top third made of it.
+
+    Measured across the sixteen bundled templates: the cover title is centred in the
+    page, between 1.24in and 4.76in down a 7.5in canvas, and what sits in the top third
+    is the presenter line and the date. So `title=` resolved to "Presenter name" on two
+    covers and `subtitle=` raised on ten of them. This is the worst of those, with both
+    chrome rows above the heading and the whole heading below the band.
+    """
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    from pptx.util import Inches
+
+    from raven.ppt.services.template.compose import adapt
+
+    source = Presentation()
+    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
+    page = source.slides.add_slide(source.slide_layouts[0])
+    for slot, box, said in (
+        (0, (0.72, 4.41, 8.0, 1.59), "棕色商务风工作总结汇报"),
+        (1, (0.72, 6.06, 8.0, 0.65), "回望来路，蓄力前行，再谱新篇"),
+    ):
+        shape = page.placeholders[slot]
+        shape.left, shape.top, shape.width, shape.height = (Inches(value) for value in box)
+        shape.text_frame.text = said
+    for left, said in ((0.72, "Presenter name"), (9.21, "20XX.XX.XX")):
+        page.shapes.add_textbox(Inches(left), Inches(0.51), Inches(2.0), Inches(0.41)).text_frame.text = said
+    template = tmp_path / "cover.pptx"
+    source.save(str(template))
+
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
+    slide = adapt(deck, Presentation(str(template)).slides[0], title="七个基准上的结果", subtitle="与六个基线的对比")
+
+    wrote = _written_slots(slide)
+    assert wrote[PP_PLACEHOLDER.CENTER_TITLE] == "七个基准上的结果"
+    assert wrote[PP_PLACEHOLDER.SUBTITLE] == "与六个基线的对比"
+    assert "Presenter name" not in [shape.text_frame.text.strip() for shape in slide.shapes if shape.has_text_frame]
+
+
+def test_a_section_divider_subtitle_is_the_line_under_its_title(tmp_path: Path) -> None:
+    """The other half of the same measurement: every one of the sixteen dividers puts
+    its one line under the title below the top third, so `subtitle=` raised KeyError on
+    all sixteen. The line is 0 to 0.34in under the title's own box and at exactly its
+    left edge, which is what makes the two of them one heading block."""
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    from pptx.util import Inches
+
+    from raven.ppt.services.template.compose import adapt
+
+    source = Presentation()
+    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
+    page = source.slides.add_slide(source.slide_layouts[2])
+    for slot, box, said in (
+        (0, (0.72, 1.24, 8.0, 1.78), "单击此处添加章节标题"),
+        (1, (0.72, 3.09, 8.0, 0.67), "单击此处添加章节页描述内容"),
+    ):
+        shape = page.placeholders[slot]
+        shape.left, shape.top, shape.width, shape.height = (Inches(value) for value in box)
+        shape.text_frame.text = said
+    template = tmp_path / "section.pptx"
+    source.save(str(template))
+
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
+    slide = adapt(deck, Presentation(str(template)).slides[0], title="实验设置", subtitle="数据、基线与指标")
+
+    wrote = _written_slots(slide)
+    assert wrote[PP_PLACEHOLDER.TITLE] == "实验设置"
+    assert wrote[PP_PLACEHOLDER.BODY] == "数据、基线与指标"
+
+
+def test_a_presenter_row_above_the_title_is_neither_heading(tmp_path: Path) -> None:
+    """A closing page carries a title and two lines of chrome and no subtitle at all.
+
+    Both facts have to survive: the title is the title however far down the page it is,
+    and a page with no subtitle row refuses `subtitle=` rather than writing the author's
+    line onto the presenter's name -- which is what six of the sixteen closing pages did.
+    """
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    from pptx.util import Inches
+
+    from raven.ppt.services.template.compose import adapt
+
+    source = Presentation()
+    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
+    page = source.slides.add_slide(source.slide_layouts[5])
+    heading = page.placeholders[0]
+    heading.left, heading.top, heading.width, heading.height = Inches(0.72), Inches(3.5), Inches(8.0), Inches(2.0)
+    heading.text_frame.text = "谢谢观看"
+    for left, said in ((0.72, "Presenter name"), (3.76, "20XX.XX.XX")):
+        page.shapes.add_textbox(Inches(left), Inches(0.68), Inches(2.0), Inches(0.31)).text_frame.text = said
+    template = tmp_path / "closing.pptx"
+    source.save(str(template))
+
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
+    slide = adapt(deck, Presentation(str(template)).slides[0], title="谢谢")
+    assert _written_slots(slide)[PP_PLACEHOLDER.TITLE] == "谢谢"
+
+    with pytest.raises(KeyError, match="subtitle"):
+        adapt(deck, Presentation(str(template)).slides[0], title="谢谢", subtitle="有问题欢迎交流")
+
+
+def test_a_subtitle_stranded_mid_page_is_found_by_its_type_size(tmp_path: Path) -> None:
+    """The last resort, and the tie that refuses it.
+
+    One content page in the bundled sixteen sets its title at the very top and its
+    subtitle at 4.20in, over a row of cards -- out of reach of the top third and too far
+    under the title to be one block with it. Its size says what it is: 24pt against a
+    column that declares nothing else. An agenda page reached the same way declares one
+    size across eight numbered slots, and picking any of them would put the author's
+    subtitle inside slot 01, so a tie is a refusal.
+    """
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    from pptx.util import Inches, Pt
+
+    from raven.ppt.services.template.compose import adapt
+
+    def build(path: Path, sizes: tuple[int, ...]):
+        source = Presentation()
+        source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
+        page = source.slides.add_slide(source.slide_layouts[5])
+        heading = page.placeholders[0]
+        heading.left, heading.top, heading.width, heading.height = Inches(0.72), Inches(0.14), Inches(8.0), Inches(0.98)
+        heading.text_frame.text = "单击此处添加页面标题"
+        for index, size in enumerate(sizes):
+            box = page.shapes.add_textbox(Inches(0.72), Inches(4.2 + index * 0.9), Inches(6.0), Inches(0.62))
+            run = box.text_frame.paragraphs[0].add_run()
+            run.text = f"单击此处添加长一点的副标题 {index}"
+            run.font.size = Pt(size)
+        source.save(str(path))
+        return path
+
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
+    stranded = Presentation(str(build(tmp_path / "stranded.pptx", (24, 12)))).slides[0]
+    slide = adapt(deck, stranded, title="实验结果", subtitle="七个基准")
+
+    assert _written_slots(slide)[PP_PLACEHOLDER.TITLE] == "实验结果"
+    assert "七个基准" in [shape.text_frame.text.strip() for shape in slide.shapes if shape.has_text_frame]
+
+    tied = Presentation(str(build(tmp_path / "tied.pptx", (20, 20)))).slides[0]
+    with pytest.raises(KeyError, match="subtitle"):
+        adapt(deck, tied, title="实验结果", subtitle="七个基准")
 
 
 def test_replace_picture_swaps_a_photograph_used_as_a_shape_fill(tmp_path: Path) -> None:

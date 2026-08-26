@@ -13,6 +13,7 @@ from raven.ppt.services.ingest.documents import (
     discover,
     image_asset_id,
     read_text_source,
+    source_captions,
     source_urls,
     text_density,
     unreadable,
@@ -113,6 +114,53 @@ def test_a_downloaded_source_keeps_its_url_when_the_bytes_still_match(tmp_path: 
 
     # The redirect target wins: it is where the bytes actually came from.
     assert source_urls(manifest, [source]) == {source.resolve(): "https://cdn.example.com/source.png"}
+
+
+def test_a_downloaded_picture_keeps_the_caption_its_fetch_recorded(tmp_path: Path) -> None:
+    """The words are on the page, not in the bytes, so this record is the only place a
+    fetched picture's caption ever exists."""
+    described = tmp_path / "figure.png"
+    described.write_bytes(b"payload")
+    bare = tmp_path / "other.png"
+    bare.write_bytes(b"more")
+    manifest = tmp_path / "sources.jsonl"
+    manifest.write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/figure.png",
+                "path": str(described),
+                "content_sha256": hashlib.sha256(b"payload").hexdigest(),
+                "caption": "  Figure 2: the extraction phase  ",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "url": "https://example.com/other.png",
+                "path": str(bare),
+                "content_sha256": hashlib.sha256(b"more").hexdigest(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert source_captions(manifest, [described, bare]) == {described.resolve(): "Figure 2: the extraction phase"}
+
+
+def test_a_caption_from_a_source_that_changed_fails_the_ingest_too(tmp_path: Path) -> None:
+    """A caption is attribution: it must not survive onto different bytes any more than
+    a URL may."""
+    source = tmp_path / "figure.png"
+    source.write_bytes(b"replaced")
+    manifest = tmp_path / "sources.jsonl"
+    manifest.write_text(
+        json.dumps({"path": str(source), "content_sha256": "0" * 64, "caption": "Figure 2"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        source_captions(manifest, [source])
 
 
 def test_a_source_that_changed_since_it_was_fetched_fails_the_ingest(tmp_path: Path) -> None:

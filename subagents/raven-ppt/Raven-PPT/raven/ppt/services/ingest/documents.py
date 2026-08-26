@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import zipfile
+from collections.abc import Iterator
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
@@ -276,10 +277,41 @@ def source_urls(manifest_path: Path, sources: list[Path]) -> dict[Path, str]:
     that was fetched: a hash mismatch fails the ingest rather than attributing
     a figure to a page it did not come from.
     """
-    if not manifest_path.is_file():
-        return {}
-    wanted = {source.resolve() for source in sources}
     urls: dict[Path, str] = {}
+    for recorded, record in _manifest_records(manifest_path, sources):
+        url = record.get("final_url") or record.get("url")
+        if isinstance(url, str) and url:
+            urls[recorded] = url
+    return urls
+
+
+def source_captions(manifest_path: Path, sources: list[Path]) -> dict[Path, str]:
+    """The words whatever fetched a source recorded about it.
+
+    A picture downloaded off a page carries no caption in its bytes: the words are in
+    the HTML beside it, and the tool that fetched it is the only thing that ever held
+    both. What it recorded is read back here so a fetched figure can reach the
+    catalogue with the same ``caption`` a paper's figure gets from its own page.
+    """
+    captions: dict[Path, str] = {}
+    for recorded, record in _manifest_records(manifest_path, sources):
+        caption = record.get("caption")
+        if isinstance(caption, str) and caption.strip():
+            captions[recorded] = caption.strip()
+    return captions
+
+
+def _manifest_records(manifest_path: Path, sources: list[Path]) -> Iterator[tuple[Path, dict]]:
+    """Each manifest record describing one of ``sources``, checked against its hash.
+
+    The check is here rather than in one caller because everything read out of this
+    file is attribution -- the URL a slide credits, the caption it quotes -- and a
+    file that has changed since it was fetched must fail the ingest rather than lend
+    its provenance to different bytes.
+    """
+    if not manifest_path.is_file():
+        return
+    wanted = {source.resolve() for source in sources}
     for line in manifest_path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             record = json.loads(line)
@@ -293,10 +325,7 @@ def source_urls(manifest_path: Path, sources: list[Path]) -> dict[Path, str]:
         expected = record.get("content_sha256")
         if not isinstance(expected, str) or sha256_file(recorded) != expected:
             raise ValueError(f"source manifest hash mismatch: {recorded.name}")
-        url = record.get("final_url") or record.get("url")
-        if isinstance(url, str) and url:
-            urls[recorded] = url
-    return urls
+        yield recorded, record
 
 
 def image_asset_id(source: Path, materials_dir: Path) -> str:

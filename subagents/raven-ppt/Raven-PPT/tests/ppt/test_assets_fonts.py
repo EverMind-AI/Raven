@@ -21,6 +21,7 @@ from raven.ppt.services.assets.fonts import (
     ENV_BOLD,
     ENV_CJK,
     ENV_REGULAR,
+    FACE_WIDTH,
     MEASURED_SAFE_FONTS,
     measurement_fonts,
 )
@@ -77,3 +78,49 @@ def test_the_nameable_faces_stay_a_short_measured_list() -> None:
     # DejaVu is what measurement loads and is deliberately not nameable: it is
     # absent from the viewer's machine, where the name resolves to a substitute.
     assert not any("DejaVu" in name for name in MEASURED_SAFE_FONTS)
+
+
+def test_every_nameable_face_carries_the_width_it_actually_sets_at() -> None:
+    """A face with no factor is a face laid out as if it were Arial.
+
+    `ppt_layout._EMS` is one class average per character class and no face, so
+    every box a chart or a table reserves came out the same width whichever of
+    the six the deck named -- and they do not set the same. Measured on this
+    renderer: `horizontal_bar` gives "12M" a box of 0.502in at 14pt, of which
+    `write` spends 0.08 on margins, and the string sets 0.378in in the face
+    `Arial` resolves to and 0.446in in the one `Cambria` does. The second does
+    not fit, and a label that does not fit does not overlap anything or leave
+    its box -- it just comes back as "12" over "M", which is what the
+    `warm-paper` and `terracotta-craft` renders showed.
+
+    So the factor is not optional decoration on the list above: a name in
+    `MEASURED_SAFE_FONTS` without one is a theme whose labels break.
+    """
+    assert set(FACE_WIDTH) == set(MEASURED_SAFE_FONTS)
+    # Under 1.0 would mean the class table already over-reserves for that face,
+    # which no measurement found and which would take back the headroom the
+    # inset is there to provide.
+    assert all(factor >= 1.0 for factor in FACE_WIDTH.values())
+    # The two names with no metric-compatible stand-in installed here are the
+    # two the estimate has to be told about; ordering them against a grotesque
+    # is the claim, not the exact number.
+    assert FACE_WIDTH["Cambria"] > FACE_WIDTH["Arial"]
+    assert FACE_WIDTH["Bookman Old Style"] > FACE_WIDTH["Arial"]
+
+
+def test_the_widths_reach_the_module_that_estimates_with_them() -> None:
+    """`ppt_layout` is written out with the table in it, not left holding an empty one.
+
+    The generated module imports nothing from here -- the build directory has to
+    run as a plain python-pptx project -- so the table travels as source, written
+    in when the module is. An empty one is not a loud failure: `_em_width` falls
+    back to a scale of 1.0 and every deck goes back to being laid out as if it
+    were set in Arial, which is exactly the state that broke the Cambria themes.
+    """
+    from raven.ppt.services.assets.layout import layout_module_source
+
+    source = layout_module_source()
+    assert "_FACE_WIDTH = {}" not in source, "the table was never written in"
+    namespace: dict = {}
+    exec(compile(source[source.index("_FACE_WIDTH = {") : source.index("_WIDEST_FACE")], "<table>", "exec"), namespace)
+    assert namespace["_FACE_WIDTH"] == FACE_WIDTH

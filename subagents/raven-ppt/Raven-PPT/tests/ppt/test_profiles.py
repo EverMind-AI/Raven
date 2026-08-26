@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 from raven.ppt.contracts import Profile
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.profiles import registry
+from raven.ppt.services.gates.registry import DISPATCH
 
 
 def test_every_registered_route_is_reachable_by_name() -> None:
@@ -32,6 +34,28 @@ def test_no_route_lets_the_model_write_a_physical_quantity() -> None:
         caps = registry.get(name).capabilities
         assert caps.physical_geometry is False, f"{name} opened physical geometry"
         assert caps.font_size is False, f"{name} opened font size"
+
+
+def test_no_route_refuses_a_deck_over_something_the_gate_only_reports() -> None:
+    """A route's fatal list may not contradict the severity the check itself gives.
+
+    Publication refuses on `severity is BLOCKING or kind in blocking_kinds`, so the
+    two say the same thing in different places and nothing made them agree. The band
+    gate was downgraded to a warning and stayed fatal on two routes for exactly as
+    long as it took someone to try publishing: the finding came back marked
+    `warning`, the deck was refused, and the reply told the model to remove the bars.
+
+    A kind the checks do not declare at all is a route's own -- `unmapped_page` and
+    `overlap` build their findings inside the route that cares -- so this only holds
+    the kinds both places name.
+    """
+    for name in registry.names():
+        contradicted = {
+            kind
+            for kind in registry.get(name).blocking_kinds
+            if kind in DISPATCH and DISPATCH[kind] is not Severity.BLOCKING
+        }
+        assert not contradicted, f"{name} refuses on {sorted(contradicted)}, which the gate only reports"
 
 
 # The stages that settle what was agreed. `prepare` reads the request and records

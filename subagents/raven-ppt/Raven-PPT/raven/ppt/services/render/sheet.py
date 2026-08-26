@@ -1,8 +1,8 @@
-"""Several pages on one image, for the pass that judges the deck as a deck.
+"""Several pages on one image, for whoever judges the deck as a deck.
 
-The design pass has two questions to answer and they need different pictures. Per
-page: is this page's layout doing its job. Across the deck: do these pages look
-like they belong together -- does every page open with the same slab of title, do
+There are two questions and they need different pictures. Per page: is this page's
+layout doing its job. Across the deck: do these pages look like they belong
+together -- does every page open with the same slab of title, do
 three consecutive pages use the same two-column split, does the accent colour mean
 the same thing throughout. The second question cannot be answered from pages sent
 one at a time, because the answer *is* the comparison, and a model looking at page

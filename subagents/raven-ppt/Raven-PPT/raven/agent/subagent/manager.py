@@ -39,6 +39,7 @@ class SubagentManager:
         workspace: Path,
         model: str | None = None,
         brave_api_key: str | None = None,
+        web_search_max_results: int = 5,
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
@@ -60,6 +61,7 @@ class SubagentManager:
         self._submit = None
         self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
+        self.web_search_max_results = web_search_max_results
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
@@ -193,10 +195,17 @@ class SubagentManager:
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
                     executor=executor,
+                    deny_patterns=self.exec_config.deny_patterns,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
                 )
             )
-            tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+            tools.register(
+                WebSearchTool(
+                    api_key=self.brave_api_key,
+                    max_results=self.web_search_max_results,
+                    proxy=self.web_proxy,
+                )
+            )
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
             system_prompt = self._build_subagent_prompt()

@@ -14,16 +14,7 @@ attributed to a page (blocks.broken_page). Each has a module.
 """
 
 from raven.ppt.backends.script.blocks import broken_page, page_blocks, page_sources
-from raven.ppt.backends.script.edit import (
-    applied_lines,
-    apply_verified,
-    block_rejection,
-    blocks_rejection,
-    first_marker,
-    prelude_rejection,
-    slide_creators,
-    with_banner,
-)
+from raven.ppt.backends.script.edit import blocks_rejection
 from raven.ppt.backends.script.runner import ScriptBackend, run_script
 from raven.ppt.backends.script.submission import carries_a_program, submission_refusal
 from raven.ppt.backends.script.workspace import (
@@ -37,22 +28,15 @@ from raven.ppt.backends.script.workspace import (
 __all__ = [
     "HelperSources",
     "asset_helpers",
-    "applied_lines",
-    "apply_verified",
-    "block_rejection",
     "blocks_rejection",
     "ScriptBackend",
     "broken_page",
     "carries_a_program",
-    "first_marker",
     "page_blocks",
     "page_sources",
-    "prelude_rejection",
     "provision",
     "run_script",
     "script_path",
-    "slide_creators",
     "submission_refusal",
-    "with_banner",
     "with_template_helpers",
 ]

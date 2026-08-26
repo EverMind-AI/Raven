@@ -28,6 +28,18 @@ has one size, and a reader reads a page against the page before it; eight cards
 set at five sizes reads as unfinished however legible each one is. `drift_findings`
 groups the boxes a deck repeats -- same declared size, same shape, wherever they
 are -- and reports the ones the renderer set apart from the rest.
+
+Both of those read the render. `scale_findings` reads the file, because it asks a
+different question: not what a reader gets but what the author chose. `ppt_layout`
+hands an author a ramp -- `BODY_PT` 16, `LABEL_PT` 14, and the steps above -- and
+across ten live pages those constants were named zero times; every page picked its own
+integer, thirteen distinct values from 10 to 32pt. The floor cannot see that, because
+a page whose copy is set at 15pt is legible, deliberate-looking and one point under
+what its own deck calls body: 15 of the 43 copy blocks measured across 34 generated
+decks are at 15pt, more than at any other size, and `type_floor` reports none of them.
+So the division of labour is the floor itself. Under it, `type_floor` already says
+"bring it up" about the same box; between the floor and `BODY_PT`, at a size the ramp
+does not have, nothing said anything at all.
 """
 
 from __future__ import annotations
@@ -37,7 +49,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
+
+# The one comparison that decides whether a shape came from the template, with the
+# tolerance it was calibrated at. Private and imported anyway: the alternative is a
+# fourth copy of "is this box the template's", and the reason `adherence` owns it is
+# that the answer took three live decks to calibrate.
+from raven.ppt.services.measure.adherence import _matches
 from raven.ppt.services.measure.geometry import (
     EMU_PER_INCH,
     EMU_PER_POINT,
@@ -258,8 +276,7 @@ def census(pptx_path: Path, spans: Sequence[Span] | None = None) -> list[TypeCen
 # Raising a size costs room, the room comes from the copy, and a gate that
 # refused publication until the floor was met could be answered by shrinking the
 # copy back -- which is the oscillation D2 describes, ending with no deck at all.
-# So this reports and never refuses, and it goes to the design pass, which is the
-# one allowed to find the room.
+# So this reports and never refuses, and the room comes from the page.
 _FIX = (
     "Bring it up, and give the copy the room the larger size needs rather than letting it overflow: "
     "fewer bullets, a wider column, or the page split. Do not shrink it back to fit"
@@ -302,7 +319,6 @@ def type_findings(pptx_path: Path, spans: Sequence[Span] | None = None) -> list[
                 kind="type_floor",
                 severity=Severity.WARNING,
                 page=page.page,
-                audience=Audience.DESIGNER,
                 message=f"{problem}. {_FIX}",
                 detail=page.detail(),
             )
@@ -340,7 +356,6 @@ def _slot_findings(pptx_path: Path, spans: Sequence[Span]) -> list[Finding]:
                 kind="type_floor",
                 severity=Severity.WARNING,
                 page=page,
-                audience=Audience.DESIGNER,
                 message=(
                     f"{len(worst)} box(es) on this page show their copy under the floor: {named}{more}. "
                     + (_FIX if chose else _AUTOFIT_FIX)
@@ -536,7 +551,6 @@ def drift_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Findin
                     kind="type_drift",
                     severity=Severity.WARNING,
                     page=page,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"this deck repeats a {width:g}x{height:g}in text box {len(members)} times at {house:g}pt, and "
                         f"on this page {len(here)} of them came out smaller: {sizes}. Each box shrank its own copy to "
@@ -554,6 +568,163 @@ def drift_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Findin
                 )
             )
     return findings
+
+
+# The two steps of `ppt_layout`'s ramp this measurement is about: the size the deck
+# calls body, and the one step the ramp puts between it and the floor. Copy may be set
+# at either, and at 15pt it was set at neither.
+#
+# Stated here rather than imported, and not for the usual reason. `ppt_layout` is not a
+# module the engine can import: it exists as the *text* of a module, written beside the
+# author's script and imported by that script alone. So the two copies are pinned
+# against each other by a test that writes the helper out and reads its own constants
+# back, which is the only place the agreement can be checked at all.
+BODY_PT = 16.0
+LABEL_PT = 14.0
+
+
+# Raising a size costs room here too, so this reports and never refuses -- invariant 3,
+# and the same oscillation `_FIX` is written against. What it can say that `_FIX` cannot
+# is where the size should have come from: nobody picks 15pt for a reason, and the call
+# that answers the question properly already exists.
+_SCALE_FIX = (
+    "Name the ramp: `size=BODY_PT` for copy, or `size=LABEL_PT` -- the one step it puts between the body "
+    "size and the floor. Where the copy has to fit a box, ask "
+    "`the_largest_step_this_copy_takes(text, box, font=F)` for the step rather than settling on an integer, "
+    "and give the copy the room the larger size needs"
+)
+
+
+def scale_findings(pptx_path: Path, template: Path | None = None) -> list[Finding]:
+    """Pages whose copy is set between the floor and `BODY_PT`, off the ramp.
+
+    A page-level reading of what a per-run floor cannot see. The floor judges each run
+    against the tier it belongs to -- 8pt in the footer band, 10.8pt for a caption or a
+    short label, 14pt for copy -- and every one of those tiers is satisfied by a page
+    whose body runs at 15pt. One live page had 20 of its 31 runs at 12pt, nothing at all
+    at 16pt, and its bullets at 15pt; the floor reported one box on it, correctly, and
+    the page still reads two steps small.
+
+    What is reported is the copy and only the copy: text of at least `_COPY_CHARS`
+    characters that is not a caption or a footer, which is the line this file already
+    draws for its own floor tier and is reused rather than doubled. The wider claim --
+    "this page's dominant size is under `BODY_PT`" -- was measured over 45 generated
+    pages and fires on 31 of them, because a chart's month labels and a card's kicker
+    are `KICKER_PT` on purpose and outnumber the prose on any page carrying a figure.
+    That number is still worth saying, so it goes in the message as evidence rather
+    than in the trigger. This trigger fires on 11 of the same 45, and 10 of the 11 are
+    pages `type_floor` says nothing at all about.
+
+    And only type the author chose. Inside a user's template the copy is the template's:
+    the ten bundled templates set 335 of their 356 copy blocks under 16pt, 269 of them at
+    12pt, so a check held to our ramp would report every page of every templated deck and
+    ask for a fix that means abandoning the template -- the dead end of invariant 6. A
+    cloned page keeps its prototype's positions exactly (`measure.adherence`), so a box
+    sitting where the template puts one is the template's and is left alone. `template`
+    is the file the user handed over, example pages included, the same one
+    `template_adherence` and `prototype_kept` compare against; without it every box is
+    the author's, which is what a deck built from a blank presentation is.
+    """
+    presentation = open_deck(pptx_path)
+    inherited = _template_boxes(template)
+    off: dict[int, list[Slot]] = {}
+    at_body: dict[int, bool] = {}
+    for slot in slots(pptx_path, ()):
+        if slot.declared_pt is None or slot.chars < _COPY_CHARS or _is_caption(slot, presentation):
+            continue
+        # Whether this page has any body-size copy at all, which is the difference
+        # between one block set small and a page with no body size on it.
+        at_body[slot.page] = at_body.get(slot.page, False) or slot.declared_pt >= BODY_PT
+        # At or over the floor, under the body size, and not the step the ramp puts
+        # between them. Under the floor is `type_floor`'s, which says "bring it up"
+        # about the same box -- two findings on one box is a finding an author learns
+        # to skip.
+        if not BODY_FLOOR_PT <= slot.declared_pt < BODY_PT or slot.declared_pt == LABEL_PT:
+            continue
+        if _matches(_inches(slot.box), inherited):
+            continue
+        off.setdefault(slot.page, []).append(slot)
+    # The page's own scale, off the census rather than measured a second way: the size
+    # most of its characters are set at, tables and short labels included.
+    scale = {page.page: page.declared_pt for page in census(pptx_path, None)}
+    findings: list[Finding] = []
+    for page, blocks in sorted(off.items()):
+        blocks.sort(key=lambda slot: slot.declared_pt or 0.0)
+        sizes = sorted({slot.declared_pt for slot in blocks if slot.declared_pt is not None})
+        named = ", ".join(f"{slot.declared_pt:g}pt over {slot.chars} characters ('{slot.head}')" for slot in blocks[:3])
+        more = f", and {len(blocks) - 3} more" if len(blocks) > 3 else ""
+        one = len(blocks) == 1
+        dominant = scale.get(page)
+        findings.append(
+            Finding(
+                kind="type_scale",
+                severity=Severity.WARNING,
+                page=page,
+                message=(
+                    (
+                        f"this page's copy is set at {sizes[0]:g}pt, which is not a step of the ramp: {named}. It "
+                        f"clears the {BODY_FLOOR_PT:g}pt floor, so no other check reports it, and it is still under "
+                        f"BODY_PT ({BODY_PT:g}pt)"
+                        if one
+                        else f"{len(blocks)} blocks of copy on this page are set at "
+                        f"{' and '.join(f'{size:g}pt' for size in sizes)}, which the ramp does not have: "
+                        f"{named}{more}. They clear the {BODY_FLOOR_PT:g}pt floor, so no other check reports them, "
+                        f"and they are still under BODY_PT ({BODY_PT:g}pt)"
+                    )
+                    + (
+                        f" -- no copy on this page reaches {BODY_PT:g}pt at all"
+                        if not at_body.get(page)
+                        else f", though the page does set other copy at {BODY_PT:g}pt or over"
+                    )
+                    + (
+                        ""
+                        if dominant is None
+                        else f", and {dominant:g}pt is what most of its characters are set at"
+                        if dominant in sizes
+                        else f", and the page's own type mostly runs at {dominant:g}pt"
+                    )
+                    + f". {_SCALE_FIX}"
+                ),
+                detail={
+                    "page": page,
+                    "body_pt": BODY_PT,
+                    "label_pt": LABEL_PT,
+                    "body_floor_pt": BODY_FLOOR_PT,
+                    "sizes_pt": [slot.declared_pt for slot in blocks],
+                    "chars": [slot.chars for slot in blocks],
+                    "page_body_pt": dominant,
+                    "reaches_body_pt": at_body.get(page, False),
+                },
+            )
+        )
+    return findings
+
+
+def _template_boxes(template: Path | None) -> set[tuple[float, float, float, float]]:
+    """Where the template puts a shape, in inches, over every page it ships.
+
+    In page coordinates, which is why this does not call `adherence._pages`: that one
+    reads a shape's own numbers, and a shape inside a group states them in the group's
+    space. Both sides of the comparison have to be in one space or a template's grouped
+    card matches nothing, and `slots` already hands its boxes back on the page.
+    """
+    if template is None or not Path(template).is_file():
+        return set()
+    try:
+        presentation = open_deck(Path(template))
+    except Exception:  # noqa: BLE001 -- an unreadable template is no signal, not a defect
+        return set()
+    return {
+        _inches(shape_rect_pt(shape))
+        for slide in presentation.slides
+        for shape in iter_shapes(slide.shapes)
+        if shape.left is not None
+    }
+
+
+def _inches(box: Rect) -> tuple[float, float, float, float]:
+    """A box in inches, rounded the way `adherence` compares two of them."""
+    return (round(box.x0 / 72, 2), round(box.y0 / 72, 2), round(box.x1 / 72, 2), round(box.y1 / 72, 2))
 
 
 def _head(text: str, limit: int = 20) -> str:

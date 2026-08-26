@@ -25,7 +25,7 @@ from raven.ppt.services.template.inventory import (
     template_dir,
 )
 
-__all__ = ["PREPARED_FILE", "Prepared", "prepare", "prepared_path"]
+__all__ = ["PREPARED_FILE", "Prepared", "prepare", "prepared_path", "strip_hidden"]
 
 
 def prepared_path(project) -> Path:
@@ -78,6 +78,47 @@ def prepare(source: Path, destination: Path) -> Prepared | None:
         destination.unlink(missing_ok=True)
         return None
     return Prepared(path=destination, inventory=inventory, removed_slides=removed)
+
+
+def strip_hidden(path: Path) -> int:
+    """Drop the slides marked hidden from a template copy, and say how many.
+
+    A hidden slide is in the file and not in the render: LibreOffice does not
+    export it. Everything downstream numbers pages off the file, so the numbers
+    then name a page the render does not have -- which is how one live run asked
+    for thirteen pages of an eleven-page PDF, lost all eleven to a single
+    out-of-range number, and told the author renders were unavailable on this
+    machine. It then read every example page as code and never looked at a render
+    again. Of a 193-template library 119 ship them, always the vendor's trailing
+    advertisement, so this is the ordinary case and not the odd one.
+
+    Takes a copy, never the user's own file. Returns 0 for a file that will not
+    open, which the caller already treats as "no template".
+    """
+    try:
+        from pptx import Presentation
+    except ImportError:  # pragma: no cover - python-pptx ships with the extra
+        return 0
+    try:
+        presentation = Presentation(str(path))
+    except Exception:  # noqa: BLE001 -- a file that will not open is not a template
+        return 0
+    slide_ids = presentation.slides._sldIdLst
+    hidden = [
+        slide_id
+        for slide_id, slide in zip(list(slide_ids), list(presentation.slides), strict=False)
+        if slide._element.get("show") == "0"
+    ]
+    if not hidden:
+        return 0
+    for slide_id in hidden:
+        presentation.part.drop_rel(slide_id.rId)
+        slide_ids.remove(slide_id)
+    try:
+        presentation.save(str(path))
+    except OSError:
+        return 0
+    return len(hidden)
 
 
 def _drop_slides(presentation) -> int:

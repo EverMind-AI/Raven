@@ -17,7 +17,7 @@ import pytest
 
 pytest.importorskip("pptx")
 
-from raven.ppt.contracts import Project  # noqa: E402
+from raven.ppt.contracts import Project, Severity  # noqa: E402
 from raven.ppt.services.gates.house_style import house_style_findings  # noqa: E402
 from raven.ppt.services.measure.inherited import over_layout_art  # noqa: E402
 from raven.ppt.services.template import bind, theme_name, theme_of  # noqa: E402
@@ -282,7 +282,7 @@ def test_copy_laid_across_the_layouts_artwork_is_reported(deck):
     assert len(findings) == 1
     assert findings[0].kind == "over_layout_art"
     assert findings[0].page == 1
-    assert findings[0].audience.value == "designer"
+    assert findings[0].severity is Severity.WARNING
     assert "the template kept that part of the page clear" in findings[0].message
 
 

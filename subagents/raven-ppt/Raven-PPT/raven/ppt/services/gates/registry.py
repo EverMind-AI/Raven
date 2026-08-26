@@ -1,19 +1,15 @@
 """One pass over a built deck, one list of findings.
 
-The predecessor projected the same measurements three ways -- `_content_findings`
-for the author, `_page_findings` for the design pass, `_render_defects` for
-whoever was about to look at the render -- plus a fourth copy of the third,
-inlined in the polish tool. Each returned a different shape (a list of dicts, a
-dict keyed by page, another list of dicts), each wrapped its own group of checks
-in one `try` so a crash in the first silenced the other two, and which audience
-got what was decided by which function a call site happened to reach for. The
-split was real -- content problems must not go to the design pass, which is
-forbidden to change what a page says -- but it belongs on the finding, not in the
-call graph.
+The predecessor projected the same measurements three ways -- `_content_findings`,
+`_page_findings`, `_render_defects` -- plus a fourth copy of the third, inlined in
+the polish tool. Each returned a different shape (a list of dicts, a dict keyed by
+page, another list of dicts), each wrapped its own group of checks in one `try` so a
+crash in the first silenced the other two, and which of the three a problem appeared
+in was decided by which function a call site happened to reach for.
 
-So: one entry point runs everything, every check states its own audience and
-severity, and a caller filters. Adding a check no longer means choosing which of
-four functions it appears in.
+So: one entry point runs everything, every check states its own severity, and a
+caller filters. Adding a check no longer means choosing which of four functions it
+appears in.
 """
 
 from __future__ import annotations
@@ -26,7 +22,7 @@ from typing import Any
 
 from raven.ppt.contracts.brief import DeckBrief
 from raven.ppt.contracts.build import BuildOutcome
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.assets.text_metrics import measurer as _font_measurer
 from raven.ppt.services.gates.bands import band_findings
 from raven.ppt.services.gates.brief import language_findings, page_budget_findings
@@ -44,11 +40,14 @@ from raven.ppt.services.measure.adherence import (
     template_adherence,
     template_pictures,
 )
+from raven.ppt.services.measure.captions import caption_findings
 from raven.ppt.services.measure.content import (
+    banded_tables,
     evidence_coverage,
     flat_formulas,
     literal_escapes,
     native_tables,
+    planned_tables,
     unmarked_points,
     wide_tables,
 )
@@ -70,7 +69,14 @@ from raven.ppt.services.measure.rendered import (
     unseparated_blocks,
     word_collisions,
 )
-from raven.ppt.services.measure.type_size import Span, drift_findings, rendered_spans, type_findings
+from raven.ppt.services.measure.type_size import (
+    Span,
+    drift_findings,
+    rendered_spans,
+    scale_findings,
+    type_findings,
+)
+from raven.ppt.services.measure.variety import layout_variety
 from raven.ppt.services.measure.width import WidthMeasurer
 from raven.ppt.services.measure.words import WordBox, words_from_pdf
 
@@ -81,48 +87,93 @@ from raven.ppt.services.measure.words import WordBox, words_from_pdf
 # starts blocking the deck fails a test instead of stalling a run. The two axes
 # and why each row falls where it does:
 #
-# BLOCKING is reserved for claims about the source material (a number that never
-# appeared in it, a figure cited as another figure), for the one design tell that
-# prose demonstrably could not stop, and for a deck the pipeline cannot reason
-# about at all. Everything else is a WARNING and rides along with the deck,
+# BLOCKING is reserved for what a page credits (a figure cited as another figure),
+# for what the deck was agreed to be, and for a deck the pipeline cannot reason
+# about at all. It once also covered a number the materials never printed; that gate
+# was deleted for firing ten times across seven runs and being wrong every time
+# (design doc D3a), and nothing has replaced it. Everything else is a WARNING and rides along with the deck,
 # because every remaining finding is satisfiable by shrinking the copy and a gate
 # that refused publication until they cleared could be answered by making the
 # page worse -- the oscillation of design doc D2, which ends with no deck at all.
 #
-# AUTHOR gets anything whose fix changes what a page says. The design pass may
-# rearrange a page and never rewrite it, so density, evidence and table width go
-# to the author even though they read like layout problems; handing them to the
-# pass leaves it holding a problem it is forbidden to solve, which is measurably
-# what happened -- the same overloaded page came back arranged into compartments
-# however often it was redesigned.
-DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
-    "citation": (Severity.BLOCKING, Audience.AUTHOR),
-    "band": (Severity.BLOCKING, Audience.DESIGNER),
+# There was a second axis. Every row also named who was allowed to act on it,
+# because a stage that could rearrange a page but not rewrite it had to be kept away
+# from anything whose fix changes what a page says. That stage is gone: the author
+# owns the program and can change anything in it, so every row below is the author's
+# and the column said nothing. It was not free either -- filed under a heading that
+# named somebody else, 25 pairs of overlapping words went unanswered across eight
+# builds of one live run.
+DISPATCH: Mapping[str, Severity] = {
+    "citation": Severity.BLOCKING,
+    # Filled colour bars carrying nothing. It refused decks until it had misfired
+    # three times, each time on work that was correct, and each time the patch was
+    # another exemption: eight bars on four rows read as accent strips on a page the
+    # skill itself asks for ("ranking -> sorted horizontal bars"), so bar series had
+    # to be detected and exempted; five full-width planes carrying formulas and a
+    # takeaway row read as "a band with nothing on it" while one to six text boxes
+    # sat on each, so the top-of-page requirement had to go; and a template's own
+    # kicker rule, 0.04in tall and correct in the render, was refused under eight
+    # titles by one eighth of a millimetre, so the hairline ceiling had to be
+    # borrowed from the measurement module. A refusal has to be right the first time;
+    # three exemptions in is not that, so this one reports. What it is about does not
+    # change -- the strip is still the loudest tell of a generated deck.
+    "band": Severity.WARNING,
     # Whether each page traces to its own block in build.py. What it protects is the
-    # design pass's ability to find a page's code, not anything a reader sees, so it
-    # reports: a deck whose pages are right and whose program is arranged oddly is a
-    # deck, and refusing it buys the reader nothing.
-    "page_mapping": (Severity.WARNING, Audience.AUTHOR),
-    "page_budget": (Severity.BLOCKING, Audience.AUTHOR),
-    "language": (Severity.BLOCKING, Audience.AUTHOR),
-    "evidence": (Severity.WARNING, Audience.AUTHOR),
-    "wide_table": (Severity.WARNING, Audience.AUTHOR),
-    "native_table": (Severity.WARNING, Audience.DESIGNER),
+    # ability to match a render back to the code that drew it, not anything a reader
+    # sees, so it reports: a deck whose pages are right and whose program is arranged
+    # oddly is a deck, and refusing it buys the reader nothing.
+    "page_mapping": Severity.WARNING,
+    "page_budget": Severity.BLOCKING,
+    "language": Severity.BLOCKING,
+    "evidence": Severity.WARNING,
+    "wide_table": Severity.WARNING,
+    "native_table": Severity.WARNING,
+    "banded_table": Severity.WARNING,
+    # A caption written by looking at a figure rather than read off its source, and
+    # naming something the materials never mention. Beside `citation` in what it is
+    # about -- who says this picture is what the page says it is -- and a warning
+    # rather than a refusal, because the name may well be printed in the pixels and
+    # the answer is one sentence rather than a rebuilt page.
+    "inferred_caption": Severity.WARNING,
+    # A page whose outline planned a table and whose file holds none. With `citation`,
+    # `page_budget` and `language` rather than with the layout warnings: it is a
+    # disagreement between the plan and the file rather than a reading of a rendered
+    # page, so D2's oscillation argument does not reach it -- nothing about it is
+    # answered by making the page smaller. Refused, because the plan is what every
+    # page after it is written against and because both answers are one edit: draw the
+    # table, or call ppt_outline again for a plan that does not promise one. The twin
+    # of `unplaced_figure`, which every route already refuses.
+    "unplaced_table": Severity.BLOCKING,
+    # And the same page drawing a grid of another size. Reported, not refused: the
+    # plan-time width warning tells an author to drop the columns the claim does not
+    # rest on, so a refusal here would refuse the fix that warning asks for. What is
+    # worth saying is that the plan and the deck now describe different tables.
+    "table_grid": Severity.WARNING,
+    # The plan-time estimate, checked against the file that settled it: a plan wanting
+    # more column width than the page carries, on a page whose drawn table is squeezed
+    # or reaches past the margin. A warning with `wide_table`, which reports the same
+    # shape -- two rows over one table, one refusing and one reporting, is the
+    # contradiction `band` was downgraded for.
+    "table_room": Severity.WARNING,
     # A page printing "48.3\\nOVIS" is not taste and not layout: the escape was escaped on
     # its way in, and the fix is one character in the author's program. Refused, with the
     # other rows about what a page says.
-    "literal_escape": (Severity.BLOCKING, Audience.AUTHOR),
-    # An expression written as prose. The author's, not the designer's: the fix is
-    # one call in the program, and the design pass may not touch what a page says.
-    "flat_formula": (Severity.WARNING, Audience.AUTHOR),
-    # Parallel claims with nothing in front of them. The author's as well: the marks
-    # come with the call that writes the points, and the pass may not rewrite copy.
-    "unmarked_points": (Severity.WARNING, Audience.AUTHOR),
-    "type_floor": (Severity.WARNING, Audience.DESIGNER),
+    "literal_escape": Severity.BLOCKING,
+    # An expression written as prose. The fix is one call in the program.
+    "flat_formula": Severity.WARNING,
+    # Parallel claims with nothing in front of them. The marks come with the call
+    # that writes the points.
+    "unmarked_points": Severity.WARNING,
+    "type_floor": Severity.WARNING,
     # One slot the deck repeats, set at five sizes because the renderer shrank each
-    # box to fit what went into it. With the design pass, not the author: the sizes
-    # even out by giving the boxes room, and the copy is the last resort.
-    "type_drift": (Severity.WARNING, Audience.DESIGNER),
+    # box to fit what went into it. The sizes even out by giving the boxes room, and
+    # cutting the copy is the last resort.
+    "type_drift": Severity.WARNING,
+    # And the size the author picked rather than the one the renderer produced: copy set
+    # over the floor, under `BODY_PT`, at a number the ramp does not have. A warning with
+    # the two rows above it and for the same reason -- raising a size costs room, and a
+    # refusal could be answered by cutting the copy back.
+    "type_scale": Severity.WARNING,
     # The one measurement that refuses. D2 said every measured layout problem
     # should only feed the loop, because hard-refusing invites the shrink-and-retry
     # oscillation text fitting already threatens. A rendered overlap is the
@@ -130,98 +181,107 @@ DISPATCH: Mapping[str, tuple[Severity, Audience]] = {
     # painted over copy: it is not taste, it is not answerable by shrinking (the
     # type floor is measured too, and shrinking trades one finding for another),
     # and the move it wants -- a wider box -- costs the page nothing.
-    "word_collision": (Severity.BLOCKING, Audience.DESIGNER),
+    "word_collision": Severity.BLOCKING,
     # The quiet half of the same thing: content nothing collides with because it is
     # simply behind something. Refused for the reason `word_collision` is -- a figure
-    # four fifths under a card is not answerable by making the page smaller, and a page
+    # three fifths under a card is not answerable by making the page smaller, and a page
     # citing evidence it does not show is not a matter of taste.
-    "covered_shape": (Severity.BLOCKING, Audience.DESIGNER),
+    "covered_shape": Severity.BLOCKING,
     # Copy the file states and the render does not show, which is what a shape narrower
     # than its own words does: it clips instead of wrapping, and every other check
     # passes. A warning, because the render's text layer is one source of truth about
     # what a reader sees and a font that draws a glyph as blank would read the same way.
-    "clipped_copy": (Severity.WARNING, Audience.DESIGNER),
-    "rule_strike": (Severity.WARNING, Audience.DESIGNER),
-    "card_overflow": (Severity.WARNING, Audience.DESIGNER),
+    "clipped_copy": Severity.WARNING,
+    "rule_strike": Severity.WARNING,
+    "card_overflow": Severity.WARNING,
     # The other side of the same rim: copy inside its panel and touching the edge. Found
     # by reading a polished deck page by page -- two note cards ended on their last
     # line's descender while every other card on that deck carried 0.20in of padding.
-    "crowded_panel": (Severity.WARNING, Audience.DESIGNER),
+    "crowded_panel": Severity.WARNING,
     # A label the render broke one character short of fitting. Four of eight labels on
     # one delivered agenda page read "为什么要统 / 一"; the words do not collide, the copy
     # fits the box's height, and the type is the right size.
-    "orphan_line": (Severity.WARNING, Audience.DESIGNER),
+    "orphan_line": Severity.WARNING,
     # Two groups with no more air between them than inside them, which is the one thing
     # the design brief asks for in prose and nothing measured: "a gap that is plainly
     # wider than the gaps inside each group".
-    "unseparated_blocks": (Severity.WARNING, Audience.DESIGNER),
-    "excessive_whitespace": (Severity.WARNING, Audience.DESIGNER),
-    "wrapped_label": (Severity.WARNING, Audience.DESIGNER),
+    "unseparated_blocks": Severity.WARNING,
+    "excessive_whitespace": Severity.WARNING,
+    # A deck whose composed pages nearly all came out as the same arrangement of the
+    # same kinds of thing. A warning and deliberately not more: "varied enough" is not
+    # a property a page has, a series of pages built alike so a reader can compare them
+    # is good work, and a refusal here would be a refusal of a design judgement the
+    # measurement is not entitled to make. What it is entitled to is the reading, which
+    # nothing else produces -- every page of the deck this was written for passed every
+    # other check while four of them were the same eight lines of code. The plan's
+    # `layout` column is read for the same concentration a build earlier, by
+    # `tools.outline._layout_spread`, off the same thresholds; that reading is not a
+    # row here because this table is what a *built* deck is held to.
+    "layout_variety": Severity.WARNING,
+    "wrapped_label": Severity.WARNING,
     # Copy that does not fit the box it was put in, decided by measurement rather
     # than by looking at what the renderer did with it. The render checks could only
     # report the consequence -- words on top of words -- one round later.
-    "overset_copy": (Severity.WARNING, Audience.DESIGNER),
-    "off_page": (Severity.WARNING, Audience.DESIGNER),
+    "overset_copy": Severity.WARNING,
+    "off_page": Severity.WARNING,
     # A shape inside the page whose copy is not: a box with wrapping off does not clip,
     # it paints straight out of itself, and two page titles of one delivered deck ran off
     # the canvas that way while every other check passed.
-    "spilled_copy": (Severity.WARNING, Audience.DESIGNER),
+    "spilled_copy": Severity.WARNING,
     # Not findings about the deck at all, but about which of the rows above were
     # able to run. Warnings for the same reason the checks they stand in for
     # report nothing: an absent input is not a defect, and refusing on one would
     # be the refusal those checks correctly decline to invent.
-    "unchecked_citations": (Severity.WARNING, Audience.AUTHOR),
-    "unchecked_agreement": (Severity.WARNING, Audience.AUTHOR),
-    "unrendered": (Severity.WARNING, Audience.AUTHOR),
+    "unchecked_citations": Severity.WARNING,
+    "unchecked_agreement": Severity.WARNING,
+    "unrendered": Severity.WARNING,
     # With the language row rather than with the layout warnings: a deck in
     # somebody else's colours is not a deck the user asked for, and the fix is one
     # line at the top of the program rather than a rearranged page.
-    "house_style": (Severity.BLOCKING, Audience.AUTHOR),
+    "house_style": Severity.BLOCKING,
     # The place, where `type_drift` measures the size: the title row is the one element
     # every page of a deck shares, and a deck whose titles start at three different left
     # edges reads as three decks. Reported, because a page may earn its own treatment.
-    "title_row": (Severity.WARNING, Audience.DESIGNER),
-    # A placement problem the design pass fixes by moving a block, so it goes to
-    # the designer and it warns: a deliberate overlay is a legitimate design, and
-    # refusing on placement invites the shrink-and-retry of design doc D2.
-    "over_layout_art": (Severity.WARNING, Audience.DESIGNER),
+    "title_row": Severity.WARNING,
+    # A placement problem, answered by moving a block, and it warns: a deliberate
+    # overlay is a legitimate design, and refusing on placement invites the
+    # shrink-and-retry of design doc D2.
+    "over_layout_art": Severity.WARNING,
     # A deck built inside a template that did not open, index, divide or close in the
     # template's own pages. `house_style` only compares theme colours, which a program
     # passes by opening the template at all, so this was invisible: a live deck drew all
-    # eight of its pages from scratch and every check came back green. The author's,
-    # because which prototype a page is built on is a decision the design pass may not
-    # make -- and because the content pages in between are meant to be composed rather
-    # than cloned, so this no longer counts them.
-    "template_adherence": (Severity.WARNING, Audience.AUTHOR),
+    # eight of its pages from scratch and every check came back green. The content
+    # pages in between are meant to be composed rather than cloned, so this no longer
+    # counts them.
+    "template_adherence": Severity.WARNING,
     # And the opposite failure of the same pair: a page that cloned a prototype and
     # left its placeholder copy in place. Refused, not reported -- a page saying
     # "single-click here to add a subtitle" is finished by nobody's standard.
-    "placeholder_copy": (Severity.BLOCKING, Audience.AUTHOR),
+    "placeholder_copy": Severity.BLOCKING,
     # A template photograph still on a finished page. Reported, not refused: a
     # decorative graphic and a placeholder photograph both arrive as a PNG, and
     # deleting the first damages the page.
-    "template_picture": (Severity.WARNING, Audience.AUTHOR),
+    "template_picture": Severity.WARNING,
     # And the mechanism that produces those: the template's page cloned for its
     # background with new text boxes laid over it. Refused for the same reason -- the
-    # page shows two designs at once, and the fix is the author's program, not the
-    # design pass, which may not rewrite a word.
-    "template_underlay": (Severity.BLOCKING, Audience.AUTHOR),
+    # page shows two designs at once, and the fix is in the author's program.
+    "template_underlay": Severity.BLOCKING,
     # A page that did not come from the prototype its own outline named. Reported
     # rather than refused: the mismatch is real, but it is a mismatch between a plan
     # and a page and says nothing about the page. One run drew its own four-card
     # layout where the outline had promised the template's page 3, and the page reads
     # well -- refusing it asked for a worse page. The escape the message itself offers,
     # "or change the outline", is one line, so refusal bought nothing either.
-    "prototype_kept": (Severity.WARNING, Audience.AUTHOR),
+    "prototype_kept": Severity.WARNING,
     # Type a reader cannot make out: measured off the render, because what is behind a
     # text box is a layout's artwork, a photograph or a panel three shapes down, and
     # only the renderer has resolved that. Refused -- a page whose title is #1A1A1A on
     # #000000 has not been delivered, however well it is composed.
-    "unreadable": (Severity.BLOCKING, Audience.AUTHOR),
+    "unreadable": Severity.BLOCKING,
     # And the band above it: legible, thin. Separated from the row above after 3:1 flat
     # refused a deck for its own template's agenda page, whose white-on-orange numerals
     # measure 2.5:1 and are what the template's designer drew.
-    "thin_contrast": (Severity.WARNING, Audience.AUTHOR),
+    "thin_contrast": Severity.WARNING,
 }
 
 
@@ -255,6 +315,13 @@ class DeckUnderReview:
     outline: Any | None = None
     figure_labels: Mapping[str, str] | None = None
     figure_catalogue: Mapping[str, Mapping[str, object]] | None = None
+    materials: str = ""
+    """Everything this deck was given to read, as one string.
+
+    The only thing a name in a caption can be checked against: a caption asserting a
+    product the materials never mention is asserting it from nowhere. Empty when
+    nothing was ingested, in which case the check that needs it reports nothing
+    rather than flagging every name it sees."""
     # What was agreed with the person asking for the deck. None when nobody was
     # asked, in which case the checks that need it report nothing rather than
     # inventing a budget to fail against.
@@ -324,11 +391,23 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "evidence": lambda deck: evidence_coverage(deck.pptx_path, _structural(deck.outline)),
         "wide_table": lambda deck: wide_tables(deck.pptx_path),
         "native_table": lambda deck: native_tables(deck.pptx_path),
+        "banded_table": lambda deck: banded_tables(deck.pptx_path),
+        "inferred_caption": lambda deck: caption_findings(deck.figure_catalogue, deck.materials),
+        # One reading, filtered three ways, the way the contrast and adherence rows
+        # already are: the three findings come off one pass over the plan and the file,
+        # and each answers differently, so each needs its own row in the table above.
+        "unplaced_table": lambda deck: _planned(deck, "unplaced_table"),
+        "table_grid": lambda deck: _planned(deck, "table_grid"),
+        "table_room": lambda deck: _planned(deck, "table_room"),
         "flat_formula": lambda deck: flat_formulas(deck.pptx_path),
         "unmarked_points": lambda deck: unmarked_points(deck.pptx_path),
         "literal_escape": lambda deck: literal_escapes(deck.pptx_path),
         "type_floor": lambda deck: type_findings(deck.pptx_path, deck.rendered_type),
         "type_drift": lambda deck: drift_findings(deck.pptx_path, deck.rendered_type),
+        # `prototypes` and not `template`: the prepared copy has its example pages removed,
+        # so it holds no page a box could have been cloned from and every box would read as
+        # the author's. The same argument `template_adherence` is wired on.
+        "type_scale": lambda deck: scale_findings(deck.pptx_path, deck.prototypes),
         "off_page": lambda deck: off_page_shapes(deck.pptx_path),
         "spilled_copy": lambda deck: spilled_copy(deck.pptx_path, deck.measurer),
         "over_layout_art": lambda deck: over_layout_art(deck.pptx_path),
@@ -351,6 +430,10 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "template_underlay": lambda deck: [
             f for f in template_adherence(deck.pptx_path, deck.prototypes) if f.kind == "template_underlay"
         ],
+        # The pages the deck composed, which is every page that is not one of the
+        # template's own: those are meant to be alike, and counting them is how a
+        # correct deck gets reported for the four pages it was supposed to clone.
+        "layout_variety": lambda deck: layout_variety(deck.pptx_path, _layout_structural(deck.outline)),
         "wrapped_label": lambda deck: wrapped_labels(deck.pptx_path, deck.measurer),
         "overset_copy": lambda deck: overset_copy(deck.pptx_path, deck.measurer),
         # Not findings about the deck, but about which of the checks above were
@@ -371,6 +454,13 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
             lambda words: excessive_whitespace(deck.pptx_path, words, _layout_structural(deck.outline)),
         ),
     }
+
+
+def _planned(deck: DeckUnderReview, kind: str) -> list[Finding]:
+    """One kind out of the plan-against-file table reading, or nothing without a plan."""
+    if deck.outline is None:
+        return []
+    return [finding for finding in planned_tables(deck.pptx_path, deck.outline) if finding.kind == kind]
 
 
 def _structural(outline: Any | None) -> list[int]:
@@ -432,11 +522,6 @@ def check_deck(
             if on_error is not None:
                 on_error(name, exc)
     return found
-
-
-def for_audience(findings: Iterable[Finding], audience: Audience) -> list[Finding]:
-    """The findings one party can act on."""
-    return [finding for finding in findings if finding.audience is audience]
 
 
 def by_page(findings: Iterable[Finding]) -> dict[int, list[Finding]]:

@@ -33,7 +33,7 @@ async def test_a_text_source_is_read_and_recorded(workspace: Path) -> None:
     assert body["ok"] is True
     # A path, not a name: every path in the reply reads back with `read_file`, which
     # cost a live run two calls guessing where "notes.md" was.
-    assert body["sources"] == ["ppt_projects/tarvis/sources/notes.md"]
+    assert body["sources"] == ["deck/sources/notes.md"]
     assert (workspace / body["sources"][0]).is_file()
     assert (workspace / body["materials"]).is_file()
     assert body["characters"] > 0

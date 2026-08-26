@@ -55,6 +55,7 @@ from raven.providers.base import (
     LLMResponse,
     RunMeta,
     ToolCallRequest,
+    format_llm_error,
     send_max_tokens,
 )
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
@@ -233,6 +234,12 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
     return out
 
 
+# The backoff a streamed call falls back on when its provider names none. Only
+# duck-typed providers land here -- a real one answers `retry_delays`, which is
+# per-category and longer for a throttle.
+_STREAM_RETRY_DELAYS: tuple[float, ...] = (1, 2, 4)
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -273,6 +280,7 @@ class AgentLoop:
         max_iterations: int = 40,
         context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
+        web_search_max_results: int = 5,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
@@ -378,6 +386,7 @@ class AgentLoop:
             self.model, None, allow_fetch=False
         )
         self.brave_api_key = brave_api_key
+        self.web_search_max_results = web_search_max_results
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
@@ -524,6 +533,7 @@ class AgentLoop:
             workspace=workspace,
             model=self.model,
             brave_api_key=brave_api_key,
+            web_search_max_results=web_search_max_results,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
             exec_config=self.exec_config,
@@ -772,15 +782,11 @@ class AgentLoop:
             return
         from raven.ppt.tools.assembly import build_ppt_tools
 
-        designer = getattr(config, "designer", None)
         for tool in build_ppt_tools(
             self.workspace,
             profile=getattr(config, "profile", "script_author"),
             provider=self.provider,
-            designer_model=getattr(designer, "model", "") or None,
-            design_pass=getattr(designer, "enabled", False),
-            design_rounds=getattr(designer, "rounds", 2),
-            design_concurrency=getattr(designer, "concurrency", 6),
+            composer_model=getattr(config, "composer_model", "") or None,
             render_dpi=getattr(config, "render_dpi", 144),
             render_concurrency=getattr(config, "render_concurrency", 2),
             deck_name=getattr(config, "deck_name", "deck.pptx"),
@@ -800,11 +806,18 @@ class AgentLoop:
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
+                deny_patterns=self.exec_config.deny_patterns,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
             )
         )
         self._register_ppt_tools()
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        self.tools.register(
+            WebSearchTool(
+                api_key=self.brave_api_key,
+                max_results=self.web_search_max_results,
+                proxy=self.web_proxy,
+            )
+        )
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
@@ -1020,9 +1033,7 @@ class AgentLoop:
         if not blocks:
             return model_text, blocks, None
         if not self._supports_vision(model):
-            placeholder = image_placeholder_text(
-                blocks, blind=True, describe_tool=self._describe_tool_name()
-            )
+            placeholder = image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name())
             return _with_image_note(model_text, placeholder), None, None
         if self._supports_image_tool_result(model):
             return model_text, blocks, None
@@ -1736,71 +1747,161 @@ class AgentLoop:
         per-fragment arguments strings. Multi-tool / out-of-order merging is
         a v0.2 ask.
 
-        No retry on transient errors in v0.1 stream mode — adding retry to
-        a partially-streamed call requires either restarting from scratch
-        (wasteful) or resume-from-offset (provider-specific). Deferred.
+        A stream that fails before emitting anything is asked again, on the
+        provider's own backoff ladder. Restarting a stream already part-way
+        through is the wasteful case, and it stays refused — but a refusal at
+        the door has no partial anything to throw away, and this branch had no
+        retry at all: a single provider throttle ended a run that had twenty
+        pages of a deck built, while the ladder ``chat()`` uses sat unreachable
+        on the other side of the streaming split.
         """
-        content_buf: list[str] = []
-        reasoning_buf: list[str] = []
-        tool_call_slots: list[dict[str, Any]] = []
-        final_usage: dict[str, Any] | None = None
-        had_error = False
-        error_content: str | None = None
-        error_classification: ErrorClassification | None = None
-        upstream_finish_reason: str | None = None
+        # getattr because the loop accepts duck-typed providers (test stubs and
+        # thin adapters implement just chat/chat_stream); absent means the ladder
+        # LLMProvider would have used.
+        ladder = getattr(self.provider, "retry_delays", None)
+        delays: tuple[float, ...] = tuple(ladder()) if ladder is not None else _STREAM_RETRY_DELAYS
+        attempt = 0
+        while True:
+            attempt += 1
+            content_buf: list[str] = []
+            reasoning_buf: list[str] = []
+            tool_call_slots: list[dict[str, Any]] = []
+            final_usage: dict[str, Any] | None = None
+            had_error = False
+            error_content: str | None = None
+            error_classification: ErrorClassification | None = None
+            upstream_finish_reason: str | None = None
+            failure: LLMResponse | None = None
 
-        # aclosing() guarantees the async generator (and its underlying stream)
-        # is closed when a TimeoutError from the per-chunk idle cap unwinds the
-        # loop, so a stalled stream terminates with a structured error instead
-        # of hanging or leaking the connection. The stream path has no retry
-        # (see docstring), so the error surfaces as the turn's response.
-        try:
-            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
-                async for delta in stream:
-                    if delta.finish_reason == "error":
-                        # A non-streaming provider's chat() error, replayed
-                        # through the fallback as its single terminal delta.
-                        # Its content is the error text, not a token to render
-                        # or accumulate -- surface it via error_classification
-                        # instead of the normal success collation below.
-                        had_error = True
-                        error_content = delta.content
-                        error_classification = delta.error_classification
+            # aclosing() guarantees the async generator (and its underlying stream)
+            # is closed when a TimeoutError from the per-chunk idle cap unwinds the
+            # loop, so a stalled stream terminates with a structured error instead
+            # of hanging or leaking the connection.
+            try:
+                async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+                    async for delta in stream:
+                        if delta.finish_reason == "error":
+                            # A non-streaming provider's chat() error, replayed
+                            # through the fallback as its single terminal delta.
+                            # Its content is the error text, not a token to render
+                            # or accumulate -- surface it via error_classification
+                            # instead of the normal success collation below.
+                            had_error = True
+                            error_content = delta.content
+                            error_classification = delta.error_classification
+                            if delta.usage is not None:
+                                final_usage = delta.usage
+                            continue
+                        if delta.finish_reason:
+                            upstream_finish_reason = delta.finish_reason
+                        reasoning_delta = getattr(delta, "reasoning_content", None)
+                        if reasoning_delta:
+                            reasoning_buf.append(reasoning_delta)
+                            if on_reasoning_delta is not None:
+                                await on_reasoning_delta(reasoning_delta)
+                        if delta.content:
+                            content_buf.append(delta.content)
+                            if on_token_delta is not None:
+                                await on_token_delta(delta.content)
+                        if delta.tool_call_delta:
+                            _merge_tool_call_fragments(
+                                tool_call_slots,
+                                delta.tool_call_delta,
+                            )
                         if delta.usage is not None:
                             final_usage = delta.usage
-                        continue
-                    if delta.finish_reason:
-                        upstream_finish_reason = delta.finish_reason
-                    reasoning_delta = getattr(delta, "reasoning_content", None)
-                    if reasoning_delta:
-                        reasoning_buf.append(reasoning_delta)
-                        if on_reasoning_delta is not None:
-                            await on_reasoning_delta(reasoning_delta)
-                    if delta.content:
-                        content_buf.append(delta.content)
-                        if on_token_delta is not None:
-                            await on_token_delta(delta.content)
-                    if delta.tool_call_delta:
-                        _merge_tool_call_fragments(
-                            tool_call_slots,
-                            delta.tool_call_delta,
-                        )
-                    if delta.usage is not None:
-                        final_usage = delta.usage
-        except TimeoutError:
-            return LLMResponse(
-                content="".join(content_buf),
-                finish_reason="error",
-                error_classification=self.provider.classify_error(TimeoutError()),
-            )
+            except Exception as exc:
+                # Every upstream failure, not just a stall. `chat_stream` raises
+                # rather than yielding a terminal error delta, and only the stall
+                # was caught here -- so a throttle, a context overflow and a bad
+                # request all escaped this helper and every recovery keyed on
+                # `response.error_classification` with them: the compress-and-retry
+                # below could not see the overflow that ended a run 19 pages in, and
+                # the fallback chain could not see the 429 that ended another at 20.
+                # Returned as the shape `chat()` returns, they are all reachable
+                # again -- proved by `test_a_streamed_overflow_shrinks_and_recovers`,
+                # which fails without this branch.
+                #
+                # CancelledError is a BaseException and is not caught here, which
+                # is what keeps a cancelled turn cancelled.
+                # getattr for the same reason the rest of this method uses it: a thin
+                # adapter implementing just chat/chat_stream has no classifier, and
+                # this handler now runs on every upstream failure rather than only on
+                # a stall -- so its absence would turn a recoverable error into an
+                # AttributeError. The base class's reading is the same reading.
+                classifier = getattr(self.provider, "classify_error", LLMProvider.classify_error)
+                classification = classifier(exc)
+                # Tokens that arrived are the content; the formatted error only
+                # stands in when none did. A stall half way through a sentence has
+                # text the caller has already seen, and replacing it with the error
+                # string would lose the turn's only output -- while a refusal at the
+                # door has nothing to keep, and there `parse_llm_error` is what lets
+                # the surface render a diagnosis instead of an empty reply.
+                streamed = "".join(content_buf)
+                failure = LLMResponse(
+                    content=streamed
+                    or format_llm_error(exc, classification, provider=getattr(self.provider, "provider_name", None)),
+                    finish_reason="error",
+                    error_classification=classification,
+                )
 
-        if had_error:
-            return LLMResponse(
-                content=error_content,
-                finish_reason="error",
-                error_classification=error_classification,
-                usage=final_usage or {},
+            if failure is None and had_error:
+                failure = LLMResponse(
+                    content=error_content,
+                    finish_reason="error",
+                    error_classification=error_classification,
+                    usage=final_usage or {},
+                )
+            elif (
+                failure is None
+                and not (content_buf or tool_call_slots or reasoning_buf)
+                and upstream_finish_reason in (None, "stop")
+            ):
+                # An upstream that died mid-stream can arrive looking finished:
+                # litellm has no mapping for a provider's `finish_reason:
+                # "error"` (nor for zhipu's `network_error`) and answers "stop"
+                # for both, so a call that failed upstream reaches here as a
+                # completion holding nothing. Read as an answer, that is the
+                # model choosing to say nothing, and the turn ends on it with no
+                # error anywhere -- which is how a deck stops mid-build. Nothing
+                # can consume an empty completion, so it is reported as the
+                # failure it is.
+                failure = LLMResponse(
+                    content="Error calling LLM (empty_completion): the provider returned an empty completion",
+                    finish_reason="error",
+                    error_classification=ErrorClassification("empty_completion", retryable=True, should_fallback=True),
+                    usage=final_usage or {},
+                )
+
+            if failure is None:
+                break
+
+            # Asked again only when nothing was emitted. A stream cut half way
+            # through has tokens the caller has already seen, and restarting it
+            # would render them twice; a refusal at the door has nothing to
+            # replay, and that is the one a throttle produces.
+            verdict = failure.error_classification
+            if verdict is not None:
+                delays = max(delays, tuple(ladder(verdict)) if ladder is not None else delays, key=len)
+            if (
+                content_buf
+                or tool_call_slots
+                or reasoning_buf
+                or verdict is None
+                or not verdict.retryable
+                or attempt > len(delays)
+            ):
+                return failure
+            delay = delays[attempt - 1]
+            logger.warning(
+                "LLM stream error [{}] (attempt {}/{}) model={}, retrying in {:.1f}s",
+                verdict.category,
+                attempt,
+                len(delays) + 1,
+                model,
+                delay,
             )
+            await asyncio.sleep(delay)
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
 

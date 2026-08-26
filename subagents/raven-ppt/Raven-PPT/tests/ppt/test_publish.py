@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.ppt.contracts import Audience, Finding, Project, Severity
+from raven.ppt.contracts import Finding, Project, Severity
 from raven.ppt.services.publish import PublishRefusedError, publish, stage
 
 
@@ -29,9 +29,7 @@ def _fact() -> Finding:
 
 
 def _warning() -> Finding:
-    return Finding(
-        kind="type_floor", severity=Severity.WARNING, message="11.5pt body", page=3, audience=Audience.DESIGNER
-    )
+    return Finding(kind="type_floor", severity=Severity.WARNING, message="11.5pt body", page=3)
 
 
 def test_a_deck_is_delivered_atomically_to_the_named_path(project: Project) -> None:
@@ -69,10 +67,23 @@ def test_a_blocking_finding_refuses_and_names_what_stands(project: Project) -> N
 
 
 def test_a_kind_the_route_calls_fatal_refuses_even_at_warning_severity(project: Project) -> None:
-    band = Finding(kind="band", severity=Severity.WARNING, message="a filled bar across page 4", page=4)
+    """A route's own kind, which the shared checks do not rank at all.
+
+    `unmapped_page` is built inside the route that cares whether a page traces to
+    its own code, so severity is not where its weight lives. The example used to be
+    `band`, and that was the bug: the gate reported it, one route still called it
+    fatal, and this test froze the contradiction as intended behaviour.
+    """
+    orphan = Finding(kind="unmapped_page", severity=Severity.WARNING, message="page 4 maps to no block", page=4)
     staged = stage(project, _deck(project))
-    with pytest.raises(PublishRefusedError, match="1 band"):
-        publish(project, staged, project.exports_dir / "d.pptx", findings=[band], blocking_kinds=frozenset({"band"}))
+    with pytest.raises(PublishRefusedError, match="1 unmapped_page"):
+        publish(
+            project,
+            staged,
+            project.exports_dir / "d.pptx",
+            findings=[orphan],
+            blocking_kinds=frozenset({"unmapped_page"}),
+        )
 
 
 def test_a_deck_that_changed_after_it_was_checked_is_refused(project: Project) -> None:

@@ -2,6 +2,12 @@
 .env
 .config.rendered.json
 
+# The config loader's own bookkeeping: it writes `<config>.migrations.json`
+# beside whatever config file it loaded, to record the schema version already
+# applied. It is written by the runtime, read by the runtime, and carries
+# nothing a checkout needs.
+config.migrations.json
+
 # Local records of an install, and of the config that preceded an update. Both
 # carry this machine's absolute paths, and a backup taken through install.py
 # carries every other subagent registered on it.
@@ -15,6 +21,12 @@ config.json.bak-*
 # back into the repo.
 *.tar
 *.pptx
+
+# The bundled templates are the exception: they are what a task with no template
+# of its own is offered, so a checkout without them resolves an empty catalogue.
+# They are source in the sense that matters here -- nothing in this repo builds
+# them -- and they are large, so a change to this directory is a decision.
+!Raven-PPT/raven/ppt/assets/templates/*.pptx
 
 # Runtime state. Every one of these is a record of real runs -- the materials a
 # caller pointed at, the decks built, the pages rendered for review -- so it is

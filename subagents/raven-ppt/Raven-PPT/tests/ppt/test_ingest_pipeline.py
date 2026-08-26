@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.contracts.sources import AssetKind
 from raven.ppt.services.ingest import READ_FILE, ingest_materials, load_catalogue
 
@@ -131,7 +131,6 @@ def test_image_only_sources_come_back_with_a_warning_not_silent_empty_text(tmp_p
     (finding,) = outcome.findings
     assert finding.kind == "text_layer"
     assert finding.severity is Severity.WARNING
-    assert finding.audience is Audience.AUTHOR
     assert "image-only" in finding.message
     assert finding.detail["pages"] == 2
 
@@ -365,6 +364,62 @@ def test_a_supplied_image_is_registered_with_where_it_was_downloaded_from(tmp_pa
     # Not a region of any page, so coverage says nothing about it.
     assert asset.page_coverage == 0.0
     assert asset.source_bbox is None
+
+
+def test_a_supplied_image_takes_the_caption_its_fetch_recorded(tmp_path: Path) -> None:
+    """A picture off a web page has no caption in its bytes: the words sit in the HTML
+    beside it, so whatever fetched it is the only thing that ever held both."""
+    from PIL import Image
+
+    materials = tmp_path / "downloads"
+    materials.mkdir()
+    Image.new("RGB", (320, 180), (35, 90, 140)).save(materials / "source.png")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "sources.jsonl").write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/source.png",
+                "path": str(materials / "source.png"),
+                "content_sha256": hashlib.sha256((materials / "source.png").read_bytes()).hexdigest(),
+                "caption": "Figure 2: extraction and update phases",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (asset,) = ingest_materials(materials, out).assets
+
+    assert asset.caption == "Figure 2: extraction and update phases"
+    assert load_catalogue(out / "figures.json", figures_dir=out / "figures")[asset.asset_id].caption == asset.caption
+
+
+def test_a_papers_own_figure_caption_is_not_replaced_by_the_download_it_arrived_in(tmp_path: Path, noise_png) -> None:
+    """A recorded caption describes the file, and a paper is not one figure. Letting it
+    through would print one line under every figure the paper prints, over the caption
+    each of those pages actually carries."""
+    materials = tmp_path / "downloads"
+    materials.mkdir()
+    _report_pdf(noise_png, materials / "paper.pdf", with_figure=True, caption="Figure 3. A noisy block.")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "sources.jsonl").write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/paper.pdf",
+                "path": str(materials / "paper.pdf"),
+                "content_sha256": hashlib.sha256((materials / "paper.pdf").read_bytes()).hexdigest(),
+                "caption": "the Mem0 paper",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (asset,) = ingest_materials(materials, out).assets
+
+    assert asset.caption == "Figure 3. A noisy block."
 
 
 def test_two_supplied_images_with_one_stem_stay_separately_referenceable(tmp_path: Path) -> None:

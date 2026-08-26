@@ -27,7 +27,14 @@ from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
 from raven.ppt.contracts import Project
-from raven.ppt.services.template import bind, bound, decompile
+from raven.ppt.services.template import (
+    PaletteError,
+    as_palette,
+    bind,
+    bound,
+    decompile,
+    write_palette,
+)
 from raven.ppt.services.template.house import house_style
 from raven.ppt.services.template.inventory import template_dir, write_ground
 from raven.ppt.services.template.menu import menu, roles
@@ -36,11 +43,10 @@ from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_ints
 from raven.utils.helpers import image_block, text_block
 
-# Every example page is reachable, in batches. A cap was the first answer and it
+# Every example page comes back in one reply. A cap was the first answer and it
 # was indefensible: the templates measured ship thirteen pages, the cap was twelve,
 # and the thirteenth was simply never shown -- an author choosing a page to adapt
-# could not choose the one it could not see. So the batch bounds the request body
-# and the reply says how many remain and how to ask for them.
+# could not choose the one it could not see.
 #
 # These renders answer "which page is nearest what I have to say", not "is this
 # type legible in a room", so they are cheap: at 96 dpi a page is a quarter of the
@@ -57,14 +63,14 @@ MAX_SOURCE_PAGES = 6
 class PptTemplateTool(Tool):
     name = "ppt_template"
     description = (
-        "Build this deck inside a .pptx template the user supplied. Call it with the file's path to "
-        "bind it: the deck is then built in a copy of that file, so the template's master, theme, "
-        "layouts, fonts and canvas are this deck's house style. What comes back is every visible example "
-        "page with its role, capacity and render. Choose the nearest page for each content shape and "
-        "adapt it: replace its text and pictures, delete unused repeated units, and move or resize only "
-        "when the content needs it. The cover, contents, section divider and closing should retain their "
-        "native furniture; content pages may be substantially changed. If no example page can carry the "
-        "argument, compose inside the measured house style."
+        "Build this deck inside a .pptx template. Call it with the file's path to bind it: the deck is "
+        "then built in a copy of that file, so the template's master, theme, layouts, fonts and canvas "
+        "are this deck's house style. Called with just the project it returns every visible example page "
+        "with its role and capacity, a render of each, the measured house style -- title row, body area, "
+        "type ladder -- and a palette derived from the file. Called with `pages` it returns those "
+        "example pages as python-pptx source to adapt. Called with `palette` it keeps the colours you "
+        "read off the renders as this deck's own, for every page: what a template declares and what its "
+        "pages paint are not the same colours, and only the renders show the second."
     )
     timeout_seconds = 300.0
 
@@ -85,12 +91,31 @@ class PptTemplateTool(Tool):
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "project": {"type": "string", "description": "the deck project, as given to ppt_ingest"},
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
                 "path": {
                     "type": "string",
                     "description": (
                         "path to the user's .pptx, relative to the workspace. Give it once to bind the "
                         "template; leave it out afterwards, the deck stays bound to it"
+                    ),
+                },
+                "palette": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ]
+                    },
+                    "description": (
+                        "the colours you read off the renders above, as role: #RRGGBB. These become this "
+                        "deck's theme for every page, so state them once here rather than per page. "
+                        "background, foreground, accent, surface, muted, accent_soft, accent_ink and grid "
+                        "replace what would have been derived; chart_series is a list in the order the "
+                        "charts read it; any other name you give is a colour this deck's pages can then "
+                        "reach as a tint. State the roles you are sure of -- the rest follow from those. "
+                        "What a template declares and what its pages paint are not the same colours, so "
+                        "this reading is the renders' and not the file's"
                     ),
                 },
                 "pages": {
@@ -99,8 +124,8 @@ class PptTemplateTool(Tool):
                     "maxItems": MAX_SOURCE_PAGES,
                     "description": (
                         "which example pages to read as python-pptx source, by the numbers the reply names. "
-                        "Any example page may be adapted; use the nearest content shape and change its "
-                        "text, pictures and repeated units to fit the actual page"
+                        "The source comes back with the page's pictures written into the build directory, so "
+                        "an add_picture line in it runs as pasted"
                     ),
                 },
             },
@@ -112,6 +137,7 @@ class PptTemplateTool(Tool):
         project: str,
         path: str | None = None,
         pages: list[int] | None = None,
+        palette: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
         try:
@@ -126,6 +152,14 @@ class PptTemplateTool(Tool):
 
         already = bound(deck)
         rebound = self._bind(deck, path) if path else None
+        # After the bind, because binding a different template drops the palette read
+        # off the last one -- so a call that does both states this template's colours.
+        stated: dict[str, Any] | None = None
+        if palette is not None:
+            try:
+                stated = write_palette(deck, as_palette(palette))
+            except PaletteError as exc:
+                return _return.failed(str(exc), hint='palette: {"accent": "#155FFD"}')
         template = rebound or already
         if template is None:
             error, detail = self._nothing(path)
@@ -152,6 +186,14 @@ class PptTemplateTool(Tool):
             payload["theme_colours"] = dict(template.inventory.theme_colours)
         if template.inventory.fonts:
             payload["fonts"] = list(template.inventory.fonts)
+        if stated is not None:
+            # Echoed, because a palette is merged over what the deck already stated and
+            # an author correcting one role should see the seven it is now sitting with.
+            payload["palette"] = stated
+            payload["palette_note"] = (
+                "kept for this deck; every page's ppt_theme carries these, and the roles you did "
+                "not name are derived from the ones you did"
+            )
 
         if pages:
             return await self._as_code(deck, template, pages, payload)
@@ -277,20 +319,71 @@ class PptTemplateTool(Tool):
                 "clone the template's structural pages -- "
                 + ", ".join(f"its {role} is page {number}" for role, number in named.items())
                 + " -- with `from ppt_template import adapt, prototype` then "
-                "`adapt(prs, prototype(tpl, N), texts={...})`, where tpl is Presentation(the template's own file). "
-                "Those four are the deck's house frame and are not redrawn"
+                "`adapt(prs, prototype(tpl, N), title='...', texts={'the words there now': 'yours'})`, where "
+                "`tpl = Presentation(os.environ['PPT_TEMPLATE_SOURCE'])` -- the user's own file, with these "
+                "example pages still in it. That is a different file from the one you build into: "
+                "`PPT_TEMPLATE` has had them removed, so handing that one to `prototype` answers `this "
+                "template ships 0 pages`. Those pages are the deck's house frame and are not redrawn"
             )
+        # Every argument gets a literal call here, and that is the whole point of the
+        # length. A live run called `adapt` fourteen times, passed `texts=` in thirteen
+        # of them and `pictures=` and `drop=` in none -- the reply had spelled `texts={...}`
+        # out and left the other two as prose, so the template's placeholder photograph and
+        # its icons shipped untouched. The same run imported `drop_shape` and never called
+        # it. A capability described is a capability declined.
         asks.append(
             "any listed example page may be a content prototype when its composition is close to the "
-            "page's information shape: use adapt to replace its text and pictures, items to fill the "
-            "actual repeated units and delete spares, and drop_shape for unused furniture. A prototype "
+            "page's information shape: `adapt(prs, prototype(tpl, N), title='page title', "
+            "subtitle='its second line', texts={'the words there now': 'yours'}, "
+            "pictures={4: FIGURES/'fig2.png'}, drop=[9], keep=['20XX.XX.XX'])`, where "
+            "`FIGURES = Path(os.environ['PPT_FIGURES_DIR'])` -- a bare 'figures/...' resolves against the "
+            "build directory the program runs in, which is not where the ingest put them. A key is the "
+            "shape's current text or its 1-based place on the page -- a shape's *name* matches nothing "
+            "and raises, listing what the page does hold. `title` and `subtitle` reach the page's own "
+            "heading rows without your having to know which shape they are, and on a content page they "
+            "are the form to prefer -- measured across the twelve templates here, `title` lands on all 197 "
+            "example pages and `subtitle` on 180. A closing page is where `subtitle` runs out: a heading row is the topmost "
+            "line in the page's top third, and a cover that centres its title mid-page or a section "
+            "divider carrying one word has no second one, so there `adapt` raises and you name that "
+            "line in `texts` off the render instead"
+        )
+        asks.append(
+            "the two defaults are opposites, and this is the one that catches authors out: **text you "
+            "name in none of those arguments is emptied**, because the words on a template page are its "
+            "example copy -- so name every line you mean to keep, or list it in `keep=[...]` to leave it "
+            "exactly as the template wrote it. **A picture or icon you name in neither `pictures` nor "
+            "`drop` stays as it is**, so the template's stock photograph and its decorative icons ship in "
+            "your deck unless you replace them or drop them. `pictures={4: FIGURES/'fig2.png'}` "
+            "keeps the frame's size, crop and rounding; `pictures={4: (FIGURES/'fig2.png', "
+            "(0.8, 1.6, 7.4, 4.2))}` reshapes the frame first, where those four numbers are "
+            "(left, top, width, height) in inches -- a size, not the two corners a `ppt_layout` Box "
+            "holds, though a Box may be handed over whole and is converted"
+        )
+        asks.append(
+            "a content page is usually one small group repeated, and `items` is what fills it: "
+            "`adapt(prs, prototype(tpl, N), title='...', items=[['01', 'first heading', 'its body'], "
+            "['02', 'second heading', 'its body']])`. One entry per unit, each a list positional over "
+            "that unit's text shapes -- `None` keeps one as it is, and `''` over a number restates it "
+            "for its new position -- or a dict keyed by the text a shape holds now. Give one value per "
+            "text shape in the unit and not one per line you have to say: a list shorter than the unit "
+            "leaves the rest exactly as the template wrote it, so a two-value entry against a "
+            "three-shape card ships the template's own placeholder copy once per surviving card. "
+            "Passing more values than the unit holds raises, naming each shape, which is how to learn "
+            "the count. The units left over "
+            "are deleted rather than emptied, so a six-slot page carrying four points loses two slots "
+            "instead of shipping two empty bubbles. `items` fills the page's longest run only: if a "
+            "render shows more repeated cards than you passed items for, the page holds a second run, "
+            "and `fill(units(slide)[1], [['03', 'third heading', 'its body']])` after `adapt` returns "
+            "fills that one -- positionally, because `adapt` has already emptied its words; both come "
+            "from `from ppt_template import adapt, prototype, fill, units, shape_at, drop_shape`. A prototype "
             "is a starting composition, not an immutable form; if its capacity or picture geometry is "
             "wrong, choose another page or compose inside the house style"
         )
         if house is not None and house.layout:
             asks.append(
-                f"for a page without a suitable prototype, draw it yourself: `prs.slides.add_slide(layout)` "
-                f"on the {house.layout!r} layout so it inherits the template's background, put the page title "
+                f"for a page without a suitable prototype, draw it yourself: "
+                f"`layout = prs.slide_layouts.get_by_name({house.layout!r})` then "
+                f"`prs.slides.add_slide(layout)`, so the page inherits the template's background, put the page title "
                 "in the title row exactly as given above, and lay the content out inside body_area_in with "
                 "`ppt_layout` -- Box.columns, .rows, .grid, plane(), write(), table(). The arrangement is "
                 "yours to decide from what the page has to say"
@@ -299,7 +392,7 @@ class PptTemplateTool(Tool):
             asks.append(
                 "one scale for the whole deck: every page title at "
                 f"{house.scale.get('title', 28):g}pt, body copy at {house.scale.get('body', 18):g}pt, and "
-                "nothing under 14pt. Same size for the same role on every page -- a reader reads each page "
+                "copy at or above 14pt, with a caption or a source line free to reach 10.8pt. Same size for the same role on every page -- a reader reads each page "
                 "against the one before it, and a deck whose body size moves page to page reads as unfinished"
             )
         asks.append(
@@ -307,7 +400,17 @@ class PptTemplateTool(Tool):
             "pages removed, so a page you add inherits its master, theme and canvas"
         )
         if named and not renders:
-            payload["renders"] = "unavailable on this machine; ask for selected example pages as code instead"
+            # What is known is that this call produced none, and that is all this
+            # may say. It used to say "unavailable on this machine", which is a
+            # fact about the host rather than about the call -- and the author acts
+            # on it for the rest of the deck: one live run read every example page
+            # as code and never asked for a render again, on a host where the pdf
+            # and four page renders had just been written to disk. The failure is
+            # in the log now; the sentence no longer states its cause.
+            payload["renders"] = (
+                "none came back from this call; ask again for a few pages by number, "
+                "or read selected example pages as code"
+            )
         body = _return.done(asks=asks, **payload)
         blocks: list[Any] = []
         by_number = {number: role for role, number in named.items()}
@@ -326,8 +429,6 @@ class PptTemplateTool(Tool):
         author can paste and run: that directory is where the program runs.
         """
         deck.build_dir.mkdir(parents=True, exist_ok=True)
-        listing = menu(template.source)
-        named = roles(listing)
         asked = sorted(set(pages))
         # Out of range first: "page 9 of a 2-page template" is a different mistake from
         # "page 5 is a content page", and answering the second for the first sends an

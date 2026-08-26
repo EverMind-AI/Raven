@@ -1,18 +1,17 @@
 """Whether the pipeline can tell one page of a deck from another.
 
-Every later stage works one page at a time: the design pass is handed a page's
-render and the part of the author's input that drew it, and can neither review
-nor repair a page it cannot locate. So a deck whose pages cannot be told apart
+Review works one page at a time: a page's render comes back beside the part of
+the author's input that drew it, and neither the author nor a finding can be
+pointed at a page nothing can locate. So a deck whose pages cannot be told apart
 is refused -- not because anything is wrong with it, but because nothing after
-this point can do anything with it, and a deck that silently skips the design
-pass ships with every defect the pass exists to find. One did, with copy running
-off seven of its cards, every one of them measured and reported to nobody.
+this point can do anything with it. One shipped that way, with copy running off
+seven of its cards, every one of them measured and reported to nobody.
 """
 
 from __future__ import annotations
 
 from raven.ppt.contracts.build import BuildOutcome
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 
 _MESSAGE = (
     "the pages cannot be told apart in the program that drew them: every page came from the same line of "
@@ -48,7 +47,6 @@ def mapping_findings(outcome: BuildOutcome | None) -> list[Finding]:
         Finding(
             kind="page_mapping",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=_MESSAGE,
             detail={"pages": outcome.pages, "mapped": len(outcome.sources), "distinct_starts": len(starts)},
         )

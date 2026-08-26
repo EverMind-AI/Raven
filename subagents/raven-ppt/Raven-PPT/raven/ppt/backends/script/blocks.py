@@ -1,7 +1,7 @@
 """Which part of the program drew which page.
 
-The design pass works on one page at a time, so it needs that page's code and
-nothing else. Two sources, and the order matters.
+Review works on one page at a time, so a render has to be matched to that page's
+code and nothing else. Two sources, and the order matters.
 
 Execution is exact: every `add_slide` call has the script line that made it on
 the stack, so the runner records it and the spans follow by construction. There

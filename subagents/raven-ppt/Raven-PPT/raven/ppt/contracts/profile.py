@@ -18,11 +18,8 @@ from raven.ppt.contracts.capability import Capabilities
 class StageSpec:
     """One step of a route, and the tool the model reaches it through.
 
-    `tool` is None for a stage the pipeline runs itself. The design pass is the
-    case that matters: asked for in prose it did not happen, because by the time
-    a later instruction says "now review the layout" the author has already been
-    looking at these pages while getting them to build, so the review it would
-    run is the one it just ran. It runs from code, on a fresh context.
+    `tool` is None for a stage the pipeline runs itself -- publication, which
+    happens inside the build rather than through a call the model makes.
     """
 
     name: str
@@ -38,8 +35,8 @@ class Profile:
     backend: str
     stages: tuple[StageSpec, ...]
     capabilities: Capabilities = field(default_factory=Capabilities)
-    # Finding kinds that refuse publication. Everything else warns and is fed
-    # back into the next design round.
+    # Finding kinds that refuse publication. Everything else warns and comes back
+    # to the author with the renders.
     blocking_kinds: frozenset[str] = field(default_factory=frozenset)
     skill: str | None = None
 

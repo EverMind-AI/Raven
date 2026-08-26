@@ -15,9 +15,23 @@ material:
 * "crop" is the wrong instruction for a table. Half a table is a misquote.
 
 So a fragment is dropped here, by the geometry that proves it is one, and what
-survives carries sentences instead of a grade: what was measured, and what that
-costs on a slide. A model can act on those, argue with them, or place the
-figure anyway -- which it could always do, only now the reasoning is visible.
+survives carries sentences instead of a grade: what the extraction produced. A
+model can act on those, argue with them, or place the figure anyway -- which it
+could always do, only now the reasoning is visible.
+
+What those sentences deliberately do *not* say is how big to place the figure.
+An intermediate version of this file computed a shrink factor -- the figure's
+pixels contained inside a nominal half-page slot -- and stated it as a fact
+("renders at 20% ... which puts its own 8pt type under 10pt"). It divided points
+by pixels, so the number only meant anything at 72dpi, which an extracted figure
+almost never carries: of seventeen assets in one real run, ten reported no dpi at
+all, three reported a default 72 and four reported 150. It fired on 17 of 17
+figures in that run and 14 of 14 in another, which between them placed two
+pictures across twenty pages and one across eight. A figure's legibility is a
+function of the width the page gives it, which is not visible from here, and a
+model that can render the figure and look at it reads that better than any ratio
+computed from the file. So the placement is the page's decision, and none of the
+sentences below make it.
 """
 
 from __future__ import annotations
@@ -28,40 +42,21 @@ from pathlib import Path
 
 from raven.ppt.contracts.sources import AssetKind, SourceAsset
 from raven.ppt.services.ingest.geometry import as_tuple, contained_in, rect
-from raven.ppt.services.ingest.images import (
-    DETAIL_INK_MAX,
-    contain_scale,
-    estimate_panels,
-    ink_ratio,
-    interior_ink_ratio,
-)
+from raven.ppt.services.ingest.images import estimate_panels, interior_ink_ratio
 
 # Below either bound a figure cannot carry a slide at any size.
 _MIN_W_PX = 200
 _MIN_H_PX = 140
 _MIN_PAGE_COVERAGE = 0.01
 _MIN_INTERIOR_INK = 0.004
-# Beyond this a figure no longer fits a slot beside text, though a page of its
-# own still carries it: observed on four paper decks whose 4-5:1 figures the
-# planner placed anyway -- and was right to.
-_MAX_ASPECT = 3.5
-_MIN_ASPECT = 0.28
-# Past this there is no layout at all: the 6.1:1 bands a web-print export
-# slices a page into sit above it, a wide architecture diagram below.
+# What separates a strip from a wide figure, measured on the two real runs
+# behind this file: the widest figure a person judged usable came out at 3.4:1
+# (2191x650 and 1055x313), while the assets that are not figures at all sat far
+# above -- a badge at 12.9:1, and the 6.1:1 bands a web-print export slices a
+# page into. Nothing real was observed between 3.4 and 6.
 _STRIP_ASPECT = 6.0
 _PAGE_SCREENSHOT_COVERAGE = 0.6
 _COMPOSITE_PANELS = 4
-# A half-page figure area on a 1280x720 board, less its padding: what a figure
-# has to survive when it shares a page with text. Nominal on purpose -- no
-# backend's slot geometry is visible from here, and the point is the order of
-# magnitude at which in-figure text stops being readable.
-_FIGURE_AREA = (508.0, 360.0)
-# A paper figure rendered at 150dpi shows an 8pt axis label at roughly
-# 1.56*scale pt on the slide, so anything under ~0.8 puts it below 10pt -- the
-# point where a projector loses it. A photograph has no labels to lose and
-# survives much further down.
-_DETAIL_MIN_SCALE = 0.8
-_PHOTO_MIN_SCALE = 0.45
 
 SCHEMA = "raven.ppt.assets.v1"
 
@@ -74,7 +69,6 @@ class Measurements:
     height_px: int
     page_coverage: float
     panel_count: int
-    ink_ratio: float = 1.0
     interior_ink_ratio: float = 1.0
 
     @property
@@ -95,13 +89,16 @@ def measure(path: Path, size: tuple[int, int], coverage: float, *, panel_count: 
         height_px=int(height),
         page_coverage=coverage,
         panel_count=estimate_panels(path) if panel_count is None else panel_count,
-        ink_ratio=ink_ratio(path),
         interior_ink_ratio=interior_ink_ratio(path),
     )
 
 
 def concerns(measured: Measurements, kind: AssetKind) -> tuple[str, ...]:
-    """Every reason this asset may be hard to use, as sentences.
+    """What the extraction produced, where that is not simply a figure.
+
+    Every sentence here is a property of the file on disk. None of them says
+    how large to place it -- see the module docstring for the measurement that
+    retired the one that did.
 
     Ordered worst first, and every applicable one is stated rather than the
     first: a 6:1 band that also covers its whole page has two problems, and the
@@ -124,47 +121,12 @@ def concerns(measured: Measurements, kind: AssetKind) -> tuple[str, ...]:
     if measured.interior_ink_ratio < _MIN_INTERIOR_INK:
         found.append("the interior is blank: only an outer frame or a background band was extracted")
     if aspect > _STRIP_ASPECT or (aspect and aspect < 1 / _STRIP_ASPECT):
-        found.append(f"aspect {aspect:.1f}:1 — a banner or a narrow strip; no slide layout carries that shape")
-    elif aspect > _MAX_ASPECT or (aspect and aspect < _MIN_ASPECT):
-        shape = "wide" if aspect > _MAX_ASPECT else "tall"
-        found.append(
-            f"aspect {aspect:.1f}:1 — too {shape} for a slot beside text, though a page of its own carries it "
-            "at full size"
-        )
+        found.append(f"aspect {aspect:.1f}:1 — the shape of a banner or a page-slicing strip")
     if coverage >= _PAGE_SCREENSHOT_COVERAGE:
-        found.append(
-            f"covers {coverage:.0%} of its source page — a whole-page screenshot, so in a slot beside text its "
-            "own words are unreadable"
-        )
+        found.append(f"covers {coverage:.0%} of its source page — a whole-page screenshot rather than a figure in it")
     if kind is not AssetKind.TABLE and measured.panel_count >= _COMPOSITE_PANELS:
-        found.append(
-            f"about {measured.panel_count} panels in one figure — the single panel a page cites reads far "
-            "better than the composite"
-        )
-    found.extend(_scale_concerns(measured, kind))
+        found.append(f"about {measured.panel_count} panels in one figure — a composite, not a single plot")
     return tuple(found)
-
-
-def _scale_concerns(measured: Measurements, kind: AssetKind) -> list[str]:
-    scale = contain_scale((measured.width_px, measured.height_px), _FIGURE_AREA)
-    if not 0.0 < scale < _DETAIL_MIN_SCALE:
-        return []
-    detail = kind is AssetKind.TABLE or measured.ink_ratio < DETAIL_INK_MAX
-    if detail:
-        subject = "a table" if kind is AssetKind.TABLE else "line art"
-        return [
-            f"{subject} at {measured.width_px}x{measured.height_px}px renders at {scale:.0%} in a figure area "
-            "beside text, which puts its own 8pt type under 10pt"
-        ]
-    if scale < _PHOTO_MIN_SCALE:
-        # Nothing here can tell a product photograph (fine shrunk) from a UI
-        # screenshot (whose captions vanish), so state the scale and let
-        # whoever can see the image decide.
-        return [
-            f"renders at {scale:.0%} in a figure area beside text — fine for a photograph, thin for anything "
-            "carrying text or interface detail"
-        ]
-    return []
 
 
 def build(
@@ -282,9 +244,7 @@ def write_catalogue(assets: list[SourceAsset], path: Path) -> None:
     for asset in sorted(assets, key=lambda item: item.asset_id):
         entry = {key: value for key, value in asdict(asset).items() if key not in ("asset_id", "path", "kind")}
         entry["file"] = (
-            str(asset.path.relative_to(figures_dir))
-            if asset.path.is_relative_to(figures_dir)
-            else asset.path.name
+            str(asset.path.relative_to(figures_dir)) if asset.path.is_relative_to(figures_dir) else asset.path.name
         )
         entry["kind"] = asset.kind.value
         entry["concerns"] = list(asset.concerns)

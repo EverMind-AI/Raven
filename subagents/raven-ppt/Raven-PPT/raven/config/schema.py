@@ -742,6 +742,11 @@ class ExecToolConfig(Base):
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
     extra_deny_patterns: list[str] = Field(default_factory=list)
+    # Replaces ExecTool's built-in destructive-command list rather than adding to it.
+    # None keeps the built-ins; an empty list turns them off. A deck run needs that:
+    # the built-in rm -rf pattern refused the scratch directory a render check had
+    # just made, and the refusal ended the run with the deck unfinished.
+    deny_patterns: list[str] | None = None
 
 
 class MediaToolConfig(Base):
@@ -819,36 +824,6 @@ class ToolSearchConfig(Base):
     """Extra tool names kept exposed every turn, on top of the core set."""
 
 
-class PptDesignerConfig(Base):
-    """The design pass: a second look over the finished deck, off by default.
-
-    Off because it was measured and it made decks worse. On the deck it was last
-    run over: 224 of 3420 characters gone across four pages -- a whole bullet, a
-    chart's caption, a page's conclusion -- and three surviving lines reworded,
-    all of which its own brief forbids in the first paragraph. It also added an
-    accent rail to eight pages that the deck's own gate reads as a colour band.
-    The mechanical guards for both are in now (`copy_rejection`, the band gate),
-    but a stage whose value is unproven should not be the default on a route that
-    is otherwise good.
-
-    Set `enabled = true` to get it back. Everything it does is a rearrangement of
-    a deck that already measured clean, so a build without it loses a second pair
-    of eyes and none of the checks.
-    """
-
-    enabled: bool = False
-    model: str = ""
-    """The model the pass runs on; empty means the main one. What matters is the
-    empty context rather than the model -- the author cannot see its own pages as
-    a reader does, having decided what they mean -- so pointing this at the same
-    model is a normal configuration rather than a no-op."""
-    rounds: int = Field(default=2, ge=1, le=5)
-    """How many look-fix-look rounds. One pass can only claim to have improved a
-    page; the round after it renders the page again and hands it to someone who
-    did not write it. Above three the returns are not visible in the render."""
-    concurrency: int = Field(default=6, ge=1, le=16)
-
-
 class PptToolConfig(Base):
     """Deck authoring, which is what this build is for.
 
@@ -865,7 +840,12 @@ class PptToolConfig(Base):
     as a python-pptx program; the other declared routes are named in
     `raven.ppt.profiles.registry` and register nothing until their backends
     exist."""
-    designer: PptDesignerConfig = Field(default_factory=PptDesignerConfig)
+    composer_model: str = ""
+    """The model the per-page calls inside `ppt_outline` and `ppt_figure_inspect`
+    run on; empty means the main one. What matters is the empty context rather
+    than the model -- a page's copy is written better against one page's claim
+    than as one twentieth of a reply -- so pointing this at the same model is a
+    normal configuration rather than a no-op."""
     render_dpi: int = Field(default=144, ge=72, le=300)
     """What a page render is rasterised at before it is shown to a model. 144 is
     legible for judging type size; 96 is not, and 300 is bytes nobody reads."""

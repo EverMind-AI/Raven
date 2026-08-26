@@ -1,5 +1,6 @@
 """Shell execution tool."""
 
+import logging
 import os
 import re
 import shlex
@@ -67,16 +68,22 @@ class ExecTool(Tool):
     ):
         self.timeout = timeout
         self.working_dir = working_dir
-        self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",  # del /f, del /q
-            r"\brmdir\s+/s\b",  # rmdir /s
-            r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
-            r"\b(mkfs|diskpart)\b",  # disk operations
-            r"\bdd\s+if=",  # dd
-            r">\s*/dev/sd",  # write to disk
-            r":\(\)\s*\{.*\};\s*:",  # fork bomb
-        ]
+        # `is not None`, not `or`: an operator asking for no deny-list at all passes
+        # an empty one, and `or` would hand back the defaults they just turned off.
+        self.deny_patterns = (
+            deny_patterns
+            if deny_patterns is not None
+            else [
+                r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
+                r"\bdel\s+/[fq]\b",  # del /f, del /q
+                r"\brmdir\s+/s\b",  # rmdir /s
+                r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
+                r"\b(mkfs|diskpart)\b",  # disk operations
+                r"\bdd\s+if=",  # dd
+                r">\s*/dev/sd",  # write to disk
+                r":\(\)\s*\{.*\};\s*:",  # fork bomb
+            ]
+        )
         # Operator-configurable extras (tools.exec.extra_deny_patterns), appended
         # to the built-in defaults; empty by default so product behaviour is
         # unchanged. The proactivity-eval harness sets these to block host GUI
@@ -187,10 +194,12 @@ class ExecTool(Tool):
             # Non-sandboxed: full guard — deny-list patterns AND workspace restriction.
             guard_error = self._guard_command(command, cwd)
             if guard_error:
-                return self._terminal_error(guard_error)
+                return self._terminal_error(guard_error, command)
             decision = self._policy.evaluate(command)
             if decision is CommandDecision.HARD_DENY:
-                return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
+                return self._terminal_error(
+                    "Error: Command blocked by safety guard (policy evaluation failed)", command
+                )
             if decision is CommandDecision.REQUIRE_APPROVAL:
                 approval_error = await self._request_approval(command)
                 if approval_error:
@@ -200,7 +209,7 @@ class ExecTool(Tool):
             # enforce workspace restriction so operator-set boundaries are respected.
             workspace_error = self._check_workspace_restriction(command, cwd)
             if workspace_error:
-                return self._terminal_error(workspace_error)
+                return self._terminal_error(workspace_error, command)
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
@@ -235,9 +244,28 @@ class ExecTool(Tool):
         turn = self._approval_turn.get()
         digest = sha256(command.encode()).hexdigest()
         if digest in turn.denied_digests:
-            return self._terminal_error("Error: User denied this command earlier in the current turn")
+            return self._terminal_error("Error: User denied this command earlier in the current turn", command)
         if turn.responder is None or not turn.conversation_id:
-            return self._terminal_error("Error: Command requires user approval, but this turn is not interactive")
+            # Nobody to ask is not the same as being told no. A denial is a decision
+            # to respect rather than route around, which is what `abort_action`
+            # enforces by ending the turn; an absent approval channel is a fact about
+            # where this is running, and ending the turn on it costs everything the
+            # model could still do without a shell. Two headless deck runs ended
+            # here with eighteen of twenty pages unwritten -- one cropping a logo,
+            # one reading its own materials -- and neither was refused by anyone.
+            #
+            # The command still does not run, and nor will any other that needs
+            # approval, so there is no equivalent route to be routed to. Only the
+            # turn survives.
+            return ToolResult(
+                model_text=(
+                    "Error: this command needs approval and this turn has nobody to ask, so it was "
+                    "not run. No shell command that needs approval will run here. Carry on with the "
+                    "rest of the task by another route, and say what you could not do."
+                ),
+                retryable=False,
+                abort_action=False,
+            )
         approved = await turn.responder.await_approval(
             conversation_id=turn.conversation_id,
             turn_id=turn.turn_id,
@@ -253,11 +281,20 @@ class ExecTool(Tool):
                 denied_digests=turn.denied_digests | {digest},
             )
         )
-        return self._terminal_error("Error: User denied this command or the approval request expired")
+        return self._terminal_error("Error: User denied this command or the approval request expired", command)
 
     @classmethod
-    def _terminal_error(cls, message: str) -> ToolResult:
-        """Return a policy result that the registry and agent loop cannot retry."""
+    def _terminal_error(cls, message: str, command: str = "") -> ToolResult:
+        """Return a policy result that the registry and agent loop cannot retry.
+
+        The command goes to the log. A refusal that does not say what it refused
+        cannot be told apart from a fault, and this one ends the turn: two headless
+        deck runs stopped here with eighteen of twenty pages unwritten and the only
+        record was that the turn had ended. Truncated, because a refused command is
+        untrusted text and the point is to recognise it, not to store it.
+        """
+        if command:
+            logging.getLogger(__name__).warning("exec refused (%s) -- command: %s", message, command[:400])
         return ToolResult(
             model_text=message + cls._STOP_INSTRUCTION,
             retryable=False,
@@ -292,7 +329,17 @@ class ExecTool(Tool):
         if "..\\" in cmd or "../" in cmd:
             return "Error: Command blocked by safety guard (path traversal detected)"
 
-        cwd_path = Path(cwd).resolve()
+        # The workspace bounds this, not the directory a call chose to run in.
+        # A caller may work anywhere inside the workspace, and measuring against
+        # its own choice breaks both ways: a build directory could not list the
+        # figures beside it, and `working_dir="/"` would admit the filesystem.
+        fence = Path(self.working_dir or cwd).expanduser().resolve()
+        requested = Path(cwd).expanduser().resolve()
+        if not self._within(requested, fence):
+            return (
+                f"Error: Command blocked by safety guard: working_dir {requested} is outside the "
+                f"workspace {fence}. Pick a directory inside it, or leave working_dir unset."
+            )
         for raw in self._extract_absolute_paths(cmd):
             try:
                 expanded = os.path.expandvars(raw.strip())
@@ -304,10 +351,23 @@ class ExecTool(Tool):
                 p = Path(expanded).expanduser().resolve()
             except Exception:
                 continue
-            if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                return "Error: Command blocked by safety guard (path outside working dir)"
+            if p.is_absolute() and not self._within(p, fence):
+                # Which path, because the caller has to repair the command and one
+                # refusal covers the whole of it. A live run wrote
+                # `ls <workspace>/figures/ && ls /tmp/`, was told only that a path
+                # was outside, could not tell which half offended, and ended the
+                # run asking a user who was not there whether to continue.
+                return (
+                    f"Error: Command blocked by safety guard: {p} is outside the workspace "
+                    f"{fence}. Every path this command names has to be inside it -- drop that part "
+                    "or point it at the workspace, and run the rest."
+                )
 
         return None
+
+    @staticmethod
+    def _within(path: Path, fence: Path) -> bool:
+        return path == fence or fence in path.parents
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

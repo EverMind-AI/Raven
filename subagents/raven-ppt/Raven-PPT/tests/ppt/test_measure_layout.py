@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.services.measure.layout import (
     BOX_SIDE_MARGINS_PT,
     EDGE_SLACK_EMU,
@@ -38,7 +38,6 @@ def test_a_shape_over_the_right_edge_is_reported(deck: DeckBuilder) -> None:
     assert [finding.detail["edges"] for finding in findings] == [("right",)]
     assert findings[0].page == 1
     assert findings[0].severity is Severity.WARNING
-    assert findings[0].audience is Audience.DESIGNER
 
 
 def test_a_shape_over_two_edges_names_both(deck: DeckBuilder) -> None:
@@ -96,7 +95,6 @@ def test_a_label_in_a_box_too_narrow_for_it_is_reported(deck: DeckBuilder) -> No
     assert len(findings) == 1  # the prose box wraps by design and is not held to this
     assert findings[0].detail["label"] == "01"
     assert findings[0].kind == "wrapped_label"
-    assert findings[0].audience is Audience.DESIGNER
 
 
 def test_the_slack_is_five_per_cent_of_the_boxs_own_width(deck: DeckBuilder) -> None:

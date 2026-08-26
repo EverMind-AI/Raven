@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.ppt.contracts import Audience, Finding, Severity
+from raven.ppt.contracts import Finding, Severity
 from raven.ppt.services.measure.geometry import Rect, has_text, is_panel, iter_shapes, pages, shape_rect_emu
 
 # Below this a layout shape is a mark rather than a ground: a rule, a page number,
@@ -103,7 +103,6 @@ def _clash(page: int, text: str, share: float) -> Finding:
     return Finding(
         kind="over_layout_art",
         severity=Severity.WARNING,
-        audience=Audience.DESIGNER,
         page=page,
         message=(
             f'{round(share * 100)}% of "{text[:40]}" sits on decoration the layout draws, outside every '

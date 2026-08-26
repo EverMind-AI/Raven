@@ -22,11 +22,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven.ppt.services.render import LocalDeckRenderer, RenderError
+
+_log = logging.getLogger(__name__)
 
 # What one picture may cost, encoded. Twelve page renders plus a contact sheet is
 # the working case, and a gateway that accepts a 20MB body still pays for it in
@@ -60,6 +63,10 @@ class DeckViews:
             try:
                 return await asyncio.to_thread(self.renderer.to_pdf, pptx, out_dir)
             except RenderError:
+                # Logged, because the caller turns an empty answer into a sentence
+                # for the author and cannot tell "LibreOffice is not installed"
+                # from "this one conversion failed".
+                _log.warning("render: %s did not convert to pdf", pptx.name, exc_info=True)
                 return None
 
     async def pages(self, pptx: Path, out_dir: Path, numbers: Sequence[int] | None = None) -> dict[int, Path]:
@@ -75,6 +82,14 @@ class DeckViews:
             try:
                 pngs = await asyncio.to_thread(self.renderer.to_pngs, pdf, out_dir, self.dpi, wanted)
             except RenderError:
+                # The empty dict reaches `ppt_template` as "renders unavailable on
+                # this machine", which the author reads as a fact about the host and
+                # acts on for the rest of the deck: one live run answered it by
+                # reading every example page as code and never looked at a render
+                # again, on a host where the pdf and four page renders had just
+                # been written. Whatever went wrong here is the only thing that can
+                # say whether that sentence is true, and it went nowhere.
+                _log.warning("render: %s pages of %s did not render", len(wanted or []), pdf.name, exc_info=True)
                 return {}
         return {number: path for number, path in zip(wanted or range(1, len(pngs) + 1), pngs, strict=False)}
 
@@ -95,9 +110,10 @@ def _encoded(png: Path, budget: int) -> str:
         from PIL import Image
     except ImportError:  # pragma: no cover - Pillow ships with the ppt extra
         return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
-    # Halving twice is enough for any page render against this budget; the loop
-    # stops rather than shrinking a page to something unreadable, because an
-    # image too small to judge is worse than a slightly expensive one.
+    # Two halvings answer any page render against this budget and the loop allows a
+    # third; past that it stops rather than shrinking a page to something
+    # unreadable, because an image too small to judge is worse than a slightly
+    # expensive one.
     with Image.open(io.BytesIO(raw)) as image:
         current = image.convert("RGB")
         for _ in range(3):

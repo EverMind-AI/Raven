@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.services.gates.bands import (
     BAND_MAX_HEIGHT_EMU,
     BAND_MIN_WIDTH_FRACTION,
@@ -86,8 +86,7 @@ def test_a_top_band_with_the_title_below_it_is_decoration(deck: DeckBuilder) -> 
     assert len(findings) == 1
     assert findings[0].detail["reason"] == "a band with nothing on it"
     assert findings[0].kind == "band"
-    assert findings[0].severity is Severity.BLOCKING
-    assert findings[0].audience is Audience.DESIGNER
+    assert findings[0].severity is Severity.WARNING
     assert "hairline in the secondary grey" in findings[0].message
 
 
@@ -246,3 +245,75 @@ def test_a_strip_welded_to_one_card_is_still_a_strip(deck) -> None:
 
     kinds = [finding.detail["reason"] for finding in band_findings(deck.save())]
     assert "an accent strip" in kinds
+
+
+def test_a_stacked_column_is_one_bar_cut_into_parts_not_three_strips(deck) -> None:
+    """The measured page: three columns from `ppt_charts.stacked_bar`, each cut in
+    three, and a finding on every thin top part -- 2.46 x 0.09in, 2.46 x 0.13in,
+    2.46 x 0.08in, all "an accent strip", on the one chart whose subject is a part
+    too small to be a bar of its own.
+
+    The series test cannot see a stack: its parts stand on each other rather than
+    on one baseline, and their thickness the way the values run *is* the value. Only
+    the three parts sitting on the axis were exempt, and those by accident.
+    """
+    page = deck.page()
+    for column, (foot, middle, top) in enumerate(((2.21, 1.42, 0.09), (2.52, 1.58, 0.13), (2.84, 1.74, 0.08))):
+        left, axis = 1.47 + column * 3.96, 6.22
+        deck.panel(page, left=left, top=axis - foot, width=2.46, height=foot)
+        deck.panel(page, left=left, top=axis - foot - middle, width=2.46, height=middle)
+        deck.panel(page, left=left, top=axis - foot - middle - top, width=2.46, height=top)
+
+    assert band_findings(deck.save()) == []
+
+
+def test_a_stack_running_sideways_is_read_the_same_way(deck) -> None:
+    """`direction="bar"` and enough rows to make each one thin: the same chart
+    turned, and every part after the first left a finding, the first being exempt
+    only because all the firsts happen to share the plot's left edge."""
+    page = deck.page()
+    for row, parts in enumerate(((5.31, 3.41, 0.23), (6.07, 3.79, 0.30), (6.82, 4.17, 0.19))):
+        left, top = 1.43, 1.87 + row * 1.73
+        for length in parts:
+            deck.panel(page, left=left, top=top, width=length, height=0.20)
+            left += length
+
+    assert band_findings(deck.save()) == []
+
+
+def test_a_stack_whose_bars_are_all_one_length_is_still_a_stack(deck) -> None:
+    """`share=True` normalises every category to its own whole, so the bars come out
+    equal on purpose and the values are in where each one is cut. The series test's
+    "lengths differ" would refuse all of them, which is why the stack test asks the
+    question of the cuts as well as of the length."""
+    page = deck.page()
+    for row, parts in enumerate(((6.65, 4.16, 0.19), (5.20, 5.30, 0.50), (7.90, 2.90, 0.20))):
+        left, top = 1.43, 1.87 + row * 1.73
+        for length in parts:
+            deck.panel(page, left=left, top=top, width=length, height=0.20)
+            left += length
+
+    assert band_findings(deck.save()) == []
+
+
+def test_a_row_of_identical_cards_each_wearing_a_strip_is_still_decoration(deck) -> None:
+    """A strip laid flush against a card edge joins into a run where one drawn over
+    the card does not -- and then the three runs are identical copies of each other,
+    which is what a repeated device is and what a chart's bars are not."""
+    page = deck.page()
+    for index in range(3):
+        left = 1.0 + index * 4.2
+        deck.panel(page, left=left, top=1.86, width=4.0, height=0.14)
+        deck.panel(page, left=left, top=2.0, width=4.0, height=2.0)
+
+    assert [finding.detail["reason"] for finding in band_findings(deck.save())] == ["an accent strip"] * 3
+
+
+def test_a_strip_laid_flush_against_one_card_is_not_a_stack(deck) -> None:
+    """The slot clause, which the stack test borrows from the series test unchanged:
+    one run in one slot is a decorated card however exactly the strip is placed."""
+    page = deck.page()
+    deck.panel(page, left=1.0, top=1.86, width=4.0, height=0.14)
+    deck.panel(page, left=1.0, top=2.0, width=4.0, height=2.0)
+
+    assert [finding.detail["reason"] for finding in band_findings(deck.save())] == ["an accent strip"]

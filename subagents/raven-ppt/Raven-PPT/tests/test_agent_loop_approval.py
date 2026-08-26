@@ -165,3 +165,40 @@ async def test_agent_loop_skips_remaining_tool_calls_after_delete_denial(tmp_pat
     assert "no alternative method will be attempted" in result
     assert executor.commands == []
     assert len(provider.responses) == 1
+
+
+async def test_a_turn_with_nobody_to_ask_loses_the_command_and_not_the_turn(tmp_path) -> None:
+    """An absent approval channel refuses the command and lets the turn go on.
+
+    The two tests above end the turn, and should: a denial is a decision to respect
+    rather than route around, so the next plan must not get the chance to translate
+    it into an equivalent script. Nobody to ask is not that. No one refused
+    anything, no equivalent route exists -- every command needing approval meets
+    the same wall -- and the model has the rest of a task it can still do without a
+    shell.
+
+    Measured on two headless deck runs that ended here with eighteen of twenty
+    pages unwritten: one was cropping a logo onto a white ground, the other reading
+    its own materials. Both were told the operation would not be completed and no
+    alternative would be attempted, by a turn in which nobody had been asked.
+    """
+    provider = _Provider()
+    agent = AgentLoop(provider=provider, workspace=tmp_path, model="fake/model")
+    executor = _Executor()
+    # No `start_approval_turn`: this is a run with no approval transport at all.
+    agent.tools.register(ExecTool(executor=executor, working_dir=str(tmp_path)))
+
+    result, _media = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+            text="delete file.txt",
+            conversation="session-a",
+        ),
+        session_key="session-a",
+    )
+
+    assert executor.commands == []
+    assert "no alternative method will be attempted" not in result
+    # The model was called again with the refusal, rather than the turn ending on it.
+    assert provider.responses == []

@@ -1,8 +1,8 @@
 """`.pptx` -> `.pdf` through LibreOffice headless.
 
 This is the only link in the chain that cannot be done in-process, and it is the
-one the rest of the capability leans on: the PDF is what the author looks at, what
-the design pass looks at, and what measurement reads word boxes from. So the
+one the rest of the capability leans on: the PDF is what the author looks at and
+what measurement reads word boxes from. So the
 failure modes are worth spelling out, because every one of them was observed
 rather than guessed.
 

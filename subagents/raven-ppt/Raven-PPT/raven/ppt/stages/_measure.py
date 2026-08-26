@@ -4,9 +4,9 @@ The gate registry takes a record and returns findings; this is what fills the
 record in. Two things make that non-trivial and neither belongs in a service.
 Rendering the deck is slow, blocking and optional -- a deck with no LibreOffice on
 the machine can still be built, gated on its content and delivered, with the
-render-truth checks reporting nothing rather than the call failing. And the fact
-index and figure catalogue come off disk, which a stateless check has no business
-reading.
+render-truth checks reporting nothing rather than the call failing. And the brief,
+the outline and the figure catalogue come off disk, which a stateless check has no
+business reading.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from raven.ppt.services.gates import (
     figure_labels,
     load_figure_catalog,
 )
-from raven.ppt.services.ingest import CATALOGUE_FILE
+from raven.ppt.services.ingest import CATALOGUE_FILE, MATERIALS_FILE
 from raven.ppt.stages._views import DeckViews
 
 
@@ -40,6 +40,7 @@ class DeckMeasurer:
             outcome=outcome,
             figure_labels=_figure_labels(project),
             figure_catalogue=_figure_catalogue(project),
+            materials=_materials(project),
             brief=load_brief(brief_path(project)),
             template=_template(project),
             prototypes=_prototypes(project),
@@ -97,6 +98,14 @@ def _figure_labels(project: Project):
         return figure_labels(project.figures_dir, load_figure_catalog(path)) or None
     except (OSError, ValueError):
         return None
+
+
+def _materials(project: Project) -> str:
+    """Everything this deck was given to read, or "" when nothing was ingested."""
+    try:
+        return (project.ingest_dir / MATERIALS_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _figure_catalogue(project: Project):

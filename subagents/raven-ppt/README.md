@@ -43,7 +43,7 @@ What that removed, and what it cost:
 | The docker SDK, and an interpreter that had it | **The launcher is now stdlib-only.** It used to require a specific venv that happened to carry the SDK, named by absolute path in the registered command; any `python3` runs it now |
 | Bind mounts, and the DinD workarounds around them | The two host quirks the old launcher was built to survive - a hijacked docker CLI stdout, and a daemon resolving mount sources against `/ebs/rootfs` - stop applying |
 | `RAVEN_PPT_IMAGE=1`, the in-image marker | Nothing here reads it |
-| The `containers/render-worker` image | Never on this path; `tools.render.backend` is `direct` |
+| The `containers/render-worker` image | Never on this path; every render runs in-process, through the `soffice` on this host |
 
 ## Layout
 
@@ -51,6 +51,9 @@ What that removed, and what it cost:
 subagents/raven-ppt/         what ships
 |- Raven-PPT/         the checkout, with its own .venv (uv sync --extra ppt)
 |- config.json        this install's runtime config (no secrets - they live in .env)
+|- .env.example       the secrets template; copy to .env, which never ships
+|- .gitignore         what stays out of the repo: .env, install backups, run state
+|- README.md          this file
 |- install.py         registers the entry in the host raven's config
 |- run.py             host-side launcher; what the gateway actually invokes
 `- subagent.json      the entry registered with the host Raven
@@ -65,7 +68,8 @@ config file's own parent. `PPT_STATE_ROOT` moves it; the default is:
 |- .config.rendered.json    config + the key, mode 600, outside any published tree
 `- jobs/<job>/              one directory per run
    |- materials/            the named source files, copied in
-   |- exports/              where the deck is compiled
+   |- deck/                 the agent's own working directories
+   |- out/                  where the finished deck is published
    `- launcher.log          that run's diagnostics
 ```
 
@@ -74,8 +78,8 @@ config file's own parent. `PPT_STATE_ROOT` moves it; the default is:
 `jobs/<job>/` is a whole raven workspace, not just a scratch area: the staged
 materials, the deck project, the rendered previews, the session transcript and
 the memory lanes all live in it. Measured 2026-08-20, a five-page deck leaves
-**1.4 MB**, of which 1.1 MB is `ppt_projects/` - the build script, the staged
-candidate and the review renders.
+**1.4 MB**, of which 1.1 MB is `deck/` - the build script, the staged candidate
+and the review renders.
 
 **There is no TTL, no count cap and no reclaim path**, and that is a deferral
 rather than an oversight: a job directory is the only record of how a deck was
@@ -107,18 +111,20 @@ same agent-agnostic installer the other three subagents use, byte for byte.
    task text, keeps the ones that exist and look like documents, and copies them
    into the job's `materials/`. Naming no resolvable file is refused rather than
    run: a deck built from nothing is the failure this agent exists to avoid.
-2. **The fence still holds.** `tools.restrictToWorkspace` is `true` and the
-   workspace is the job directory, with `materials/` and `exports/` inside it.
-   The agent reads the copies, not the originals, and cannot walk the host
-   looking for more - which is the property the container used to provide by
-   having nothing else mounted.
+2. **The copies are what the prompt names.** The workspace is the job directory,
+   with `materials/` and `out/` inside it, and the staged listing points at the
+   copies rather than the originals. The workspace is not fenced:
+   `tools.restrictToWorkspace` is `false`, because the guard behind it reads
+   command text rather than what a command does. It refused the slashes inside
+   `sed -n '/## .*/p'` and ended that run with the deck unwritten, while a script
+   that opens a path it never spells out goes through untouched.
 3. **A verdict on whether a deck exists.** An exit code cannot decide this: the
    container used to exit 139 on fully successful runs. Success is a deck *this
    run* wrote that opens as a zip carrying slide parts, picked out by the `MEDIA:`
    line when it names one. That test checks the artifact rather than the process,
    which is why it survived the move off docker unchanged. The run scoping is not
    decoration: `--job` is the conversation's `agent_id`, so every turn shares one
-   `exports/`, and without it a turn that published nothing would hand back an
+   `out/`, and without it a turn that published nothing would hand back an
    earlier turn's deck and report success.
 4. **stdout is the result.** Raven's CLI backend uses a child's whole output as
    the sub-agent's reply, so the agent's own narration goes to `launcher.log`
@@ -165,23 +171,41 @@ or the RPC hot-apply path before it sees the change.
 
 ## Config choices
 
-`config.json` differs from a stock install in seven deliberate ways. Five are
-carried over from the container's rendered config; the sixth exists *because*
-the container's config does not port cleanly to this branch, and the seventh is
-the memory identity explained below the table:
+`config.json` differs from a stock install in the ways below. Most are carried
+over from the container's rendered config; `context.curator_model` exists
+*because* the container's config does not port cleanly to this branch, and the
+memory identity is explained below the table. No count is given deliberately -
+the table is the list, and a number beside it goes stale the first time a row
+moves:
 
 | Setting | Value | Why |
 |---|---|---|
-| `tools.restrictToWorkspace` | `true` | The job directory is the fence. Unlike the other three subagents here, this one has no reason to read the wider host: everything it may use was copied into `materials/` |
-| `tools.render` | `enabled`, backend `direct`, 6/12 previews, 240s | The visual gate. `direct` renders in-process through LibreOffice rather than handing off to the `render-worker` image, which is not on this path |
-| `tools.disabledTools` | no media generation, no `deep_research` | Unrelated surface for a deck builder |
-| `agents.defaults.maxToolIterations` | 240 | A page-by-page write-render-review loop over a 16-20 page deck spends iterations the way a research run spends fetches |
-| `agents.defaults.maxTokens` | 16384 | Enough for a page's worth of script; layout and text budgets are measured rather than invented, so nothing here needs a long tail. **No `temperature`**: `anthropic/claude-sonnet-5` does not list it as a supported parameter, and a value that is silently ignored reads as a determinism pin that is not there. raven-research drops it for the same reason |
+| `tools.restrictToWorkspace` | `false` (stock `false`) | Left where stock leaves it, unlike the other subagents in this folder, which turn it on. The guard behind it reads command text, not what a command does: it refused the slashes in a `sed` expression and ended that run, while a script that opens a path it never spells out goes through. It cost two runs their decks and stopped nothing |
+| `tools.ppt` | `enabled`, profile `script_author`, 144 dpi, 2 renders at a time - every value stock | Written out rather than left implicit: the deck route is the only reason this folder exists, and a default that moves upstream would move it silently. Rendering happens in-process through LibreOffice rather than handing off to the `render-worker` image, which is not on this path |
+| `tools.exec.denyPatterns` | the 8 built-ins minus `\brm\s+-[rf]{1,2}\b` (stock: all 8) | The key *replaces* the list rather than extending it, so naming seven is how one goes. `rm -rf` on a scratch directory a render check had just made was refused and ended a run; only that pattern is dropped, and dropping it costs nothing, because `_matches_delete_command` still sends any `rm` to `REQUIRE_APPROVAL` -- approvable where a responder exists, refused where none does, which is every headless deck run. The other seven stay because they are what has no second gate behind it: `dd if=`, `mkfs`/`diskpart`, `format`, a redirect into `/dev/sd*`, a fork bomb, and the Windows `del /f` / `rmdir /s`. `[]` would have dropped all of them for a `rm` that stays blocked either way. `extra_deny_patterns` is the additive key, if the list should grow rather than change |
+| `tools.disabledTools` | no media generation, no `deep_research` (stock: none disabled) | Unrelated surface for a deck builder |
+| `tools.web.search.maxResults` | 10 (stock 5) | A page's figure is chosen against alternatives; five results is one page of them |
+| `agents.defaults.maxToolIterations` | 600 (stock 40) | A page-by-page write-render-review loop over a 16-20 page deck spends iterations the way a research run spends fetches; a 20-page deck that reviews its own renders passes 240 before it publishes |
+| `agents.defaults.contextWindowTokens` | 1048576 (stock: unset) | The skill, the reference documents and a deck's worth of build script and render review. A model with a smaller window needs this lowered to its own ceiling -- the value is a promise to the runtime, not a request to the provider |
+| `agents.defaults.reasoningEffort` | `high` (stock: unset) | Thinking is asked for here rather than left to each backend's default |
+| `agents.defaults.maxConcurrentSubagents` | 2 (stock 4) | Half the stock cap. A deck run spawns few sub-agents; what it runs in parallel is LibreOffice, and that is capped by `renderConcurrency` |
 | `memory` + `plugins.config.everos-memory` | `raven-ppt` / `raven-ppt`, slice carries `base_url` alone | Keeps this agent's runs out of the host assistant's memory. Omitting the block does not mean "no memory" - see below |
 | `context.curator_model` | `""` (empty) | **The one setting that is new, not inherited.** This branch replaced turn-compaction with the Curator context engine, which is on by default and needs no config - but its slow path defaults to `gemini-2.5-flash`, and this install's single provider serves only its own pinned model. Empty is the documented value that follows the agent's model, and it is the only value that cannot send a request nothing here can answer |
 
 No `agents.defaults.workspace`: the launcher passes `--workspace` per job, which
-is what keeps two concurrent decks out of each other's files.
+is what keeps two concurrent decks out of each other's files. No
+`agents.defaults.maxTokens` either - `AgentDefaults` has no such field, so a
+value written there would be read by nothing. And **no `temperature`**:
+`anthropic/claude-sonnet-5` does not list it as a supported parameter, and a
+value that is silently ignored reads as a determinism pin that is not there.
+raven-research drops it for the same reason.
+
+`tools.ppt` is the section that decides whether this folder builds decks at all,
+and it is written out rather than inherited: `enabled: true`, `profile:
+"script_author"`, `composerModel: ""` (the per-page calls run on the main model),
+`renderDpi: 144` and `renderConcurrency: 2`. Every one of those is the upstream
+default, so none is a deviation - they are in the file so the values can be read
+instead of inferred. The sixth field, `deckName`, is left at `deck.pptx`.
 
 **What did not port from the container.** Its rendered config set
 `context.turn_compaction`, which this branch does not have: the whole block is
@@ -248,14 +272,17 @@ keys reach `web_search` and page fetching: a Serper key at
 are left blank in `.env`, so the launcher reads the host raven's own values at
 launch, and rotating either one there covers all four folders. Setting
 `PPT_SERPER_API_KEY` or `PPT_JINA_API_KEY` overrides that for this folder alone.
-The empty `tools.web` block in `config.json` is only the slot they land in - the
-`maxResults` in it is the stock default, not a deviation like the ones in the
-table above.
+The keyless `tools.web` block in `config.json` is the slot they land in; the
+`maxResults` beside them is a deviation in its own right and is in the table
+above.
 
 Neither key is required and neither is fatal, but a missing Serper key is not
-free: `ppt_prepare` and `ppt_outline` hand back gather errands whose stated
-method is `web_search(kind="images")`, and with no key that is the one tool that
-can only refuse. The deck still builds; it builds without pictures.
+free: `ppt_outline` hands back gather errands whose stated method is
+`web_search(kind="images")`, and with no key that is the one tool that can only
+refuse. The deck still builds; it builds without pictures. `ppt_prepare`'s own
+errand asks for a different thing - a sweep of what the material already cites,
+by `web_fetch(extractMode="images")` - so that one survives a missing Serper key
+and depends on the reader path instead.
 
 "Missing" means all three places, not two. The runtime reads a bare
 `SERPER_API_KEY` / `JINA_API_KEY` from its environment when the config carries
@@ -279,7 +306,7 @@ What a real run leaves, verified rather than assumed:
 |---|---|---|
 | `$PPT_STATE_ROOT/.config.rendered.json` | `600` | The only file here that holds the key |
 | `subagents/raven-ppt/.env` | `600` | Same, and `subagents/install.sh` creates it that way from the template |
-| `jobs/<job>/`, `materials/`, `exports/` | `755` | Traversable, so anything that reads the deck can reach it |
+| `jobs/<job>/`, `materials/`, `out/` | `755` | Traversable, so anything that reads the deck can reach it |
 | the deck, the staged material, `launcher.log` | `644` | The deck is delivered to a caller who has to be able to open it |
 | `Raven-PPT/.venv/bin/raven` | `755` | The launcher tests for exactly this |
 

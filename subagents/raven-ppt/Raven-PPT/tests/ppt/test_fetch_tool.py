@@ -18,6 +18,7 @@ import pytest
 
 from raven.ppt.contracts import Project
 from raven.ppt.tools.fetch import MAX_BYTES, PptFetchTool
+from raven.security.network import validate_url_target as _real_validate
 
 pytest.importorskip("PIL")
 
@@ -27,6 +28,30 @@ def _png(width: int = 8, height: int = 8) -> bytes:
 
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _described_png(description: str, *, key: str = "Description") -> bytes:
+    """A PNG carrying its own description in a text chunk, as an export tool writes it."""
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+
+    chunks = PngInfo()
+    chunks.add_text(key, description)
+    buffer = io.BytesIO()
+    Image.new("RGB", (320, 180), "white").save(buffer, format="PNG", pnginfo=chunks)
+    return buffer.getvalue()
+
+
+def _described_jpeg(description: str) -> bytes:
+    """A JPEG carrying EXIF `ImageDescription`, NUL-padded the way cameras write it."""
+    from PIL import Image
+
+    image = Image.new("RGB", (320, 180), "white")
+    exif = image.getexif()
+    exif[0x010E] = f"{description}\x00\x00"
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", exif=exif.tobytes())
     return buffer.getvalue()
 
 
@@ -73,7 +98,7 @@ def fetch(monkeypatch, tmp_path: Path):
             return real(*args, transport=transport, **kwargs)
 
         monkeypatch.setattr(httpx, "AsyncClient", factory)
-        monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: None)
+        monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: (True, ""))
         return PptFetchTool(tmp_path)
 
     return make
@@ -107,6 +132,104 @@ async def test_the_url_is_recorded_beside_what_it_fetched(fetch, tmp_path: Path)
 
     held = fetched(Project(workspace=tmp_path, slug="tarvis"))
     assert [source.url for source in held] == ["https://example.com/figure"]
+
+
+@pytest.mark.asyncio
+async def test_the_caption_the_caller_gives_reaches_the_figure_catalogue(fetch, tmp_path: Path) -> None:
+    """The whole point of the parameter. A picture off a web page carries no caption in
+    its bytes -- the words are in the HTML beside it -- so before this every fetched
+    figure entered the catalogue with `caption: null` while a paper's figure arrived
+    with the line printed under it. One live deck captioned a marketing banner as an
+    architecture diagram with nothing to hold it to."""
+    from raven.ppt.services.ingest import ingest_materials, load_catalogue
+
+    tool = fetch(_png(320, 180))
+    tool.ingest = ingest_materials
+    caption = "Figure 2: Architectural overview of the Mem0 system"
+
+    body = await _run(tool, url="https://example.com/figure.png", caption=caption)
+
+    assert body["ok"] is True and body["caption"] == caption
+    deck = Project(workspace=tmp_path, slug="tarvis")
+    catalogue = load_catalogue(deck.ingest_dir / "figures.json", figures_dir=deck.ingest_dir / "figures")
+    (asset,) = catalogue.values()
+    assert asset.caption == caption
+    assert asset.source_url == "https://example.com/figure.png"
+
+
+@pytest.mark.asyncio
+async def test_the_caption_is_recorded_beside_the_url_it_came_with(fetch, tmp_path: Path) -> None:
+    from raven.ppt.services.ingest import fetched
+
+    await _run(fetch(_png()), url="https://example.com/figure", caption="  Fig. 3\n  Retrieval latency  ")
+
+    (held,) = fetched(Project(workspace=tmp_path, slug="tarvis"))
+    assert held.caption == "Fig. 3 Retrieval latency"
+
+
+@pytest.mark.asyncio
+async def test_a_picture_that_describes_itself_needs_no_caption_from_the_caller(fetch, tmp_path: Path) -> None:
+    """What is reachable from the bytes is taken rather than asked for twice."""
+    from raven.ppt.services.ingest import fetched
+
+    await _run(fetch(_described_png("Figure 4: token cost per turn")))
+
+    (held,) = fetched(Project(workspace=tmp_path, slug="tarvis"))
+    assert held.caption == "Figure 4: token cost per turn"
+
+
+@pytest.mark.asyncio
+async def test_an_exif_image_description_is_read_and_its_padding_dropped(fetch, tmp_path: Path) -> None:
+    """EXIF strings are NUL-padded, and a NUL in the catalogue makes the file a
+    search tool treats as binary."""
+    from raven.ppt.services.ingest import fetched
+
+    await _run(fetch(_described_jpeg("Mem0 memory lifecycle")))
+
+    (held,) = fetched(Project(workspace=tmp_path, slug="tarvis"))
+    assert held.caption == "Mem0 memory lifecycle"
+
+
+@pytest.mark.asyncio
+async def test_the_pages_words_beat_the_files_own_metadata(fetch, tmp_path: Path) -> None:
+    """The caller's caption is what the page printed next to this picture; an
+    `ImageDescription` field is whatever the file was exported with."""
+    from raven.ppt.services.ingest import fetched
+
+    await _run(fetch(_described_png("stock photo 118372")), caption="Figure 1: the extraction phase")
+
+    (held,) = fetched(Project(workspace=tmp_path, slug="tarvis"))
+    assert held.caption == "Figure 1: the extraction phase"
+
+
+@pytest.mark.asyncio
+async def test_a_second_fetch_without_a_caption_does_not_blank_the_first(fetch, tmp_path: Path) -> None:
+    """Same URL, twice: a retry, or the same picture wanted for a second page. That is
+    not new information about these bytes, so it must not take the words away."""
+    from raven.ppt.services.ingest import fetched
+
+    # One tool for both calls: the factory wraps whatever `httpx.AsyncClient` is when
+    # it runs, so calling it twice in one test nests the transport into itself.
+    tool = fetch(_png(320, 180))
+    await _run(tool, caption="Figure 5: end-to-end latency")
+    await _run(tool)
+
+    (held,) = fetched(Project(workspace=tmp_path, slug="tarvis"))
+    assert held.caption == "Figure 5: end-to-end latency"
+
+
+@pytest.mark.asyncio
+async def test_a_caption_on_a_document_is_refused_out_loud_rather_than_dropped(fetch, tmp_path: Path) -> None:
+    """A caption belongs to one picture and a paper holds many, so it is not recorded
+    for a document -- and saying so is the difference between this and the silence the
+    parameter exists to end. The paper's figures carry the captions its pages print."""
+    from raven.ppt.services.ingest import fetched
+
+    body = await _run(fetch(b"%PDF-1.7\n trailer"), caption="Figure 2: architectural overview")
+
+    assert body["ok"] is True and "caption" not in body
+    assert "describes one picture" in body["note"]
+    assert [held.caption for held in fetched(Project(workspace=tmp_path, slug="tarvis"))] == [""]
 
 
 @pytest.mark.asyncio
@@ -310,3 +433,22 @@ def test_a_machine_without_libcairo_keeps_the_svg_instead_of_failing(monkeypatch
 
     assert kind == "document", "an SVG that cannot be drawn is still the text it is"
     assert payload == SVG
+
+
+@pytest.mark.asyncio
+async def test_an_address_the_network_guard_refuses_is_not_downloaded(fetch, monkeypatch, tmp_path: Path) -> None:
+    """`validate_url_target` answers, it does not throw.
+
+    The call read it by catching an exception, so every refused address went
+    through: loopback, the link-local range, and the cloud metadata endpoint that
+    hands out credentials to whoever asks from inside the host.
+    """
+    tool = fetch(_png())
+    # After the factory, which installs the permissive stub the other cases need.
+    monkeypatch.setattr("raven.security.network.validate_url_target", _real_validate)
+    out = await _run(tool, url="http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+
+    assert out.get("ok") is False, "the metadata endpoint must not be fetched"
+    assert "cannot be fetched" in json.dumps(out), out
+    landed = list((tmp_path / "tarvis").rglob("*")) if (tmp_path / "tarvis").exists() else []
+    assert not [p for p in landed if p.is_file()], "nothing may be written for a refused address"

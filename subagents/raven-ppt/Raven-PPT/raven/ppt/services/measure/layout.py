@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import (
     EMU_PER_INCH,
     EMU_PER_POINT,
@@ -122,7 +122,6 @@ def spilled_copy(pptx_path: Path, measurer: WidthMeasurer | None = None) -> list
                     kind="spilled_copy",
                     severity=Severity.WARNING,
                     page=number,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"'{text[:34]}' sets {needed / 72:.2f}in wide in a {max(box_w, 0.0) / 72:.2f}in box with "
                         f"wrapping off, so it spills {spill / 72:.2f}in past each side and off the edge of the "
@@ -155,8 +154,7 @@ def off_page_shapes(pptx_path: Path) -> list[Finding]:
 
     Arithmetic on the built file rather than anyone's judgement: a box 0.2in past
     the bottom edge looks like a design choice in a thumbnail and is a truncated
-    sentence on a projector. A design pass that adds to a page until it no longer
-    fits has no other way of being told.
+    sentence on a projector, and a thumbnail is what the author is looking at.
     """
     presentation = open_deck(pptx_path)
     width, height = presentation.slide_width, presentation.slide_height
@@ -182,7 +180,6 @@ def off_page_shapes(pptx_path: Path) -> list[Finding]:
                     kind="off_page",
                     severity=Severity.WARNING,
                     page=number,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"a shape crosses the {' and '.join(crossed)} edge of the page"
                         + (f" -- it holds {text[:40]!r}" if text else "")
@@ -246,7 +243,6 @@ def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> li
                         kind="wrapped_label",
                         severity=Severity.WARNING,
                         page=number,
-                        audience=Audience.DESIGNER,
                         message=(
                             f"the label {text!r} needs about {needed / 72:.2f} in but its box gives "
                             f"{max(box_w, 0.0) / 72:.2f} in, so it wraps mid-label -- widen the box or "

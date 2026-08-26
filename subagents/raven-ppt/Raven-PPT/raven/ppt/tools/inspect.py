@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,11 +40,38 @@ LEGIBLE_PPI = 96.0
 
 CAPTION_BRIEF = """Describe this visual for presentation planning in {language}. Use only what is
 visible in the image and the source metadata supplied with it. Write one concise
-caption that says what the visual shows; do not claim provenance, results or meaning
-the pixels do not establish. Reply as JSON and nothing else:
+caption, under {limit} characters, that says what the visual shows; do not claim
+provenance, results or meaning the pixels do not establish. Concretely: do not say
+who made it, which paper, product or company it belongs to, or what it proves; do
+not number it ("Figure 3"); do not name a system, dataset or organisation unless
+those words are printed in the image. Name the kind of thing it is before you
+describe it -- a banner with a headline and a statistic on it is a banner, not the
+architecture of whatever it advertises; a screenshot is a screenshot; a logo is a
+logo. Reply as JSON and nothing else:
 
 {{"visual_caption": "one sentence"}}
 """
+
+# What an inspected caption may be, checked rather than only asked for. The brief
+# above already said all of this and a live run disregarded it, so what is worth
+# having here is whatever can be decided from the reply alone: its length, and
+# whether it numbered the figure. Whether the sentence is *true* of the picture is
+# not decidable here -- that is `inferred_caption` in services/measure/captions.py,
+# which can compare the caption against the deck's materials.
+MAX_CAPTION_CHARS = 220
+
+# `Figure 3`, `Fig. 3`, `Table 1`, `图 3` in a caption the source did not write. A
+# number is the source's own, `source_label` is the field that holds one, and the
+# citation gate reads that field -- so a number invented here lets a page cite
+# "Fig. 5" with nothing to check it against.
+#
+# Deliberately narrower than case-insensitive: a citation is capitalised and a
+# description is not ("a table 3 rows tall" describes, "Table 3" cites), and the
+# CJK half must not fire inside a compound, where the character is the name of a
+# chart kind rather than a reference -- the digit after the compound in "柱状图 3
+# 个分组" counts columns. Missing a shouty or mid-sentence reference is the right
+# way to be wrong here, because this drops the model's reply on the floor.
+_NUMBERED_RE = re.compile(r"\b(?:Fig|Figure|Table)s?\.?\s*\d|(?<![一-鿿])[图表]\s*\d")
 
 
 class PptFigureInspectTool(Tool):
@@ -70,7 +98,7 @@ class PptFigureInspectTool(Tool):
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "project": {"type": "string", "description": "the deck project, as given to ppt_ingest"},
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
                 "figures": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -93,7 +121,7 @@ class PptFigureInspectTool(Tool):
         try:
             figures = as_strings(figures, "figures")
         except ArgumentError as exc:
-            return _return.failed(str(exc), hint='figures: ["tarvis_p003_fig12", …]')
+            return _return.failed(str(exc), hint='figures: ["tarvis_p003_fig12", "tarvis_p004_fig01"]')
 
         catalogue = _catalogue(deck)
         if not catalogue:
@@ -111,10 +139,12 @@ class PptFigureInspectTool(Tool):
                 hint=f"the ids it holds are {', '.join(sorted(catalogue)[:20])}",
             )
 
-        await self._enrich_captions(deck, catalogue, seen)
+        declined = await self._enrich_captions(deck, catalogue, seen)
         payload: dict[str, Any] = {"project": project, "figures": [_described(name, e) for name, e in seen]}
         if unknown:
             payload["not_in_the_catalogue"] = unknown
+        if declined:
+            payload["no_caption_written_for"] = declined
         asks = ["place only what you have looked at, and crop or drop what does not read at the size the page gives it"]
         blocks: list[Any] = []
         for name, entry in seen:
@@ -133,13 +163,18 @@ class PptFigureInspectTool(Tool):
         deck: Project,
         catalogue: dict[str, dict[str, Any]],
         seen: list[tuple[str, dict[str, Any]]],
-    ) -> None:
+    ) -> dict[str, str]:
+        """Write a caption for each figure whose source printed none.
+
+        Returns the figures it declined to caption and why, so a reply that wrote
+        nothing says so rather than looking like a figure nobody looked at.
+        """
         if self.composer is None:
-            return
+            return {}
         brief = load_brief(brief_path(deck))
         language = brief.language if brief is not None else "the deck's language"
 
-        async def one(name: str, entry: dict[str, Any]) -> tuple[str, str] | None:
+        async def one(name: str, entry: dict[str, Any]) -> tuple[str, str, str] | None:
             if entry.get("caption") or entry.get("visual_caption"):
                 return None
             path = deck.ingest_dir / FIGURES_DIR / str(entry.get("file") or "")
@@ -147,7 +182,7 @@ class PptFigureInspectTool(Tool):
             if shown is None:
                 return None
             reply = await self.composer.ask(
-                CAPTION_BRIEF.format(language=language),
+                CAPTION_BRIEF.format(language=language, limit=MAX_CAPTION_CHARS),
                 [text_block(_label(name, entry)), image_block(self.views.data_uri(shown))],
                 max_tokens=1200,
             )
@@ -155,19 +190,24 @@ class PptFigureInspectTool(Tool):
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
             except (ValueError, AttributeError):
                 return None
-            caption = str(payload.get("visual_caption") or "").strip()
-            return (name, caption) if caption else None
+            caption, refused = _vetted(str(payload.get("visual_caption") or ""))
+            return (name, caption, refused) if caption or refused else None
 
         described = await asyncio.gather(*(one(name, entry) for name, entry in seen))
+        declined: dict[str, str] = {}
         changed = False
         for result in described:
             if result is None:
                 continue
-            name, caption = result
-            catalogue[name]["visual_caption"] = caption
-            changed = True
+            name, caption, refused = result
+            if caption:
+                catalogue[name]["visual_caption"] = caption
+                changed = True
+            else:
+                declined[name] = refused
         if changed:
             _write_catalogue(deck, catalogue)
+        return declined
 
     def _shown(self, path: Path, out_dir: Path) -> Path | None:
         """The figure as a PNG this tool can hand over.
@@ -190,6 +230,31 @@ class PptFigureInspectTool(Tool):
         except Exception:  # noqa: BLE001 -- a figure that will not decode is skipped, not fatal
             return None
         return target
+
+
+def _vetted(caption: str) -> tuple[str, str]:
+    """The caption to keep, or "" and the reason it was not kept.
+
+    Both objections are about the shape of the reply and neither needs the picture,
+    which is the point: the brief asks for these in prose and a live run answered
+    with a caption that broke one of them anyway. Declined rather than trimmed,
+    because a caption edited into shape by string surgery is a third claim nobody
+    made, and no caption is the state a figure inspection never ran on is already in.
+    """
+    collapsed = " ".join(caption.split())
+    if not collapsed:
+        return "", ""
+    if len(collapsed) > MAX_CAPTION_CHARS:
+        return "", (
+            f"inspection replied with {len(collapsed)} characters where the brief asks for one caption under "
+            f"{MAX_CAPTION_CHARS}; nothing was written to the catalogue"
+        )
+    if _NUMBERED_RE.search(collapsed):
+        return "", (
+            "inspection numbered the figure, which is the source's own label and not something the pixels "
+            "establish; nothing was written to the catalogue"
+        )
+    return collapsed, ""
 
 
 def _catalogue(deck: Project) -> dict[str, dict[str, Any]]:
@@ -230,9 +295,12 @@ def _label(name: str, entry: dict[str, Any]) -> str:
     width = int(entry.get("width_px") or 0)
     lines = [f"{name} — {said}" + (f", holds up to {width / LEGIBLE_PPI:.1f}in wide" if width else "")]
     if entry.get("caption"):
-        lines.append(f"  its source's caption: {str(entry['caption'])[:200]}")
-    elif entry.get("visual_caption"):
-        lines.append(f"  visual caption added during inspection: {str(entry['visual_caption'])[:200]}")
+        lines.append(f"  its source's caption, quotable and creditable: {str(entry['caption'])[:200]}")
+    if entry.get("visual_caption"):
+        lines.append(
+            "  what inspection saw in the pixels, nobody's caption -- describe it, never quote or credit it: "
+            + str(entry["visual_caption"])[:200]
+        )
     if entry.get("concerns"):
         lines.append(f"  the extraction was unsure about: {', '.join(entry['concerns'])}")
     return "\n".join(lines)

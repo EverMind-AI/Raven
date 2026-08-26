@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck
 from raven.ppt.services.measure.width import WidthMeasurer, is_cjk_char
 
@@ -129,7 +129,6 @@ def _overset(shape, page: int, measurer: WidthMeasurer) -> Finding | None:
         kind="overset_copy",
         severity=Severity.WARNING,
         page=page,
-        audience=Audience.DESIGNER,
         message=(
             f"'{_head(text)}' wraps to {len(lines)} lines at {size_pt:g}pt in a {width_in:.2f}in column, "
             f"which needs {needed_in:.2f}in of height, and the box gives {height_in:.2f}in. Give it the room "

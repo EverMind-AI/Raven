@@ -113,9 +113,9 @@ class PptGenerateImageTool(Tool):
                 "GPT Image 2 is not configured",
                 hint="set tools.media.image.apiKey and optionally apiBase/model, or export OPENROUTER_API_KEY",
             )
-        digest = hashlib.sha256(
-            f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")
-        ).hexdigest()[:12]
+        digest = hashlib.sha256(f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")).hexdigest()[
+            :12
+        ]
         name = _filename(filename, digest)
         existing = deck.sources_dir / name
         if existing.is_file() and existing.stat().st_size > 0:

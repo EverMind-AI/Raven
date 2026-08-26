@@ -54,16 +54,6 @@ from raven.ppt.services.template.compose import (
     units,
 )
 from raven.ppt.services.template.decompile import PageSource, decompile
-from raven.ppt.services.template.house import House, Row, house_style
-from raven.ppt.services.template.inventory import (
-    TemplateInventory,
-    TemplateLayout,
-    inspect_template,
-    template_dir,
-    template_path,
-)
-from raven.ppt.services.template.prepare import PREPARED_FILE, Prepared, prepare, prepared_path
-from raven.ppt.services.template.theme import theme_name, theme_of
 from raven.ppt.services.template.defaults import (
     DEFAULT_TEMPLATES,
     DefaultTemplate,
@@ -72,6 +62,29 @@ from raven.ppt.services.template.defaults import (
     fallback_default_template,
     find_default_template,
 )
+from raven.ppt.services.template.house import House, Row, house_style
+from raven.ppt.services.template.inventory import (
+    TemplateInventory,
+    TemplateLayout,
+    inspect_template,
+    template_dir,
+    template_path,
+)
+from raven.ppt.services.template.palette import (
+    DERIVED,
+    PaletteError,
+    as_palette,
+    read_palette,
+    write_palette,
+)
+from raven.ppt.services.template.prepare import (
+    PREPARED_FILE,
+    Prepared,
+    prepare,
+    prepared_path,
+    strip_hidden,
+)
+from raven.ppt.services.template.theme import theme_name, theme_of
 
 __all__ = [
     "House",
@@ -87,6 +100,11 @@ __all__ = [
     "arrangement",
     "PREPARED_FILE",
     "BoundTemplate",
+    "PaletteError",
+    "DERIVED",
+    "as_palette",
+    "read_palette",
+    "write_palette",
     "PageSource",
     "Prepared",
     "TemplateInventory",
@@ -100,6 +118,7 @@ __all__ = [
     "inspect_template",
     "prepare",
     "prepared_path",
+    "strip_hidden",
     "template_dir",
     "theme_name",
     "theme_of",

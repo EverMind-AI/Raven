@@ -2,10 +2,9 @@
 
 The front of this route used to be four separate asks -- record the brief, bind
 the template, fetch the sources, ingest them -- each described in its own tool and
-sequenced by whoever was reading them. That is the arrangement the design pass
-already argued against: asked for in prose, it did not happen. And it is
-unnecessary here, because once the task has been read every one of those steps is
-mechanical. Reading the task is the only judgement, so it is the only model call,
+sequenced by whoever was reading them. Asked for in prose, they did not happen in
+order. And the sequencing is unnecessary here, because once the task has been read
+every one of those steps is mechanical. Reading the task is the only judgement, so it is the only model call,
 and the rest of this runs from code off its answer.
 
 Two details of the order are load-bearing.
@@ -67,6 +66,7 @@ from raven.ppt.contracts import (
     write_brief,
     write_plan,
 )
+from raven.ppt.services import citations
 from raven.ppt.services import state as deck_state
 from raven.ppt.services.ingest import documents, sources
 from raven.ppt.services.template import (
@@ -83,8 +83,9 @@ from raven.utils.helpers import text_block
 TASK_SOURCE = "from-the-request.md"
 
 # How many of the plan's notes reach the brief. The brief's one-line summary is
-# formatted into every design-pass prompt, so a long one crowds out the three
-# fields it exists to carry.
+# what carries it into the deck's state summary -- the intake prompt and every
+# ppt_prepare reply -- so a long one crowds out the three fields it exists to
+# carry.
 MAX_BRIEF_NOTES = 3
 
 # How many directories the listing names. Past this it stops being read, and a
@@ -98,12 +99,12 @@ MAX_LISTED = 60
 BRIEF_QUESTIONS: dict[str, Question] = {
     "language": Question(
         question="What language should the deck be written in?",
-        why="The materials' language is not necessarily the audience's, and every page is checked against this.",
+        why="The materials' language is not necessarily the audience's, and the built deck is checked against this.",
         options=("中文", "English", "the same language as the materials"),
     ),
     "audience": Question(
         question="Who is this for, and on what occasion?",
-        why="It decides how much the deck may assume, and it reaches the design pass.",
+        why="It decides how much the deck may assume, and it is recorded in the brief the deck is written against.",
         options=("an internal review", "a conference talk", "a non-technical exec update"),
     ),
     "pages": Question(
@@ -365,6 +366,10 @@ class PrepareStage:
             # restating fields the brief already carries. The plan keeps all of
             # them; the brief carries the few that a page has to honour.
             notes=plan.notes[:MAX_BRIEF_NOTES],
+            # Not capped, unlike the notes: dropping the fourth thing a user
+            # forbade is the one failure this field exists to prevent, and a page
+            # that uses it is not a slightly longer prompt.
+            forbidden=plan.stated.forbidden,
         )
         write_brief(brief, brief_path(project))
         return [f"recorded the brief the task stated: {brief.summary()}"]
@@ -379,7 +384,7 @@ def _completed(plan: IntakePlan, state: deck_state.DeckState) -> tuple[Question,
 
 
 def _with_pictures(plan: IntakePlan, state: deck_state.DeckState) -> tuple[Errand, ...]:
-    """The plan's errands, plus one for pictures when the deck has none at all.
+    """The plan's errands, plus one to look for evidence when ingest found none.
 
     Added by code for the same reason the brief questions are: it is the one
     threshold here that needs no judgement. Zero figures means every page will be
@@ -387,15 +392,43 @@ def _with_pictures(plan: IntakePlan, state: deck_state.DeckState) -> tuple[Erran
     build -- one round too late to do anything but rebuild. Any number above zero
     is a judgement about whether these particular figures carry this particular
     deck, and that is the model's to make, not a ratio invented here.
+
+    What it asks for is a sweep of what the sources cite, not a picture search.
+    Nothing here knows what the deck argues yet -- there are no pages -- so
+    "find some pictures" is a question with no target, and it answers itself:
+    one live run took two logos and a marketing banner, which made `state.figures`
+    non-empty and the errand satisfied, while the material cited a paper whose
+    figures carry their own captions and two benchmark posts nobody swept. Which
+    picture a page needs is `ppt_outline`'s question, asked per page against a
+    plan; this one only establishes what there is to choose from.
+
+    Suppressed by the figures and by nothing else now. It used to stand down when any
+    of the model's own errands had "image" anywhere in its `how`, which is a substring
+    of `web_search(kind="images")` -- so an author that mentioned a picture search in
+    passing, for one page, deleted the errand asking it to sweep the sources. The
+    errand it deleted is the one thing said about the sweep before `ppt_outline`
+    refuses over it, and two errands about pictures cost a reader a sentence.
     """
-    if state.figures or any("image" in errand.how.lower() or "图" in errand.what for errand in plan.errands):
+    if state.figures:
         return plan.errands
+    urls = citations.cited(state.project)
     return (
         *plan.errands,
         Errand(
-            what="pictures for the pages that have nothing to show",
-            why="nothing visual was extracted from the sources, so every page will be prose or a drawing",
-            how='web_search(kind="images") for what the deck describes, then ppt_fetch each one you will use',
+            what="the figures the sources themselves point at",
+            why=(
+                f"ingest extracted nothing visual from the files and the materials cite {len(urls)} URL(s), "
+                "so every picture this deck could have is still on the other end of a link"
+                if urls
+                else "ingest extracted nothing visual from the files, so every page will be prose or a drawing"
+            ),
+            how=(
+                'web_fetch(extractMode="images") on the URLs the material cites, which returns each '
+                "picture with the caption its author wrote; a paper cited as an abstract keeps its "
+                "figures in the PDF, so ppt_fetch that and ingest extracts them. ppt_fetch what you "
+                "will use. ppt_outline records no outline while a cited URL is still unopened -- one "
+                "that comes back with nothing goes in its `swept` argument, with what came back"
+            ),
         ),
     )
 
@@ -474,7 +507,7 @@ def _directories(workspace: Path) -> list[Path]:
     found: list[Path] = []
     for pattern in ("*", "*/*"):
         for path in sorted(workspace.glob(pattern)):
-            if path.is_dir() and "ppt_projects" not in path.parts and "exports" not in path.parts:
+            if path.is_dir() and "deck" not in path.parts and "out" not in path.parts:
                 found.append(path)
     return found
 

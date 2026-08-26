@@ -16,7 +16,7 @@ prepare it again from clean.
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven.ppt.services.template.inventory import (
@@ -27,7 +27,8 @@ from raven.ppt.services.template.inventory import (
     template_dir,
     template_path,
 )
-from raven.ppt.services.template.prepare import prepare, prepared_path
+from raven.ppt.services.template.palette import palette_path, read_palette
+from raven.ppt.services.template.prepare import prepare, prepared_path, strip_hidden
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,13 @@ class BoundTemplate:
     inventory: TemplateInventory
     example_pages: int
     """How many pages the original ships. These are the reference, not the deck."""
+    palette: dict[str, object] = field(default_factory=dict)
+    """What the author read off those pages, in whole or in part, or {}.
+
+    Bound to the deck rather than passed along because that is what it is: a reading
+    of this template, taken once, standing for the deck's whole life. Empty until an
+    author states one, and empty is the derivation's cue rather than a gap to fill.
+    """
 
 
 def bind(source: Path, project) -> BoundTemplate | None:
@@ -65,6 +73,14 @@ def bind(source: Path, project) -> BoundTemplate | None:
     for stale in folder.glob("*.pptx"):
         if stale.resolve() != destination.resolve():
             stale.unlink()
+    # And the palette goes with them. It is a reading of the pages of one file, so
+    # kept across a rebind it would put the last template's colours in this one --
+    # which `bound` would then read back as this template's own.
+    palette_path(project).unlink(missing_ok=True)
+    # On the copy, before anything counts its pages: a hidden slide is absent from
+    # the render, so leaving it in makes the file's page numbers disagree with the
+    # render's for every page after it.
+    strip_hidden(destination)
 
     prepared = prepare(destination, prepared_path(project))
     if prepared is None:
@@ -99,4 +115,5 @@ def bound(project) -> BoundTemplate | None:
         prepared=prepared,
         inventory=inventory,
         example_pages=original.example_slides if original else 0,
+        palette=read_palette(project),
     )

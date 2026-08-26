@@ -10,12 +10,11 @@ drop out of the path.
 What the container contributed that still has to happen somewhere, and now
 happens here:
 
-- **Only the named files are visible.** Raven's CLI sub-agent contract
-  substitutes `{prompt}`, `{prompt_file}` and `{agent_id}` and nothing else, so
-  a dispatching agent has no argv slot for material -- naming absolute paths in
-  the task text is the only channel. Those files are copied into the job's own
-  `materials/`, and `tools.restrictToWorkspace` keeps the agent inside the job
-  directory, so it reads the copies and cannot wander the host for more.
+- **The named files arrive.** Raven's CLI sub-agent contract substitutes
+  `{prompt}`, `{prompt_file}` and `{agent_id}` and nothing else, so a dispatching
+  agent has no argv slot for material -- naming absolute paths in the task text
+  is the only channel. Those files are copied into the job's own `materials/`
+  and the prompt points at the copies.
 - **The key never touches a published file.** `config.json` ships and holds no
   secret; `.env` supplies it and the two are merged into a rendered config under
   the state root at launch.
@@ -23,10 +22,11 @@ happens here:
   the sub-agent's reply, so the agent's own narration goes to the job log and
   stdout carries only what was produced and where.
 
-Success is a published deck rather than an exit code: a `MEDIA:` line whose file
-exists and opens as a pptx with slides in it. That test was written because the
-container exited 139 on fully successful runs; it survives the move because it
-checks the artifact rather than the process.
+Success is a published deck rather than an exit code: a pptx this run wrote under
+the job's `out/` that opens as a zip carrying slide parts, with the `MEDIA:` line
+only choosing between several. That test was written because the container exited
+139 on fully successful runs; it survives the move because it checks the artifact
+rather than the process.
 """
 
 from __future__ import annotations
@@ -53,9 +53,11 @@ STATE_ROOT = Path(
 
 MATERIAL_SUFFIXES = {
     ".pdf", ".md", ".markdown", ".txt", ".rst", ".docx", ".doc", ".pptx",
-    ".csv", ".tsv", ".json", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp",
+    ".xlsx", ".xls", ".csv", ".tsv", ".json", ".html", ".htm", ".png", ".jpg",
+    ".jpeg", ".webp",
 }
 _PATH_RE = re.compile(r"/[^\s'\"`,;()<>\[\]]+")
+_INPUTS_FENCE = re.compile(r"```(?:raven-ppt|json)?\s*\n\s*(\{.*?\})\s*\n\s*```", re.DOTALL)
 
 _LOG_FILE: Path | None = None
 _VERBOSE = False
@@ -163,14 +165,58 @@ def inherit_llm(config: dict, host: dict) -> str:
     return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
+def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
+    """What a dispatching agent declared, as a fenced JSON object: its materials
+    and its template. ``([], None)`` when it declared nothing, which leaves the
+    prose scan below as the only reader.
+
+    The sub-agent contract carries one content channel, the task text, and prose
+    is not a reliable one. A path in prose is delimited by whitespace, so
+    ``/tmp/my deck.pptx`` splits in two; a full stop in a script whose punctuation
+    is not ASCII stays attached, so ``notes.md<CJK full stop>`` matches no known
+    type. Either way the file is dropped without a word, which is exactly the
+    silence ``stage`` refuses to allow for a file it cannot copy. A quoted string
+    has neither problem.
+
+    It is also the only way the launcher learns which file is the *template*.
+    Named in prose, that is a sentence only the model downstream can read, and a
+    model that misreads it builds the deck in the wrong file.
+    """
+    for block in _INPUTS_FENCE.findall(text):
+        try:
+            declared = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(declared, dict) or not declared.keys() & {"materials", "template"}:
+            continue
+        listed = declared.get("materials")
+        materials = [item for item in listed if isinstance(item, str)] if isinstance(listed, list) else []
+        template = declared.get("template")
+        return materials, template if isinstance(template, str) and template else None
+    return [], None
+
+
 def materials_from_prompt(text: str) -> list[str]:
-    """Absolute paths named in the prompt that exist and look like documents."""
+    """Absolute paths named in the prompt that exist and look like documents.
+
+    The tail is trimmed a character at a time until what is left is a file,
+    rather than by stripping ASCII full stops. Prose in any script puts its
+    punctuation against the path, and a mark that is not ASCII stays attached:
+    the suffix of `notes.md<CJK full stop>` is not `.md`, so the whole document
+    used to be dropped without a word. The type list still applies, to the
+    trimmed name -- prose names paths that are not material, and a run that
+    staged every file mentioned in passing would ground the deck in its own log.
+    A document whose kind is not on that list reaches this run through the
+    declared block instead, which does not filter.
+    """
     found: list[str] = []
     for match in _PATH_RE.findall(text):
-        candidate = match.rstrip(".")
-        path = Path(candidate)
-        if path.suffix.lower() in MATERIAL_SUFFIXES and path.is_file() and candidate not in found:
-            found.append(candidate)
+        for end in range(len(match), 1, -1):
+            candidate = match[:end]
+            if Path(candidate).is_file():
+                if Path(candidate).suffix.lower() in MATERIAL_SUFFIXES and candidate not in found:
+                    found.append(candidate)
+                break
     return found
 
 
@@ -193,7 +239,7 @@ def unique_sources(paths: list[str]) -> list[str]:
 def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[str, Path]]]:
     """The job directory, with the named files copied into it.
 
-    Returns ``(root, materials, exports, staged)``, where ``staged`` pairs each
+    Returns ``(root, materials, out_dir, staged)``, where ``staged`` pairs each
     source with the path it was copied to -- the prompt is built from that pairing
     rather than re-deriving it, so the agent is told where each file actually is.
     ``root`` is handed to raven as the workspace, which is what puts both
@@ -213,8 +259,8 @@ def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[
     and grounds the deck twice in one of them.
     """
     root = STATE_ROOT / "jobs" / job
-    mats, exports = root / "materials", root / "exports"
-    for directory in (mats, exports):
+    mats, out_dir = root / "materials", root / "out"
+    for directory in (mats, out_dir):
         directory.mkdir(parents=True, exist_ok=True)
     staged: list[tuple[str, Path]] = []
     taken: set[str] = set()
@@ -233,7 +279,7 @@ def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[
                 "absolute path, or drop it from the task."
             ) from None
         staged.append((source, target))
-    return root, mats, exports, staged
+    return root, mats, out_dir, staged
 
 
 def render_config(source: Path) -> Path:
@@ -336,10 +382,10 @@ def _slide_count(deck: Path) -> int:
         ])
 
 
-def deck_mtimes(exports: Path) -> dict[Path, float]:
-    """Every pptx under ``exports`` with its mtime, for the before/after compare."""
+def deck_mtimes(out_dir: Path) -> dict[Path, float]:
+    """Every pptx under ``out_dir`` with its mtime, for the before/after compare."""
     found: dict[Path, float] = {}
-    for path in exports.rglob("*.pptx"):
+    for path in out_dir.rglob("*.pptx"):
         try:
             found[path] = path.stat().st_mtime
         except OSError:
@@ -347,7 +393,7 @@ def deck_mtimes(exports: Path) -> dict[Path, float]:
     return found
 
 
-def verified_deck(exports: Path, tail: list[str], before: dict[Path, float]) -> tuple[Path | None, int]:
+def verified_deck(out_dir: Path, tail: list[str], before: dict[Path, float]) -> tuple[Path | None, int]:
     """The deck the agent published, or ``(None, 0)``.
 
     The directory is searched rather than the transcript parsed, because neither
@@ -355,8 +401,7 @@ def verified_deck(exports: Path, tail: list[str], before: dict[Path, float]) -> 
     2026-08-20 on the first host run: the CLI hard-wraps its output at the
     terminal width, so the announced path was split across three lines and the
     marker line ended up empty -- and the deck itself was written to
-    ``exports/<project>/<name>.pptx``, a level below where a basename lookup
-    against ``exports`` would find it.
+    a level below where a basename lookup against the directory would find it.
 
     So the launcher trusts what it owns. Every valid deck this run wrote or
     rewrote is a candidate; the announcement only chooses between them, and the
@@ -365,14 +410,14 @@ def verified_deck(exports: Path, tail: list[str], before: dict[Path, float]) -> 
     Scoped to this run rather than to the directory, which is the whole point of
     ``before``. ``--job`` is the sub-agent's ``agent_id``, minted once per
     conversation and replayed on every later turn, so one job directory
-    accumulates every turn's exports while ``tail`` holds only this turn's
+    accumulates every turn's decks while ``tail`` holds only this turn's
     output. Accepting any deck in it would let a turn that published nothing --
     a model error, the watchdog kill, a render that never finished -- match no
     announcement, fall through to the newest, and hand back an earlier turn's
     file as this turn's result.
     """
     candidates = [
-        (path, count) for path, mtime in sorted(deck_mtimes(exports).items())
+        (path, count) for path, mtime in sorted(deck_mtimes(out_dir).items())
         if mtime > before.get(path, -1.0) and (count := _slide_count(path))
     ]
     if not candidates:
@@ -421,9 +466,14 @@ def main() -> int:
     ap.add_argument("--prompt-file", help="File holding the prompt (alternative to --task)")
     ap.add_argument("--job", required=True, help="Job name; also the job directory name")
     ap.add_argument("--material", action="append", default=[], help="Source document; repeatable")
+    ap.add_argument("--template", default=None, help="Deck template (.pptx); the deck is built in it")
     ap.add_argument("--session", help="Enable multi-turn: reuse this key across runs")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
-    ap.add_argument("--timeout", type=int, default=3600)
+    # An hour killed a run that had written all twenty pages and was on its last
+    # pass over the renders, so nothing was published and the hour was spent for
+    # nothing. A page costs a build, a render and a reading, and twenty of them
+    # plus the review the deck is for do not fit in one.
+    ap.add_argument("--timeout", type=int, default=10800)
     ap.add_argument("--deliver-to", default=None, help="Copy the finished deck here")
     ap.add_argument("--no-deliver", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="Mirror diagnostics to stderr")
@@ -447,26 +497,49 @@ def main() -> int:
             f"  cd {CHECKOUT} && uv sync --extra ppt"
         )
 
-    materials = unique_sources(list(args.material) + materials_from_prompt(task))
+    declared, declared_template = inputs_from_prompt(task)
+    template_source = args.template or declared_template
+    # The template is staged with the rest because the workspace fence is what the
+    # agent reads through; it is only told apart afterwards, by source path.
+    materials = unique_sources(
+        list(args.material)
+        + declared
+        + ([template_source] if template_source else [])
+        + materials_from_prompt(task)
+    )
     if not materials:
         raise SystemExit(
-            "error: no source material. Pass --material, or name existing absolute "
-            "paths to the source documents in the task text."
+            "error: no source material. Pass --material, declare one in a fenced "
+            '{"materials": [...]} block, or name existing absolute paths to the '
+            "source documents in the task text."
         )
 
-    root, mats, exports, staged = stage(args.job, materials)
+    root, mats, out_dir, staged = stage(args.job, materials)
+    template_target = None
+    if template_source:
+        wanted = os.path.realpath(template_source)
+        template_target = next(
+            (target for source, target in staged if os.path.realpath(source) == wanted), None
+        )
 
     global _LOG_FILE, _VERBOSE
     _VERBOSE = args.verbose
     _LOG_FILE = root / "launcher.log"
 
     task += "\n\n# Material staged for this run\n" + "\n".join(
-        f"- {Path(source).name} (from {source}) -> {target}" for source, target in staged
+        f"- {Path(source).name} (from {source}) -> {target}"
+        + ("  [template]" if target == template_target else "")
+        for source, target in staged
     ) + (
         f"\nUse only files under {mats} as factual source material. "
-        f"Compile the deck under {exports}/ and end your final reply with the "
+        f"Compile the deck under {out_dir}/ and end your final reply with the "
         "MEDIA line naming it."
     )
+    if template_target is not None:
+        task += (
+            f"\nBuild this deck in {template_target}. It is the template, not source "
+            "material: bind it first, and do not quote it as evidence."
+        )
 
     rendered = render_config(Path(args.config).resolve())
     argv = [
@@ -474,6 +547,13 @@ def main() -> int:
         "--config", str(rendered),
         "--workspace", str(root),
         "--no-markdown",
+        # The runtime's own warnings, without which this log carries only what the
+        # model said. Two failed runs were diagnosed off the absence of a
+        # "Context overflow" line here, and the line was never going to be here:
+        # `raven agent` suppresses loguru unless asked, so the log said nothing
+        # about a recovery that may well have run. A launcher log is the only
+        # record a finished run leaves.
+        "--logs",
     ]
     if args.session:
         argv += ["--session", args.session]
@@ -485,7 +565,7 @@ def main() -> int:
             log(f"[run] staged {source} as {target.name}: its own basename was already taken")
     # Taken before the child starts, so what it publishes can be told apart from
     # what an earlier turn of this conversation left in the same job directory.
-    before = deck_mtimes(exports)
+    before = deck_mtimes(out_dir)
     tail: list[str] = []
     timed_out = False
     # Inherited wholesale on purpose: a proxy the host needs to reach the model
@@ -535,7 +615,7 @@ def main() -> int:
     finally:
         watchdog.cancel()
 
-    deck, slides = verified_deck(exports, tail, before)
+    deck, slides = verified_deck(out_dir, tail, before)
     log(f"[run] exit_code={rc} timed_out={timed_out} deck={deck} slides={slides}")
 
     if deck is None:

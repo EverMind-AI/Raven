@@ -18,7 +18,7 @@ import io
 import pytest
 from loguru import logger as _logger
 
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
@@ -65,10 +65,13 @@ async def test_no_fallbacks_preserves_single_model_behavior():
 @pytest.mark.asyncio
 async def test_exhausted_transient_falls_back_to_next_model():
     transient = LLMResponse(content="429 rate limit", finish_reason="error")
+    # As many attempts as the ladder this failure asks for, read off the provider
+    # rather than written down: a rate limit is answered on a longer ladder than
+    # a dropped connection, and a literal here would be testing the number.
+    attempts = len(_ScriptedProvider({}).retry_delays(ErrorClassification("rate_limit"))) + 1
     provider = _ScriptedProvider(
         {
-            # primary: 4 transient attempts (3 sleep + 1 final) all fail
-            "primary": [transient] * 4,
+            "primary": [transient] * attempts,
             "backup": [LLMResponse(content="recovered", finish_reason="stop")],
         }
     )
@@ -80,7 +83,28 @@ async def test_exhausted_transient_falls_back_to_next_model():
         fallback_models=["backup"],
     )
     assert resp.content == "recovered"
-    assert provider.calls == ["primary"] * 4 + ["backup"]
+    assert provider.calls == ["primary"] * attempts + ["backup"]
+
+
+def test_a_throttle_waits_longer_than_a_dropped_connection():
+    """The ladder is per category, and flattening the base flattens both.
+
+    A single 429 used to end a run seven seconds after the first one arrived,
+    with a deck two thirds built; and a test that zeroed the delays to stay fast
+    would have slept for five real minutes had the throttle ladder been written
+    out as a constant of its own.
+    """
+    provider = _ScriptedProvider({})
+    network = provider.retry_delays(ErrorClassification("network", retryable=True))
+    throttle = provider.retry_delays(ErrorClassification("rate_limit", retryable=True))
+
+    assert network == tuple(float(d) for d in provider._CHAT_RETRY_DELAYS)
+    assert len(throttle) > len(network)
+    assert sum(throttle) > 240
+    assert provider.retry_delays() == network
+
+    provider._CHAT_RETRY_DELAYS = (0, 0, 0)
+    assert not any(provider.retry_delays(ErrorClassification("rate_limit")))
 
 
 @pytest.mark.asyncio

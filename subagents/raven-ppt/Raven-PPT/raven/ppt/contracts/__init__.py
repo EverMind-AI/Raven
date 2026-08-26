@@ -9,7 +9,7 @@ from raven.ppt.contracts.brief import DeckBrief, PageBudget, brief_path, load_br
 from raven.ppt.contracts.build import BuildOutcome, PageSource
 from raven.ppt.contracts.capability import Capabilities
 from raven.ppt.contracts.deck import DeckPlan, PageSpec
-from raven.ppt.contracts.findings import Audience, Finding, Severity, blocking, warnings
+from raven.ppt.contracts.findings import Finding, Severity, blocking, warnings
 from raven.ppt.contracts.intake import (
     Errand,
     IntakePlan,
@@ -22,6 +22,7 @@ from raven.ppt.contracts.intake import (
 from raven.ppt.contracts.outline import (
     Outline,
     PagePlan,
+    PlannedTable,
     load_outline,
     outline_path,
     write_outline,
@@ -32,7 +33,6 @@ from raven.ppt.contracts.rendered import PageSize, WordBox
 from raven.ppt.contracts.stage import Backend, StageResult
 
 __all__ = [
-    "Audience",
     "Backend",
     "BuildOutcome",
     "Capabilities",
@@ -47,6 +47,7 @@ __all__ = [
     "PageSpec",
     "Outline",
     "PagePlan",
+    "PlannedTable",
     "Profile",
     "Project",
     "Question",

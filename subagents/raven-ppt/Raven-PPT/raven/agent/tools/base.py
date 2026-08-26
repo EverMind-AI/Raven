@@ -210,6 +210,20 @@ class Tool(ABC):
         """Cast a single value according to schema."""
         target_type = schema.get("type")
 
+        if isinstance(target_type, list):
+            # JSON Schema lets `type` be a list of alternatives, and that is how a
+            # field says it may be given as an explicit nothing rather than left
+            # out: `["integer", "null"]`. Everything below indexes `_TYPE_MAP`
+            # with this value, so a list arrived as a dict key and raised
+            # `unhashable type: 'list'` -- from the registry, before the tool ran,
+            # which reads from the outside exactly like the tool being broken.
+            # Three end-to-end runs died here, each spending its budget rewriting
+            # a call whose arguments were correct.
+            if val is None:
+                return val
+            named = [one for one in target_type if one != "null"]
+            return self._cast_value(val, {**schema, "type": named[0]}) if named else val
+
         if target_type == "boolean" and isinstance(val, bool):
             return val
         if target_type == "integer" and isinstance(val, int) and not isinstance(val, bool):
@@ -262,6 +276,23 @@ class Tool(ABC):
 
     def _validate(self, val: Any, schema: dict[str, Any], path: str) -> list[str]:
         t, label = schema.get("type"), path or "parameter"
+
+        if isinstance(t, list):
+            # The alternatives above, checked the way alternatives are: valid if
+            # the value satisfies any one of them, and the complaint from the
+            # first named type when it satisfies none -- one type's message says
+            # what to send, where a list of every alternative's would not.
+            if val is None and "null" in t:
+                return []
+            first: list[str] = []
+            for one in t:
+                if one == "null":
+                    continue
+                errors = self._validate(val, {**schema, "type": one}, path)
+                if not errors:
+                    return []
+                first = first or errors
+            return first
         if t == "integer" and (not isinstance(val, int) or isinstance(val, bool)):
             return [f"{label} should be integer"]
         if t == "number" and (not isinstance(val, self._TYPE_MAP[t]) or isinstance(val, bool)):

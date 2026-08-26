@@ -17,13 +17,19 @@ pytest.importorskip("pptx")
 
 from raven.ppt.contracts import (  # noqa: E402
     DeckBrief,
+    IntakePlan,
+    Outline,
     PageBudget,
+    PagePlan,
     Project,
     brief_path,
     intake_path,
     load_brief,
     load_plan,
+    outline_path,
     write_brief,
+    write_outline,
+    write_plan,
 )
 from raven.ppt.services import state as deck_state  # noqa: E402
 from raven.ppt.services.ingest import ingest_materials  # noqa: E402
@@ -162,6 +168,68 @@ async def test_a_request_that_states_the_brief_is_not_asked_back(project: Projec
     assert result.data["plan"].questions == ()
 
 
+async def test_a_request_that_rules_something_out_binds_it_to_the_deck(project: Project, materials: Path):
+    """ "这份不要用 icon" is a decision, and before the brief had a slot for it the
+    only place it could go was prose thirty turns upstream of the build that would
+    have to honour it."""
+    stage, _ = _stage(
+        _plan(
+            stated={
+                "language": "中文",
+                "audience": "内部技术评审",
+                "pages_low": 12,
+                "pages_high": 12,
+                "forbidden": ["不要用 icon", "  "],
+            }
+        )
+    )
+
+    await stage.run(project, "做一份 12 页中文内部评审材料，这份不要用 icon")
+
+    brief = load_brief(brief_path(project))
+    assert brief is not None
+    assert brief.forbidden == ("不要用 icon",), "and the blank entry never became a rule"
+
+
+async def test_one_prohibition_written_as_a_string_is_still_read(project: Project, materials: Path):
+    """A reply that answers `"forbidden": "no icons"` instead of a list means the
+    user forbade icons; dropping it is the one wrong reading available."""
+    stage, _ = _stage(_plan(stated={"forbidden": "no icons"}))
+
+    result = await stage.run(project, "make a deck, no icons")
+
+    assert result.data["plan"].stated.forbidden == ("no icons",)
+    assert "forbidden" not in result.data["plan"].stated.missing, "nobody is asked what they did not forbid"
+
+
+async def test_a_prohibition_that_came_back_as_an_object_is_dropped_not_stringified(project: Project, materials: Path):
+    """`str()` on a dict does not recover what the model meant by it.
+
+    A reply holding `"forbidden": [{"what": "no icons"}]` came through as the literal
+    text `{'what': 'no icons'}`, went into the brief as a rule, and was quoted back on
+    every build verbatim -- a line of Python presented to the author as something the
+    user said. There is no reading of it that is better than none, so it goes the way
+    the blank entries go.
+    """
+    stage, _ = _stage(
+        _plan(
+            stated={
+                "language": "中文",
+                "audience": "内部技术评审",
+                "pages_low": 12,
+                "pages_high": 12,
+                "forbidden": [{"what": "no icons"}, "不要用 icon", 7, None],
+            }
+        )
+    )
+
+    result = await stage.run(project, "做一份 12 页中文内部评审材料，这份不要用 icon")
+
+    assert result.data["plan"].stated.forbidden == ("不要用 icon",)
+    brief = load_brief(brief_path(project))
+    assert brief is not None and brief.forbidden == ("不要用 icon",)
+
+
 async def test_half_a_brief_is_not_recorded_at_all(project: Project, materials: Path):
     """A brief exists to be checked against, so half of one filled out with
     defaults would have the deck measured against a decision nobody made -- worse
@@ -250,6 +318,50 @@ async def test_the_errands_and_the_notes_survive(project: Project, materials: Pa
     assert plan.outstanding
 
 
+def _text_only(workspace: Path) -> Path:
+    """Materials with nothing to extract and a URL that has something."""
+    where = workspace / "text-only"
+    where.mkdir()
+    (where / "analysis.md").write_text(
+        "# Competitors\n\nMem0 documents its pipeline at https://docs.mem0.ai/core-concepts/how-it-works.\n",
+        encoding="utf-8",
+    )
+    return where
+
+
+async def test_an_errand_naming_a_picture_no_longer_deletes_the_sweep(project: Project, workspace: Path):
+    """The loophole: "image" is a substring of `web_search(kind="images")`, so an author
+    that mentioned a picture search for one page deleted the errand asking it to sweep
+    the sources -- which is the one thing said about that sweep before `ppt_outline`
+    refuses over it."""
+    _text_only(workspace)
+    stage, _ = _stage(
+        _plan(
+            materials_dir="text-only",
+            errands=[{"what": "a product shot", "why": "page 4 shows nothing", "how": 'web_search(kind="images")'}],
+        )
+    )
+
+    result = await stage.run(project, "make a deck")
+
+    errands = result.data["plan"].errands
+    swept = [errand for errand in errands if errand.what == "the figures the sources themselves point at"]
+    assert len(swept) == 1
+    assert "cite 1 URL(s)" in swept[0].why
+    assert "`swept`" in swept[0].how
+
+
+async def test_the_sweep_errand_is_not_added_once_there_are_figures(project: Project, materials: Path):
+    """Any number above zero is a judgement about these figures and these pages, and
+    that one is the author's."""
+    stage, _ = _stage(_plan())
+
+    result = await stage.run(project, "make a deck")
+
+    assert deck_state.read(project).figures
+    assert all(errand.what != "the figures the sources themselves point at" for errand in result.data["plan"].errands)
+
+
 # --- not doing the work twice --------------------------------------------
 
 
@@ -329,6 +441,20 @@ async def test_the_reply_carries_both_lists_and_asks_the_questions_first(project
     assert body["next_step"].index("ask_user") < body["next_step"].index("gather")
 
 
+async def test_a_prohibition_outlives_a_brief_that_could_not_be_written(project: Project, materials: Path):
+    """Half a brief is not recorded, so the prohibition the request stated has
+    nowhere to live yet -- and the brief is the only thing that carries one forward to
+    the builds. Said in the reply, or lost between the two calls."""
+    stage, _ = _stage(_plan(stated={"language": "中文", "forbidden": ["别放对比表"]}))
+    tool = PptPrepareTool(project.workspace, stage)
+
+    body = json.loads(await tool.execute(project="talk", task="做一份材料，别放对比表"))
+
+    assert load_brief(brief_path(project)) is None
+    assert body["forbidden"] == ["别放对比表"]
+    assert "别放对比表" in body["next_step"] and "ppt_brief" in body["next_step"]
+
+
 async def test_a_prepared_deck_is_told_to_go_and_build(project: Project, materials: Path):
     write_brief(
         DeckBrief(language="English", audience="an internal review", pages=PageBudget(10, 12)),
@@ -341,6 +467,54 @@ async def test_a_prepared_deck_is_told_to_go_and_build(project: Project, materia
 
     assert "ppt_build" in body["next_step"]
     assert body["figures"] == 1
+
+
+async def test_a_deck_that_already_has_a_program_is_handed_back_without_being_re_read(
+    project: Project, materials: Path, template_file
+):
+    """The resume branch, which nothing exercised until it broke.
+
+    All four -- brief, plan, outline and program -- have to be on disk before this
+    path is taken, so the one existing prepared-deck test writes a brief and goes
+    straight past it. That left `_resume_payload` at zero coverage, and what found
+    the missing import in it was ruff's F821 rather than a run: an `AttributeError`
+    on a resumed layout pass is a whole prepare call thrown away.
+
+    What it must do is hand the build back without asking the model anything, because
+    re-reading the task resets the model's attention to preparation and can discard
+    the fact that an outline and a runnable program already exist.
+    """
+    from raven.ppt.backends.script import script_path
+    from raven.ppt.services.template import bind
+
+    bind(template_file(where=project.workspace), project)
+    write_brief(
+        DeckBrief(language="中文", audience="an internal review", pages=PageBudget(10, 12)),
+        brief_path(project),
+    )
+    # The request as well as the topic: resuming skips the reading, so it is only
+    # right for the request this project was prepared from, and the plan on disk is
+    # what says which that was.
+    write_plan(IntakePlan(topic="video segmentation", request="make a deck"), intake_path(project))
+    write_outline(
+        Outline(takeaway="one model matches four", pages=(PagePlan(page=1, claim="a claim"),)),
+        outline_path(project),
+    )
+    script_path(project).parent.mkdir(parents=True, exist_ok=True)
+    script_path(project).write_text("# already written\n", encoding="utf-8")
+    stage, composer = _stage(_plan())
+    tool = PptPrepareTool(project.workspace, stage)
+
+    body = json.loads(await tool.execute(project="talk", task="make a deck"))
+
+    assert body["ok"] and body["resumed"] is True
+    assert composer.seen == [], "a resumed deck must not re-read the task"
+    assert body["topic"] == "video segmentation"
+    assert body["outline_pages"] == 1
+    assert "中文" in body["brief"], "the recorded brief comes back rather than being asked for again"
+    assert body["write_the_program_to"] == str(script_path(project).relative_to(project.workspace))
+    assert body["template"] == "house-style.pptx", "and the deck it is built inside is still named"
+    assert "ppt_build" in body["next_step"]
 
 
 async def test_path_a_helpers_exist_before_the_prepare_reader_runs(project: Project, materials: Path):

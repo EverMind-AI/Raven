@@ -1,10 +1,9 @@
 """The citation gate: a page cites the figure it actually shows.
 
-A page saying "Fig. 4" beside Figure 5 is a provenance error a reader checks in
-a second and nothing else here looks for. It went unnoticed until ingest started
-reading captions --
-before that nothing knew which figure was which, and the author could only guess
-from the picture.
+A page saying "Fig. 4" beside Figure 5 is a provenance error a reader checks in a
+second and nothing else here can see -- this is the deck's only check on what a page
+credits. It went unnoticed until ingest started reading captions; before that nothing
+knew which figure was which, and the author could only guess from the picture.
 
 Which figure is on a page is decided by hashing the placed image against the
 ingested files, so a page placing something this deck never ingested, or an
@@ -21,7 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import iter_shapes, page_paragraphs, pages
 
 # `Fig. 4`, `Figure 4`, `Table 1`, `图 3` as a page's own text writes them.
@@ -140,7 +139,6 @@ def citation_findings(pptx_path: Path, labels: Mapping[str, str]) -> list[Findin
                     kind="citation",
                     severity=Severity.BLOCKING,
                     page=number,
-                    audience=Audience.AUTHOR,
                     message=(
                         f"the page shows {', '.join(sorted(on_page))} but cites {', '.join(sorted(named))}. "
                         "Cite what is on the page, or place what the page cites"
