@@ -28,6 +28,7 @@ from unittest.mock import patch
 
 from raven.providers.base import GenerationSettings, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.transport_failure import flag_transport_failure
 
 # ---------- the shape litellm hands back, with the error already laundered ----
 
@@ -577,6 +578,28 @@ def test_the_library_files_the_original_beside_the_value_it_rewrote() -> None:
     assert native_finish_reason(healthy) is None
 
 
+def test_a_rename_never_seen_before_says_so_without_being_judged_differently() -> None:
+    """The one case the allow list can get wrong, made visible.
+
+    A normal end spelled in a way nothing has mapped is recorded as a rename, is
+    absent from the allow list, and is reported as a failure -- taking a turn
+    that the loop's own silence recovery should have had. The verdict cannot tell
+    that apart from a new failure dialect and does not try: both are refused, for
+    the reason the allow list exists. What it can do is say which one it is
+    looking at, so the case has a signal at all rather than only a retry nobody
+    asked about.
+    """
+    known = flag_transport_failure(
+        finish_reason="stop", content=None, tool_calls=[], native_finish_reason="network_error"
+    )
+    unknown = flag_transport_failure(finish_reason="stop", content=None, tool_calls=[], native_finish_reason="ALL_DONE")
+
+    # Same verdict for both -- the wording is the only thing that differs.
+    assert known and unknown
+    assert "not seen before" not in known
+    assert "not seen before" in unknown
+
+
 def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
     """The allow list's safety net.
 
@@ -588,19 +611,9 @@ def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
     """
     from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
 
-    from raven.providers.transport_failure import _NORMAL_STOP_ALIASES
+    from raven.providers.transport_failure import _NORMAL_STOP_ALIASES, _OBSERVED_FAILURE_REASONS
 
-    #: Renames to `stop` that are known to report a failure, not a normal end.
-    #: Listed here rather than in the module: the verdict needs no list of
-    #: these, only this test needs to say which names it has already seen.
-    known_failures = {
-        "error",
-        "ERROR",
-        "network_error",
-        "MALFORMED_RESPONSE",
-        "MALFORMED_FUNCTION_CALL",
-        "TOO_MANY_TOOL_CALLS",
-    }
+    known_failures = _OBSERVED_FAILURE_REASONS
 
     renamed_to_stop = {name for name, mapped in _FINISH_REASON_MAP.items() if mapped == "stop" and name != "stop"}
     unclassified = renamed_to_stop - _NORMAL_STOP_ALIASES - known_failures

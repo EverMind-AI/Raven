@@ -60,6 +60,24 @@ _NORMAL_STOP_ALIASES = frozenset(
     }
 )
 
+#: Renames to ``stop`` observed to report a failure. The verdict does not read
+#: this -- an unrecognised rename is a failure either way, which is what the
+#: allow list is for -- so it is here to be *said*, not to decide. A rename this
+#: does not name is either a new failure dialect or the one thing the allow list
+#: gets wrong: a normal end spelled in a way nothing has mapped, reported as a
+#: failure when the loop's own silence recovery should have had it. Naming the
+#: two apart in the log is the only signal that case has.
+_OBSERVED_FAILURE_REASONS = frozenset(
+    {
+        "error",
+        "ERROR",
+        "network_error",
+        "MALFORMED_RESPONSE",
+        "MALFORMED_FUNCTION_CALL",
+        "TOO_MANY_TOOL_CALLS",
+    }
+)
+
 #: Below this, an accounted prompt is not evidence of anything -- a short
 #: request really can cost a handful of tokens.
 _MIN_PROMPT_CHARS = 400
@@ -244,7 +262,8 @@ def flag_transport_failure(
         # about what the upstream meant, it is what the upstream said. The
         # accounting below exists to tell a failed request apart from a silent
         # model, and a model that stayed silent does not send one of these.
-        return f"the upstream reported finish_reason={native_finish_reason!r}, renamed to 'stop' in transit"
+        seen = "" if native_finish_reason in _OBSERVED_FAILURE_REASONS else ", a spelling not seen before"
+        return f"the upstream reported finish_reason={native_finish_reason!r}{seen}, renamed to 'stop' in transit"
     accounting = _accounting_is_absurd(usage, sent_chars)
     if not accounting:
         return None
