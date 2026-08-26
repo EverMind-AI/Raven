@@ -132,6 +132,39 @@ describe('merging one source onto another', () => {
     expect(merged[0]?.prompt_template).toBe('go look')
   })
 
+  it('refuses to push a node back to an earlier stage', () => {
+    /* The bug this exists for. `dag.get` is asked when the card is opened and
+       answers whenever the gateway gets to it, so its snapshot is as old as the
+       question -- while the events kept arriving. Taken as the newer fact, it
+       put finished nodes back to `pending`, and the card then showed the whole
+       graph as waiting for the rest of the run. */
+    const live = merge(args, fromSnapshot([{ node: 'a', status: 'completed', started_at: 5, ended_at: 9 }]))
+    const stale = merge(live, fromSnapshot([{ node: 'a', status: 'pending' }]))
+
+    expect(stale[0]?.status).toBe('completed')
+    /* And the times it already had stay with it: a status that survives beside
+       stamps that did not would leave a finished node with no clock. */
+    expect([stale[0]?.started_at, stale[0]?.ended_at]).toEqual([5, 9])
+  })
+
+  it('still takes a status the existing node has not reached', () => {
+    /* The other direction, which is the common one: a card restored from history
+       holds nothing but `pending`, and the read is the only thing that knows the
+       run is over. Monotonicity must not turn into "the first answer wins". */
+    const restored = fromArgs({ nodes: [{ id: 'a', subagent: 'scout' }] })
+    const merged = merge(restored, fromSnapshot([{ node: 'a', status: 'running', started_at: 5 }]))
+
+    expect(merged[0]?.status).toBe('running')
+  })
+
+  it('lets one terminal status replace another', () => {
+    /* Terminal statuses share a rank rather than being ordered against each
+       other: they are mutually exclusive endings, so the later report wins.
+       Ranking them would freeze whichever ending happened to arrive first. */
+    const done = merge(args, fromSnapshot([{ node: 'a', status: 'completed' }]))
+    expect(merge(done, fromSnapshot([{ node: 'a', status: 'interrupted' }]))[0]?.status).toBe('interrupted')
+  })
+
   it('appends a node the existing list never had', () => {
     /* A card whose arguments carried no graph at all: everything is new. */
     const merged = merge(args, fromSnapshot([{ node: 'b', status: 'pending' }]))

@@ -10,16 +10,22 @@
 
 import { t } from '../../shell/bridge'
 import { formatDuration } from '../../shell/duration'
+import { settled } from './nodes'
 
 import type { DagNode, DagRun, DagLayout } from './types'
 
 /* Wider and taller than the first pass: the box carries a status mark as well
-   as the node's id, the agent under it and a clock, and 108x38 had them
+   as the node's name, the agent under it and a clock, and 108x38 had them
    touching each other. GAP_X leaves 46px of edge between columns, which is
-   enough for a curve to read as a curve rather than as a kink. */
-export const GAP_X = 182
+   enough for a curve to read as a curve rather than as a kink.
+
+   Widened again when the name became the node's summary rather than its id. A
+   summary is a sentence -- "research the current hot topics and pick two" --
+   and the 65px the label had left over from a 136px box cut every one of them
+   to four characters, which says less than the id it replaced. */
+export const GAP_X = 282
 export const GAP_Y = 60
-export const W = 136
+export const W = 236
 export const H = 44
 export const PAD = 10
 
@@ -38,7 +44,7 @@ export const SHEET: Dims = { W, H, GAP_X, GAP_Y, PAD }
    A second set of constants rather than a scale factor: the box holds text at a
    fixed size, so what has to change is how much room the text gets, not how big
    everything is. */
-export const CARD: Dims = { W: 132, H: 38, GAP_X: 166, GAP_Y: 50, PAD: 10 }
+export const CARD: Dims = { W: 212, H: 38, GAP_X: 246, GAP_Y: 50, PAD: 10 }
 
 /* Depth by longest path, which is what puts a node in the column after the last
    thing it waits for. Memoised, and guarded against a cycle it should never
@@ -168,9 +174,18 @@ export function summary(d: DagRun): string {
 /* How long a node has been at it. A node that has not started shows nothing;
    one still running is measured against now, which is what the panel's clock
    re-reads every second. Floored at a second so a node that starts and ends
-   inside one tick does not report 0.0s. */
+   inside one tick does not report 0.0s.
+
+   A node that has stopped without saying when shows nothing either, rather than
+   being measured against now. Two endings arrive that way -- a cancel carries
+   neither stamp, and a run's completion reports each node's final status without
+   repeating its clock -- and measuring those against now is a number that grows
+   for as long as the page stays open. It is the same rule the trail's card
+   already applies to the graph's own span: blank beats a made-up number, and one
+   reload reads the manifest, which carries the real stamps. */
 export function took(n: DagNode, now: number): string {
   if (!n.started_at) return ''
+  if (!n.ended_at && settled(String(n.status))) return ''
   const end = n.ended_at || now
   return formatDuration(Math.max(end - n.started_at, 1000))
 }

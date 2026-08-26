@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { _resetForTests as rackReset, sync as rackSync } from '../composer/sheets'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
-import { forget, resume, run, start, sync, touch, _resetForTests } from './mount'
+import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
@@ -410,5 +410,56 @@ describe('the dag sheet after a reload', () => {
 
     expect(put).toBe(false)
     expect(sheets()).toHaveLength(0)
+  })
+})
+
+describe('the two live reports the sheet takes', () => {
+  const clocks = (): string[] =>
+    [...sheets()[0]!.querySelectorAll<SVGTextElement>('.nd .tm')].map((el) => el.textContent || '')
+
+  const states = (): string[] =>
+    [...sheets()[0]!.querySelectorAll<SVGGElement>('.nd')].map((el) => el.getAttribute('data-st') as string)
+
+  it('moves the node the report names, and only that one', () => {
+    act(() => { start('a', graph('r1')) })
+    act(() => { advance('a', { run_id: 'r1', node: 'one', status: 'running', started_at: 1_000 }) })
+
+    expect(states()).toEqual(['running', 'pending'])
+  })
+
+  it('ignores a report about a run this sheet is not showing', () => {
+    /* One graph per conversation. An event for another run belongs to a card in
+       the trail, and writing it here would move a box the reader is watching. */
+    act(() => { start('a', graph('r1')) })
+    act(() => { advance('a', { run_id: 'r-other', node: 'one', status: 'failed' }) })
+
+    expect(states()).toEqual(['pending', 'pending'])
+  })
+
+  it('gives no node an end stamp the run never reported', () => {
+    /* The bug this exists for. Stamping "now" on a node whose own end nobody
+       reported measured it from its own start to the whole run's end, so a node
+       that finished in the first twenty seconds of a five-minute graph read as
+       having taken the five minutes. The node that DID report its end keeps its
+       own span; the one that did not shows nothing rather than a made-up
+       number, which is what the trail's card already does with the same gap. */
+    act(() => { start('a', graph('r1')) })
+    act(() => {
+      advance('a', { run_id: 'r1', node: 'one', status: 'completed', started_at: 1_000, ended_at: 21_000 })
+      advance('a', { run_id: 'r1', node: 'two', status: 'running', started_at: 21_000 })
+    })
+    act(() => {
+      settle('a', {
+        run_id: 'r1',
+        dir: '/w/.ravenx_dag/r1',
+        summary: { total: 2, completed: 2 },
+        files: [{ node: 'one', status: 'completed' }, { node: 'two', status: 'completed' }],
+      })
+    })
+
+    expect(states()).toEqual(['completed', 'completed'])
+    expect(clocks()[0]).toBe('20s')
+    expect(clocks()[1]).toBe('')
+    expect(run('a')?.done).toBe(true)
   })
 })

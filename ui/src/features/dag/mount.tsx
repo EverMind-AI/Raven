@@ -79,6 +79,22 @@ interface RunWire {
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '')
 
+/* What the two live events carry, as loosely as they cross the wire. */
+interface NodeWire {
+  run_id?: unknown
+  node?: unknown
+  status?: unknown
+  started_at?: unknown
+  ended_at?: unknown
+}
+
+interface CompletionWire {
+  run_id?: unknown
+  dir?: unknown
+  summary?: unknown
+  files?: unknown
+}
+
 /* Put a sheet back after the page was replaced.
  *
  * The reader had one open on this conversation and `dag.get` has just said what
@@ -114,6 +130,46 @@ export function resume(key: string, wire: unknown): boolean {
     task_summary: text(run.task_summary) || null,
   })
   return true
+}
+
+const num = (v: unknown): number | null => (typeof v === 'number' && isFinite(v) ? v : null)
+
+/* One node's report. Applied to the run the sheet is watching, and only when
+   that is the run the event is about: the sheet shows one graph per
+   conversation, and an event for another one belongs to a card in the trail. */
+export function advance(key: string, p: NodeWire): void {
+  const d = store.run(key)
+  if (!d || d.run_id !== String(p.run_id)) return
+  const n = d.nodes.get(String(p.node))
+  if (!n) return
+  n.status = text(p.status) || n.status
+  n.started_at = num(p.started_at) ?? n.started_at
+  n.ended_at = num(p.ended_at) ?? n.ended_at
+  store.touch()
+}
+
+/* The run's last word: each node's final status, the tally, and the fold.
+ *
+ * The status and nothing else. This used to stamp `Date.now()` on any node whose
+ * own end nobody had reported, which measured that node from its own start to
+ * the whole run's end -- so a node that finished in the first twenty seconds of
+ * a five-minute graph read as having taken the five minutes. A node whose end is
+ * unknown shows no duration instead, which is what the trail's card already does
+ * with the same gap, and one reload reads the manifest, which carries the real
+ * stamps. */
+export function settle(key: string, p: CompletionWire): void {
+  const d = store.run(key)
+  if (!d || d.run_id !== String(p.run_id)) return
+  const files = Array.isArray(p.files) ? p.files : []
+  files.forEach((f) => {
+    const n = f && typeof f === 'object' ? d.nodes.get(String((f as NodeWire).node)) : undefined
+    if (n) n.status = text((f as NodeWire).status) || n.status
+  })
+  d.summary = (p.summary || null) as DagSummary | null
+  d.dir = text(p.dir) || null
+  d.done = true
+  d.folded = true
+  store.touch()
 }
 
 /* The caller mutated the run it holds -- a node's status, a time, the summary --

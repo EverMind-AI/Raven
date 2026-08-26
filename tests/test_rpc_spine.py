@@ -1048,6 +1048,7 @@ class TestDagProgressSink:
             {
                 "run_id": "dag-1",
                 "tool_call_id": "call-a",
+                "task_summary": "compare the two pricing pages",
                 "nodes": [
                     {"id": "a", "subagent": "echo", "depends_on": [], "instance": None},
                     {
@@ -1066,6 +1067,10 @@ class TestDagProgressSink:
         assert key == "tui:c1"
         assert event["payload"]["run_id"] == "dag-1"
         assert event["payload"]["tool_call_id"] == "call-a"
+        # The line the graph was dispatched with. The sheet above the composer is
+        # titled by it, and this event is the only place it can reach a live
+        # reader -- dropping it left every running graph titled "Orchestration".
+        assert event["payload"]["task_summary"] == "compare the two pricing pages"
         # "a" carries no node_summary in the input and must carry none on the wire
         # (absent, not null); "b" proves the field survives the live path at all.
         assert event["payload"]["nodes"] == [

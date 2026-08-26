@@ -142,8 +142,31 @@ export function fromSnapshot(files: unknown): DagNode[] {
     }))
 }
 
+/* How far through its life a node is. A node only ever moves forward inside a
+   run, so the later of two reports is the higher one -- which is what lets a
+   merge take state from whichever source has it without knowing which source is
+   newer. Every terminal status shares one rank: they are mutually exclusive
+   endings, so two sources can only disagree about one by being about different
+   runs. */
+const STAGE: Record<string, number> = {
+  pending: 0,
+  running: 1,
+  completed: 2,
+  failed: 2,
+  skipped: 2,
+  cancelled: 2,
+  interrupted: 2,
+}
+
+const stage = (status: string): number => STAGE[status] ?? 0
+
+/* Whether a node has stopped. Read off the same table the merge ranks by, so
+   "this node is over" has one answer in this domain rather than a set of names
+   kept in step by hand. */
+export const settled = (status: string): boolean => stage(status) > 1
+
 /* Later facts on top of earlier ones, per node, without either source erasing
-   what it does not know.
+ * what it does not know.
  *
  * The asymmetry is the point. A field the incoming source did not supply keeps
  * the value it had -- `dag.run_started` carries no prompt template, and taking
@@ -162,7 +185,13 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
       subagent: next.subagent || n.subagent,
       instance: next.instance ?? n.instance,
       depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
-      status: next.status || n.status,
+      /* Not last-writer-wins, because these sources are not ordered in time. A
+         `dag.get` read is issued when the card is opened and answers whenever
+         the gateway gets to it, so its snapshot is as old as the moment it was
+         asked -- while the events kept arriving. Letting it win pushed finished
+         nodes back to `pending`, where they sat for the rest of the run with a
+         clock ticking from the start time this same merge had kept. */
+      status: stage(String(next.status)) >= stage(String(n.status)) ? next.status || n.status : n.status,
       started_at: next.started_at ?? n.started_at,
       ended_at: next.ended_at ?? n.ended_at,
       node_summary: next.node_summary ?? n.node_summary,
