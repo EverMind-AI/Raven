@@ -23,7 +23,10 @@ multi-turn semantics are per-agent and only documented there.
 | `.env` | The real secrets. Mode 600, never committed |
 | `.gitignore` | The per-folder exclusion list - the enforceable form of "what ships" |
 
-The four folders differ only in the names:
+The four folders differ only in the names - and, since the 2026-08-25 swap,
+in `raven-research`'s transport: its manifest is `kind: "acp"` (the launcher
+serves the Agent Client Protocol on stdio instead of answering one question per
+process; see its own README). The layout contract above is unchanged.
 
 | Folder | Roster name | Checkout | `.env` prefix | `uv` extra |
 |---|---|---|---|---|

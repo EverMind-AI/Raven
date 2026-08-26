@@ -29,6 +29,56 @@ def _default_telemetry_dir() -> Path:
     return Path.home() / ".raven" / "telemetry"
 
 
+def _serving_upstream(response: Any) -> dict[str, Any]:
+    """Which upstream actually served this call, when the wire says so.
+
+    A gateway model id names the gateway, not the machine that ran the weights:
+    ``deepseek/deepseek-v4-flash`` had 17+ OpenRouter upstreams serving it at
+    once on 2026-08-17. **Each upstream holds its own prompt cache**, so an
+    ``auto`` policy that switches mid-conversation presents as a cache_read
+    collapse with no local cause - and until this field existed there was no way
+    to tell that apart from our own trimming, an idle timeout, or a genuinely
+    new prefix. Measured on the dsv4f batch before this landed: collapses
+    (previous call read >20k from cache, this one read 0) ran **6.44% on the
+    anchor and 12.01% on the treated arm**, and nothing on disk could say who
+    caused them.
+
+    This is the same law the repo already applies one level up - "which model
+    served this hop must be a first-class artifact field, not something
+    reconstructed afterwards" - applied to the hop's *upstream* rather than its
+    model. Reconstruction is strictly impossible here: the id is identical for
+    every upstream, so no amount of post-hoc analysis recovers it.
+
+    Recorded, never acted on: pinning is ``providers.<name>.routing``'s job and
+    stays an explicit config decision. Absent keys rather than nulls when the
+    wire does not report it, so a non-gateway provider's rows keep their old
+    shape byte for byte and "we never asked" stays distinguishable from
+    "it answered nothing".
+    """
+    if response is None:
+        return {}
+    get = response.get if isinstance(response, dict) else lambda k, d=None: getattr(response, k, d)
+    out: dict[str, Any] = {}
+    try:
+        upstream = get("provider", None)
+        if isinstance(upstream, str) and upstream:
+            out["serving_upstream"] = upstream
+        call_id = get("id", None)
+        if isinstance(call_id, str) and call_id:
+            out["upstream_call_id"] = call_id
+        # Which source in ``_parse_response`` answered. Kept because a bare absent
+        # ``serving_upstream`` cannot say whether the wire was silent or whether the
+        # extraction looked in the wrong place - and the first version of this
+        # recorder produced 0 rows out of 67,693 for the SECOND reason while reading
+        # exactly like the first.
+        src = get("upstream_source", None)
+        if isinstance(src, str) and src:
+            out["upstream_source"] = src
+    except Exception:  # pragma: no cover - a recorder must never kill a call
+        return {}
+    return out
+
+
 class UsageTracker(TokenStrategy):
     """Observes every LLM call; persists & rolls up token and cost stats."""
 
@@ -72,6 +122,7 @@ class UsageTracker(TokenStrategy):
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
                     **asdict(usage),
+                    **_serving_upstream(response),
                 }
             )
             if self._call_count % self.flush_every == 0:

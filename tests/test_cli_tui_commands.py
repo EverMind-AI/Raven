@@ -443,12 +443,34 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
     monkeypatch.setattr("raven.rpc.methods.turn.clear_active", MagicMock())
 
+    # The snapshot backfill walks a real registry; the MagicMock loop has none.
+    fake_schedule_backfill = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        "raven.agent.subagent.probe.schedule_snapshot_verification",
+        fake_schedule_backfill,
+    )
+    ctx["schedule_backfill"] = fake_schedule_backfill
+
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
     ctx["fake_approval_broker"] = fake_approval_broker
     ctx["fake_build_rpc_spine"] = fake_build_rpc_spine
     ctx["dispatcher"] = fake_dispatcher
     return ctx
+
+
+async def test_the_acp_snapshot_backfill_is_scheduled_on_the_tui_server_path(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """The TUI server is hand-wired rather than mounted through
+    ``build_rpc_stack``, so the backfill hook has to be called here too --
+    unscheduled, a fresh install holds no capability snapshot, every acp row
+    reads stateless, and the ``/new-instance`` picker hides those agents."""
+    ctx = rpc_server_deps
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    ctx["schedule_backfill"].assert_called_once_with(ctx["agent_loop"].subagents)
 
 
 async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):

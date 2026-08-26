@@ -70,6 +70,9 @@ class ToolEvent:
     truncated: bool = False
     source: Source | None = None
     conversation_id: str | None = None
+    # Display-only; emitters other than the agent loop's tool step (e.g. the
+    # message tool's complete) leave it at its zero default.
+    iteration: int = 0
 
 
 @dataclass(frozen=True)

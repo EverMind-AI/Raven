@@ -877,6 +877,24 @@ def fetch_result_ok(out: object) -> bool:
     return "error" not in payload
 
 
+_ENCODING_LOST_WARNING = (
+    "the source lost its text encoding upstream; non-ASCII characters on this "
+    "page are unreliable - do not quote them, prefer another source"
+)
+
+
+def _encoding_lost(text: str) -> bool:
+    """True when the page text is dominated by U+FFFD replacement characters.
+
+    A page that declares its charset only in an HTML meta tag while the HTTP
+    header says none (GB2312 sites commonly do) is decoded as UTF-8 somewhere
+    upstream and arrives as runs of U+FFFD - one measured page carried 4060 of
+    them, title included. The floor tolerates the odd replacement character a
+    legitimate page carries; a run of them means the decode itself failed.
+    """
+    return text.count("\ufffd") > max(8, len(text) // 200)
+
+
 class WebFetchTool(Tool):
     """Fetch and extract content from a URL using Jina Reader."""
 
@@ -997,7 +1015,8 @@ class WebFetchTool(Tool):
             return record
         for key, out_key in (("length", "chars"), ("source_chars", "source_chars"),
                              ("digested", "digested"), ("docid", "docid"),
-                             ("truncated", "truncated"), ("error", "error")):
+                             ("truncated", "truncated"), ("error", "error"),
+                             ("encoding_lost", "encoding_lost")):
             if key in payload:
                 record[out_key] = payload[key]
         return record
@@ -1068,9 +1087,17 @@ class WebFetchTool(Tool):
             r = await self._get_with_retry(url, headers)
 
             text = r.text
+            if _encoding_lost(text):
+                # A poisoned cached extraction is the common case, and a fresh
+                # render usually comes back clean.
+                r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
+                text = r.text
+            encoding_lost = _encoding_lost(text)
             source_chars = len(text)
 
-            extracted = await self._try_digest(text, info_to_extract, url)
+            # A page that lost its encoding is not worth a digest call: the
+            # model would distill replacement characters.
+            extracted = None if encoding_lost else await self._try_digest(text, info_to_extract, url)
             if extracted is not None:
                 return json.dumps(
                     {
@@ -1092,19 +1119,20 @@ class WebFetchTool(Tool):
             if truncated:
                 text = text[:max_chars]
 
-            return json.dumps(
-                {
-                    "url": url,
-                    "finalUrl": url,
-                    "status": r.status_code,
-                    "extractor": "jina-reader",
-                    "extractMode": extractMode,
-                    "truncated": truncated,
-                    "length": len(text),
-                    "text": text,
-                },
-                ensure_ascii=False,
-            )
+            payload = {
+                "url": url,
+                "finalUrl": url,
+                "status": r.status_code,
+                "extractor": "jina-reader",
+                "extractMode": extractMode,
+                "truncated": truncated,
+                "length": len(text),
+                "text": text,
+            }
+            if encoding_lost:
+                payload["encoding_lost"] = True
+                payload["warning"] = _ENCODING_LOST_WARNING
+            return json.dumps(payload, ensure_ascii=False)
         except httpx.ProxyError as e:
             logger.error("WebFetch proxy error for {}: {}", url, e)
             return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)

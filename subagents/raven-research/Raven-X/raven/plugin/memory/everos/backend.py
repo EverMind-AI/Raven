@@ -2152,7 +2152,11 @@ class EverosBackend:
         out: list[Memory] = []
         if owner_type == "user":
             for ep in getattr(data, "episodes", None) or []:
-                text = getattr(ep, "summary", "") or getattr(ep, "episode", "") or ""
+                # ``summary`` is a hard 200-character prefix of ``episode``
+                # (verified against everos 1.2.x, which cuts it mid-word), so
+                # it is the fallback, never the choice: preferring it hands
+                # the prompt a sentence chopped at an arbitrary byte.
+                text = getattr(ep, "episode", "") or getattr(ep, "summary", "") or ""
                 out.append(
                     Memory(
                         text=text,

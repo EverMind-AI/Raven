@@ -704,6 +704,15 @@ async def _run_rpc_server_until_done(
         # And the seam a delegated result re-enters the conversation at, so the
         # announce's reply does not arrive as an assistant turn nobody asked.
         agent_loop.subagents.set_delivery_sink(emitter.emit)
+        # Backfill the acp capability snapshots at startup, exactly as
+        # build_rpc_stack does for the served page: an acp row's statefulness
+        # is read from its snapshot, and with no writer on this path a fresh
+        # install reads every acp agent stateless and the /new-instance picker
+        # hides them. This server is hand-wired rather than mounted, so the
+        # bootstrap hook never runs here.
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        schedule_snapshot_verification(agent_loop.subagents)
 
     def _agent_loop_factory():
         if agent_loop is not None:

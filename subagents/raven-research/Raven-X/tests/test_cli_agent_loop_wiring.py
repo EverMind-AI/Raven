@@ -48,7 +48,20 @@ _EXEMPT: dict[tuple[str, str], str] = {
     ),
 }
 
-_REQUIRED = ("dr_flow", "strategies")
+# The config-driven set: every kwarg here carries an operator setting whose
+# absence has no runtime symptom (the loop default is a working value). Found
+# the hard way a fourth time on 20260826: the ACP construction site shipped
+# without five of these, and the only functional trace was r.jina.ai being
+# dialled unauthenticated.
+_REQUIRED = (
+    "dr_flow",
+    "strategies",
+    "context_window_authoritative",
+    "jina_api_key",
+    "disabled_tools",
+    "context_config",
+    "skill_forge_router_config",
+)
 
 
 def _agent_loop_sites() -> list[tuple[str, int, set[str]]]:
@@ -114,9 +127,9 @@ def test_the_dr_surfaces_pass_the_configured_flow_not_a_fresh_default():
     """
     import inspect
 
-    from raven.cli import agent_commands, gateway_commands
+    from raven.cli import acp_commands, agent_commands, gateway_commands
 
-    for mod in (agent_commands, gateway_commands):
+    for mod in (acp_commands, agent_commands, gateway_commands):
         src = inspect.getsource(mod)
         assert "dr_flow=ec_config.dr_flow" in src, (
             f"{mod.__name__} must pass the configured flow, not a fresh DRFlowConfig()"

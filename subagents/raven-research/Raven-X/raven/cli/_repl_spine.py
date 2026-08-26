@@ -24,12 +24,12 @@ from raven.spine import (
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
-from raven.spine.events import Reasoning
+from raven.spine.events import Reasoning, ToolEvent
 
 
 class CliOutlet:
     """Renders a turn's deliverables to the terminal. Runs non-streaming (run_turn
-    stream=False), so the reply arrives as one Text; ToolEvent/MediaOut are eaten.
+    stream=False), so the reply arrives as one Text; MediaOut is eaten.
 
     ``render_notice`` is opt-in progress rendering: when set, a Notice (and any
     Reasoning a tool streams, see ``deliver``) renders as a progress line, gated
@@ -37,6 +37,10 @@ class CliOutlet:
     one-shot ``-m`` path and the interactive REPL wire it; note this also
     surfaces the model's per-tool progress hint on every tool call, gated by the
     same flags. A surface that omits it eats Notice / Reasoning as before.
+
+    ``render_tool`` is opt-in tool-progress rendering: when set, every ToolEvent
+    is forwarded as-is (the callback pairs START/COMPLETE and renders; see
+    cli/_progress_line.py). Left None, ToolEvent stays eaten.
 
     ``render_marker`` is opt-in: a Text whose ``source.extras._sentinel_origin``
     is set renders this proactive marker before its content (the interactive
@@ -49,6 +53,7 @@ class CliOutlet:
         render: Callable[[str], None],
         *,
         render_notice: Callable[[str], None] | None = None,
+        render_tool: Callable[[ToolEvent], None] | None = None,
         render_marker: Callable[[], None] | None = None,
         send_progress: bool = False,
         send_tool_hints: bool = False,
@@ -57,6 +62,7 @@ class CliOutlet:
         self.capabilities = Capabilities()
         self._render = render
         self._render_notice = render_notice
+        self._render_tool = render_tool
         self._render_marker = render_marker
         self._send_progress = send_progress
         self._send_tool_hints = send_tool_hints
@@ -71,12 +77,14 @@ class CliOutlet:
                 self._render_notice(out.detail or "")
             elif out.kind is NoticeKind.TOOL_HINT and self._send_tool_hints:
                 self._render_notice(out.detail or "")
+        elif isinstance(out, ToolEvent) and self._render_tool is not None:
+            self._render_tool(out)
         elif isinstance(out, Reasoning):
             # A long tool may stream coarse progress as Reasoning; the model
             # itself never emits Reasoning here (REPL runs non-streaming).
             if self._render_notice is not None and self._send_progress and out.content:
                 self._render_notice(out.content)
-        # Other Notice kinds / ToolEvent / MediaOut are eaten (render-can't path).
+        # Other Notice kinds / unwired ToolEvent / MediaOut are eaten (render-can't path).
 
 
 def build_repl(
@@ -85,6 +93,7 @@ def build_repl(
     render: Callable[[str], None],
     *,
     render_notice: Callable[[str], None] | None = None,
+    render_tool: Callable[[ToolEvent], None] | None = None,
     render_marker: Callable[[], None] | None = None,
     send_progress: bool = False,
     send_tool_hints: bool = False,
@@ -97,14 +106,15 @@ def build_repl(
     exit — stop the scheduler (no more events) then close the hub's outlet workers
     — shared with the test so the teardown sequence itself is covered.
 
-    ``render_notice`` + the two config flags are threaded to the CliOutlet for the
-    one-shot ``-m`` path; the interactive REPL omits them (Notice stays eaten)."""
+    ``render_notice`` / ``render_tool`` + the two config flags are threaded to
+    the CliOutlet by both the one-shot ``-m`` path and the interactive REPL."""
     hub = DeliveryHub()
     hub.register(
         CliOutlet(
             channel,
             render,
             render_notice=render_notice,
+            render_tool=render_tool,
             render_marker=render_marker,
             send_progress=send_progress,
             send_tool_hints=send_tool_hints,
@@ -132,7 +142,7 @@ async def run_repl_loop(
     chat_id: str,
     is_exit: Callable[[str], bool],
     handle_slash: Callable[[str], bool],
-    thinking: Callable[[], Any],
+    thinking: Callable[[str], Any],
     on_exit: Callable[[], None],
 ) -> None:
     """Read a line, submit it as a turn, wait for the turn to finish AND its
@@ -161,7 +171,7 @@ async def run_repl_loop(
                     conversation=f"{channel}:{chat_id}",
                 )
             )
-            with thinking():
+            with thinking(user_input):
                 await handle.result()
             await wait_idle(channel)
         except (EOFError, KeyboardInterrupt):

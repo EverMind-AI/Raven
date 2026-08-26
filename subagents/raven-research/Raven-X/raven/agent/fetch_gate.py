@@ -40,7 +40,12 @@ that are worth separating because only one of them is about the mechanism:
     and the behaviour never changes.
 
 This gate is the same intent applied one layer down: the tool is removed from
-the schema for the iteration, so re-requesting it is not an available move. The
+the schema for the iteration. ⚠️ 20260825 correction: that makes it un-OFFERED,
+not un-AVAILABLE — ``ToolRegistry.execute`` resolves against the registry and
+``modified_tools`` never edits the registry, so a model that names the tool anyway
+still runs it. ``FetchGateObserver.before_execute_tools`` records those as
+``gate_called_when_closed`` (observation only, following ``AskUserGate``); any
+claim about "the action space" must be read against that counter. The
 predicates also differ and neither subsumes the other - saturation asks whether
 searches come back **dry**, this asks whether they come back **unread**. Four
 questions on that batch ran 67-93 searches with zero suppressed rows: their

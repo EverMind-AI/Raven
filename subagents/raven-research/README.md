@@ -15,10 +15,10 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `71abb5a6` |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `6b5ec31` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
 | Local patches | **none** - the tree is that commit byte for byte, and the command that proves it is below |
-| Package / version | `raven` 0.1.5, flow `dr@3.4` (updated 2026-08-21 from upstream `71abb5a6`; the label moves *down* because upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4` - see below. `dr@3.7` came from `ce225550` on 2026-08-20, `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-26 from upstream `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -90,9 +90,11 @@ endpoints, so picking by name would point this agent at a gateway its model is
 not served on - which reads as a bad answer, not as an error.
 
 Inheriting is a fallback, not an equivalence: a measurement taken on the pinned
-model does not carry over to whatever the host happens to run. `launcher.log`
-records which one was used on every turn, in the form
-`llm: inherited from <path> (provider=... model=...); tuned for <recommended>`.
+model does not carry over to whatever the host happens to run. The launcher
+says which one was used on stderr at startup (journaled by the host), in the
+form `llm: inherited from <path> (provider=... model=...); tuned for
+<recommended>` - once per server now rather than once per turn, since the
+config is rendered at launch and the server lives across turns.
 
 With no key here and no provider key in the host config either, the launcher
 refuses rather than starting something that cannot answer.
@@ -190,8 +192,9 @@ validator rejects every superseded label on a newer build - `dr@2.4` through
 `dr@3.1` are all refused by this one. It matches the **base** label, so our
 `-filetools` profile suffix survives and only the number moves
 (`dr@2.9-filetools` -> `dr@3.2-filetools`). Skipping it does not degrade the run,
-it kills it: the config fails to load, `raven` exits 1, and `run.py` reports a
-credential-or-config error for what is really a stale label.
+it kills it: the config fails to load and `raven acp` exits at launch, so the
+host reports the agent unreachable with the validator's message in the stderr
+tail - a stale label reads as a broken agent.
 
 Earlier swaps kept the previous build beside the checkout as
 `Raven-X-dr32-rollback.tar.gz` (tree only, no `.venv`) with a matching
@@ -202,6 +205,35 @@ there.** The repo clones now, so the tree rolls back with
 previous value is in our own history. Both halves of the pair are gitignored and
 neither was made for the `dr@3.7` swap; keep the old ones as long as the zips
 they came from are the only copy of those builds.
+
+### What `dr@3.5` and the ACP transport changed for us
+
+The 2026-08-25 swap (`71abb5a6` -> `7b603aa`) brought two coupled things: the
+flow label moved to `dr@3.5` (upstream's launch convention supersedes `dr@3.4`
+the moment its batch finished, so the old label is now *rejected* on this
+build), and the checkout grew `raven acp` - a serve entry that speaks the Agent
+Client Protocol on stdio (`raven/acp/`, upstream's plan and pitfalls in its
+`ACP_INTEGRATION_PLAN.md`). This folder switched its registration to it in the
+same change: `subagent.json` is now `kind: "acp"`, and `run.py` shrank from a
+686-line per-turn wrapper to a launcher that renders the config and execs the
+server.
+
+| Change | Effect here |
+|---|---|
+| **`drFlow.version` -> `dr@3.5-filetools-askuser`** | The never-optional step, forwards again this time. Verified on this build: the new label loads, and `dr@3.4-filetools-askuser` is rejected with "predates this build's flow semantics". Under the acp transport a stale label no longer masquerades as a credential error: `raven acp` dies at launch and the host shows the validator's own message in the stderr tail |
+| **One server per connection, not one process per turn** | The host raven keeps a pooled ACP connection; a task is a `session/prompt` on it. Statefulness is no longer declared through `resumeCommand` - the handshake reports `loadSession: true` and `sessionCapabilities.resume`, the host measures it (verified: `can_resume=True`, `can_load=True`, ~3s), and a follow-up on the same instance handle is a `session/load` + prompt on the same server |
+| **The whole answer-extraction layer died with the CLI mode** | Everything `Calling it` used to document - session-log parsing, the wrap-up/clarify row classification, `--session` sanitising, per-conversation workspaces, `launcher.log` - is protocol business now. The reply is the turn's `agent_message_chunk` stream (non-streaming inside the loop, so it is the one committed reply, wrap-ups and clarify handoffs included); progress arrives as `session/update` tool-call frames the host journals |
+| **The research trail arrives natively** | The appendix rides on the value `run_turn` returns, which is exactly what the acp spine emits as the closing text - so the trail reaches the host with no `observers["research_trail"]` re-derivation. What is lost is `compose_reply`'s budgeting: the host tail-truncates the reply at the entry's `maxOutputChars` (30000), so a report that saturates the cap loses its trail silently instead of shortening the answer to keep it |
+| **`cwd` is pinned in the manifest** | New field, load-bearing: the host's connection pool keys the launch on `(command, cwd, env)`, and an acp entry with no `cwd` falls back to the calling task's workspace - every new workspace would relaunch the server and kill the sessions the old one was serving. `{SUBAGENT_DIR}` resolves at discovery/install time, same as the command |
+| **The rendered config outlives the process that wrote it** | The exec hands `run.py`'s pid to the server, and the host tears servers down with `SIGKILL` to the process group, so the old delete-in-`finally` can never run. Each launch now sweeps rendered files whose pid is dead instead; the age-based day sweep went with it |
+| **`--wait-skill-extract` / `--flush-skill-buffer` have no acp addressee** | Both were per-turn CLI flags. The server runs turns through the same loop (`drain_backend_stores` still blocks on the detached everos writes), but nothing flushes the skill buffer per prompt any more - the promote-on-last-turn problem the old launcher documented is moot in the form it had, and unsolved in a new one: a long-lived server never sees a "last turn" either |
+
+Verified on this build 2026-08-25: the vendored tree is byte-identical to
+`7b603aa`, the editable venv carried across with a plain `uv sync` (5 packages
+moved), `config.json` loads as `dr@3.5-filetools-askuser`, the full chain
+`run.py` -> `raven acp` answers `initialize` + `session/new` with
+`agentInfo.name: raven-x-research`, and the checkout's own suite is **5563
+passed, 84 skipped** in 136s under an isolated `HOME`.
 
 ### What the `dr@3.4` fold, `ask_user` and everos v2 changed for us
 
@@ -343,7 +375,10 @@ on a chat turn alike.
 
 ### What a turn reports
 
-`observers.conversation_gate` in `launcher.log` is the record of the decision:
+`observers.conversation_gate` is the record of the decision, stamped on the
+turn's persisted assistant message
+(`$RESEARCH_STATE_ROOT/workspace/sessions/acp/<session>.jsonl` - the old
+`launcher.log` went with the per-turn wrapper):
 
 ```
 turn 1  {"dr_turn_research": true,  "dr_turn_source": "first_turn", "dr_turn_why": ""}
@@ -386,196 +421,100 @@ thing left refusing. Leave it on.
 
 ### What the caller sees
 
-A clarify handoff is a **third shape of committed reply**, and `run.py` had to learn it
-because the two tests it already had both discard it. The gate short-circuits
-`before_execute_tools` and the loop commits the questions with no `finish_reason`, so
-the wrap-up rule drops them; and when the model writes its questions as ordinary prose
-instead of calling the tool, the reply carries a perfectly normal `finish_reason ==
-"stop"`, so the completed-answer rule would file a page of questions as a finished
-report.
+A clarify handoff arrives as an ordinary reply: the turn's closing text is the
+questions, relayed over ACP like any other answer. The classification that
+`run.py` used to re-derive from `turn_end.awaiting_user` lives upstream now -
+the loop commits the questions as the turn's reply on both routes (the
+`ask_user` tool and plain prose), so there is no separate shape for a caller
+to mishandle. What the caller must still know is written into the entry's
+`description`: the first reply is normally questions, and the answers go back
+to the **same instance**, which the host resumes over `session/load`.
 
-Both routes are recognised from `turn_end.awaiting_user`, which the flow stamps for
-exactly this reader, with `turn_end.awaiting_user_source` saying which route it was.
-`run.py` tests it **first**, before `finish_reason`, and logs the handoff louder than a
-wrap-up, because this reply is not a thin answer - it is not an answer at all:
-
-```
-[run] reply is a clarify handoff, NOT a research answer - resume this session
-      with the user's answers to continue
-```
-
-Resuming the same `--session` with the answers is what turns it into research. That
-only works because the entry is registered **stateful** (see `Installed as`): the
-gateway replays one `{agent_id}` across turns, so the clarify round and its answer are
-one conversation. A caller that restates the whole question instead gets a fresh turn
-one, which asks again.
-
-The turn that answers the questions is classified as research from the commit marker
-rather than by asking the conversation gate. That is deliberate and it is load-bearing:
-a clarify answer ("the EU market, 2024") reads exactly like the shapes the gate is told
-mean `research=false`, so consulting the gate there dropped the tools from the schema
-and answered a never-researched question from memory, with nothing in the record saying
-so. Under `mode: "first_turn"` that is not an edge case - turn one always asks, so turn
-two is always this turn.
+The turn that answers the questions is classified as research from the commit
+marker rather than by asking the conversation gate. That is deliberate and it
+is load-bearing: a clarify answer ("the EU market, 2024") reads exactly like
+the shapes the gate is told mean `research=false`, so consulting the gate there
+dropped the tools from the schema and answered a never-researched question from
+memory, with nothing in the record saying so. Under `mode: "first_turn"` that
+is not an edge case - turn one always asks, so turn two is always this turn.
 
 ## Calling it
 
+In production nothing calls `run.py` per question any more. The host raven
+discovers the `kind: "acp"` entry, spawns `run.py` **once per connection**, and
+speaks the Agent Client Protocol on its stdin/stdout: `initialize`,
+`session/new` (or `session/load` for a follow-up on a known instance), then one
+`session/prompt` per turn. The reply is the turn's `agent_message_chunk`
+stream; tool activity arrives as `session/update` frames the host journals
+beside the run.
+
+By hand, the same thing in two lines:
+
 ```bash
-python3 run.py --session myquestion --question "..."
-python3 run.py --session myquestion --question "and the second point?"   # same conversation
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}' \
+  | python3 run.py
 ```
 
-`run.py` wraps the CLI because two properties of the contract make a bare
-registration useless:
+For an interactive question-and-answer session, skip the protocol and use the
+checkout's own CLI against a rendered config - but remember that a config you
+render by hand holds the key and is yours to delete.
 
-- **stdout must not be parsed.** It is rendered for a human - spinners, progress
-  lines, tool hints - and `--no-markdown` only turns off the renderer, not the
-  prose. Their own evaluation harness never reads it. The answer comes from the
-  turn's session log instead: `<workspace>/sessions/cli/<conversation>.jsonl`,
-  one JSON object per line, first line `_type: "metadata"`. The answer is the
-  last assistant row **past the lines the file already had** that either stopped
-  normally or carries a wrap-up flag - see below. The line count is taken before
-  the child starts, because a later turn appends to the file it continues and
-  without the skip an answerless turn would report the previous turn's answer as
-  its own.
-- **exit 0 does not mean an answer was produced.** By design, nothing maps an
-  answerless run to a non-zero code - whether the agent committed an answer is a
-  measurement outcome, not a process failure. Exit 1 is the config-or-credential
-  bucket - a missing key, an unreadable config, an invalid provider, and since
-  the everos rewrite a memory backend with `require_service=true` that finds no
-  usable service. That last one is unreachable on this config, where the knob is
-  unset. So `run.py` decides success by finding a committed answer, and reports
-  the exit code separately.
+Two contract properties the old per-turn wrapper existed to absorb are solved
+by the protocol itself, which is why the wrapper could die:
 
-It also gives every *conversation* its own workspace under
-`./runs/<conversation>/`. Not a decoration: this build files a session under the
-workspace it ran in, so the workspace has to be a function of the conversation id
-and nothing else - a per-process workspace would file every turn under a fresh
-session and there would be no history for the next turn to read. Distinct ids
-still get distinct workspaces, which is what keeps concurrent conversations from
-interleaving. `RESEARCH_RUN_ROOT` moves that root; this machine points it at the
-run tree that predates the change, which is also what keeps the folder free of
-run artifacts.
+- **stdout no longer needs parsing.** The CLI's stdout was rendered for a human
+  and the answer had to be dug out of the session JSONL, wrap-up flags,
+  clarify markers and all. Over ACP the loop runs non-streaming and emits one
+  closing text per turn - the committed reply, whatever produced it (a normal
+  stop, a budget wrap-up, a clarify handoff) - and the server relays exactly
+  that. The classification lives upstream in `run_turn`, where it belongs.
+- **success no longer hides in an exit code.** One process is one connection,
+  not one turn, so there is no exit status per question to misread. A turn that
+  commits nothing is a protocol-visible empty turn (`stopReason: "end_turn"`
+  with no message chunk), which the host raises as an error naming the stderr
+  tail, rather than an exit-0 silence a wrapper has to disbelieve.
 
-The id is sanitised to one path segment before it is used, because it names a
-directory and arrives from a CLI flag: `--session ../../elsewhere` must not
-escape the run root. The surviving character set is a subset of what the build's
-own `safe_filename` leaves alone, which is what lets `run.py` *name* the
-transcript rather than pick the newest file in the directory - a guess that would
-hand back the wrong conversation's answer the moment a workspace held two.
+Sessions are minted and named by the server (`acp:<timestamp>_<nonce>`), filed
+under one workspace pinned beneath `RESEARCH_STATE_ROOT` - the per-conversation
+workspace machinery went with the wrapper, and with it `RESEARCH_RUN_ROOT` and
+the `--session` path-escape sanitising: no caller-supplied string names a
+directory any more.
 
-### Which row is the answer
+### The research trail is still appended to the reply
 
-`finish_reason == "stop"` alone is not enough, and `dr@2.9` is what made that
-matter. Since `dr@3.0` the wrap-up is gated and **off by default**, so on this
-config the rule below currently only ever fires its first row; the rest is kept
-because the gate is one config line away and the cost of getting this wrong is a
-real answer discarded. The loop writes a **wrap-up** when a budget cut the answer off -
-the tool-iteration budget, or the completion budget, which strands a turn
-mid-sentence on turn one having called no tool at all (measured upstream at 22 of
-60 HLE anchor items). Both wrap-ups are appended through
-`add_assistant_message` with no `finish_reason` at all, so the old rule discarded
-a real answer and reported the run as answerless.
+The trail rides on the value `run_turn` returns - upstream appends the appendix
+to the returned string, never to the persisted message - and the returned
+string is exactly what the acp spine emits as the turn's closing text. So the
+record of what was searched and opened reaches the host natively now, with no
+`observers["research_trail"]` re-derivation; the report template's promise
+(no source list in the prose, the full record follows) is kept by the
+transport itself.
 
-They are picked up by the flag the loop stamps on the message -
-`synthesized_on_truncation` / `synthesized_on_exhaustion` - which it sets only
-when the wrap-up produced real text rather than the static apology. The flag is
-what keeps the rule from over-accepting, and it has to: two other kinds of
-assistant row also carry no `finish_reason`, and both were seen here while
-testing this update.
+One budgeting nicety is gone: the old launcher shortened the *answer* to keep
+the trail under the host's 30000-char reply cap, with a notice saying so. The
+acp backend tail-truncates instead, so a report that saturates
+`maxOutputChars` loses its trail silently. Accepted: the cap is sized so that
+a saturating report is already an anomaly worth reading in the journal.
 
-| Row | `finish_reason` | Verdict |
-|---|---|---|
-| Normal final message | `"stop"` | the answer |
-| Truncation / exhaustion wrap-up | absent, flag set | the answer, and `launcher.log` says which wrap-up produced it |
-| A draft the verify reviewer rejected, before the revision replaced it | absent | not an answer |
-| A turn whose whole 27k-character reply sat inside an unclosed think block | absent | not an answer - `turn_end.answerless` agrees |
-
-`observers` is collected independently of the answer now, because an answerless
-run is exactly when its counters are worth reading.
-
-Invoke the console script, not `python -m raven.cli`: `raven.cli` is a package
-with no `__main__` and cannot be executed as a module.
-
-`run.py` records the flow's own `observers` block in `launcher.log`. Two traps
-there, both documented upstream and both deliberately not treated as failures:
-`invariants.ok == false` is a counter and gates nothing (a run can commit a
-1,300-character answer while reporting it), and `answer_chars: 0` alongside a real
-answer is the same accounting seen from the other side: the count is the reply's
-length *after reasoning is folded away*, so it reads 0 when the whole reply parsed
-as reasoning - a think block the generation never closed. It is not a count of
-marker text; the `<answer></answer>` span has its own counter,
-`final_shape.span_chars`.
-
-On this profile `answer_chars: 0` is not even occasional. `finalShape.requireMarker`
-is **off** here, so the model is never asked for the marker at all and
-`final_shape` reads `form: "unmarked"` / `reason: "no_marker"` on every turn - a
-permanently degenerate `record` payload, and a config choice rather than model
-non-compliance. The three-section report template already puts the answer under a
-mandated `## Answer` heading, which is what makes the marker redundant; note that
-the profile suffix does not distinguish marker-on from marker-off, so two configs
-can carry this label and read different prompts.
-
-### The research trail is appended to the reply
-
-**This reversed.** It used to be a decision that the trail stayed out: the appendix
-rides on the value the CLI *returns*, never on the persisted message, and `run.py`
-reads the persisted message, so the trail reached the CLI's stdout and stopped
-there.
-
-What made that untenable is the report template. It tells the model **not** to
-close with a list of sources, on the promise that the reply is followed by the full
-record of what was searched and opened - and on this path that record never arrived.
-So the model was made to omit its sources in exchange for a substitute the caller
-never got: measured at 17 pages read and 8 cited on one live turn, with the other 9
-recorded nowhere.
-
-The trail therefore reaches this launcher through `observers["research_trail"]`,
-which is upstream's own key for exactly this reader, and `run.py` appends it to the
-one string the host uses for **both** the recorded `out.md` and the reply it shows,
-so the record and the reader see the same sources. It is derived, not generated: no
-tokens are spent on it and there is nothing in it to invent. It is kept out of
-`process_appendix`, which batch tooling reads as a numeric measurement payload, and
-`run.py` pops it before logging the observers line - it is prose measured in
-kilobytes and the rest of that payload is counters.
-
-Leaving the knob on is worth it anyway, because its counters land in
-`launcher.log`, and one of them is a real integrity check:
-
-```
-"process_appendix": {"emitted": true, "searches": 5, "distinct_queries": 5,
-  "pages_opened": 10, "pages_ok": 3, "urls_cited": 2, "cited_not_opened": 0,
-  "citation_grounding_rate": 1.0, "cites_nothing": false, ...}
-```
-
-`citation_grounding_rate` is the share of URLs cited in the answer that appear in
-a fetch record - a link the run never opened is a fabricated citation. Upstream
-attaches three conditions to reading it and they are not optional: never without
-`urls_cited` and `cites_nothing` beside it (citing less raises the rate, so the
-denominator is chosen by the thing being measured), only as an intra-run integrity
-guard and never as a quality score, and its denominator is cited URLs rather than
-claims - an answer can be perfectly grounded and entirely wrong.
+`process_appendix` and its counters (`citation_grounding_rate` above all) are
+unchanged flow business; they ride `observers` on the persisted assistant
+message, now under
+`$RESEARCH_STATE_ROOT/workspace/sessions/acp/<session>.jsonl`. Read
+`citation_grounding_rate` only with `urls_cited` and `cites_nothing` beside
+it, only as an intra-run integrity guard, never as a quality score.
 
 ## stdout discipline
 
-Raven's CLI backend uses the child's **entire** output as the subagent's reply -
-`combined = stdout + "\n" + stderr` when stderr is non-empty
-(`cli_agent.py:288`). So anything a launcher prints becomes conversation text
-attributed to the agent. Both launchers here therefore:
-
-- print **only the result** on stdout (the answer / the deck paths), plus a
-  one-line reason on failure so the caller is never left guessing;
-- send progress, container narration and the flow's `observers` block to
-  `launcher.log` in the run directory;
-- keep stderr empty unless `--verbose` is passed, which is for running by hand
-  only - stderr is folded into the reply too, so a spawned run must never use it.
-
-This was a real defect: the first version streamed every container log line and
-every `[run] ...` diagnostic to stdout, and those lines showed up verbatim at the
-top of the agent's answer in the chat UI. Moving them to stderr would not have
-helped, and `outputPattern` cannot rescue it either - the backend takes
-`m.group(1)` from a non-DOTALL regex, so a capture group cannot span a multi-line
-answer.
+Over ACP the discipline is stricter and enforced upstream rather than here:
+**every byte on stdout must be a frame.** The serve entry claims fd 1 before
+anything else loads (`claim_stdout`), so a stray `print` anywhere in the
+import graph lands on stderr as log noise instead of breaking the client's
+decoder. `run.py` keeps the same rule for the window it owns - everything it
+says goes to stderr, which the host journals beside the run and shows in the
+tail of an empty-turn error. Nothing folds stderr into the reply any more; the
+old CLI backend's `combined = stdout + stderr` trap died with the transport.
 
 ## Credentials
 
@@ -597,11 +536,14 @@ and ships as-is. `.env.example` is the template - copy it, fill it, `chmod 600`.
 
 The indirection is not decoration. Raven-X's config loader does **no**
 environment-variable substitution and reads no key from the environment, so the
-key has to be *in the config file* by the time the CLI loads it. `run.py`
-therefore merges `.env` into a rendered copy at launch, hands the CLI that, and
-deletes it in a `finally`. It is created with mode 600 via `os.open` **before** a
-secret byte is written, rather than written and then `chmod`-ed, which would
-leave a window.
+key has to be *in the config file* by the time the server loads it. `run.py`
+therefore merges `.env` into a rendered copy at launch and execs `raven acp`
+on it. It is created with mode 600 via `os.open` **before** a secret byte is
+written, rather than written and then `chmod`-ed, which would leave a window.
+The file lives as long as the server does - the host tears servers down with
+`SIGKILL` to the process group, so nothing inside can delete it on the way out;
+each launch instead sweeps rendered files whose pid (baked into the filename,
+and preserved by the exec) is no longer alive.
 
 **Where that rendered file goes is what decides where everything else goes.**
 `get_data_dir()` is the config file's own parent, and there is no separate knob
@@ -615,14 +557,17 @@ follow the config wherever it is written. Rendering it under
 is therefore what keeps conversation transcripts out of this folder, and the
 only way to do it without patching the checkout - which would not survive, since
 the checkout is replaced wholesale on every upstream zip. `RESEARCH_STATE_ROOT`
-moves that root; `RESEARCH_RUN_ROOT` moves the per-run workspaces under it.
+moves that root; the workspace is pinned at `<state root>/workspace` unless
+`config.json` names one (`RESEARCH_RUN_ROOT` and the per-conversation
+workspaces went with the per-turn wrapper).
 
 The consequence worth stating: the sibling runtime directories move too. They
 cannot be split from the transcripts, because all four hang off that one parent.
 The project folder is left holding only the files that ship.
 
-A `kill -9` is the one path that can strand a rendered file; the next run sweeps
-anything older than a day.
+Every teardown is a `kill -9` now, so a stranded rendered file is the normal
+case, not the exception; the next launch's pid-liveness sweep is what collects
+them.
 
 The proxy matters for the LLM arm: OpenAI-backed models on OpenRouter refuse
 requests from a China IP with `This model is not available in your region.`
@@ -632,60 +577,46 @@ Raven-X inherits `http_proxy` / `https_proxy` (its fetch client keeps
 
 ## Installed as
 
-A hand-written third-party subagent named `Raven-Research` (no `preset` field).
+A third-party subagent named `Raven-Research`, `kind: "acp"`.
+
+On a host that carries the `subagents/` tree nothing needs installing: the
+host raven discovers every folder's `subagent.json` at startup, resolves
+`{SUBAGENT_DIR}` / `{PYTHON}` (and, new with the acp entry, the same
+placeholder in `cwd`), and puts the row on the table - enabled only when the
+venv is built and a credential is reachable. `install.py` exists for writing
+the resolved entry into the host's config instead, and for exactly one
+migration this switch created: **a stored row from an earlier install still
+says `kind: "cli"` and overrides the discovered acp row**, because config beats
+discovery by name. Re-run `install.py` (or delete the stored row) on any host
+that ever registered this agent by hand.
 
 ```bash
 python3 install.py --dry-run   # print the resolved entry, change nothing
 python3 install.py             # back up the current list, then register
 ```
 
-`install.py` goes through `PUT /raven/subagents`, not the file-level helper -
-see the note in `../raven-ppt/README.md`, which is where that lesson was
-learned. The endpoint takes **every** entry, not just this one, so the script
-reads the live list first, merges this entry into it by name, and writes a
-timestamped backup beside itself before the PUT.
+The cli entry's interlocking declaration set (`command` + `resumeCommand` +
+`idSource`, all agreeing about `{agent_id}`) is gone, and nothing replaced it:
+an acp entry *declares* no behaviour. Statefulness is measured, not written -
+the handshake reports `loadSession: true` and `sessionCapabilities.resume`,
+the host verifies it on startup (or on the operations page's Test) and
+snapshots the result, and the roster's `stateful` tag comes from that
+snapshot. A schema field that disagreed with the handshake was the failure
+mode the design removes.
 
-`subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved so the
-published file carries no path from the machine that built it. They are resolved
-at install time and nowhere else, because the gateway substitutes only
-`{agent_id}`, `{prompt}` and `{prompt_file}`, and spawns with the *session
-workspace* as cwd - so neither a relative command nor the entry's `cwd` field can
-stand in for the real path. Moving this folder means re-running `install.py`;
-that is the whole migration.
+What the entry does carry:
 
-Registered **stateful**, since `dr@3.2` (it was stateless until then - see
-`Multi-turn` for what changed and what is still unmeasured). The entry carries a
-`resumeCommand` identical to `command`, and both pass `--session {agent_id}`:
-the gateway mints that id on an instance's first turn and replays it on every
-later one, so one instance handle is one conversation.
-
-The three fields are a single interlocking set, and the schema rejects every
-partial version of it before anything is written:
-
-| Field | Value | Why the schema insists |
+| Field | Value | Why |
 |---|---|---|
-| `command` | must contain `{agent_id}` | required when `idSource` is `provisioned`; without a `resumeCommand` the same token is *rejected*, because an unsubstituted `{agent_id}` reaches the CLI as a literal string and fails obscurely. The first install of the stateless entry failed on exactly that |
-| `resumeCommand` | must contain `{agent_id}` | it is the mechanism statefulness is derived from - there is no separate `stateful: true` to set, and setting one that disagrees is an error |
-| `idSource` | `provisioned` | raven mints the id rather than reading it back out of a transcript |
+| `command` | `{PYTHON} {SUBAGENT_DIR}/run.py` | Starts a *server*, once per connection - no `{prompt_file}`, no `{agent_id}`; a task placeholder here would be passed through literally and fail the handshake |
+| `cwd` | `{SUBAGENT_DIR}` | Pinned because the host's connection pool keys the launch on `(command, cwd, env)`; unset, it falls back to the calling task's workspace and every new workspace relaunches the server, killing the sessions the old one was serving |
+| `readyTimeoutMs` | `60000` | The `initialize` budget. The real handshake measures ~3s (a full engine import plus config render); 60s is headroom, not hope |
+| `timeout` | `2400` | Per `session/prompt`, preserving the old launcher's internal per-turn watchdog rather than the manifest's old `null` |
+| `maxOutputChars` | `30000` | The host tail-truncates the reply here - see the research-trail note above for what that costs |
 
-The rejection is safe: validation happens before the write, so a bad entry
-leaves the existing list untouched.
-
-`run.py` still mints its own conversation name when neither `--session` nor
-`--job` is given, so a run by hand gets a private workspace instead of joining
-someone else's conversation.
-
-`subagent.json` is now the source this folder installs from, not a souvenir of
-one past install. It used to be the latter and the two drifted badly: the file
-still said `researcher_x` while the live entry had been renamed `Raven-Research`
-in the web UI, so installing from it would have added a *second* entry rather
-than updating one, and its description still promised an agent that "cannot read
-local files" long after the `-filetools` profile gave it six file tools. Read the
-live entry before assuming they agree:
-
-```bash
-curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents
-```
+`run.py` still mints nothing and names nothing: sessions are the server's own
+(`acp:<timestamp>_<nonce>`), and one instance handle maps to one of them in the
+host's registry.
 
 The `description` is the field that matters most, because it is what the
 dispatching model reads when deciding whether to hand work to this agent. The
@@ -711,18 +642,18 @@ different agent with a different mechanism, hence a distinct name.
 
 | File | | Published |
 |---|---|---|
-| `run.py` | Host-side launcher (own workspace, session-log extraction, answer-based verdict) | yes |
+| `run.py` | Host-side launcher: renders the config with the `.env` secrets, then execs `raven acp` | yes |
 | `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC | yes |
 | `config.json` | Raven-X run config. Holds **no** secrets | yes |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders | yes |
-| `.env.example` | Template for the secrets and the two path knobs | yes |
+| `.env.example` | Template for the secrets and the state-root knob | yes |
 | `README.md` `.gitignore` | This file, and the exclusion list below | yes |
 | `.env` | The real secrets, mode 600 | **no** |
-| `.config.rendered.*.json` | Transient merge of the two, mode 600, deleted after each run | **no** |
+| `.config.rendered.*.json` | Merge of the two, mode 600, lives as long as its server; swept by pid-liveness at the next launch | **no** |
 | `Raven-X/` | The agent itself. Ships as source; its `.venv` does not | yes |
 | `Raven-X-dr*-rollback.tar.gz` `config.json.bak-*` | The builds this one replaced, and the configs that preceded it | **no** |
 | `subagents-backup-*.json` | What `install.py` saved before a PUT - carries every other entry on this host | **no** |
-| `runs/` `cache/` `cron/` `ledger/` | Runtime dirs the build derives from the config file's parent. `ledger/` is empty at rest (see above) | **no** |
+| `runs/` `cache/` `cron/` `ledger/` | Runtime dirs the build derives from the config file's parent - all under `RESEARCH_STATE_ROOT` now, listed here because the `.gitignore` still guards this folder against a misconfigured root. `ledger/` is empty at rest (see above) | **no** |
 
 ## Publishing
 

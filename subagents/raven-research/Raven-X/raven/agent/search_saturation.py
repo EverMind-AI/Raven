@@ -87,6 +87,9 @@ class SearchSaturation:
     rung. ``page_for`` therefore caps the global escalation at one past the
     deepest page this query family has actually been sent to."""
     _dry_streak: int = 0
+    # The streak at the moment of the most recent firing; None until one happens.
+    # Separate from ``_dry_streak`` because that one is reset BY the firing.
+    _dry_streak_at_fire: int | None = None
     _width: int | None = None
     _page: int = 1
     _stopped: bool = False
@@ -124,6 +127,11 @@ class SearchSaturation:
             self._seen.clear()
         self._query_pages.clear()
         self._dry_streak = 0
+        # Clears with everything else: it is a record of a decision this turn made,
+        # and carrying it would report the previous turn's trigger on a fresh turn.
+        # (Caught by test_reset_clears_every_field_a_turn_can_dirty the moment it was
+        # added - which is what that test is for.)
+        self._dry_streak_at_fire = None
         self._width = None
         self._page = 1
         self._stopped = False
@@ -223,6 +231,15 @@ class SearchSaturation:
         # a firing whichever rung it lands on, and the label for it comes from the one
         # place that names rungs, ``counters()``.
         self._fired = True
+        # ★ 20260825 Framework: the streak that CAUSED this, captured before the rungs
+        # below reset it. Without this the ledger structurally cannot show the value
+        # that fires the rule: every path out of ``_escalate`` zeroes ``_dry_streak``,
+        # and ``counters()`` is read afterwards, so a firing row always logged 0.
+        # Measured on dr@3.4: all 6 firings across two arms logged ``sat_dry_streak=0``
+        # while the PRECEDING row logged 9 - so a reader histogramming the field sees
+        # nothing at k=10 and concludes the trigger is unreachable. Two independent
+        # readers reached exactly that wrong diagnosis off this batch.
+        self._dry_streak_at_fire = self._dry_streak
         # Cheapest step first. Widening costs nothing - the endpoint already returned
         # those rows and the arm paid for them - while paginating buys a second call,
         # and the extra call lands disproportionately on the arm that searches most.
@@ -277,6 +294,14 @@ class SearchSaturation:
             # with no rule at all, because that one has ``sat_action`` null too.
             "sat_event": action if self._fired else None,
             "sat_dry_streak": self._dry_streak,
+            # ★ 20260825: what the streak was when the rule last fired. On a firing row
+            # ``sat_dry_streak`` is always 0 (the rungs reset it), so this is the only
+            # field that can ever equal ``k``. Null until the rule fires once.
+            # ⚠️ Read FIRINGS off ``sat_event`` (non-null only on the firing row), never
+            # off ``sat_action`` - the widen rung LATCHES, so ``sat_action`` stays
+            # "widened" on every later row. On dr@3.4 that is 164 rows against 5 actual
+            # firings, a 33x overcount, and both readers who looked made it.
+            "sat_dry_streak_at_fire": self._dry_streak_at_fire,
             "sat_page": self._page,
             "sat_width": self._width,
             "sat_pages_opened": self._pages_opened,

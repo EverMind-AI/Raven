@@ -120,15 +120,27 @@ rather than the text. From a real single-question run:
  "force_finalize":{"terminal_hits": 1, "nudges": 1, "last_reason": "empty_visible_answer"},
  "fetch_floor":   {"searches": 1, "fetches": 2, "notes": 0},
  "budget":        {"max_context_used": 6937},
- "turn_end":      {"status": "completed", "iterations_used": 3, "llm_calls": 5, "overflows": 0, "elisions": 0},
+ "turn_end":      {"status": "completed", "iterations_used": 3, "llm_calls": 5, "overflows": 0,
+                   "elisions": 0, "effective_context_window": 131072,
+                   "context_window_source": "config_fallback", "salvage_seam": null,
+                   "answerless_corrected": false, "loop_nudges": 0, "prefill_retries": 0},
  "invariants":    {"tool_calls": {"web_search": 1, "web_fetch": 2}, "ok": false, "violations": ["answer_shape_unaccounted"]},
  "containment":   {"enabled": false, "blocked_fetches": 0}}
 ```
 
-Two of the five observers fired on that run: `ForcedFinalizeGate` injected a commit nudge
-after a turn that reasoned without answering, and `DraftReviewerGate` rejected the first
-draft once. Both injections are persisted as `user` rows, so the trajectory you read is the
-trajectory the model saw.
+`ForcedFinalizeGate` and `DraftReviewerGate` both fired on that run — a commit nudge after a
+turn that reasoned without answering, and one rejected draft. Both injections are persisted as
+`user` rows, so the trajectory you read is the trajectory the model saw.
+
+**The namespace set varies per row, so a missing one is not a signal.** Seven are effectively
+always present (`turn_end`, `invariants`, `containment`, `truncation_wrapup`, `final_shape`,
+`report_shape`, `budget` — 99.7–99.8% of 875 rows on the last web batch); the rest appear only
+when they fire (`fetch_floor` 98.4%, `verify_gate` 90.9%, `spin_breaker` 32.0%,
+`force_finalize` 11.9%, `loopscan` 0.8%, `dup_query` 0.2%), and a harness-error row carries
+none at all. So **0% is not evidence that an observer did not fire** — it reads identically to
+one that was never exported, which is exactly how `fetch_gate` stayed invisible until `dr@3.5`
+added it to `terminal_state()`. Count a new namespace's occurrence rate against those figures
+before trusting a zero.
 
 Two traps in that payload:
 
@@ -197,52 +209,37 @@ config could supply — with `processAppendix` on, a turn-scoped ledger is opene
 removed once the trail is rendered. Naming the variable yourself still wins and that file is
 never deleted, because a batch's ledger is measurement data.
 
-Two things are **not** how you set the format. The five DR contract rules say nothing about
-reply shape, and there is no per-benchmark format router: with the shape knobs off — every
-benchmark profile — an answer takes its format from the task text, the same way a user
-asking for "one Markdown table with these columns" does. With `reportStructure` **on**, the
-opposite holds since `dr@3.4`: the template overrides formatting instructions in the
-question, so a question asking for one word, a JSON object, or a table is still answered as
-the three-section report on that question's topic, the requested shape satisfied inside the
-report where it fits. To honour per-question format requests, set
-`finalShape.reportFormatOverride: false` — the template still applies where the question is
-silent, which is exactly the pre-override clause — or turn `reportStructure` off entirely.
+With `reportStructure` **on**, the precedence flips (since `dr@3.4`): the template beats a
+formatting instruction in the question, so a question asking for one word, a JSON object or a
+table is still answered as the three-section report, with the requested shape satisfied inside
+it. To honour per-question format asks, set `finalShape.reportFormatOverride: false` — the
+template then applies only where the question is silent — or turn `reportStructure` off.
 
-The appendix is **computed, not asked for**. A contract clause telling the model to
-describe its own search strategy buys a self-report: unverifiable, competing with evidence
-for the window, and free to be wrong in the flattering direction. The ledger already holds
-the real trail, written as each event happened, so the body is the model's and the appendix
-is derived — no tokens spent, nothing to invent.
-
-It is distribution-neutral by construction: it runs after the turn's last generation and
-attaches to the returned value, never to the persisted message, so no model reads it in this
-turn or as history in the next. That is the one exemption to the ledger's "read by nobody at
-run time" rule, and it is narrow on purpose.
+The appendix is **computed, not asked for**. Asking the model to describe its own search
+strategy buys a self-report: unverifiable, competing with evidence for the window, and free to
+be wrong in the flattering direction. The ledger already holds the real trail, so the body is
+the model's and the appendix is derived. It is distribution-neutral by construction — it runs
+after the turn's last generation and attaches to the returned value, never to the persisted
+message, so no model reads it this turn or as history next turn.
 
 One field is worth watching: `observers.process_appendix.citation_grounding_rate` — the share
-of URLs cited in the answer that appear in a fetch record. A link the run never opened is a
-fabricated citation, and this catches it deterministically, with no judge and no reward for
-length. It is `null`, not `1.0`, when the answer cites nothing: an answer with no sources is
-unmeasured, not perfectly grounded.
-
-Three constraints travel with it and are not optional. It is **post-treatment and gameable**:
-citing less raises it, so it must always be read beside `urls_cited` and the share of answers
-where `cites_nothing` is true — the rate alone has a denominator the measured arm chooses. It
-is an **intra-arm integrity guard, not a cross-arm scoreboard**: an arm that browses more has
-more chances to mis-cite, so two arms citing at different rates are not comparable on it. And
-its denominator is **cited URLs, not claims** — an answer can be fully grounded and entirely
-wrong; this measures whether the links are real, not whether the reasoning is.
+of cited URLs that appear in a fetch record, so a link the run never opened is caught
+deterministically, with no judge and no reward for length. It is `null`, not `1.0`, when the
+answer cites nothing: an answer with no sources is unmeasured, not perfectly grounded. Three
+constraints are not optional. It is **post-treatment and gameable** — citing less raises it, so
+read it beside `urls_cited` and the share of answers where `cites_nothing` is true. It is an
+**intra-arm integrity guard, not a cross-arm scoreboard**: an arm that browses more has more
+chances to mis-cite. And its denominator is **cited URLs, not claims** — an answer can be fully
+grounded and entirely wrong.
 
 The two prompt-side clauses are **additive and asked for during generation**, never imposed
-afterwards. Restructuring
-a finished answer is the failure class measured twice here — an upstream framework's extraction
-stage carried gold on 71/120 questions into 58/120 boxed fields, inventing nothing and dropping
-10.83pp, and `dr@1.6`'s salvage seam failed the same way — so `final_shape`'s transform stays
-pure, additive and non-shortening, and shape is requested rather than enforced.
-
-Turning both off restores the benchmark contract byte for byte (`593c46c416c3f4cf`, 3,485
-chars); `scripts/stamp_dr_segment.py` is the artifact that proves which one a run used, because
-the system prompt never enters the trajectory.
+afterwards. Restructuring a finished answer is the failure class measured twice here — an
+upstream framework's extraction stage carried gold on 71/120 questions into 58/120 boxed
+fields, inventing nothing and dropping 10.83pp, and `dr@1.6`'s salvage seam failed the same way
+— so `final_shape`'s transform stays pure, additive and non-shortening. Turning both off
+restores the benchmark contract byte for byte (`593c46c416c3f4cf`, 3,485 chars);
+`scripts/stamp_dr_segment.py` proves which one a run used, because the system prompt never
+enters the trajectory.
 
 #### Multi-turn conversations
 
@@ -277,32 +274,27 @@ failure resolves to research** — a timeout, a truncated generation, an unparse
 needless research turn costs latency; a wrongly skipped one answers a factual question from
 stale context in exactly the same confident voice.
 
-What the gate cuts is **behaviour, never text**. The DR identity and contract stay
-byte-identical on every turn even when the turn is answered from context, because the system
-prompt is the head of the cached prefix and varying it per turn re-bills the whole
-conversation at uncached rates. The iteration cap is left alone for a similar reason: it is a
-ceiling, not a spend, and lowering it would only add a way for a mis-classified turn to be cut
-off mid-answer.
+What the gate cuts is **behaviour, never text**: the DR identity and contract stay
+byte-identical on every turn, because the system prompt heads the cached prefix and varying it
+re-bills the whole conversation at uncached rates. The iteration cap is left alone for a
+related reason — it is a ceiling, not a spend, and lowering it only adds a way for a
+mis-classified turn to be cut off mid-answer.
 
-`researchMemo` addresses a quieter problem. Tool results are truncated to 16k characters when
+`researchMemo` addresses a quieter problem: tool results are truncated to 16k characters when
 persisted and then dropped whole by the history trimmer, so by the third turn the pages an
 answer rests on are gone while its claims remain. The memo is a short, capped record of the
-URLs opened and the queries run, rebuilt from the client-side ledger — same source as the
-process appendix, and for the same reason: asking the model to recall its own research buys an
-unverifiable self-report. It is prepended to the current message, never persisted (it is
-re-rendered each turn from session metadata, so persisting it would compound), and it carries
-retrieval only — no findings, no integrity numbers. The appendix stays display-only; feeding it
-back would put a metric the model can read into the context of the turn that produces the next
-value of it.
+URLs opened and queries run, rebuilt from the client-side ledger rather than from the model —
+asking it to recall its own research buys an unverifiable self-report. Prepended to the current
+message and never persisted (it is re-rendered each turn, so persisting would compound), and it
+carries retrieval only: feeding the appendix's integrity numbers back would put a metric the
+model can read into the context of the turn that produces the next value of it.
 
-`identityScope` decides what the web tools forget at a turn boundary. `"turn"`, the default and
-the measured behaviour, clears the "already seen this" sets every turn — correct for a benchmark
-item, where each turn is a separate question. `"topic"` keeps them across a session so a
-follow-up does not re-search and re-open the previous turn's pages. Budgets and decisions still
-clear either way, including the saturation rule's stop flag: carrying a decision across a turn
-boundary would close search for a question nobody had asked yet. Its cost is stated rather than
-hidden — a follow-up whose first searches legitimately re-find the previous turn's pages
-accumulates a dry streak it did not earn, bounded to `k` searches by the streak reset.
+`identityScope` decides what the web tools forget at a turn boundary. `"turn"` (default, and the
+measured behaviour) clears the "already seen this" sets every turn — correct for a benchmark item,
+where each turn is a separate question; `"topic"` keeps them so a follow-up does not re-open the
+previous turn's pages, at the cost of a dry streak it did not earn, bounded to `k` by the streak
+reset. Budgets and *decisions* clear either way, including the saturation stop flag: carrying a
+decision across a turn boundary would close search for a question nobody had asked yet.
 
 `observers.conversation_gate` records the verdict per turn, and it distinguishes "the gate said
 no" from "the gate could not run" (`gate`, `gate_error`, `gate_unparsed`, `config_always`,
@@ -312,15 +304,14 @@ no" from "the gate could not run" (`gate`, `gate_error`, `gate_unparsed`, `confi
 
 A research turn can begin by asking the user one round of questions instead of guessing. The
 model calls `ask_user`; the flow turns that call into the turn's reply and ends the turn, and the
-user's next message arrives as an ordinary inbound carrying the answer. Nothing blocks on a
-human — the tool call is the signal and the turn boundary is the transport. Product surface only,
-and it needs the multi-turn surface above, because without a second turn the questions have
-nowhere to be answered.
+user's next message arrives carrying the answer — nothing blocks on a human, the tool call is the
+signal and the turn boundary is the transport. Product surface only, and it needs the multi-turn
+surface above.
 
 ```jsonc
 {
   "drFlow": {
-    // A batch that publishes a number pins "version": "dr@3.4-askuser" here — a
+    // A batch that publishes a number pins "version": "dr@3.5-askuser" here — a
     // profile suffix, not a new base label. The shipped example deliberately does
     // NOT pin it: an example has to inherit the label or it breaks on the next bump.
     "toolsAllowlist": ["web_search", "web_fetch", "ask_user"],
@@ -355,56 +346,42 @@ arm because four separate things hold it shut, but only two of them are yours to
 | 3 | `drFlow.toolsAllowlist` does not name `ask_user`, and everything unnamed is unregistered | `build_dr_flow`, once 1 and 2 are on — naming it yourself is harmless but unnecessary. An **empty** allowlist means "no slimming" and is left empty |
 | 4 | `tools.disabledTools` listing `"ask_user"` — it runs **before** the allowlist | **you**, by removing the entry. Nothing lists it by default, but every shipped bench example pins it |
 
-So from a fresh config it is two keys; from a copy of a bench profile it is those two plus deleting
-one array entry. If you set both and the model still never asks, `observers.ask_user.tool_absent`
-says the tool was missing from the schema — that is cause 4.
+So from a fresh config it is two keys; from a copy of a bench profile it is those two plus
+deleting one array entry. If you set both and the model still never asks,
+`observers.ask_user.tool_absent` says the tool was missing from the schema — that is cause 4.
+`examples/dr_ask_user.json` opens all four; it is a sibling of `examples/dr_multi_turn.json`
+rather than an edit to it, so a reading from one is still comparable with the other, and like
+its sibling it leaves `thinkClosingTagRequired` at `false` (the model it ships with emits no
+think tags, and the bar would erase every answer). `observers.ask_user` is written on **every**
+turn, asked or not: "it asked nothing" and "it was not installed" are the numerator and the
+missing denominator of the only number that could ever justify defaulting this on.
 
-`examples/dr_ask_user.json` opens all of them. It is a sibling of `examples/dr_multi_turn.json`
-rather than an edit to it, differing in exactly two settings plus the `askUser` block, so a
-reading from one can still be compared with the other. It leaves
-`thinkClosingTagRequired` at `false` like its sibling: the model it ships with emits no think
-tags, and the bar would erase every answer. `observers.ask_user` is written on **every** turn, asked or not — "it
-asked nothing" and "it was not installed" are the numerator and the missing denominator of the
-only number that decides whether this can ever default on.
+**`mode` decides when the contract asks for a round.** `first_turn` (default) always asks on
+turn one and later asks only when something is genuinely undecidable; `when_needed` applies that
+condition to every turn and renders the clause byte-for-byte as before the knob existed, which
+is what makes it an exact revert. The clause text does **not** vary per turn — it states both
+regimes in one fixed block and the model reads its turn number off the history, because the
+system prompt heads the cached prefix and varying it re-bills the whole conversation at uncached
+rates (measured 4.3x on this stack).
 
-**`mode` decides when the contract asks for a round.** `first_turn` is the default:
-turn one of a conversation always asks, later turns ask only when something is genuinely
-undecidable without the user. `when_needed` applies that condition to every turn and renders the
-clause byte-for-byte as it was before the knob existed, which is what makes it an exact revert.
-
-The clause text does **not** vary per turn. It states both regimes in one fixed block and the
-model reads its own turn number off the history, because the system prompt heads the cached
-prefix and varying it per turn re-bills the whole conversation at uncached rates — measured on
-this stack at 4.3x. So the mode changes which clause ships, never which clause a given turn sees.
-
-⚠️ **`first_turn` is a request, not a guarantee, and its cost is real.** Nothing can make a model
-emit a tool call, so `observers.ask_user.asked` on a mandated turn is a *compliance rate*; the
-namespace carries `first_turn` and `ask_required` so those turns stay separable from the ones
-where asking was merely allowed. Enforcement — bouncing a first turn that did not ask — is
-deliberately absent: it re-samples turns, which is the strongest kind of distribution change, and
-the compliance rate has to be known before that trade can be priced. Two prices ride along: a
-question has a threshold and requiring one removes it, so filler questions ("how deep would you
-like?") are the failure mode that teaches users to ignore the round entirely; and dr@3.4 measured
-replies whose history carries an outline as well-formed 2/9 against 8/14 elsewhere, which this
-mode pays on every conversation. Ask-rate data on questions that are *not* underspecified is what
+⚠️ **`first_turn` is a request, not a guarantee, and its cost is real.** Nothing can make a
+model emit a tool call, so `observers.ask_user.asked` on a mandated turn is a *compliance
+rate*; the namespace carries `first_turn` and `ask_required` to keep those turns separable.
+Enforcement — bouncing a first turn that did not ask — is deliberately absent: it re-samples
+turns, the strongest kind of distribution change, and the compliance rate has to be known
+first. Two prices ride along: filler questions ("how deep would you like?") teach users to
+ignore the round entirely, and `dr@3.4` measured replies whose history carries an outline as
+well-formed 2/9 against 8/14 elsewhere, which this mode pays on every conversation. Ask-rate data on questions that are *not* underspecified is what
 should decide between the two modes.
 
-**A clarify written as prose is a third outcome, and it is counted.** Observed on a live first
-turn: the model produced the questions and the outline as ordinary reply text and never called the
-tool, so the terminal gates read it as a draft — the reviewer rejected it for "asking a clarifying
-question instead of providing the requested report" and the bounce, persisted as a user message,
-sent the model off to research an ambiguous question under an assumption. The clause now names the
-call as the way to ask, and `ClarifyExemptHook` stands the three terminal gates down on that one
-response: a mandated turn, first iteration, no tool call, no report section present, and a
-question mark. The narrowness is the point — a draft missing only `## Limitations`, or a report
-written from memory with no retrieval, is still reviewed. `observers.ask_user.prose_clarify` and
-`clarify_chars` record it, because `asked: false` reads the same for "used the wrong channel" and
-"chose not to ask".
-
-The budget is scoped to the **clarify chain**, not the session: one handoff opens a chain, the
-count passes through the turn that answers it, and the chain closes as soon as a turn asks
-nothing further. A session-scoped count would spend the budget on a conversation's first research
-question and silently refuse its second, unrelated one.
+**A clarify written as prose is a third outcome, and it is counted.** Seen live: the model
+produced questions as ordinary reply text without calling the tool, so the terminal gates read
+it as a draft and the reviewer's bounce sent it off to research an ambiguous question under an
+assumption. `ClarifyExemptHook` stands the three terminal gates down on exactly one response
+(mandated turn, first iteration, no tool call, no report section, a question mark) and
+`observers.ask_user.prose_clarify` / `clarify_chars` record it, because `asked: false` reads the
+same for "used the wrong channel" and "chose not to ask". The round budget is scoped to the
+clarify **chain**, not the session. Both are spelled out in `raven/agent/flow/ask_user.py`.
 
 Two things to know before the first run:
 
@@ -418,10 +395,10 @@ Two things to know before the first run:
 lands silently in the first one's session. Use fixed-length ids (`raven session create`), not
 `q1 / q2 / ...`.
 
-⚠️ Turning this on **supersedes the personalizer's clarifying question** (`enable_personalization`)
-for the whole build, and warns once per turn when both are on. Two owners cannot ask in one turn,
-and the personalizer's question never enters the agent loop so it cannot carry an outline. That
-is a regression unrelated to this feature rather than part of its design; the right fix, when both
+⚠️ Turning this on **supersedes the personalizer's clarifying question**
+(`enable_personalization`) build-wide, warning once per turn when both are on: two owners cannot
+ask in one turn, and the personalizer's question never enters the agent loop so it cannot carry
+an outline. That is a pre-existing regression rather than part of this design; the fix, when both
 must live, is to move the personalizer's clarify onto this same turn-boundary seam.
 
 ### Environment variables
@@ -520,49 +497,49 @@ questions into a boxed field on 58/120, producing nothing new and dropping 10.83
 
 ### Version labels
 
-`drFlow.version` is **the key of the measurement ledger**, not a product name. A new label
-means the generated distribution changed, so the config validator rejects a superseded label
-on a newer build. Current: `dr@3.4`.
+`drFlow.version` is **the key of the measurement ledger**, not a product name. Since
+2026-08-25 it advances on **batch launch**: a label names the code a batch ran under, so it
+moves when a batch closes, not when a distribution changes. Current: **`dr@3.5`** — dr@3.4's
+web batch (`eval_web_dr34_dsv4f0731_20260821`, four arms, adjudicated) closed that rung out.
+It is not `raven --version`, which reports the package version inherited from upstream.
 
-The converse does not hold, and assuming it will mislead you: a distribution change does not
-always get a new label. What a bump protects is a *reading that already carries the old one*,
-so a label with zero batches behind it can be widened in place instead — nothing is
-mislabelled by doing so. `dr@3.3` is such a case: the turn-task fix landed under it rather
-than under a number of its own.
+The launch rule retired the *fold* tier. Under the old rule a bump protected a reading that
+already carried the old label, so a label with zero batches behind it could be widened in
+place — that is how `dr@3.3` absorbed the turn-task fix and `dr@3.4` absorbed three upstream
+labels, which the validator then had to refuse as *folded*. Labels are cheap now, so
+`dr@3.5`–`dr@3.7` are ordinary rungs again and the folded tier is gone. Renumbering is safe
+either way, because a reading's join key was never the label: it is `dr_segment_sha`
+(AGENTS.md 0.2).
 
-Note that this is not the same number as `raven --version`, which reports the package
-version inherited from upstream. `drFlow.version` is the one that identifies behaviour.
+**Bumping is two halves, and doing one is silent.** Raise the default *and* move the closed
+label into `_SUPERSEDED_VERSIONS`. Do only the first and the old label still loads with the
+flow on, so an unsynced config keeps stamping a rung this build no longer is — the label is
+behaviour-inert, so nothing at runtime complains. Then sync every enabled config template.
+`tests/test_config_raven_loader.py` asserts both halves, derived from the field default.
 
-**Reproducing the published readings.** `main` carries the current label, which is ahead of
-the one the published corpus-axis numbers were measured on. To reproduce those, check out the
-tag `dr2.4-published` (`raven/` tree_sha `2db7aa62042eb97c`); the `dr@2.7` corpus and live-web
-readings were measured from the working tree, so they reproduce only from each run's own
-`_src_snapshot`, with `dr2.7-base` marking the commit they were cut from. Two consequences of `main`
-being ahead, both intended: its `tree_sha` differs from the measured one, and a config still
-labelled anything from `dr@2.4` through `dr@3.3` is rejected on it — the validator matches the base label,
-so a profile suffix such as `dr@2.4-futurex` is rejected too. Update such configs to `dr@3.4`;
-the error message names the value to use. The validator checking the base only is what makes a
-suffix usable, and one is in use: `dr@3.4-askuser` marks a product profile with `drFlow.askUser`
-on. It gets a suffix rather than a ladder row for the same reason the multi-turn surface did — a
-label marks a measured build, and a feature no benchmark arm can reach cannot appear in a
-measurement.
+**The validator matches the base label**, so `dr@2.4-futurex` is rejected along with
+`dr@2.4` — and that is also what makes suffixes usable: `dr@3.5-askuser` marks a product
+profile with `drFlow.askUser` on. A suffix, not a rung, because a label marks a measured
+build and no benchmark arm can reach that feature. The rejection is additionally gated on
+`enabled`, so a flow-off anchor keeps its historical label: with no flow there are no flow
+semantics to name.
 
-**A label and a commit do not map onto each other, in either direction.** `dr@3.1` never
-became its own commit — it was developed and measured, then landed together with `dr@3.2`,
-behind the tag `dr3.0-base` that marks `main` as it stood at `dr@3.0`. `dr@3.3` went the other
-way and got two commits with different behaviour: one when the fetch gate landed, one when the
-turn-task fix was folded in rather than bumped.
+**Reproducing published readings.** `main` is ahead of every published number. The corpus-axis
+readings reproduce from the tag `dr2.4-published` (`raven/` tree_sha `2db7aa62042eb97c`); the
+`dr@2.7` readings were taken from a working tree and reproduce only from each run's own
+`_src_snapshot`, with `dr2.7-base` marking the commit they were cut from. `dr3.4-prebump`
+marks `main` as it stood before this bump.
 
-Both readings stay reproducible, because provenance never ran through git in the first place:
-it runs through each batch's own `_src_snapshot` plus the per-arm fingerprints in
-`iso_manifest.json`. Treat git as a convenience for reading history, not as the measurement
-ledger — when a batch and a tag disagree, the batch is right.
+**A label and a commit do not map onto each other, in either direction.** `dr@3.1` never got
+its own commit — it was measured, then landed with `dr@3.2`. `dr@3.3` got two commits with
+different behaviour. So provenance never ran through git: it runs through each batch's
+`_src_snapshot` plus the per-arm fingerprints in `iso_manifest.json`. **When a batch and a tag
+disagree, the batch is right.**
 
-The ladder below is deliberately two-tier. Labels up to `dr@2.9` get one line each: their
-readings are settled, and what is worth knowing about them is *which* thing changed, not why.
-From `dr@3.0` the entries stay long, because those are the ones still being argued about — the
-measurement each rests on, and what it does **not** establish, is the part a reader needs.
-Full per-version detail for every label lives in `raven_train/notes/`, not here.
+The ladder below is one line per rung, and the launch rule is what makes that honest: every
+label through `dr@3.4` has a closed batch, so what is worth knowing here is *which* thing
+changed — the verdict, the measurement it rests on and what it does **not** establish live in
+`raven_train/notes/`. `dr@3.5` gets a few lines because it has zero batches behind it.
 
 | Label | The one thing it changed |
 |---|---|
@@ -586,11 +563,12 @@ Full per-version detail for every label lives in `raven_train/notes/`, not here.
 | `dr@2.7` | the reader path stops discarding pages it could have read - a resolver failure is no longer a refusal |
 | `dr@2.8` | three per-arm, class-default-off retrieval changes, so the anchor cannot move |
 | `dr@2.9` | a wrap-up for turns killed by the completion budget - **not** flow-gated, so it carries its own label |
-| `dr@3.0` | the two observers that divide by the context window now divide by the window the turn actually runs on — both were handed the configured default, and on the served student that resolved to the same number, so the divergence was latent for the whole `dr@2.x` ladder. Also three criteria whose scope said "this turn" but were fed a whole conversation, all found by running one rather than by the suite: the fabricated-citation check now spans the conversation (reported as `opened_earlier`), its URL extractor stops at CJK punctuation instead of swallowing the rest of a Chinese clause, and `turn_invariants` is handed one turn. Everything else is default-off or product-only: multi-turn conversations, the search-saturation ladder, `dr@2.9`'s wrap-up moved behind a gate, and a reviewable shipping draft |
-| `dr@3.1` | the replay cache key gains `page`. The key was `(query, n_requested, k)`, so once a turn had paged to 2, re-asking a query already asked that turn returned the page-1 entry: 206 of 289 page-2 retrievals were page-1 replays, 71.3%. The waste is the smaller half — a replay is observed as a dry search, so every fake page turn also pushed the turn one step toward `stopped`, and the broken rung was feeding the rung above it. The comment directly above the key had already written the rule down correctly, but enumerated the dimensions by hand and listed only `n_requested` and `k`; a rule that has to be re-applied by hand to each new parameter is a rule that will be missed. Also `sat_event`, non-empty only on a real tier transition, because `sat_action` is a sticky label stamped on every row and counting rows overstates `stopped` by 67x |
-| `dr@3.2` | the context-window fallback doubles, 65536 to 131072, and the window is resolved **once** rather than at each consumer — `HistoryTrimmer`, `MemoryConsolidator` and `BudgetObserver` were still reading the unresolved configured value, and `BudgetObserver` is installed only on the flow-off branch, which made the divergence arm-correlated. On the served student all three agreed by accident, because the resolver returns `None` and every consumer fell back to the same number. Also `harness_text.py`, which splits one predicate into two that deliberately disagree: permissive where a false positive costs one item of look-back, strict where it would destroy a real answer. Instrument-only otherwise: `scored_by` stamps the scorer's caliber and file hash on every scored row, the ledger records `n_served`, and `renderedWidth` becomes a knob that is byte-identical at its default |
-| `dr@3.3` | `drFlow.fetchGate`, off by class default: after 15 consecutive searches with no successful fetch, `web_search` is removed from the iteration's tool schema until a page opens, so re-asking for it is not an available move. The two mechanisms already watching that shape both fail differently — `fetch_floor` only appends a sentence (+4.2pp on a ~10% base rate, real and an order of magnitude too small), and the saturation stop refuses in the tool's *return value*, which the model can simply re-request: 72 of the 84 questions it fired on chose search as their very next action, and one accumulated 195 suppressed rows. The predicates do not overlap either — saturation asks whether searches come back dry, this asks whether they come back unread. Same label, folded in later: the reviewer and the salvage gate stop reading the FIRST user message as the task. On a single-turn benchmark first-user *is* this turn's, so the derivation was correct by accident; in a conversation it judged every follow-up against turn one's question, and a reject naming no unsupported claim then rewrote a correct answer into an answer to the wrong question. The task string also stops carrying the `[Runtime Context …]` / memo / recovery envelopes, which is the half that reaches a treated arm and has not been measured |
-| `dr@3.4` | the rest of the `turn_task` bug class: three flow consumers stop re-deriving "this turn's messages" from the whole assembled context, reading `AgentHookContext.turn_base` instead. The fetch gate's first-iteration scan replayed the previous turn's persisted tool history, so a turn that ended on a ≥15 unread-search tail closed `web_search` on the next turn's *first* iteration — silently, because the newest message is the user's question and the notice has no tool result to ride on; the fetch floor double-booked earlier turns' tool results into the new turn's streak; and the verify gate's elision snapshot counted persisted placeholders from every earlier turn, so one elision anywhere in a session degraded every later turn's reject to a pass (`fail_open_on_elided_evidence` defaults true). All three are invisible on a single-turn benchmark, where the slice IS the whole list — same blind spot as `dr@3.3`'s turn-task fix. Also per-query pagination depth: the saturation ladder's escalation level stays turn-global, but the page on the wire comes from `SearchSaturation.page_for`, so a brand-new query is no longer beheaded to page 2 (ranks 11–20 for terms whose first ten ranks nobody saw) and its near-certain empty return no longer feeds the `stop` rung — a distribution change on saturation-enabled arms, hence the label. Loop-side, unlabelled because no measured arm streams or converses: the streaming path stops fabricating `finish_reason` (a `StreamDelta` now carries the provider's) and joins the non-streaming overflow recovery; the budget trimmer drops tool-call adjacency groups whole instead of orphaning results, and never drops a protected message silently; a refused hook rollback now leaves a counted `rollbacks_refused` receipt instead of letting the gate's ledger say a bounce happened that never did. Same label, folded in later: the closing-tag bar is waived per-response when the reasoning arrived out-of-band (`reasoning_content`) — on a channel-separated stack (OpenRouter/LiteLLM) `content` carries only answer text, so the bar erased every complete answer: 4 of 4 live-web turns force-finalized `empty_visible_answer` while carrying a full report, and the verify gate never saw a draft. Inert on every measured reading to date: the one dr@3.4 batch pinned `thinkClosingTagRequired: false` on every arm, where the waiver is unreachable. `turn_end` gains `closing_tag_waived_oob` beside the raw key; the shape rulers keep their unconditional strict bar, so on an out-of-band stack read `answerless_shape` only alongside that flag. Same label, folded in later, and outside the flow entirely: the CLI exit path. A live native runtime at interpreter finalization segfaults the process (SIGSEGV, exit 139) and takes the real exit code with it — measured 3 of 3 runs on a bare `watchfiles.watch()` daemon thread with raven never imported, so no agent loop is required and `ContextBuilder`'s default skill watcher is enough on its own: a plain builder over a workspace with a `skills/` root exits 139. The old guard keyed on lancedb's thread name, absent on any host whose memory backend never opens lancedb, and was bypassed anyway on three of `run()`'s exit paths — a `raise SystemExit` from inside an `except` block is not caught by its sibling handler, and an unhandled exception has no handler at all (measured 139 where the code was 1). Now each runtime registers itself at the site that starts its thread, with a shutdown hook when it has one, so the process stops the runtime and finalizes normally with `atexit` intact, and `os._exit` is left to lancedb alone, which has no hook. The interpreter's own conventions survive the guard too: 130 on an interrupt, a string `SystemExit` payload printed, typer's rich traceback rendered through `sys.excepthook`. No label of its own, because it changes what a caller reads back from a subprocess, not what the model reads · **Folded in (carried as `dr@3.5`/`dr@3.6`/`dr@3.7` upstream until 2026-08-20; none of the three, nor dr@3.4 itself, ever stamped a batch):** the report-structure clause becomes a fixed three-section template: `## Answer` / `## Findings` / `## Limitations`, exact headings, all three present every time, no other headings — replacing dr@2.8's ordered-prose request with its optional comparison/mechanism sections and "no heading at all" fallback. Knob, gating and clause numbering unchanged; only the appended text moved, so the bench contract (`593c46c416c3f4cf`) and the marker-only surface (`7ad4b42cc78aec62`) keep their measured shas byte for byte, and the flow-off anchor has no DR segment at all. A distribution change on every arm running `finalShape.reportStructure: true` — the product surface, including the live-web profile — whose dr@3.4 readings were taken under the old clause, which is why this is a bump and not a fold · the report template takes precedence over formatting instructions in the question itself: a question asking for one word, a JSON object, or a table is still answered as the three-section report on that question's topic, with the requested shape satisfied inside the report where it fits — the bare value in `## Answer`, a requested table or JSON in `## Findings`. Before this passage the layout was fixed only where the question was silent, so the product surface's shape was stable only for questions that never asked. The override passage rides its own sub-switch, `finalShape.reportFormatOverride` (default on): off restores the pre-override clause byte for byte (`93ab746e00264baf`), so the superseded label's prompt stays reproducible from this build and the override can be priced same-batch. Knob, gating and clause numbering unchanged; the bench contract and marker-only surface keep their measured shas byte for byte, and the flow-off anchor is untouched. A distribution change on every arm running `finalShape.reportStructure: true`, whose dr@3.4 runs were taken under the template-without-override clause — a bump, not a fold · the report template stops being a request nothing reads back. `finalShape.reportReminder` (on) appends a ~60-token restatement of the template to each turn's user message at assembly and strips it before persist — the same seam and lifetime as the research memo — so the instruction sits next to the generation instead of thousands of tokens up the context. `finalShape.reportBounce` (**off**) installs `ReportShapeGate`: a deterministic markdown check that bounces a draft missing a section back once, asking for a rewrite that keeps every finding, source and caveat. It is the only DR observer deliberately **not** wrapped in `GatedHook`, because it makes no model call and the non-research turn is the stratum it exists for — measured on this repo's demo sessions, 8/14 well-formed on research turns against 2/9 on the gate's non-research turns. The system prompt is byte-identical to `dr@3.4` (both surfaces keep their shas) and the anchor builds no assembly, but the reminder changes what the model reads on every product turn, which is the bump. Also read-only: the `report_shape` observer stamps the delivered shape **and** whether the template was expected — the record previously stamped `flow_version` but not the `finalShape` knobs, so no baseline scraped from sessions could tell a malformed reply from a profile that never asked for one. The bar's ruler tolerates every deviation that costs the reader nothing — a numbered, bolded, emoji-prefixed or translated heading (`## 1. Answer`, `## 回答`) is the section — because a false positive there would price the knob at the cost of punctuation, and that price is what decides whether it ever defaults on; its bounce injects the rejected draft as `_recovery_synthetic` scaffolding, so the outline it just rejected does not become the next turn's few-shot. Loop-side, folded into this label rather than unlabelled — a fully-on DR arm really can reach seven rollbacks in one turn (loopscan 2 + dup-query 2 + spin-breaker 1 + force-finalize 1 + verify 1), so unlike `dr@3.4`'s loop-side changes this one is reachable on a measured arm and is a distribution change there: `_MAX_HOOK_ROLLBACKS` goes 6 → 8, the enumeration that justifies it having omitted the verify gate long before this bar became the sixth claimant (the anchor's worst case is 4, so the cap is unreachable there either way) · Product profiles may additionally carry `drFlow.askUser` under the suffix `dr@3.4-askuser` (see "Asking the user first"); it is unreachable from every bench arm and therefore adds no rung to this ladder |
+| `dr@3.5` | **first rung under the launch convention** — dr@3.4's batch closed, so the label moved; zero batches behind it. One distribution change, and it is on **both arms** because it sits in the tool rather than behind a knob: `web_fetch` detects a page whose text encoding was lost upstream, refetches once with `x-no-cache`, and if still garbled flags the envelope `encoding_lost` with a warning not to quote it — so this label's fresh anchor pair is needed for a behavioural reason, not merely because `tree_sha` moved. Everything else is off by class default or read-only: `drFlow.fetchGate`'s release predicate is repaired (it was dead from the day it landed — a fence-wrapped body made `json.loads` raise on every real fetch, so the withhold never lifted and the knob's own mechanism counter sat at 0, meaning its verification would have *passed* by measuring something that could not happen), plus six groups of new observability fields. Merged alongside and inert on every measured arm: the `raven/acp/` subsystem |
+| `dr@3.0` | the two observers that divide by the context window divide by the window the turn actually runs on, not the configured default — and `BudgetObserver` is installed only on the flow-off branch, which made the divergence arm-correlated |
+| `dr@3.1` | the replay cache key gains `page`. Without it a page-2 request was answered from the page-1 entry cached earlier in the turn — and a replay scores as a *dry* search, so every false page-turn pushed the saturation ladder one step closer to `stop`: the broken rung fed the rung after it |
+| `dr@3.2` | the context-window fallback doubles (65536 → 131072) and the window is resolved **once** rather than at each consumer. Also `harness_text.py`, which splits one predicate into two that deliberately disagree: permissive where a false positive costs one item of look-back, strict where it would destroy a real answer |
+| `dr@3.3` | `drFlow.fetchGate`, off by class default: after 15 searches with no successful fetch, `web_search` leaves the iteration's tool schema until a page opens, so re-asking is not an available move. The two mechanisms already watching that shape fail differently — `fetch_floor` only appends a sentence, and the saturation stop refuses in the tool's *return value*, which the model can re-request (one turn accumulated 195 suppressed rows). Folded in: the reviewer and the salvage gate stop reading the *first* user message as the task |
+| `dr@3.4` | the rest of the `turn_task` bug class — three flow consumers stop re-deriving "this turn's messages" from the whole assembled context, reading `AgentHookContext.turn_base` instead. All three are invisible on a single-turn benchmark, where the slice IS the whole list. Also per-query pagination depth, so a brand-new query is no longer sent to page 2. Folded in: the fixed three-section report template, its precedence over formatting instructions in the question, the per-turn reminder (`finalShape.reportReminder`, on) and the optional shape bar (`finalShape.reportBounce`, off); the closing-tag bar is waived when reasoning arrives out-of-band; `_MAX_HOOK_ROLLBACKS` 6 → 8; and the CLI exit path stops letting a live native runtime segfault the process (see `raven/cli/_exit.py`) |
 
 Human-facing name for the current build is **Raven-X 3.4**; every superseded label stays
 in code so historical results remain indexable, and the validator matches the BASE label
@@ -600,8 +578,13 @@ so a profile suffix such as `-futurex` cannot smuggle a retired one onto a new b
 
 `agents.defaults.context_window_tokens` is **131072** as of `dr@3.2`, raised from 65536. Read
 it as "what we assume when we cannot find out", not as "this model has a 128k window": it is
-consulted only when `resolve_context_window(model)` cannot answer, and on the student we serve
-that is exactly what happens. Do not quote it as a capability.
+consulted only when `resolve_context_window(model)` cannot answer. Do not quote it as a
+capability, and **never infer a run's working point from it** — when the catalog answers, the
+catalog wins. That cost a whole batch: an arm declared 131072, ran at 1000000, and every
+overflow counter read 0 because the mechanism under test could not fire. To mean the number,
+set `agents.defaults.contextWindowAuthoritative: true` (`dr@3.5`, default false); to find out
+what actually applied, read `effective_context_window` and `context_window_source`
+(`pinned` / `catalog` / `config_fallback`) off `turn_end`, never the config.
 
 Two consequences worth stating plainly, because both have bitten:
 

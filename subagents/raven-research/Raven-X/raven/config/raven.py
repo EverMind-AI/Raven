@@ -2270,8 +2270,34 @@ class DRFlowConfig(_Base):
     """
 
     enabled: bool = False
-    version: str = "dr@3.4"
-    """dr@3.4 folds four labels into one (user's call, 2026-08-20): the
+    version: str = "dr@3.5"
+    """dr@3.5 is the first label under the LAUNCH convention (user's call,
+    2026-08-25): a label names the code a BATCH was run under, so it advances
+    when a batch finishes, not when a distribution changes. dr@3.4's web batch
+    (``eval_web_dr34_dsv4f0731_20260821``, four arms, adjudicated) closed it out,
+    which is why this build is dr@3.5 even though everything landed since is
+    default-off or pure instrumentation.
+
+    That convention VOIDS the 2026-08-20 fold record: dr@3.5/3.6/3.7 are no
+    longer "labels upstream already spent", they are simply the next three rungs,
+    and the ``_FOLDED_VERSIONS`` table that used to reject them is gone. Checked
+    before removing it - nothing outside this file pins any of the three: no
+    config under ``pipeline/configs`` (live or retired), no batch script, and no
+    ``arm_env.json`` under ``data_dr/runs/``. That last clause has power rather
+    than being vacuous, which had to be established separately: an arm DOES stamp
+    the label, in two fields - ``dr_version`` ("dr@3.4 (enabled=True)") and
+    ``config_drflow_version`` - and ``FOURCELL.json`` and ``student_runtime.json``
+    carry it too. So the empty result is a real absence, not a grep over a field
+    that was never written. A label nothing wears cannot be mislabelled by
+    reusing it.
+
+    (Retained from the fold note, because it is what makes the convention safe:
+    the join key for a reading was never the label, it is ``dr_segment_sha``
+    (AGENTS.md 0.2), so renaming or reusing a label cannot detach a reading from
+    the build that produced it.)
+
+    History, kept because the surfaces it names are still in this build.
+    dr@3.4 folded four labels into one (user's call, 2026-08-20): the
     turn-scoped flow consumers this label originally named, plus the fixed report
     template, its precedence rule, the per-turn reminder and the optional shape
     bar - upstream carried those last three as dr@3.5, dr@3.6 and dr@3.7 before
@@ -2282,16 +2308,24 @@ class DRFlowConfig(_Base):
     a label no data wears cannot mislabel anything - the same reasoning that kept
     dr@3.3 from bumping.
 
-    How that was established, corrected 2026-08-21. The original note here said
-    "every ``arm_env.json`` under ``data_dr/runs/`` stamps dr@3.3 or older", and
-    that overstates what the file can say: an arm records ``config``,
-    ``config_sha``, ``dr_segment_sha``, ``git_head`` and ``tree_diff_sha``, and no
-    label at all - so it can neither confirm nor deny wearing one. The conclusion
-    survives on a stronger footing than the claim did: the join key for a reading
-    was never the label, it is ``dr_segment_sha`` (AGENTS.md 0.2), so renaming a
-    label cannot detach a reading from the build that produced it. ``data_dr/runs/``
-    does not exist in any worktree either, which is the other half of why no arm
-    under it wears anything.
+    How that was established - and the 2026-08-21 "correction" of it was itself
+    wrong, corrected again 2026-08-25. The original note said "every
+    ``arm_env.json`` under ``data_dr/runs/`` stamps dr@3.3 or older". The 08-21
+    pass called that an overstatement on the grounds that an arm records
+    ``config_sha``/``dr_segment_sha``/``git_head``/``tree_diff_sha`` "and no label
+    at all, so it can neither confirm nor deny wearing one". That is false, and
+    checking a real file is what showed it: ``arm_env.json`` carries ``dr_version``
+    and ``config_drflow_version``, both spelling the label out, so the original
+    claim was directly checkable all along. Worth keeping as a shape rather than
+    just fixing: a correction that says "the record cannot answer this" is the
+    kind that stops anyone from looking, so it needs the same evidence bar as the
+    claim it retracts - here, one ``json.load``.
+
+    The conclusion holds either way, and the indirect leg is still the load-bearing
+    one because it does not depend on any file's field list: the join key for a
+    reading was never the label, it is ``dr_segment_sha`` (AGENTS.md 0.2), so
+    renaming or reusing a label cannot detach a reading from the build that
+    produced it. ``data_dr/runs/`` does not exist in any worktree either.
     ⚠️ The pre-fold docstrings asserted otherwise in two places - "the one dr@3.4
     batch (w302s100)" and "dr@3.5 runs were taken under the
     template-without-override clause" - and neither run exists in this repo's
@@ -2392,7 +2426,11 @@ class DRFlowConfig(_Base):
     dr@3.4 (folded in): waived per-response when the reasoning arrived
     out-of-band (``reasoning_content``) - content then carries only answer
     text and a closing tag can never appear in it, so the bar's premise is
-    void for that response. The flag now means "require the tag on responses
+    void for that response. Measured cost of not waiving it, on a
+    channel-separated stack: 4 of 4 live-web turns force-finalized
+    ``empty_visible_answer`` while carrying a full report, and the verify gate
+    never saw a draft - the bar erased every complete answer. (Recorded here
+    from the README ladder, which was the only place carrying the number.) The flag now means "require the tag on responses
     whose reasoning is inline". A stack that never inlines reasoning should
     still set this false: a response that skipped reasoning entirely carries
     neither channel and would be erased by the bar."""
@@ -2466,30 +2504,19 @@ class DRFlowConfig(_Base):
         "dr@1", "dr@1.0", "dr@1.1", "dr@1.2", "dr@1.3", "dr@1.4", "dr@1.5", "dr@1.6", "dr@1.7", "dr@1.8",
         "dr@1.9", "dr@2.0", "dr@2.1", "dr@2.2", "dr@2.3", "dr@2.4", "dr@2.5", "dr@2.6",
         "dr@2.7", "dr@2.8", "dr@2.9", "dr@3.0", "dr@3.1", "dr@3.2", "dr@3.3",
+        # dr@3.4 retired itself by finishing its batch - that IS the launch
+        # convention. Its four arms are adjudicated and its configs still say
+        # dr@3.4 inside their own ``_iso`` snapshot, which is what a re-run reads,
+        # so superseding the live label cannot restamp that reading.
+        "dr@3.4",
     )
 
-    # NOT superseded, which is why they need their own tuple and their own
-    # message: upstream carried the reminder, the shape bar and the precedence
-    # rule under these three before the 2026-08-20 fold, so their flow semantics
-    # ARE this build's - only the name changed. The tuple above would reject them
-    # with "predates this build's flow semantics", which is false and sends the
-    # reader looking for a rung that was never removed.
-    #
-    # Rejected rather than aliased, because a label's job is to name a rung: with
-    # neither table carrying them, a config or repro script still pinned to
-    # dr@3.7 stamped a batch with a label this build has no rung for, silently -
-    # exactly the failure the fold's own note describes. Nothing is protected by
-    # accepting them: no reading in this repo wears one (see the ``version``
-    # docstring - what an arm records is ``config_sha`` and ``dr_segment_sha``,
-    # not a label).
-    #
-    # A MAPPING, not a set, and the target is a literal: which label absorbed
-    # which is a historical fact and does not move when this build bumps. The
-    # neighbouring check reads the field default instead, correctly - it says
-    # "set it to the current label", which is a fact about now. Conflating the two
-    # is how a message starts claiming "dr@3.5 was folded into dr@3.8": true of
-    # neither, and it sends the reader to a rung that never absorbed anything.
-    _FOLDED_VERSIONS = {"dr@3.5": "dr@3.4", "dr@3.6": "dr@3.4", "dr@3.7": "dr@3.4"}
+    # There is no second table. Under the launch convention a label names the
+    # code a batch ran under, so dr@3.5/3.6/3.7 are ordinary future rungs and
+    # the "folded, therefore rejected" tier they used to occupy has no members
+    # left. Removed rather than emptied: a branch that can never fire is
+    # indistinguishable from one that is absent, and this repo has been bitten
+    # by a never-firing clause before.
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "DRFlowConfig":
@@ -2835,15 +2862,13 @@ class DRFlowConfig(_Base):
     while a superseded base label is still rejected. Exact membership let
     "dr@1.9-futurex" through, which is the one outcome AGENTS.md 0.2 exists to stop.
 
-    Two rejection classes, not one. A superseded label named semantics this build
-    no longer has; a FOLDED label (dr@3.5-dr@3.7) named semantics this build still
-    has under a different name. Both are refused - a label has to name a rung, and
-    neither table's members do any more - but they are refused with different text,
-    because "predates this build's flow semantics" is a false statement about the
-    folded three and would send the reader hunting a rung that was never removed.
-    The folded message names its target from the mapping, not from the field
-    default: "which label absorbed dr@3.5" is history, "which label to set now" is
-    the present, and one string cannot read both off the same source.
+    One rejection class, since 2026-08-25. There used to be a second - a FOLDED
+    tier for dr@3.5-dr@3.7, labels upstream had spent before the 2026-08-20 fold.
+    The launch convention retired that tier rather than emptying it: a label now
+    names the code a batch ran under, so those three are ordinary future rungs and
+    nothing is refused for having been absorbed. What survives from that episode is
+    the reason the whole scheme is safe to renumber: a reading's join key is
+    ``dr_segment_sha`` (AGENTS.md 0.2), never the label.
     Note what this validator still does NOT do: it is a denylist, so an invented
     label ("dr@9.9-foo") passes. Closing that needs the current label's own
     successors enumerated, which is a different guarantee from this one.
@@ -2854,24 +2879,6 @@ class DRFlowConfig(_Base):
         # outcome AGENTS.md 0.2 exists to prevent. Suffixes are legitimate (they name
         # a profile, not a semantics), so the base version is what has to be checked.
         base = self.version.split("-", 1)[0]
-        folded_into = self._FOLDED_VERSIONS.get(base)
-        if self.enabled and folded_into is not None:
-            current = type(self).model_fields["version"].default
-            # Two states, because the honest sentence differs. While the fold
-            # target IS the current label, a folded label's semantics are this
-            # build's and only the name changed. Once this build has bumped past
-            # it, that stops being true and the message has to say so rather than
-            # keep asserting a sameness that expired.
-            middle = (
-                "its flow semantics are this build's, only the name changed"
-                if folded_into == current
-                else f"{folded_into!r} has since been superseded by {current!r}"
-            )
-            raise ValueError(
-                f"drFlow.version={self.version!r} names a label that was folded "
-                f"into {folded_into!r} (base label {base!r}); {middle} - set "
-                f"drFlow.version to {current!r}, keeping any profile suffix"
-            )
         if self.enabled and base in self._SUPERSEDED_VERSIONS:
             # Name the current label from the field default, never a literal. A literal
             # here is one more place a bump has to reach, and the batch scripts already

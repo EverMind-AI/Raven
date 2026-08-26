@@ -220,13 +220,15 @@ class TestUserSearchConversion:
         hits = await b.recall("coffee", user_id="alice", top_k=5)
         assert len(hits) == 1
         h = hits[0]
-        assert h.text == "liked espresso"
+        # The full episode wins over the summary: everos cuts ``summary``
+        # to a 200-character prefix of ``episode``, mid-word.
+        assert h.text == "full text"
         assert h.score == pytest.approx(0.92)
         assert h.metadata["type"] == "episode"
         assert h.metadata["owner_type"] == "user"
         assert h.metadata["id"] == "ep1"
 
-    async def test_episode_falls_back_to_full_text_when_no_summary(
+    async def test_episode_falls_back_to_summary_when_no_full_text(
         self,
         tmp_path: Path,
     ) -> None:
@@ -236,8 +238,8 @@ class TestUserSearchConversion:
                     SimpleNamespace(
                         id="ep1",
                         session_id="s1",
-                        summary="",
-                        episode="raw content",
+                        summary="the 200-char prefix",
+                        episode="",
                         score=0.5,
                     ),
                 ],
@@ -245,7 +247,7 @@ class TestUserSearchConversion:
         )
         b = _backend(tmp_path, adapter=adapter)
         hits = await b.recall("q", user_id="x", top_k=5)
-        assert hits[0].text == "raw content"
+        assert hits[0].text == "the 200-char prefix"
 
     async def test_profile_rendered_as_key_value_lines(
         self,

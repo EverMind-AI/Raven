@@ -147,6 +147,7 @@ def test_reset_clears_every_field_a_turn_can_dirty():
     assert sat.counters() == {
         "sat_action": "none", "sat_event": None,
         "sat_dry_streak": 0, "sat_page": 1, "sat_width": None,
+        "sat_dry_streak_at_fire": None,
         "sat_pages_opened": 0, "sat_suppressed": 0, "sat_seen": 0,
     }
 
@@ -257,3 +258,34 @@ def test_reset_clears_the_per_query_pages():
     sat.reset(keep_seen=True)
     assert sat.page == 1
     assert sat.page_for("q") == 1
+
+
+def test_the_firing_streak_is_recorded_before_the_rungs_reset_it():
+    """``sat_dry_streak`` on a firing row is always 0, so it can never equal ``k``.
+
+    Every path out of ``_escalate`` zeroes the streak and ``counters()`` is read
+    afterwards, so the ledger structurally cannot show the value that fired the rule.
+    Measured on dr@3.4: all 6 firings across two arms logged ``sat_dry_streak=0``
+    while the PRECEDING row logged 9 - and two independent readers histogrammed the
+    field, saw nothing at k=10, and concluded the trigger was unreachable. It was
+    reachable every time it fired.
+
+    This test also pins the other half of that misreading: the widen rung LATCHES, so
+    ``sat_action`` stays "widened" on every later row while ``sat_event`` is non-null
+    only on the firing row. On dr@3.4 that is 164 rows against 5 actual firings.
+    Count firings off ``sat_event``.
+    """
+    sat = SearchSaturation(k=3, on_saturate="widen", widen_to=10)
+    _run(sat, [["a"], [], [], []])          # one fresh, then three dry -> fires at 3
+    c = sat.counters()
+    assert c["sat_event"] == "widened", c
+    assert c["sat_dry_streak"] == 0, "the rung resets it; that is the defect being fixed"
+    assert c["sat_dry_streak_at_fire"] == 3, c
+    # The tool closes the row after logging it; ``sat_event`` is what makes a firing
+    # countable, so the close has to happen before the next row is judged.
+    sat.end_row()
+    _run(sat, [[]])
+    c2 = sat.counters()
+    assert c2["sat_event"] is None, "not a firing row"
+    assert c2["sat_action"] == "widened", "the widen rung latches - this is the trap"
+    assert c2["sat_dry_streak_at_fire"] == 3, c2

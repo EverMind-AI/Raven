@@ -121,6 +121,7 @@ def _invoke_agent_capturing_session(
     class _StubAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
+            self.max_iterations = kwargs.get("max_iterations", 40)  # public on the real loop
             self.subagents = _StubSubagents()
 
         def configure_personalization(self, *_args) -> None:

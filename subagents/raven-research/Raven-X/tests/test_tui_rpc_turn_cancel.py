@@ -149,6 +149,69 @@ async def test_turn_cancel_keeps_subscription_open_for_next_turn(
     )
 
 
+# --- The never-started turn's slot ---
+
+
+async def test_turn_cancel_of_a_never_started_turn_frees_the_slot(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """A turn cancelled before it starts (still queued on its lane, or waiting
+    on its origin pool) emits no terminating event, so the sink never fires
+    clear_active -- turn_cancel itself must free the slot, or every later
+    turn.send on this session answers -32003 until process restart. The
+    FakeHandle here is exactly that shape: result() resolves with no sink
+    event ever firing."""
+    from raven.tui_rpc.methods import turn as turn_mod
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+    await turn_cancel({"session_key": "tui:default"}, emitter=emitter)
+
+    assert not turn_mod.is_turn_active("tui:default")
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "y"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+    assert result["accepted"] is True
+
+
+async def test_turn_cancel_drop_is_identity_guarded(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """While cancel drains the unwind, the sink may drop the slot and a next
+    turn may claim it; cancel's own drop must not evict the successor."""
+    from raven.tui_rpc.methods import turn as turn_mod
+
+    unwind: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    class GatedHandle(FakeHandle):
+        async def result(self):
+            await unwind
+            return None
+
+    class GatedScheduler:
+        def submit(self, req):
+            return GatedHandle()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"}, emitter=emitter, scheduler=GatedScheduler(), turn_ids={}
+    )
+    cancel = asyncio.ensure_future(turn_cancel({"session_key": "tui:default"}, emitter=emitter))
+    await asyncio.sleep(0.01)
+    assert not cancel.done(), "cancel must wait for the turn's unwind"
+
+    # Play the sink at the old turn's end, then let the next turn claim the slot.
+    turn_mod.clear_active("tui:default")
+    await turn_send(
+        {"session_key": "tui:default", "content": "y"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+    successor = turn_mod._active_turns["tui:default"]
+
+    unwind.set_result(None)
+    assert (await cancel) == {"cancelled": True}
+    assert turn_mod._active_turns.get("tui:default") is successor
+
+
 # --- Params validation ---
 
 

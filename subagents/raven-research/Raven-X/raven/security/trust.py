@@ -41,3 +41,46 @@ def wrap_untrusted(text: str, *, source: str) -> str:
         f"{body}\n"
         f"[END UNTRUSTED {source} #{nonce}]"
     )
+
+
+def unwrap_untrusted(text: object) -> str:
+    """Inverse of :func:`wrap_untrusted`. Unfenced input is returned unchanged.
+
+    ★ 20260825: added because a consumer that needed the PAYLOAD was handed the
+    FENCED string and had no way to say so. ``FetchGateObserver`` releases the gate
+    on ``fetch_result_ok(m.get("content"))``, and ``fetch_result_ok`` decides by
+    ``json.loads``; but every tool result is fenced before it enters ``messages``,
+    so the parse raised for 100% of real fetches and the gate could never reopen.
+    Measured on dr@3.4: the intended predicate fires on 11.1% of items, the shipped
+    one on 38.9% and never releases - a 3.5x amplification of a permanent action.
+    The knob has never been enabled, so the bug never bit; enabling it would have
+    shipped it, and its own pre-registered check (``gate_reopened``) is structurally
+    zero under the bug, so the check would have "passed" while measuring something
+    that cannot happen.
+
+    Kept HERE rather than in the consumer so the fence format has exactly one
+    definition. A consumer that re-spells the markers is the "two implementations
+    of one string" shape, and this fence carries a nonce - so a re-spelling would
+    have to guess the nonce and would silently fall back to "not fenced".
+
+    Conservative by construction: it unwraps only when the opening line and the
+    final line agree on the SAME nonce. A body that merely contains a fake marker
+    is left alone, which is the whole point of the nonce.
+    """
+    body = text if isinstance(text, str) else str(text)
+    if not body.startswith("[BEGIN UNTRUSTED "):
+        return body
+    head, sep, rest = body.partition("\n")
+    if not sep:
+        return body
+    marker = head.rsplit("#", 1)[-1].split()[0] if "#" in head else ""
+    if not marker:
+        return body
+    lines = rest.rsplit("\n", 1)
+    if len(lines) != 2:
+        return body
+    inner, tail = lines
+    if not (tail.startswith("[END UNTRUSTED ") and tail.rstrip().endswith(f"#{marker}]")):
+        return body
+    return inner
+

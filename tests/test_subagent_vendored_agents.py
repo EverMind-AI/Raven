@@ -45,6 +45,18 @@ _MANIFEST = {
 }
 
 
+_ACP_MANIFEST = {
+    "name": "Raven-Probe-Acp",
+    "kind": "acp",
+    "description": "a vendored build served over acp",
+    "enabled": True,
+    "command": "{PYTHON} {SUBAGENT_DIR}/run.py",
+    "cwd": "{SUBAGENT_DIR}",
+    "readyTimeoutMs": 60000,
+    "timeout": 2400,
+}
+
+
 def _folder(root: Path, name: str, *, manifest: dict | None = None, venv: bool = False) -> Path:
     """One folder shaped the way the real ones are: manifest, installer, checkout."""
     folder = root / name
@@ -89,6 +101,35 @@ def test_a_folder_becomes_a_cli_row_with_its_placeholders_resolved(tree: Path) -
     # The task-time placeholders are *not* resolved here -- the cli backend
     # substitutes those per dispatch.
     assert "{prompt_file}" in row.command and "{agent_id}" in row.command
+
+
+def test_an_acp_manifest_becomes_an_acp_row_with_its_cwd_resolved(tree: Path) -> None:
+    """The manifest's own ``kind`` picks the schema. Validating an acp manifest
+    as cli would reject it on the ``kind`` literal and the folder would silently
+    vanish from the roster.
+
+    ``cwd`` resolves like the command fields, and pinning it is load-bearing: an
+    acp entry with no ``cwd`` falls back to the calling task's workspace, which
+    is part of the pool's launch key -- every new workspace would relaunch the
+    server and kill the sessions the old one was serving.
+    """
+    _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=True)
+
+    (row,) = va.discover_vendored_rows()
+
+    assert row.kind == "acp"
+    assert row.name == "Raven-Probe-Acp"
+    assert "{SUBAGENT_DIR}" not in row.command and "{PYTHON}" not in row.command
+    assert row.cwd == str(tree / "raven-probe")
+    assert row.ready_timeout_ms == 60000
+
+
+def test_an_unready_acp_folder_is_listed_disabled_like_a_cli_one(tree: Path) -> None:
+    _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=False)
+
+    (row,) = va.discover_vendored_rows()
+
+    assert row.kind == "acp" and row.enabled is False
 
 
 def test_the_manifests_name_wins_over_the_folders(tree: Path) -> None:
@@ -279,6 +320,19 @@ class TestOnTheTable:
         # leaving the model to assume one.
         assert "no-progress" in registry.roster_text()
         assert registry.get("Raven-Probe").kind == "cli"
+
+    def test_a_ready_acp_folder_reaches_the_roster_as_acp(self, tree: Path) -> None:
+        """An acp row builds an acp backend and the roster tags follow the kind:
+        the live event stream is a property of the transport, so the row has to
+        reach the table as acp for the model to be told about it."""
+        _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=True)
+        registry = AgentRegistry()
+
+        registry.apply([])
+
+        assert "Raven-Probe-Acp" in registry.names()
+        assert registry.get("Raven-Probe-Acp").kind == "acp"
+        assert "live-progress" in registry.roster_text()
 
     def test_an_unready_folder_is_on_the_table_but_not_in_the_enum(self, tree: Path) -> None:
         _folder(tree, "raven-probe", venv=False)
