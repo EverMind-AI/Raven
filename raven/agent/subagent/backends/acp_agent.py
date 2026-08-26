@@ -538,7 +538,17 @@ class AcpAgentBackend:
         # TypeError before the agent is ever contacted.
         skey = session_key or "default"
         handle = instance or task_id
-        cwd = self.cwd or str(workspace)
+        # Two directories, deliberately not one. `launch_cwd` is where the server
+        # process starts and is part of the pool's launch key, so it has to stay
+        # constant across workspaces or every new one relaunches the server and
+        # drops the sessions the old one was serving -- which is why an entry may
+        # pin it. `session_cwd` is the working directory of the *turn*: the agent
+        # binds it as the session's `workdir` and its tools resolve paths against
+        # it, so it must be the caller's workspace whatever the entry pinned.
+        # Conflating them sent a pinned entry's own folder to `session/new`, and
+        # the agent then edited that tree instead of the caller's.
+        launch_cwd = self.cwd or str(workspace)
+        session_cwd = str(workspace)
         started = time.monotonic()
 
         with external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span:
@@ -552,7 +562,7 @@ class AcpAgentBackend:
             connection = await get_pool().acquire(
                 name=self.name,
                 command=self.command,
-                cwd=cwd,
+                cwd=launch_cwd,
                 env=dict(self.env),
                 ready_timeout_s=budget,
             )
@@ -564,7 +574,9 @@ class AcpAgentBackend:
             journal = client.journal
             frames_start = journal.offset if journal is not None else None
 
-            session_id, resumed = await self._open_session(client, cwd=cwd, skey=skey, handle=handle, budget=budget)
+            session_id, resumed = await self._open_session(
+                client, cwd=session_cwd, skey=skey, handle=handle, budget=budget
+            )
             if journal is not None:
                 # Inside the marked range on purpose, so the per-call copy of the
                 # frames carries the line that says whose call they are.

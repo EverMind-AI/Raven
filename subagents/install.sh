@@ -207,7 +207,7 @@ import sys
 from pathlib import Path
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import remove_agent
 
 payload = json.load(sys.stdin)
@@ -232,8 +232,14 @@ def as_row(entry):
     # reports fields neither side can ever agree on: the schema drops
     # recommendedLlm (it annotates the installer and is not a config field), so
     # every row was listed as differing in it on every run, forever.
+    # The `kind` the manifest declares picks the schema, the same way
+    # vendored_agents.discover_vendored_rows does. Validating an acp entry as cli
+    # is refused on the `kind` literal, so it fell back to the raw entry -- which
+    # is exactly the "reports fields neither side can agree on" case above, and it
+    # listed recommendedLlm and a literal-placeholder cwd for every acp folder.
+    model = ThirdPartyAcpSubagentConfig if entry.get("kind") == "acp" else ThirdPartyCliSubagentConfig
     try:
-        return ThirdPartyCliSubagentConfig.model_validate(entry).model_dump(by_alias=True)
+        return model.model_validate(entry).model_dump(by_alias=True)
     except Exception:
         return entry
 
@@ -241,7 +247,10 @@ python = os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
 wanted = {}
 for folder, manifest in payload["folders"].items():
     entry = dict(manifest)
-    for field in ("command", "resumeCommand"):
+    # `cwd` too: it carries the placeholders on an acp manifest, and leaving it
+    # unresolved reported the literal `{SUBAGENT_DIR}` as a difference from the
+    # the real path in the stored row. Same three fields as _PLACEHOLDER_FIELDS.
+    for field in ("command", "resumeCommand", "cwd"):
         template = entry.get(field)
         if template:
             entry[field] = str(template).replace("{SUBAGENT_DIR}", folder).replace("{PYTHON}", python)

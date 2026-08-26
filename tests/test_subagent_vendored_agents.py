@@ -845,3 +845,149 @@ def test_an_explicit_empty_owns_is_the_users_opt_out(tree: Path) -> None:
 
     merged = merge_vendored_seeds([stored], discovered)
     assert next(r for r in merged if r.name == "Scribe").owns == ""
+
+
+class TestTheShippedManifests:
+    """The four real ``subagent.json`` files, validated as what they declare.
+
+    Every other test here stands on a synthetic tree, which is what keeps them
+    independent of whether the developer has built the folders' venvs. That
+    leaves the shipped manifests themselves unguarded, and they are the one part
+    a user cannot fix: a manifest that fails validation drops its folder from the
+    roster with a log line nobody reads, and one that carries a field its own
+    ``kind`` does not support is rejected outright by the install-time write path
+    (``update_subagents.reject_unsupported_acp_fields``) -- so the folder installs
+    on some paths and not others.
+
+    Read from the repository rather than through ``subagents_root()``: the point
+    is the files this commit ships, not whichever tree the machine running the
+    tests happens to resolve to.
+    """
+
+    @staticmethod
+    def _manifests() -> list[tuple[str, dict]]:
+        root = Path(__file__).resolve().parent.parent / "subagents"
+        found = [
+            (p.parent.name, json.loads(p.read_text(encoding="utf-8"))) for p in sorted(root.glob("*/subagent.json"))
+        ]
+        assert found, f"no vendored manifests under {root}"
+        return found
+
+    def test_every_manifest_validates_under_the_schema_its_kind_names(self) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
+
+        for folder, entry in self._manifests():
+            model = ThirdPartyAcpSubagentConfig if entry.get("kind") == "acp" else ThirdPartyCliSubagentConfig
+            try:
+                model.model_validate(entry)
+            except Exception as exc:  # noqa: BLE001 - the folder name is the whole point of the message
+                pytest.fail(f"{folder}: manifest does not validate as kind {entry.get('kind')!r}: {exc}")
+
+    def test_no_acp_manifest_declares_a_cli_only_field(self) -> None:
+        """These are rejected on the write path, not merely warned about, so a
+        manifest carrying one installs through discovery and fails through
+        ``install.py``."""
+        from pydantic.alias_generators import to_camel
+
+        from raven.config.schema import ACP_UNSUPPORTED_FIELDS
+
+        for folder, entry in self._manifests():
+            if entry.get("kind") != "acp":
+                continue
+            declared = [s for f in ACP_UNSUPPORTED_FIELDS for s in (f, to_camel(f)) if s in entry]
+            assert not declared, f"{folder}: cli-only field(s) on an acp manifest: {declared}"
+
+    def test_no_acp_command_carries_a_per_task_placeholder(self) -> None:
+        """An acp ``command`` starts a server once per connection, so a task
+        placeholder reaches the child as a literal argv token and the handshake
+        fails."""
+        from raven.config.schema import ACP_PROMPT_PLACEHOLDERS
+
+        for folder, entry in self._manifests():
+            if entry.get("kind") != "acp":
+                continue
+            left = [p for p in ACP_PROMPT_PLACEHOLDERS if p in str(entry.get("command", ""))]
+            assert not left, f"{folder}: task placeholder(s) in an acp command: {left}"
+
+    def test_every_acp_manifest_pins_its_cwd(self) -> None:
+        """An acp entry with no ``cwd`` falls back to the calling task's
+        workspace, and ``cwd`` is part of the pool's launch key -- so every new
+        workspace would relaunch the server and kill the sessions the old one was
+        serving."""
+        for folder, entry in self._manifests():
+            if entry.get("kind") != "acp":
+                continue
+            assert entry.get("cwd") == "{SUBAGENT_DIR}", f"{folder}: acp manifest must pin cwd to the folder"
+
+    def test_no_manifest_ships_an_env_block(self) -> None:
+        """``env`` is per-install: the ACP child is built from the login shell's
+        environment, so a value like ``RAVEN_HOME`` is needed but cannot be a
+        shipped constant. Leaving it out is what makes the default correct."""
+        for folder, entry in self._manifests():
+            assert not entry.get("env"), f"{folder}: manifest must not ship an env block"
+
+    def test_each_installer_resolves_every_placeholder_field_its_manifest_uses(self) -> None:
+        """Discovery and ``install.py`` must agree on the resolved row.
+
+        ``_PLACEHOLDER_FIELDS`` is documented as "exactly the set each folder's
+        own install.py substitutes", and a field resolved in one but not the
+        other means a discovered row and an installed row disagreeing -- for
+        ``cwd``, one with a real path and one with the literal
+        ``{SUBAGENT_DIR}``, which is a launch key that never matches.
+
+        Asserted per folder against the fields its own manifest actually carries,
+        not against the whole tuple: a folder whose manifest declares no ``cwd``
+        is not made wrong by an installer that would not have resolved one.
+        """
+        root = Path(__file__).resolve().parent.parent / "subagents"
+        for folder, entry in self._manifests():
+            source = (root / folder / "install.py").read_text(encoding="utf-8")
+            for field in va._PLACEHOLDER_FIELDS:
+                if "{SUBAGENT_DIR}" not in str(entry.get(field, "")) and "{PYTHON}" not in str(entry.get(field, "")):
+                    continue
+                assert f'"{field}"' in source, f"{folder}: manifest uses {field!r} but install.py does not resolve it"
+
+
+def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -> None:
+    """The upgrade path for a folder that changes transport.
+
+    ``install.py`` writes a complete row, so a stored row wins on name -- which
+    means a folder's move from cli to acp would never reach an install that had
+    already registered it. The launcher still exists here, so this can only pass
+    through the kind check rather than the stale-path one.
+    """
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    folder = _folder(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"}, venv=True)
+    (folder / "run.py").write_text("", encoding="utf-8")
+    discovered = discover_vendored_rows()
+    assert next(r for r in discovered if r.name == "Scribe").kind == "acp"
+
+    stored = ThirdPartyCliSubagentConfig(
+        name="Scribe",
+        command=f"{folder / 'run.py'} --prompt-file {{prompt_file}}",
+        description="the row install.py wrote before the folder moved to acp",
+    )
+    assert not va._launcher_is_gone(stored), "the launcher must exist, or this passes for the wrong reason"
+
+    row = next(r for r in merge_vendored_seeds([stored], discovered) if r.name == "Scribe")
+    assert row.kind == "acp"
+    assert row.cwd == str(folder)
+
+
+def test_a_stored_row_of_the_same_kind_still_wins(tree: Path) -> None:
+    """The boundary on the check above: a same-kind row is the user's edit of the
+    baseline and keeps winning, which is what makes the config editable at all."""
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+
+    folder = _folder(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"}, venv=True)
+    (folder / "run.py").write_text("", encoding="utf-8")
+    discovered = discover_vendored_rows()
+    stored = next(r for r in discovered if r.name == "Scribe").model_copy(
+        update={"description": "edited by the user", "ready_timeout_ms": 90000}
+    )
+
+    row = next(r for r in merge_vendored_seeds([stored], discovered) if r.name == "Scribe")
+    assert row.description == "edited by the user"
+    assert row.ready_timeout_ms == 90000
