@@ -223,6 +223,9 @@ describe('arranging the desk', () => {
     desk.arrange(['file:/workspace/b.ts'], 'cols')
     desk.arrange(['file:/workspace/b.ts', 'file:/workspace/zz.ts'], 'cols')
     desk.arrange(['file:/workspace/b.ts', 'file:/workspace/b.ts'], 'cols')
+    /* The one a set-size test cannot see: two distinct ids, both of them up,
+       in a list of three. */
+    desk.arrange(['file:/workspace/a.ts', 'file:/workspace/b.ts', 'file:/workspace/b.ts'], 'cols')
 
     expect(desk.getState().panes.map((pane) => pane.id))
       .toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])

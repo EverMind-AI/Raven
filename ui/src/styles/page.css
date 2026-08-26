@@ -4168,8 +4168,19 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-grid.n4 .desk-pane:nth-child(4) {
   left: calc(var(--desk-col) + var(--desk-half-gap)); right: 0; bottom: 0;
   height: calc(100% - var(--desk-right-row) - var(--desk-half-gap)); }
+/* `isolation` so that a pane's own layers stay inside the pane. Its composer
+   sits at z-index 5 (the page's `.dock`, shared), and without a stacking
+   context here that 5 was measured against the GRID's layers rather than the
+   pane's -- so it beat the drop indicator's 3, and dragging a pane over a
+   sub-agent's window drew the target rectangle behind that window's composer.
+   `container-type: size` does not stand in for this: it applies size and style
+   containment, not layout containment, so it makes neither a stacking context
+   nor a containing block (measured, not assumed). `isolation` is the one that
+   adds the stacking context alone -- `contain: layout` would also capture the
+   positioned descendants and move the composer. */
 .desk-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
-  container: desk-pane / size; pointer-events: auto; border: 1px solid var(--line); border-radius: 12px;
+  container: desk-pane / size; isolation: isolate; pointer-events: auto;
+  border: 1px solid var(--line); border-radius: 12px;
   background: var(--ink); box-shadow: none; }
 .desk-pane > header { height: 43px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--line-soft); }
