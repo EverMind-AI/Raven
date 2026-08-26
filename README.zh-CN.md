@@ -17,16 +17,9 @@
 
 # Raven
 
-Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
-**The Self-Improving Agent Harness**，并内置可选 Deep Research，用于多来源深度研究。
+Raven 是面向终端与长程任务的 **The Self-Improving Agent Harness**。它不再把模型与 harness 视为静态组合，而是将每次真实执行纳入“执行—追踪—记忆—评测—反馈”的持续闭环。
 
-Raven 会持续迭代支撑 Agent 的 harness：tools、skills、memory、code execution
-runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持久存在的用户
-记忆、Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，
-并把可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
-
-**Update：** Raven 新增 Deep Research。运行 `raven deep-research enable` 后，
-Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来源 research tool。
+Raven 构建于 [EverOS](https://github.com/EverMind-AI/EverOS) 之上，让用户记忆、Agent 经验与世界知识跨会话延续。每次运行都可以持续改进模型周围的 tools、skills、context、policies 与 workflows，让经过验证的工作沉淀为可复用的 Agent Templates 和 digital workers。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 

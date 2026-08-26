@@ -17,13 +17,9 @@
 
 # Raven
 
-Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.com/EverMind-AI/EverOS), with opt-in Deep Research for multi-source investigation.
+Raven is **The Self-Improving Agent Harness** for terminal-first, long-running AI work. It treats the model and harness not as a static pair, but as a system that can improve through a continuous loop of execution, tracing, memory, evaluation, and feedback.
 
-Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
-
-**Update:** Raven added Deep Research. Enable it with `raven deep-research enable`
-to give the agent access to MiroThinker-backed, multi-source research when a
-task needs deeper investigation.
+Built on [EverOS](https://github.com/EverMind-AI/EverOS), Raven carries user memory, agent experience, and world knowledge across sessions. Every run can refine the tools, skills, context, policies, and workflows around the model, allowing proven work to evolve into reusable Agent Templates and digital workers.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
