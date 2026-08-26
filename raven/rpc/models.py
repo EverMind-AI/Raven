@@ -2683,6 +2683,26 @@ class FsRevealResult(_Strict):
     ok: Literal[True]
 
 
+class DeliverablesListParams(_Strict):
+    session_key: str = Field(..., description="Full session_key. An empty or unknown key answers with an empty list.")
+
+
+class DeliverableEntry(_Strict):
+    path: str
+    name: str
+    title: str | None = Field(None, description="What the agent called the file; empty when it named none.")
+    description: str | None = None
+    size: int
+    media_type: str
+    download_path: str = Field(..., description="Token URL on the gateway; never a path.")
+    created_at: str = Field(..., description="ISO-8601, when the file was first delivered.")
+    missing: bool = Field(..., description="The registry has it, the filesystem no longer does.")
+
+
+class DeliverablesListResult(_Strict):
+    files: list[DeliverableEntry] = Field(..., description="Oldest first, one entry per delivered path.")
+
+
 class FsOpenParams(_Strict):
     path: str = Field(..., description="Absolute, or relative to the session's working directory.")
     app: str | None = Field(
@@ -3134,6 +3154,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "fs.upload": (FsUploadParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
     "fs.open": (FsOpenParams, FsOpenResult),
+    "deliverables.list": (DeliverablesListParams, DeliverablesListResult),
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),

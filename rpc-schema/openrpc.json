@@ -3613,6 +3613,83 @@
       }
     },
     {
+      "name": "deliverables.list",
+      "summary": "Every file this conversation handed over through deliver_files.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key. An empty or unknown key answers with an empty list."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeliverablesListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "files"
+          ],
+          "properties": {
+            "files": {
+              "type": "array",
+              "description": "Oldest first, one entry per delivered path.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "name",
+                  "size",
+                  "media_type",
+                  "download_path",
+                  "created_at",
+                  "missing"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "What the agent called the file; empty when it named none."
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "integer"
+                  },
+                  "media_type": {
+                    "type": "string"
+                  },
+                  "download_path": {
+                    "type": "string",
+                    "description": "Token URL on the gateway; never a path."
+                  },
+                  "created_at": {
+                    "type": "string",
+                    "description": "ISO-8601, when the file was first delivered."
+                  },
+                  "missing": {
+                    "type": "boolean",
+                    "description": "The registry has it, the filesystem no longer does."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "memory.stats",
       "summary": "How many memories of each kind EverOS holds.",
       "params": [],

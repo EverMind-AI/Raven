@@ -124,6 +124,13 @@ async function openLiveSession(s) {
          the changed paths and counts the rest -- see wsOnHistory. */
       wsOnHistory(r.messages);
     } else pitch();
+    /* After the replay, because the replay is the better answer where it has
+       one: a manifest on a stored turn knows which turn delivered the file, and
+       the registry only knows that this conversation did. What the registry
+       adds is everything the replay cannot carry -- a turn still in flight when
+       the socket dropped, and one whose messages a compaction has since
+       archived. Not awaited: the shelf fills when it answers. */
+    RavenIslands.workspace.loadDeliveries(s.id);
     await subscribe(s.id);
     /* Last, and only on this path. The reader may be arriving here after a
        reload -- or after an upgrade replaced the page under them -- in which

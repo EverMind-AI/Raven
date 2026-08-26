@@ -4959,6 +4959,10 @@
       "en": "source",
       "zh": "源码"
     },
+    "gui.ws.unseen_tab": {
+      "en": "{n} new",
+      "zh": "{n} 项新的"
+    },
     "gui.ws.deliverables": {
       "en": "Deliverables",
       "zh": "产物"

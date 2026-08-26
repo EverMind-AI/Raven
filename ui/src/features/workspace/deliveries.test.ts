@@ -1,9 +1,13 @@
 /** Tests for the session's delivery registry and how it survives a park. */
 
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { setCurrent } from '../../shell/session'
 import * as deliveries from './deliveries'
 import * as workspace from './store'
+
+import type { WorkspaceSource } from './types'
 
 const manifest = (files: Array<Record<string, unknown>>): unknown => ({ raven_delivery: { files } })
 
@@ -93,6 +97,48 @@ describe('delivery registry', () => {
     expect(seen).toBe(1)
   })
 
+  /* The registry is what answers after a reconnect: the transcript comes back
+     from disk, and a turn still in flight was never written to it. */
+  it('fills the shelf from the gateway registry, newest first', () => {
+    deliveries.seed([
+      { path: '/w/old.md', name: 'old.md', title: 'Older', size: 10, created_at: '2026-08-01T00:00:00Z' },
+      { path: '/w/new.md', name: 'new.md', title: 'Newer', size: 20, created_at: '2026-08-02T00:00:00Z' },
+    ])
+
+    expect(deliveries.list().map((row) => row.title)).toEqual(['Newer', 'Older'])
+    /* No turn to name: the registry knows the conversation delivered it, not
+       where in the reading that was. */
+    expect(deliveries.list()[0]?.turn).toBeNull()
+    expect(deliveries.count()).toBe(2)
+  })
+
+  it('lets a turn keep the path the registry also has, and adds only the rest', () => {
+    deliveries.record(4, manifest([{ path: '/w/a.md', name: 'a.md', title: 'from the turn' }]))
+    deliveries.seed([
+      { path: '/w/a.md', name: 'a.md', title: 'from the registry' },
+      { path: '/w/b.md', name: 'b.md', title: 'only in the registry' },
+    ])
+
+    expect(deliveries.list().map((row) => row.title)).toEqual(['from the turn', 'only in the registry'])
+    expect(deliveries.ofTurn(4).map((row) => row.title)).toEqual(['from the turn'])
+    expect(deliveries.count()).toBe(2)
+  })
+
+  it('seeds the same registry twice without doubling it', () => {
+    const files = [{ path: '/w/a.md', name: 'a.md' }]
+    deliveries.seed(files)
+    deliveries.seed(files)
+
+    expect(deliveries.count()).toBe(1)
+    expect(deliveries.list()).toHaveLength(1)
+  })
+
+  it('ignores an answer that is not a list', () => {
+    deliveries.seed(null)
+    deliveries.seed({ files: [] })
+    expect(deliveries.list()).toEqual([])
+  })
+
   /* The one way these rows can vanish without anybody noticing: a conversation
      switched away from is restored from the parked snapshot, never from a
      replay, so a snapshot that does not carry them loses the live turn's. */
@@ -105,6 +151,72 @@ describe('delivery registry', () => {
 
     workspace.restore(parked)
     expect(deliveries.list().map((row) => row.title)).toEqual(['A'])
+  })
+
+  it('asks the source for the conversation, once, and takes what it answers', async () => {
+    const asked: string[] = []
+    window.DS = {
+      workspace: {
+        shortPath: (p: string) => p,
+        hostPlatform: () => 'mac',
+        deliverables: async (key: string) => {
+          asked.push(key)
+          return [{ path: '/w/a.md', name: 'a.md', title: 'recovered' }]
+        },
+      } as WorkspaceSource,
+    }
+
+    setCurrent('tui:s1')
+    await workspace.loadDeliveries('tui:s1')
+
+    expect(asked).toEqual(['tui:s1'])
+    expect(deliveries.list().map((row) => row.title)).toEqual(['recovered'])
+    setCurrent(null)
+    window.DS = undefined
+  })
+
+  /* The reader can click another conversation while the answer is in flight,
+     and the registry it would land in is that one's. */
+  it('drops an answer for a conversation the reader has already left', async () => {
+    let release: (rows: unknown) => void = () => {}
+    setCurrent('tui:a')
+    window.DS = {
+      workspace: {
+        shortPath: (p: string) => p,
+        hostPlatform: () => 'mac',
+        deliverables: () => new Promise((resolve) => { release = resolve }),
+      } as WorkspaceSource,
+    }
+
+    const pending = workspace.loadDeliveries('tui:a')
+    /* The switch: B's own desk, and B's own registry. */
+    setCurrent('tui:b')
+    release([{ path: '/a/secret.md', name: 'secret.md', title: "A's file" }])
+    await pending
+
+    expect(deliveries.list()).toEqual([])
+    setCurrent(null)
+    window.DS = undefined
+  })
+
+  /* A source without the verb is an older gateway; a source that throws is one
+     that is there and unhappy. Neither may cost the shelf what it already has. */
+  it('keeps what the turns gave it when the registry cannot be read', async () => {
+    deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'from the turn' }]))
+    window.DS = {
+      workspace: {
+        shortPath: (p: string) => p,
+        hostPlatform: () => 'mac',
+        deliverables: async () => { throw new Error('nope') },
+      } as WorkspaceSource,
+    }
+
+    await workspace.loadDeliveries('tui:s1')
+    window.DS = { workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac' } as WorkspaceSource }
+    await workspace.loadDeliveries('tui:s1')
+
+    expect(deliveries.list().map((row) => row.title)).toEqual(['from the turn'])
+    window.DS = undefined
   })
 
   it('is emptied by a workspace reset, which is what a session switch does', () => {

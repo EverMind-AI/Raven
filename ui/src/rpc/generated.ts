@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 132 methods, 79 component schemas.
+// 133 methods, 79 component schemas.
 
 /* eslint-disable */
 /**
@@ -2462,6 +2462,40 @@ export interface FsOpenResult {
    */
   app?: string;
 }
+export interface DeliverablesListParams {
+  /**
+   * Full session_key. An empty or unknown key answers with an empty list.
+   */
+  session_key: string;
+}
+export interface DeliverablesListResult {
+  /**
+   * Oldest first, one entry per delivered path.
+   */
+  files: {
+    path: string;
+    name: string;
+    /**
+     * What the agent called the file; empty when it named none.
+     */
+    title?: string;
+    description?: string;
+    size: number;
+    media_type: string;
+    /**
+     * Token URL on the gateway; never a path.
+     */
+    download_path: string;
+    /**
+     * ISO-8601, when the file was first delivered.
+     */
+    created_at: string;
+    /**
+     * The registry has it, the filesystem no longer does.
+     */
+    missing: boolean;
+  }[];
+}
 export interface MemoryStatsParams {}
 /**
  * ``ok`` is false when a kind could not be counted; the counts stay zero
@@ -3129,6 +3163,7 @@ export interface RpcMethods {
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
   'fs.open': { params: FsOpenParams; result: FsOpenResult };
+  'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
   'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
@@ -3200,6 +3235,7 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
+  "deliverables.list",
   "ext.list",
   "fs.list",
   "fs.open",

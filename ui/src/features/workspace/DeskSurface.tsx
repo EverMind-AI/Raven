@@ -39,7 +39,7 @@ function DeliveryStrip({ row }: { row: DeliveryRow }): JSX.Element {
   const size = deliveries.humanSize(row.size)
   const when = row.turn === workspace.currentTurn()
     ? t('gui.ws.dlv_here')
-    : t('gui.ws.dlv_turn', { n: String(row.turn) })
+    : row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
   return (
     <div className="dlv-strip">
       <b>{row.title}</b>
@@ -47,7 +47,7 @@ function DeliveryStrip({ row }: { row: DeliveryRow }): JSX.Element {
       <div className="dlv-meta">
         {row.ext ? <i>{row.ext.toUpperCase()}</i> : null}
         {size ? <i>{size}</i> : null}
-        <i>{when}</i>
+        {when ? <i>{when}</i> : null}
         {row.missing ? <i className="bad">{t('gui.arts.missing')}</i> : null}
       </div>
     </div>

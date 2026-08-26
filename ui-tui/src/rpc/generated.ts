@@ -3434,6 +3434,48 @@ export interface FsOpenResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeliverablesListParams".
+ */
+export interface DeliverablesListParams {
+  /**
+   * Full session_key. An empty or unknown key answers with an empty list.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeliverablesListResult".
+ */
+export interface DeliverablesListResult {
+  /**
+   * Oldest first, one entry per delivered path.
+   */
+  files: {
+    path: string;
+    name: string;
+    /**
+     * What the agent called the file; empty when it named none.
+     */
+    title?: string;
+    description?: string;
+    size: number;
+    media_type: string;
+    /**
+     * Token URL on the gateway; never a path.
+     */
+    download_path: string;
+    /**
+     * ISO-8601, when the file was first delivered.
+     */
+    created_at: string;
+    /**
+     * The registry has it, the filesystem no longer does.
+     */
+    missing: boolean;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "MemoryStatsParams".
  */
 export interface MemoryStatsParams {}

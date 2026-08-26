@@ -1281,6 +1281,45 @@ async def fs_read(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
+async def deliverables_list(params: dict, *, agent_loop_factory=None) -> dict:
+    """``deliverables.list`` -- what this conversation has handed over.
+
+    The registry, not the transcript. A client can read the manifests off the
+    turn events as they arrive, and one that was open the whole time will have
+    them all -- but only that one. A reconnect re-opens the session from disk
+    and a turn still in flight has not been written yet; a compaction archives
+    the tool messages that carried the manifests; a second client was never
+    told. The registry outlives all three, because it is what the download
+    token resolves against.
+
+    ``missing`` is stat'd here rather than pruned: a delivered file that has
+    since been deleted is still something this conversation handed over, and
+    saying so is more use than dropping the row.
+    """
+    session_key = str(params.get("session_key") or "")
+    loop = _safe_loop(agent_loop_factory)
+    store = getattr(loop, "deliverables", None)
+    if store is None or not session_key:
+        return {"files": []}
+    from urllib.parse import quote
+
+    files = [
+        {
+            "path": rec.path,
+            "name": rec.name,
+            "title": rec.title,
+            "description": rec.description,
+            "size": rec.size,
+            "media_type": rec.media_type,
+            "download_path": f"/files/download?token={quote(rec.token)}",
+            "created_at": rec.created_at,
+            "missing": not os.path.isfile(rec.path),
+        }
+        for rec in store.for_conversation(session_key)
+    ]
+    return {"files": files}
+
+
 def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     """Register the console handlers with the loop factory pre-bound."""
 
@@ -1310,6 +1349,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("fs.upload", bind(fs_upload))
     dispatcher.register("fs.reveal", bind(fs_reveal))
     dispatcher.register("fs.open", bind(fs_open))
+    dispatcher.register("deliverables.list", bind(deliverables_list))
 
 
 __all__ = ["register_console_methods"]

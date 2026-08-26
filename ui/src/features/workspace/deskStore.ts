@@ -4,10 +4,13 @@ import { shell, t } from '../../shell/bridge'
 import { slot } from '../../shell/persist'
 import { current as currentSession } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
+import * as agents from '../subagents/store'
+import * as deliveries from './deliveries'
+import * as marks from './marks'
 import * as workspace from './store'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
+import type { DeskMarks, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
 
 const DESK_OPEN_KEY = 'raven.gui.desk.open'
@@ -219,6 +222,43 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
   revealWorkspace()
 }
 
+/* What each tab is counting. One number per tab, read from the source that tab
+   draws from, so "how many" and "how many are new" can never disagree:
+   the changes this session made, the files it delivered, the background work it
+   started. */
+export function totals(): DeskMarks {
+  return {
+    diff: workspace.shared().changes.length,
+    deliverables: deliveries.count(),
+    agents: agents.instances().length,
+  }
+}
+
+/* What arrived since the reader last had this tab in front of them. Never
+   negative: a session switch empties every source, and a tab that shrank has
+   nothing new to report.
+
+   Zero for the tab that is showing, said here rather than left to the mark
+   catching up: the mark moves in an effect, so between something landing and
+   that effect running there is a frame where the open tab could paint a bubble
+   for what is already on screen. Not qualified by whether the palette is open,
+   because a shut palette draws no bubble at all -- the same answer serves, and
+   a condition nothing can observe is a condition no test can hold. */
+export function unseen(tab: DeskTab): number {
+  if (state.tab === tab) return 0
+  return Math.max(0, totals()[tab] - marks.of_(tab))
+}
+
+/* The reader is looking at this tab, so nothing in it is new any more. Called
+   while the palette is open -- including as things land underneath it, which is
+   why it runs on every render of the open palette and not only on a switch. */
+export function seeTab(tab: DeskTab): void {
+  /* `update`, not `commit`: the marks keep their own per-conversation record
+     (marks.ts), and `remember()` would republish the whole desk note from
+     whatever is on screen at that instant -- during a resume, nothing. */
+  if (marks.set(tab, totals()[tab])) update({})
+}
+
 export function toggleDesk(): void {
   const paletteOpen = !state.paletteOpen
   try { localStorage.setItem(DESK_OPEN_KEY, String(paletteOpen)) } catch {}
@@ -334,6 +374,7 @@ export function reset(): void {
 
 export function _resetForTests(): void {
   state = initialState()
+  marks._clearForTests()
   KEPT.clear()
   REPLAYING.clear()
   listeners.clear()

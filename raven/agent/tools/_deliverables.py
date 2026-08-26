@@ -20,7 +20,15 @@ from loguru import logger
 
 @dataclass(frozen=True)
 class DeliverableRecord:
-    """One delivered file, addressable by its opaque token."""
+    """One delivered file, addressable by its opaque token.
+
+    ``title`` and ``description`` are what the agent said the file IS, and they
+    are stored rather than left on the turn event: the event reaches a client
+    once, and this registry is what answers "what has this conversation handed
+    over" afterwards -- after a reconnect, after a compaction archived the turn
+    that carried the manifest, or on a client that was not open at the time.
+    Both default to empty so a registry written before they existed still loads.
+    """
 
     token: str
     path: str
@@ -29,6 +37,8 @@ class DeliverableRecord:
     size: int
     conversation: str
     created_at: str
+    title: str = ""
+    description: str = ""
 
 
 class DeliverableStore:
@@ -76,13 +86,25 @@ class DeliverableStore:
             self._save()
         return len(gone)
 
-    def register(self, *, path: str, name: str, media_type: str, size: int, conversation: str) -> DeliverableRecord:
+    def register(
+        self,
+        *,
+        path: str,
+        name: str,
+        media_type: str,
+        size: int,
+        conversation: str,
+        title: str = "",
+        description: str = "",
+    ) -> DeliverableRecord:
         """Register a delivered file, reusing the token if this conversation
         already delivered this path (the size is refreshed, so the UI never
         shows a stale figure for a file that changed)."""
         for token, rec in self._by_token.items():
             if rec.conversation == conversation and rec.path == path:
-                refreshed = replace(rec, name=name, media_type=media_type, size=size)
+                refreshed = replace(
+                    rec, name=name, media_type=media_type, size=size, title=title, description=description
+                )
                 self._by_token[token] = refreshed
                 self._save()
                 return refreshed
@@ -94,6 +116,8 @@ class DeliverableStore:
             size=size,
             conversation=conversation,
             created_at=datetime.now(UTC).isoformat(),
+            title=title,
+            description=description,
         )
         self._by_token[rec.token] = rec
         self._save()
@@ -101,6 +125,19 @@ class DeliverableStore:
 
     def get(self, token: str) -> DeliverableRecord | None:
         return self._by_token.get(token)
+
+    def for_conversation(self, conversation: str) -> list[DeliverableRecord]:
+        """Everything this conversation handed over, oldest first.
+
+        The answer to "what did this session deliver" that does not depend on a
+        client having been connected when it happened, or on the turn that
+        carried the manifest still being in the transcript.
+        """
+        if not conversation:
+            return []
+        rows = [rec for rec in self._by_token.values() if rec.conversation == conversation]
+        rows.sort(key=lambda rec: rec.created_at)
+        return rows
 
     def drop(self, token: str) -> None:
         if self._by_token.pop(token, None) is not None:

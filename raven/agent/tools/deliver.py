@@ -161,6 +161,10 @@ class DeliverFilesTool(Tool):
                 media_type=mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
                 size=resolved.stat().st_size,
                 conversation=ctx.session_key,
+                # Stored, not only sent: the manifest reaches a client once, and
+                # the registry is what answers for this delivery afterwards.
+                title=str(entry.get("title") or ""),
+                description=str(entry.get("description") or ""),
             )
             delivered.append(
                 {
