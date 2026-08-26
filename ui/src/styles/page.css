@@ -3272,6 +3272,11 @@ details[open] summary { margin-bottom: 8px; }
 .mrole .ff { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .mrole .ff input { width: 100%; }
 .mrole .ff .mfacts { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+/* The lender picker sits in the grid like the inputs it replaces; the note
+   that stands in for the two hidden fields spans both columns, because it
+   explains both. */
+.mrole .ff .mlend { width: 100%; }
+.mrole .ff .mnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 
 /* cron detail: the job's own page. Cards speak the same language as the
    list cards (ink ground, 13px radius, soft elevation); the header status

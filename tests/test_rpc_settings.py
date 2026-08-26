@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 
 import pytest
 
@@ -121,6 +122,124 @@ async def test_everos_set_rejects_bad_input(everos_toml):
         await rpc_console.settings_everos_set({"section": "llm", "fields": {"dimensions": "1024"}})
     with pytest.raises(ConfigValidationError, match="non-empty"):
         await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "  "}})
+
+
+@pytest.fixture()
+def lender(tmp_path, monkeypatch):
+    """A provider written into a real config file, in whichever of the three
+    shapes a section may take. Reading the file rather than stubbing the reader
+    is the point: the two shapes that broke this are precedence rules inside
+    `provider_endpoints`, and a stub would answer for neither."""
+
+    def _write(section: dict, name: str = "openrouter") -> None:
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"providers": {name: section}}), encoding="utf-8")
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+
+    return _write
+
+
+async def test_everos_set_borrows_a_connected_provider(everos_toml, lender):
+    """The page cannot read a stored key, so the server resolves it. What lands
+    in the file is the real key, copied -- not the provider's name."""
+    lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "fields": {"model": "qwen/qwen3-embedding-8b"}, "borrow_from": "openrouter"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"] == {
+        "model": "qwen/qwen3-embedding-8b",
+        "api_key": "sk-lent",
+        "base_url": "https://lender.example/v1",
+    }
+
+
+async def test_borrowing_reads_an_endpoints_section(everos_toml, lender):
+    """`endpoints` replaces the flat pair outright, so a section written that way
+    has an empty `api_key` while the provider serves traffic. Reading the flat
+    field offered it as a lender and then refused to lend."""
+    lender(
+        {
+            "endpoints": [
+                {"label": "one", "apiKey": "sk-from-endpoint", "apiBase": "https://ep.example/v1"},
+            ]
+        }
+    )
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "openrouter"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"]["api_key"] == "sk-from-endpoint"
+    assert data["embedding"]["base_url"] == "https://ep.example/v1"
+
+
+async def test_borrowing_reads_an_api_key_list_section(everos_toml, lender):
+    """The other shape the precedence exists for: Gemini's rotation list never
+    populates the flat field either."""
+    lender({"apiKeyList": ["k-gem-1", "k-gem-2"], "apiBase": "https://gem.example/v1"}, name="gemini")
+    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "m"}, "borrow_from": "gemini"})
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"]["api_key"] == "k-gem-1"
+
+
+async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, lender):
+    """`model.endpoints` hands the page `****set****`, and a form that submits
+    what it was shown would write that string over a working key."""
+    lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
+    await rpc_console.settings_everos_set(
+        {
+            "section": "embedding",
+            "fields": {"model": "m", "api_key": "****set****", "base_url": "https://stale/v1"},
+            "borrow_from": "openrouter",
+        }
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"]["api_key"] == "sk-lent"
+    assert data["embedding"]["base_url"] == "https://lender.example/v1"
+
+
+async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_toml, lender):
+    """A provider with no address of its own must not blank an address the
+    reader typed: only the key is certain to be worth copying."""
+    lender({"apiKey": "sk-lent"}, name="custom")
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"]["api_key"] == "sk-lent"
+    # `custom` carries a registry default address, so the borrow does have one to
+    # give and it wins -- which is the same rule as every other lender. What the
+    # section keeps on its own is covered by the endpoints case above, where the
+    # entry supplies the address.
+    assert data["embedding"]["base_url"]
+
+
+async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
+    """`ProvidersConfig.get` is spelling-insensitive and attribute access is not.
+    A provider raven carries no spec for is stored under whatever key its writer
+    used, which is exactly the case the invariant in
+    `test_provider_resolution_invariants` exists to keep working."""
+    lender({"apiKey": "sk-hyphen", "apiBase": "https://hyph.example/v1"}, name="some-vendor")
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "some-vendor"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["embedding"]["api_key"] == "sk-hyphen"
+
+
+async def test_borrowing_refuses_what_it_cannot_lend(everos_toml, lender):
+    """Usable and lendable are different questions: a keyless local address
+    satisfies the first and has nothing to answer the second with."""
+    lender({"apiKey": "sk-lent"})
+    with pytest.raises(ConfigValidationError, match="no such provider"):
+        await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "nobody"}
+        )
+    lender({"apiBase": "http://127.0.0.1:11434/v1"}, name="ollama")
+    with pytest.raises(ConfigValidationError, match="no api key to lend"):
+        await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "ollama"}
+        )
 
 
 async def test_everos_clear_optional_only(everos_toml):

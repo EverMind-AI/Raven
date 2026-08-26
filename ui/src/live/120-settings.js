@@ -87,8 +87,11 @@ DS.settings = {
     return settingsSnapshot();
   },
   /* A null fields object means "clear the section" (optional roles only). */
-  everosSet: async (section, fields) => {
+  everosSet: async (section, fields, borrowFrom) => {
     const p = fields ? { section, fields } : { section, clear: true };
+    /* Only the name travels. The key stays where it is and the server copies
+       it across -- what this page holds is `****set****`. */
+    if (borrowFrom) p.borrow_from = borrowFrom;
     try {
       await rpc.call('settings.everosSet', p);
       await loadEveros();

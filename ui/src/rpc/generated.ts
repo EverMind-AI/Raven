@@ -2415,6 +2415,10 @@ export interface SettingsEverosSetParams {
    * Drop the section; refused for llm and embedding.
    */
   clear?: boolean;
+  /**
+   * Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one.
+   */
+  borrow_from?: string;
 }
 export interface SettingsEverosSetResult {
   applied: boolean;

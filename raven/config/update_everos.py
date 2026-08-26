@@ -53,6 +53,64 @@ _LEGACY_EVEROS_SUFFIX = (".everos", "raven")
 
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal", "api")
 
+
+def borrow_provider_credentials(provider: str) -> dict[str, str]:
+    """The api_key and base_url of a provider raven is already connected to.
+
+    Read through ``provider_endpoints``, which is the one place that knows the
+    precedence a section can be written in -- ``endpoints`` first, then
+    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
+    instead answers "" for both of the shapes that precedence exists for, so a
+    provider serving traffic every day would be offered as a lender and then
+    refuse to lend.
+
+    This asks a narrower question than ``credential_status``, which owns "is
+    this Provider usable": a provider can be perfectly usable and have nothing
+    to lend, because an OAuth token file and a keyless local address both
+    satisfy usability without a key that means anything anywhere else.
+
+    Copied, not referenced. The alternative -- storing the provider's name and
+    resolving it on every read -- would follow a later key change on its own,
+    but this file is read by EverOS as well as by raven, and a field only raven
+    resolves is a field EverOS reads as an endpoint it cannot reach. `provider`
+    is also already taken there for EverOS's own meaning (`[rerank]` carries
+    one). The CLI's onboarding already copies (see `_resolve_reuse_llm_creds`),
+    so copying is the meaning the file already has.
+
+    Raises:
+        KeyError: no such provider is configured.
+        ValueError: it is configured but holds no key to lend.
+    """
+    from raven.config import load_config
+    from raven.providers.endpoints import provider_endpoints
+    from raven.providers.registry import find_by_name
+
+    # `ProvidersConfig.get`, never attribute access: a provider stored under a
+    # hyphenated or camelCase key is invisible to the attribute, and the ones
+    # raven carries no spec for are exactly the ones stored that way. It
+    # canonicalises the name itself. Parsed rather than raw, because the file
+    # spells its fields in camelCase and `provider_endpoints` reads the
+    # schema's names.
+    section = load_config().providers.get(provider)
+    if section is None:
+        raise KeyError(provider)
+
+    # The first endpoint holding a key. A section can offer several, and any one
+    # of them is a key that works against the same address.
+    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
+    if lent is None:
+        raise ValueError(f"{provider} has no api key to lend")
+
+    spec = find_by_name(provider)
+    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
+    out = {"api_key": lent.api_key}
+    # A provider with no address of its own leaves the section's own base_url
+    # alone rather than blanking it: the reader may have typed one that works.
+    if base_url:
+        out["base_url"] = base_url
+    return out
+
+
 # Sections holding a model + credentials, as opposed to the address.
 MODEL_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
 

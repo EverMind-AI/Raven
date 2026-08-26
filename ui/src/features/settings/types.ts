@@ -92,7 +92,11 @@ export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
-  everosSet(section: string, fields: Record<string, string> | null): Promise<SettingsSnapshot>
+  /* `borrowFrom` names a provider raven is already connected to: the server
+     copies its key and address into the section. It has to resolve there --
+     the page is only ever shown a redacted key, so it has nothing to send. */
+  everosSet(section: string, fields: Record<string, string> | null,
+    borrowFrom?: string): Promise<SettingsSnapshot>
   usage(): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   model(): string
