@@ -184,7 +184,11 @@ jobs:
         # pytest-asyncio is needed even though this file has no async test: the
         # isolated interpreter still reads the project's pytest config, whose
         # --strict-config turns the then-unknown asyncio_mode into a hard error.
-        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
+        # pytest-xdist for the same reason, one step further: addopts now carries
+        # `-n 4`, and an unknown ARGUMENT is fatal whatever --strict-config says
+        # ("unrecognized arguments: -n"). It runs two tests here, so the workers
+        # buy nothing -- the plugin only has to exist.
+        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio --with pytest-xdist pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
   tui:
     name: TUI checks

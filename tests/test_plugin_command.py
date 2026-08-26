@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 
@@ -25,14 +26,38 @@ def _make_runner_args(tmp_path: Path, config: dict[str, Any]) -> list[str]:
     return ["plugins", "-c", str(config_path)]
 
 
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the command a console wide enough to print a factory reference.
+
+    ``COLUMNS`` in the invocation's environment is not enough on its own. The
+    command renders through ``plugin_commands.console``, a module-level
+    ``Console()`` whose width is fixed when the module is first imported, so
+    the variable only lands if this file is what imported it -- which held
+    until the suite started running in parallel, where another worker's test
+    gets there first and the width is Rich's default 80. The factory column
+    then truncates to ``...`` and the assertions read as a missing string
+    rather than a narrow terminal.
+
+    Reproduce by importing the CLI at 80 columns before the test runs: the
+    failure is `assert 'raven.plugin.memory.everos.backend:make_backend' in`
+    a string that ends `...___/`.
+    """
+    from rich.console import Console
+
+    from raven.cli import plugin_commands
+
+    monkeypatch.setattr(plugin_commands, "console", Console(width=200))
+
+
 def _invoke(args: list[str], tmp_path: Path):
     """Run the CLI with a sandboxed HOME so user-level plugin discovery
     doesn't surface unrelated plugins on the developer's machine.
 
-    ``COLUMNS=200`` overrides Rich's default terminal width so the
-    table columns don't truncate the factory references / long
-    metadata. Without this, assertions on full column text would fail
-    against truncated ``...`` strings in the captured stdout.
+    ``COLUMNS=200`` is kept for the child's own sake -- anything the command
+    renders through a console it builds itself reads it -- but the table this
+    file asserts on comes from the module-level console that ``_wide_console``
+    replaces.
     """
     # Lazy import so other tests that pin sys.modules aren't affected.
     from raven.cli.commands import app
