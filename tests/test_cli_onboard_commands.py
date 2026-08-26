@@ -1674,6 +1674,90 @@ def test_a_failed_start_can_be_retried_until_it_works(
     assert json.loads(tmp_env.read_text())["memory"]["backend"] == "everos"
 
 
+def test_a_failed_start_can_switch_port(tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The start menu offers a different port, for the race the pre-check
+    cannot see: free at the check, taken by the time the server binds."""
+    import questionary
+
+    seen: list[str] = []
+
+    async def _fails_once(base_url: str, **_kw: object) -> None:
+        seen.append(base_url)
+        if len(seen) == 1:
+            raise RuntimeError("boom")
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
+    monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+
+    calls = {"n": 0}
+
+    def _port_is_free(p: int) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True
+        return p == 20000
+
+    monkeypatch.setattr(onboard_everos, "_port_is_free", _port_is_free)
+    monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+    monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
+
+    class _FQ:
+        def ask(self):
+            return "change"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert seen == ["http://localhost:18791", "http://localhost:20000"]
+    data = json.loads(tmp_env.read_text())
+    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:20000"
+    assert data["memory"]["backend"] == "everos"
+
+
+def test_change_port_asks_even_when_the_port_tests_free(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as the reuse lane: an explicit Change port must ask, not decide."""
+    import questionary
+
+    seen: list[str] = []
+
+    async def _fails_once(base_url: str, **_kw: object) -> None:
+        seen.append(base_url)
+        if len(seen) == 1:
+            raise RuntimeError("boom")
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
+    monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+    monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+    prompted: list[str] = []
+    monkeypatch.setattr(
+        onboard_everos,
+        "_prompt_text",
+        lambda _label, **kw: prompted.append(kw.get("default", "")) or "20000",
+    )
+
+    class _FQ:
+        def ask(self):
+            return "change"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert prompted == ["18791"], "Change port did not ask for a port"
+    assert seen == ["http://localhost:18791", "http://localhost:20000"]
+
+
 def _root_state(root: Path, **kw: Any) -> Any:
     from raven.plugin.memory.everos._discover import RootState
 
@@ -1748,6 +1832,137 @@ class TestTakingOverAFoundRoot:
         assert slice_["base_url"] == "http://localhost:1995"
         assert slice_["owned"] is True
         assert Path(slice_["root"]) == root
+        assert data["memory"]["backend"] == "everos"
+
+    def test_an_occupied_declared_port_is_replaced_before_start(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """The reuse lane checks the declared address before starting into it.
+
+        A listener that does not answer /health -- another app squatting on the
+        port -- reads as "not running" to discovery, so the wizard used to spawn
+        into the collision and fail. The port question exists for exactly that
+        case, and the reuse lane never asked it.
+        """
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
+        _stubs.setattr(onboard_everos, "_port_is_free", lambda p: p != 18791)
+        _stubs.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        _stubs.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        self._answers(_stubs, ["managed", "reuse"])
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert started == ["http://localhost:20000"]
+        data = json.loads(tmp_env.read_text())
+        assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:20000"
+        assert data["memory"]["backend"] == "everos"
+
+    def test_a_failed_start_offers_change_port(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
+        """The pre-check cannot see the future: a port free at the check can
+        be taken before bind, so the failure menu is the second net."""
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
+
+        calls = {"n": 0}
+
+        def _port_is_free(p: int) -> bool:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return True
+            return p == 20000
+
+        _stubs.setattr(onboard_everos, "_port_is_free", _port_is_free)
+        _stubs.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        _stubs.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+            if len(started) == 1:
+                raise RuntimeError("taken between check and bind")
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        self._answers(_stubs, ["managed", "reuse", "change"])
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert started == ["http://localhost:18791", "http://localhost:20000"]
+        data = json.loads(tmp_env.read_text())
+        assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:20000"
+        assert data["memory"]["backend"] == "everos"
+
+    def test_a_failed_start_can_be_skipped(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
+        """A failed start in the reuse lane offers a way out that leaves
+        memory off, instead of silently ending the step."""
+        import questionary
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
+        _stubs.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+
+        async def _ensure(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("boom")
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        asked: list[str] = []
+        it = iter(["managed", "reuse", "skip"])
+
+        def _select(message: str, *a: object, **kw: object) -> Any:
+            asked.append(message)
+            return _Answer(next(it))
+
+        _stubs.setattr(questionary, "select", _select)
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert len(asked) == 3, "the failed start offered no way out"
+        assert json.loads(tmp_env.read_text()).get("memory", {}).get("backend") != "everos"
+
+    def test_change_port_prompts_even_when_the_port_tests_free(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """The start can fail for reasons no port fixes; Change port then
+        silently rerunning the same address looks broken."""
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
+        _stubs.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+        prompted: list[str] = []
+        _stubs.setattr(
+            onboard_everos,
+            "_prompt_text",
+            lambda _label, **kw: prompted.append(kw.get("default", "")) or "20000",
+        )
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+            if len(started) == 1:
+                raise RuntimeError("boom")
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        self._answers(_stubs, ["managed", "reuse", "change"])
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert prompted == ["18791"], "Change port did not ask for a port"
+        assert started == ["http://localhost:18791", "http://localhost:20000"]
+        data = json.loads(tmp_env.read_text())
+        assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:20000"
         assert data["memory"]["backend"] == "everos"
 
     def test_a_root_recorded_as_the_users_is_taken_over_all_the_same(
@@ -1925,7 +2140,7 @@ class TestTakingOverAFoundRoot:
 
         _stubs.setattr(_server, "ensure_everos_server", _boom)
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
-        self._answers(_stubs, ["managed", "reuse"])
+        self._answers(_stubs, ["managed", "reuse", "skip"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
@@ -5432,19 +5647,22 @@ class TestTheManagedPortIsOfferedNotImposed:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
-        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 20000)
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
 
         assert onboard_everos._ask_managed_port(Path("/r")) == 20000
 
-    def test_nonsense_falls_back_to_the_default(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_nonsense_is_rejected_until_the_default_is_kept(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
-        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "not-a-port")
+        answers = iter(["not-a-port", ""])
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: next(answers))
 
         assert onboard_everos._ask_managed_port(Path("/r")) == 18791
 
@@ -5462,15 +5680,92 @@ class TestTheManagedPortIsOfferedNotImposed:
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         seen: list[str] = []
+        answers = iter(["20000", ""])
 
         def _spy(_label, **kw):
             seen.append(kw.get("default", ""))
-            return kw.get("default", "")
+            return next(answers)
 
         monkeypatch.setattr(onboard_everos, "_prompt_text", _spy)
 
         assert onboard_everos._ask_managed_port(Path("/r")) == 20000
-        assert seen == ["20000"]
+        assert seen == ["20000", "20000"]
+
+    def test_a_declared_default_is_the_port_checked(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A caller that brings its own port -- the reuse lane, whose root
+        declares one -- has that port checked, not raven's recorded intent."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"port": 20000}}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+        monkeypatch.setattr(
+            onboard_everos, "_prompt_text", lambda *a, **kw: pytest.fail("asked about a port that was free")
+        )
+
+        assert onboard_everos._ask_managed_port(Path("/r"), default=1995) == 1995
+
+    def test_an_occupied_answer_is_rechecked(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Typing a port that is also taken asks again instead of starting
+        into a bind failure one screen later."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 20001)
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        answers = iter(["20000", "20001"])
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: next(answers))
+
+        assert onboard_everos._ask_managed_port(Path("/r")) == 20001
+
+    def test_an_out_of_range_port_is_rejected_not_fatal(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The bind test raises OverflowError outside 0-65535, so a typed
+        out-of-range port must be rejected before it reaches the socket."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        seen: list[int] = []
+
+        def _port_is_free(p: int) -> bool:
+            if not (0 < p <= 65535):
+                raise OverflowError("bind(): port must be 0-65535")
+            seen.append(p)
+            return p == 20000
+
+        monkeypatch.setattr(onboard_everos, "_port_is_free", _port_is_free)
+        answers = iter(["70000", "0", "20000"])
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: next(answers))
+
+        assert onboard_everos._ask_managed_port(Path("/r")) == 20000
+        assert seen == [18791, 20000], "the bind test saw the out-of-range answers"
+
+    def test_the_bind_guard_rejects_out_of_range_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """0 and >65535 must not reach the socket: bind(0) silently takes an
+        ephemeral port, and bind(70000) raises OverflowError."""
+        from raven.cli import onboard_everos
+
+        assert onboard_everos._port_is_free(0) is False
+        assert onboard_everos._port_is_free(70000) is False
+
+    def test_force_prompt_asks_even_when_the_port_is_free(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Change port is an explicit request; deciding the port is fine and
+        staying put makes the menu item look broken."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+        prompted: list[str] = []
+        monkeypatch.setattr(
+            onboard_everos,
+            "_prompt_text",
+            lambda _label, **kw: prompted.append(kw.get("default", "")) or "20000",
+        )
+
+        assert onboard_everos._ask_managed_port(Path("/r"), force_prompt=True) == 20000
+        assert prompted == ["18791"]
 
     def test_the_build_path_asks(self) -> None:
         import inspect
@@ -5690,7 +5985,7 @@ class TestReconfiguringRestartsOurOwnService:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
-        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 19999)
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "19999")
 
