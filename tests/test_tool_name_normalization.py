@@ -188,27 +188,56 @@ def test_every_exit_that_builds_a_call_from_upstream_data_normalises_it() -> Non
         # exists not to do.
         "raven/trajectory/replay.py",
     }
+
+    def _calls(node: ast.AST, name: str) -> list[ast.Call]:
+        """Every call to ``name`` under ``node``, spelled either way.
+
+        Both spellings, because the bare name is the only one used today and the
+        case this guard exists for is the exit written differently later: an
+        `ast.Attribute` covers `base.ToolCallRequest(...)` after
+        `from raven.providers import base`, and an alias resolves to one or the
+        other.
+        """
+        found = []
+        for n in ast.walk(node):
+            if not isinstance(n, ast.Call):
+                continue
+            called = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
+            if called == name:
+                found.append(n)
+        return found
+
+    # Anchored to this file, not to the working directory. `Path("raven")` reads
+    # as the repo only while pytest happens to run from the root: from anywhere
+    # else it enumerates nothing, `offenders` stays empty, and the assert passes
+    # having checked nothing -- the one failure mode this guard must not have,
+    # since it is what stands between a fifth exit and production.
+    root = Path(__file__).resolve().parents[1]
+    inspected: list[str] = []
     offenders: list[str] = []
-    for path in sorted(Path("raven").rglob("*.py")):
-        rel = path.as_posix()
+    for path in sorted((root / "raven").rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
         if rel in exempt:
+            inspected.append(rel)
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for func in ast.walk(tree):
             if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
-            body = list(ast.walk(func))
-            builds = [n for n in body if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "ToolCallRequest"]
+            builds = _calls(func, "ToolCallRequest")
             if not builds:
                 continue
+            inspected.append(f"{rel}:{func.name}")
             # Asked of the whole function rather than of the `name=` expression:
             # the streaming exit normalises into a local and passes that, which
             # an inline-only check reads as a miss.
-            normalises = any(
-                isinstance(n, ast.Call) and getattr(n.func, "id", None) == "normalized_tool_name" for n in body
-            )
-            if not normalises:
+            if not _calls(func, "normalized_tool_name"):
                 offenders.extend(f"{rel}:{n.lineno}" for n in builds)
+
+    # What separates "checked and found nothing" from "checked nothing". The
+    # exits are known and counted, so a walk that suddenly sees fewer of them is
+    # reporting on a tree it did not read.
+    assert len(inspected) >= 5, f"the walk found {len(inspected)} construction sites, expected at least 5: {inspected}"
 
     assert not offenders, (
         f"these build a ToolCallRequest from an upstream name without normalising it: {offenders}. "
