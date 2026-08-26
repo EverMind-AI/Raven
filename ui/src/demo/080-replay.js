@@ -26,7 +26,7 @@ function replay(run, instant) {
       st.hasThink = true;
       st.thinkAppend(e.x);
       st.reveal();
-      st.thinkDone(e.s);
+      st.thinkDone();
       if (!instant) { st.setThinkOpen(true); later(1400, () => st.setThinkOpen(false)); }
     }, e.d);
     else if (e.t === 'say') fire(() => { st.setSay(e.x); }, e.d);

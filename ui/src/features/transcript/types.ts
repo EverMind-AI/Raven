@@ -79,9 +79,6 @@ export interface StepData {
   thinkOpen: boolean
   thinkPinned: boolean
   thinkShown: boolean
-  thinkT0: number
-  thinkMs: number
-  thinkSecs: number | null
   say: string
   sayCaret: boolean
   hasSay: boolean
@@ -240,7 +237,7 @@ export interface StepHandle {
   failed: boolean
   thinkAppend(text: string): void
   reveal(): void
-  thinkDone(secs?: number | null): void
+  thinkDone(): void
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void

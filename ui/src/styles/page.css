@@ -773,8 +773,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .think { width: fit-content; max-width: 100%; }
 .think .g { color: var(--faint); flex: none; width: 10px; font-size: 11px; }
 .think .lb { flex: none; }
-.think .tm { color: var(--faint); margin-left: auto; flex: none; font-size: 11px;
-  font-variant-numeric: tabular-nums; }
 .think.live .lb {
   background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
   background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
@@ -1390,11 +1388,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    greys, which made three lines of the same kind read as three kinds of thing.
    Declared together so they cannot drift again. */
 .think, .tfh, .wrow.sum { font-size: 13px; color: var(--muted); }
-.think .tm, .tfh .tm { color: var(--faint); }
+.tfh .tm { color: var(--faint); }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
-.think .tm:empty, .tfh .tm:empty { display: none; }
+.tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
 .wrow.sum .ar { color: var(--muted); }
