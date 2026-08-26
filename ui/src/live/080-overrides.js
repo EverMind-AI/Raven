@@ -181,7 +181,12 @@ function liveSend(text) {
     turnOwner = current;
     touchSession(current, text);
     beginNaming(text);
-    rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) }).catch(failed);
+    /* `=== false`, not falsy: a server too old to carry the field says nothing
+       at all, and reading that as "declined" would tear down a placeholder
+       while a title really is on its way. */
+    rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
+      .then(r => { if (r && r.naming === false) namingDeclined(current); })
+      .catch(failed);
     return;
   }
   // The draft becomes a real session here, on its first message.
@@ -198,7 +203,8 @@ function liveSend(text) {
     beginNaming(text);
     sessionDraw();
     await subscribe(s.id);
-    await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
+    const sent = await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
+    if (sent && sent.naming === false) namingDeclined(s.id);
   })().catch(failed);
 };
 

@@ -1111,6 +1111,17 @@ class TurnSendParams(_Strict):
 class TurnSendResult(_Strict):
     turn_id: str
     accepted: bool
+    # Whether a session-naming call was started for this turn. It answers a
+    # question a client otherwise has no way to ask, and without it the only way
+    # to find out was to hold a placeholder until a grace period ran out --
+    # which made the shortest openings, the ones refused in microseconds, the
+    # slowest to show a name.
+    #
+    # Read it as what it says, not as "no title is coming": a send arriving
+    # while an earlier namer for the same session is still in flight is also
+    # declined, and that earlier call's title may still land. Settling early on
+    # this is safe because the event overwrites whatever the row shows.
+    naming: bool
 
 
 class TurnSubscribeParams(_Strict):

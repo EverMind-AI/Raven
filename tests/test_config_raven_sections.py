@@ -181,6 +181,33 @@ class TestSessionTitleSection:
         assert "sessionTitle" in EXTENSION_KEYS
         assert "session_title" in EXTENSION_KEYS
 
+    # Both spellings of the block and both of the key: a config may use either
+    # casing throughout, and covering only one leaves half the users breaking.
+    @pytest.mark.parametrize("block_key", ["sessionTitle", "session_title"])
+    @pytest.mark.parametrize("legacy_key", ["minInputChars", "min_input_chars"])
+    def test_the_retired_gate_key_is_dropped_rather_than_rejected(
+        self, tmp_path: Path, block_key: str, legacy_key: str
+    ) -> None:
+        """A config still carrying the old key must load, not take the process down.
+
+        `SessionTitleConfig` forbids extras, and this model is loaded by the
+        gateway, the TUI and doctor -- none of which swallow a ValidationError
+        the way `turn.send` does. Without the migration a stale key in a
+        hand-edited config stops those from starting at all, which is a far
+        worse outcome than the missing title it is nominally about.
+        """
+        path = _write_config(tmp_path, {block_key: {legacy_key: 8, "enabled": False}})
+
+        cfg = load_raven_config(path)
+
+        # Dropped, not carried across: the old key counted code points and the
+        # new one counts display columns, so 8 of one is not 8 of the other and
+        # reusing the number would silently re-tighten the gate.
+        assert cfg.session_title.min_input_width == 6
+        # The rest of the block still applies -- this is a migration, not a
+        # reason to discard what the user actually configured.
+        assert cfg.session_title.enabled is False
+
     def test_camel_case_block_reaches_the_model(self, tmp_path: Path) -> None:
         path = _write_config(
             tmp_path,
@@ -219,7 +246,7 @@ class TestSessionTitleSection:
         assert st.enabled is True
         assert st.budget == 24
         assert st.timeout_seconds == 8.0
-        assert st.min_input_chars == 8
+        assert st.min_input_width == 6
         assert st.model is None
 
 

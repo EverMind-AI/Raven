@@ -65,7 +65,7 @@ def _start(mgr: SessionManager, provider: object, emitter: object, **over: objec
         "enabled": True,
         "model": None,
         "budget": 24,
-        "min_input_chars": 8,
+        "min_input_width": 6,
         "timeout_seconds": 5.0,
     }
     kwargs.update(over)
@@ -216,4 +216,57 @@ async def test_a_provider_that_raises_is_not_a_failed_turn(tmp_path: Path) -> No
     assert task is not None
     await task
 
+    assert emitter.events == []
+
+
+@pytest.mark.parametrize(
+    ("opening", "should_name"),
+    [
+        # Openings taken from the session store this gate was tuned against.
+        ("你好", False),
+        ("你哈", False),
+        ("？", False),
+        ("rpc", False),
+        ("nihao", False),
+        ("hi", False),
+        ("hello", False),
+        ("你是谁", True),
+        ("你能做什么", True),
+        ("调研hermes", True),
+        ("fix login", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_gate_splits_greetings_from_questions_in_either_script(
+    tmp_path: Path, opening: str, should_name: bool
+) -> None:
+    """Six columns, so one number is fair to both scripts.
+
+    Measured in code points instead, this same 6 would admit "nihao" (5 latin
+    letters, a greeting) and refuse "你能做什么" (5 ideographs, a whole question) --
+    the wrong way round on both counts.
+    """
+    mgr = SessionManager(tmp_path)
+    provider, emitter = _Provider(), _Emitter()
+
+    # Its own key per case: `_in_flight` is module state, so cases sharing one
+    # key would refuse each other and every "should name" would pass for the
+    # wrong reason.
+    task = _start(mgr, provider, emitter, text=opening, min_input_width=6, session_key=f"tui:gate-{opening}")
+
+    assert (task is not None) is should_name
+    if task is not None:
+        await task
+
+
+@pytest.mark.asyncio
+async def test_a_refused_opening_never_reaches_the_model(tmp_path: Path) -> None:
+    """The refusal is free, which is the premise the front end now relies on."""
+    mgr = SessionManager(tmp_path)
+    provider, emitter = _Provider(), _Emitter()
+
+    task = _start(mgr, provider, emitter, text="你好", min_input_width=6, session_key="tui:refused")
+
+    assert task is None
+    assert provider.calls == 0
     assert emitter.events == []

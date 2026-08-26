@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.session.title import generate_title
+from raven.utils.text import display_width
 
 if TYPE_CHECKING:
     from raven.rpc.subscriptions import SubscriptionEmitter
@@ -115,7 +116,7 @@ def name_session_alongside_turn(
     enabled: bool,
     model: str | None,
     budget: int,
-    min_input_chars: int,
+    min_input_width: int,
     timeout_seconds: float,
 ) -> asyncio.Task[None] | None:
     """Start the naming call, or decide there is nothing to name. Never raises.
@@ -127,7 +128,7 @@ def name_session_alongside_turn(
     if not enabled or provider is None:
         return None
     stripped = text.strip()
-    if len(stripped) < min_input_chars:
+    if display_width(stripped) < min_input_width:
         return None
     if session_key in _in_flight:
         return None

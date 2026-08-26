@@ -1408,10 +1408,18 @@ class SessionTitleConfig(_Base):
     a layout rule: measured titles run 2-21 codepoints, and how a title fits a
     row is decided by each surface's own truncation."""
 
-    min_input_chars: int = 8
-    """Below this many characters in the first message, skip the call. There is
-    nothing in "hi" to name a session after, and the mechanical title is
-    already as good as anything a model could invent from it."""
+    min_input_width: int = 6
+    """Below this many display columns in the first message, skip the call.
+
+    Columns rather than code points, because one threshold has to be fair to
+    both scripts: at 6 code points "nihao" is skipped but the far more nameable
+    "你能做什么" would be too, while at 6 columns the greetings fall below and the
+    questions do not. Measured against 246 real openings, 6 columns separates
+    "?", "rpc", "hi", "nihao" and "你好" from "你是谁" and everything longer.
+
+    A message under the gate is not left waiting: `turn.send` reports that it
+    did not start a namer, and the front end fills the mechanical title in at
+    once instead of holding a placeholder until its grace period runs out."""
 
 
 class RavenConfig(_Base):
