@@ -3103,7 +3103,156 @@ class BrowserWatchResult(BrowserPageState):
     vh: int | None = None
 
 
+class KnowledgeStatusParams(_Strict):
+    pass
+
+
+class KnowledgeStatusResult(_Strict):
+    """Whether a base can be created, and with which model.
+
+    ``model`` is empty exactly when ``configured`` is false. No credential is
+    reported: the key's presence *is* the flag."""
+
+    configured: bool
+    model: str
+
+
+class KnowledgeBase(_Strict):
+    """One base as the list view needs it.
+
+    ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
+    was created rather than read from today's config -- a base outlives a change
+    to what the operator has configured, and the page has to be able to show the
+    mismatch."""
+
+    id: str
+    name: str
+    description: str
+    embedding_model: str
+    dimensions: int
+    created_at: str
+    updated_at: str
+    documents: int
+
+
+class KnowledgeBasesListParams(_Strict):
+    pass
+
+
+class KnowledgeBasesListResult(_Strict):
+    bases: list[KnowledgeBase]
+
+
+class KnowledgeDocument(_Strict):
+    """One uploaded document and where its indexing got to.
+
+    ``error`` is empty unless ``status`` is ``failed``; a row carries the reason
+    with it so a reader does not have to go looking for why nothing is
+    searchable."""
+
+    id: str
+    base_id: str
+    source: str
+    media_type: str
+    size: int
+    status: str
+    chunk_count: int
+    error: str
+    created_at: str
+    updated_at: str
+
+
+class KnowledgeBasesCreateParams(_Strict):
+    name: str
+    description: str | None = None
+
+
+class KnowledgeBasesCreateResult(_Strict):
+    base: KnowledgeBase
+
+
+class KnowledgeBasesRenameParams(_Strict):
+    """Either field may be omitted; the one left out is untouched."""
+
+    base_id: str
+    name: str | None = None
+    description: str | None = None
+
+
+class KnowledgeBasesRenameResult(_Strict):
+    base: KnowledgeBase
+
+
+class KnowledgeBasesDeleteParams(_Strict):
+    base_id: str
+
+
+class KnowledgeBasesDeleteResult(_Strict):
+    """False for a base that was not there: a second delete from a stale page
+    reached the outcome its caller wanted."""
+
+    removed: bool
+
+
+class KnowledgeDocumentsListParams(_Strict):
+    base_id: str
+
+
+class KnowledgeDocumentsListResult(_Strict):
+    documents: list[KnowledgeDocument]
+
+
+class KnowledgeHit(_Strict):
+    """One search hit. ``score`` is a similarity, so higher is nearer -- the
+    direction every caller already reads."""
+
+    score: float
+    document_id: str
+    text: str
+
+
+class KnowledgeDocumentsAddParams(_Strict):
+    """``path`` is what ``fs.upload`` answered -- a workspace path such as
+    ``uploads/handbook.md``, resolved through the filesystem tools' own policy
+    rather than opened as given."""
+
+    base_id: str
+    path: str
+
+
+class KnowledgeDocumentsAddResult(_Strict):
+    document: KnowledgeDocument
+
+
+class KnowledgeDocumentsIndexParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsIndexResult(_Strict):
+    document: KnowledgeDocument
+
+
+class KnowledgeSearchParams(_Strict):
+    base_ids: list[str]
+    query: str
+    top_k: int | None = None
+
+
+class KnowledgeSearchResult(_Strict):
+    hits: list[KnowledgeHit]
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
+    # knowledge.* -- bases and their documents, served by the in-process engine
+    "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
+    "knowledge.bases.list": (KnowledgeBasesListParams, KnowledgeBasesListResult),
+    "knowledge.bases.create": (KnowledgeBasesCreateParams, KnowledgeBasesCreateResult),
+    "knowledge.bases.rename": (KnowledgeBasesRenameParams, KnowledgeBasesRenameResult),
+    "knowledge.bases.delete": (KnowledgeBasesDeleteParams, KnowledgeBasesDeleteResult),
+    "knowledge.documents.list": (KnowledgeDocumentsListParams, KnowledgeDocumentsListResult),
+    "knowledge.documents.add": (KnowledgeDocumentsAddParams, KnowledgeDocumentsAddResult),
+    "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
+    "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

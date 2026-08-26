@@ -177,7 +177,7 @@ export function markNew(): void {
      are the flyout module's to write -- it is asked, not reached into, and it
      answers whether the group stood open. */
   if (navMark() && top === 'moreBtn') top = null
-  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'memBtn', 'moreBtn']) {
+  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
   }

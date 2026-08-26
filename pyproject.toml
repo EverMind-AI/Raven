@@ -59,6 +59,12 @@ dependencies = [
     # draw the code is one the reader has no way to diagnose. Pure Python, and
     # its [pil] backend is pillow, already here.
     "qrcode[pil]>=8.0",
+    # Embedded vector store behind raven.knowledge -- a knowledge base indexes
+    # and answers from inside the gateway process, so it must not need a server.
+    # Already resolved here as a transitive dep of everos, which keeps its own
+    # memory in it; named directly for the same reason numpy above is, so
+    # retrieval keeps working if that chain ever changes.
+    "lancedb>=0.33,<1.0",
 ]
 
 [project.optional-dependencies]
