@@ -3507,6 +3507,14 @@
       "en": "Could not archive the session - {detail}",
       "zh": "会话归档失败 · {detail}"
     },
+    "gui.sess.clear_failed": {
+      "en": "Could not clear \"{title}\" - {detail}",
+      "zh": "「{title}」没能清空 · {detail}"
+    },
+    "gui.sess.compress_failed": {
+      "en": "Could not compact \"{title}\" - {detail}",
+      "zh": "「{title}」没能压缩 · {detail}"
+    },
     "gui.sess.archived": {
       "en": "Archived {title}",
       "zh": "已归档「{title}」"
