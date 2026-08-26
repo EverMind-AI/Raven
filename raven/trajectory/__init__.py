@@ -8,9 +8,12 @@ into trajectories — addressable, labeled, retained units of agent work:
   business (``status.code`` answers "did the code crash", not "did the task
   succeed"), so verdicts live in a separate append-only file keyed by
   ``attempt.id``, written by whoever can judge (user command, eval judge).
-- ``store``    — pin registry + rotation-transparent span reader. A pinned
-  attempt is corpus, not diagnostics: any purge tooling must consult
-  :func:`store.pins` before deleting spans or the artifacts they reference.
+- ``store``    — pin registry, attempt definitions, and the rotation-
+  transparent span reader. A pinned attempt is corpus, not diagnostics: any
+  purge tooling must consult :func:`store.pins` before deleting spans or the
+  artifacts they reference. Attempt definitions (``attempts.json``) are the
+  mutable merge/split sidecar: an attempt id equals the trace id unless a
+  definition groups several traces under one minted id.
 - ``bundle``   — the bundle collector. Packs one attempt's spans, artifacts,
   session record, and verdicts into a self-contained offline directory (and
   pins the id, since bundling declares the trajectory corpus).
@@ -70,13 +73,22 @@ from raven.trajectory.replay import (
 )
 from raven.trajectory.report import LocalTarballUploader, Uploader, get_uploader, pack_report
 from raven.trajectory.store import (
+    attempt_alias_ids,
+    attempt_members,
+    definitions,
     is_pinned,
     iter_spans,
+    merge_attempts,
+    new_attempt_id,
+    owning_attempt,
     pin,
+    pin_attempt,
     pins,
     resolve_attempt_id,
     span_log_paths,
+    split_attempt,
     unpin,
+    unpin_attempt,
 )
 from raven.trajectory.verdict import (
     VERDICT_STATUSES,
@@ -106,18 +118,25 @@ __all__ = [
     "ResidualFinding",
     "Uploader",
     "Verdict",
+    "attempt_alias_ids",
+    "attempt_members",
     "check_report",
     "collect_bundle",
     "collect_known_secrets",
+    "definitions",
     "get_uploader",
     "is_pinned",
     "iter_spans",
     "latest_verdict",
     "load_expectation",
     "load_recording",
+    "merge_attempts",
     "minimize_bundle",
+    "new_attempt_id",
+    "owning_attempt",
     "pack_report",
     "pin",
+    "pin_attempt",
     "pins",
     "read_verdicts",
     "record_verdict",
@@ -127,5 +146,7 @@ __all__ = [
     "run_replay",
     "scan_residuals",
     "span_log_paths",
+    "split_attempt",
     "unpin",
+    "unpin_attempt",
 ]

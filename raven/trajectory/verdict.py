@@ -19,6 +19,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Collection
 
 from raven.tracing import config as tracing_config
 from raven.utils.atomic_io import locked_append
@@ -83,15 +84,26 @@ def record_verdict(
     return verdict
 
 
-def read_verdicts(state_dir: Path | None = None, *, attempt_id: str | None = None) -> list[Verdict]:
-    """All verdicts in file order (oldest first), optionally for one attempt.
+def read_verdicts(
+    state_dir: Path | None = None,
+    *,
+    attempt_id: str | None = None,
+    attempt_ids: Collection[str] | None = None,
+) -> list[Verdict]:
+    """All verdicts in file order (oldest first), optionally filtered.
 
-    Defect-tolerant: unparseable or incomplete lines are skipped — one bad
-    line must not make the whole label store unreadable.
+    ``attempt_id`` matches one exact id; ``attempt_ids`` matches any of a set —
+    pass an attempt's alias ids so verdicts recorded under absorbed or member
+    ids stay visible for a merged attempt. The two filters are mutually
+    exclusive. Defect-tolerant: unparseable or incomplete lines are skipped —
+    one bad line must not make the whole label store unreadable.
     """
+    if attempt_id is not None and attempt_ids is not None:
+        raise ValueError("attempt_id and attempt_ids are mutually exclusive")
     path = _verdicts_path(state_dir)
     if not path.exists():
         return []
+    wanted = set(attempt_ids) if attempt_ids is not None else None
     out: list[Verdict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -110,8 +122,11 @@ def read_verdicts(state_dir: Path | None = None, *, attempt_id: str | None = Non
             )
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        if attempt_id is None or v.attempt_id == attempt_id:
-            out.append(v)
+        if attempt_id is not None and v.attempt_id != attempt_id:
+            continue
+        if wanted is not None and v.attempt_id not in wanted:
+            continue
+        out.append(v)
     return out
 
 

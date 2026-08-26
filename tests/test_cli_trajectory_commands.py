@@ -349,6 +349,30 @@ def test_pin_unpin_roundtrip(state) -> None:
     assert "not pinned" in r.stdout
 
 
+def test_pin_command_uses_locked_pin_attempt(state, monkeypatch) -> None:
+    """Guard: the CLI must pin through the attempts-lock-aware pin_attempt —
+    a lock-free resolve + literal pin() can land on an id a concurrent split
+    just deleted, leaving a dangling pin that protects nothing."""
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
+    calls = []
+
+    def record(id_, *, reason="", state_dir=None):
+        calls.append((id_, reason))
+        return "att-1"
+
+    def forbid(id_, *, reason="", state_dir=None):
+        raise AssertionError("the pin command must not call the literal pin() directly")
+
+    monkeypatch.setattr(tstore, "pin_attempt", record)
+    monkeypatch.setattr(tstore, "pin", forbid)
+
+    r = runner.invoke(trajectory_app, ["pin", "trace-1", "--reason", "keep"])
+
+    assert r.exit_code == 0
+    assert calls == [("trace-1", "keep")]
+    assert "att-1" in r.stdout
+
+
 def test_pin_unpin_resolve_turn_trace_id(state) -> None:
     """Pin/unpin by any turn's trace id must protect/release the whole attempt."""
     _write_log(

@@ -34,7 +34,7 @@ from typing import Any
 from raven import __version__
 from raven.config.paths import get_workspace_path
 from raven.tracing import config as tracing_config
-from raven.trajectory.store import iter_spans, pin, resolve_attempt_id
+from raven.trajectory.store import attempt_alias_ids, iter_spans, pin, pin_attempt, resolve_attempt_id
 from raven.trajectory.verdict import read_verdicts
 
 BUNDLE_FORMAT_VERSION = 1
@@ -116,11 +116,13 @@ def collect_bundle(
     if attempt_id is None:
         raise LookupError(f"no spans found for id {id_!r}")
     spans = list(iter_spans(resolved_state, attempt_id=attempt_id))
+    if not spans:
+        raise LookupError(f"no spans found for attempt {attempt_id!r}")
 
     out_root = (out_dir or resolved_state / "bundles").resolve()
     out_root.mkdir(parents=True, exist_ok=True)
-    # Attempt ids come from span records (user-mintable via begin_attempt), so
-    # refuse any id that would escape out_root as a directory name.
+    # Attempt ids come from span records or the hand-editable attempts.json,
+    # so refuse any id that would escape out_root as a directory name.
     bundle_dir = (out_root / attempt_id).resolve()
     if bundle_dir.parent != out_root:
         raise ValueError(f"id {attempt_id!r} cannot be used as a bundle directory name")
@@ -162,7 +164,7 @@ def collect_bundle(
             "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in out_spans), encoding="utf-8"
         )
 
-        verdicts = read_verdicts(resolved_state, attempt_id=attempt_id)
+        verdicts = read_verdicts(resolved_state, attempt_ids=attempt_alias_ids(attempt_id, resolved_state))
         (staging / "verdicts.jsonl").write_text(
             "".join(json.dumps(asdict(v), ensure_ascii=False) + "\n" for v in verdicts), encoding="utf-8"
         )
@@ -198,5 +200,12 @@ def collect_bundle(
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    pin(attempt_id, reason="bundled", state_dir=resolved_state)
+    try:
+        pin_attempt(attempt_id, reason="bundled", state_dir=resolved_state)
+    except LookupError:
+        # The attempt address vanished mid-pack (a concurrent split/merge);
+        # protect exactly the traces that were bundled instead of leaving
+        # them purgeable behind a dangling id.
+        for member in dict.fromkeys(s.get("traceId") for s in out_spans if s.get("traceId")):
+            pin(member, reason="bundled", state_dir=resolved_state)
     return bundle_dir

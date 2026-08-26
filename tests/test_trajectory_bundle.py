@@ -318,3 +318,57 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
         assert tstore.pins(state)[aid]["reason"] == "bundled"
     finally:
         _spans._store = None
+
+
+def test_bundle_of_merged_attempt_collects_all_member_traces(state):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:chat1", start="2026-08-20T10:00:00+00:00"),
+            _span("trace-2", session_key="cli:chat1", start="2026-08-20T11:00:00+00:00"),
+        ],
+    )
+    tverdict.record_verdict("trace-1", "fail", source="user", state_dir=state)
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    tverdict.record_verdict(aid, "pass", source="user", state_dir=state)
+
+    bundle_dir = tbundle.collect_bundle("trace-2", state_dir=state)
+
+    assert bundle_dir == (state / "bundles" / aid).resolve()
+    spans = _read_lines(bundle_dir / "spans.jsonl")
+    assert [s["traceId"] for s in spans] == ["trace-1", "trace-2"]
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == aid
+    assert manifest["span_count"] == 2
+    verdicts = _read_lines(bundle_dir / "verdicts.jsonl")
+    assert {v["attempt_id"] for v in verdicts} == {"trace-1", aid}
+
+
+def test_bundle_of_definition_with_purged_members_raises_lookup_error(state):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1"), _span("trace-2")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    (state / "logs" / "audit-spans.log").unlink()
+
+    with pytest.raises(LookupError, match="no spans found for attempt"):
+        tbundle.collect_bundle(aid, state_dir=state)
+
+
+def test_bundle_pin_falls_back_to_member_traces_when_attempt_vanishes(state, monkeypatch):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1"), _span("trace-2")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    def vanished(id_, *, reason="", state_dir=None):
+        raise LookupError(f"no spans found for id {id_!r}")
+
+    monkeypatch.setattr(tbundle, "pin_attempt", vanished)
+    tbundle.collect_bundle(aid, state_dir=state)
+
+    registry = tstore.pins(state)
+    assert registry["trace-1"]["reason"] == "bundled"
+    assert registry["trace-2"]["reason"] == "bundled"

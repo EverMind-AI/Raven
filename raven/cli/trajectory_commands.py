@@ -342,8 +342,15 @@ def trajectory_pin(
     reason: str = typer.Option("", "--reason", "-r", help="Why this trajectory is kept"),
 ) -> None:
     """Protect a trajectory from any future purge."""
-    attempt_id = _resolve_or_exit(id_)
-    tstore.pin(attempt_id, reason=reason)
+    # pin_attempt resolves and pins under the attempts lock, so a concurrent
+    # merge/split cannot leave this pin on an id that no longer owns anything.
+    try:
+        attempt_id = tstore.pin_attempt(id_, reason=reason)
+    except LookupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if attempt_id != id_:
+        console.print(f"[dim]{id_} is one turn of attempt {attempt_id}[/dim]")
     console.print(f"[green]✓[/green] Pinned {attempt_id}")
 
 
