@@ -24,15 +24,22 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.acp import protocol
+from raven.agent.acp.capabilities import handshake_of
 from raven.agent.acp.client import AcpClient, end_drain
 from raven.agent.acp.journal import open_journal
 from raven.agent.acp.permissions import request_dispatcher
+from raven.agent.acp.protocol import AcpError
 
 # Budget for the one `initialize` a new connection owes, when the caller does
 # not say. Generous because an adapter fetched by `npx` may be downloading
 # itself on the first connect -- but an entry's own `readyTimeoutMs` is
 # documented as exactly this budget, so a caller that has one passes it.
 _HANDSHAKE_TIMEOUT_S = 120.0
+
+# How long a best-effort `session/delete` may take before its caller moves on.
+# The caller (instance forget) has already dropped its own record, so the
+# agent-side cleanup must not hold it up past a moment.
+_DELETE_TIMEOUT_S = 10.0
 
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
@@ -315,6 +322,36 @@ class AcpConnectionPool:
 
     def live_agents(self) -> list[str]:
         return [name for name, conn in self._connections.items() if conn.alive]
+
+    async def delete_session(self, name: str, session_id: str, *, timeout: float = _DELETE_TIMEOUT_S) -> bool:
+        """Best-effort ``session/delete`` on this agent's live connection.
+
+        For instance forget: dropping the registry record must also release the
+        session on the agent, or the agent keeps it -- and any work in it -- for
+        the life of the connection. Gated on the agent's own advertisement
+        (``sessionCapabilities.delete``): sending the method to a server that
+        does not implement it would only earn a method-not-found, so the skip
+        is logged and the session rides out the connection's retirement
+        instead. Never launches a process: a forget with no live server has no
+        channel to deliver the delete on, and starting one just to delete a
+        session would be worse than the leak.
+        """
+        connection = self._connections.get(name)
+        if connection is None or not connection.alive:
+            return False
+        if not handshake_of(connection.initialize).can_delete:
+            logger.debug(
+                "acp agent {!r}: not sending session/delete for {!r}: the agent does not advertise it",
+                name,
+                session_id,
+            )
+            return False
+        try:
+            await connection.client.request("session/delete", {"sessionId": session_id}, timeout=timeout)
+        except AcpError as exc:
+            logger.warning("acp agent {!r}: session/delete for {!r} failed: {}", name, session_id, exc)
+            return False
+        return True
 
 
 _POOL: AcpConnectionPool | None = None
