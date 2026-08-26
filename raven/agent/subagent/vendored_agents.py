@@ -13,9 +13,12 @@ A row is materialized from the manifest on every start, so a folder whose
 manifest changes (a new command template after an upgrade) is picked up without a
 stored copy of the old one to contradict it.
 
-Where the tree is absent -- every wheel install, which is most of them -- there is
-nothing to discover and the table is exactly what it was before this module
-existed. That is the intended degradation, not a gap.
+Every ordinary install has the tree: a wheel carries it at ``raven/subagents``, and
+:func:`_install_packaged_tree` copies it out to the raven home on first use, which is
+why the packaged branch of :func:`subagents_root` is live rather than vestigial.
+Where it is absent -- a wheel built from an sdist, which has neither the tree nor a
+``.git`` to enumerate it from -- there is nothing to discover and the table is exactly
+what it was before this module existed. That is the intended degradation, not a gap.
 
 **Readiness decides ``enabled``, not whether the row exists.** A folder whose venv
 is unbuilt or whose credential is missing cannot start, and

@@ -62,7 +62,24 @@ All notable changes to Raven are documented here.
 - The gateway now closes the ACP connection pool on the way out. Those adapter servers
   are launched with `start_new_session=True` and receive none of the gateway's signals,
   so every gateway exit used to orphan them.
-- Setup now offers the sub-agents that ship in a source checkout. Step 5 of the wizard
+- The wheel now carries the sub-agent tree, so a `pip` / `uv tool install` has the
+  four agents without a source checkout. `subagents/` is force-included file by file
+  from git's index rather than as a directory: hatchling applies no exclude config to
+  a force-included path, and a built working copy holds each fork's filled-in `.env`
+  next to its source. That adds 67 MiB to the download and 106 MiB unpacked, half of
+  it the PPT templates. On first run the tree is copied -- not moved -- to
+  `<raven home>/subagents`, once per raven version, where an upgrade cannot take the
+  built venvs with it. The copy under site-packages stays, because the installer owns
+  it and it is what resolution falls back to when the copy-out fails, so an install
+  holds the tree twice: about 212 MiB across the two. There is no expiry or size cap,
+  and deleting the raven home copy reclaims half; the rest goes when raven itself is
+  uninstalled. An editable install is skipped -- it reads the tree beside the package
+  already. This replaces
+  the beta-only path, where `make beta` staged the tree and injected a force-include
+  line into a temporary `pyproject.toml` so the agents reached testers and no one
+  else; both mechanisms at once made every wheel build fail on a duplicate archive
+  path, and the tree now reaches stable releases and `git+` installs as well.
+- Setup now offers the sub-agents that ship with raven. Step 5 of the wizard
   lists each folder under `subagents/` and asks whether to run it on the model it is
   tuned for, on this raven's LLM, or not at all, then writes the roster entries. The
   tuned model leads the menu because it is the one a key of its own buys: inheritance

@@ -121,75 +121,6 @@ def _next_version(base_version: str, published: str | None) -> str:
     return f"{target}b{serial}"
 
 
-_FORCE_INCLUDE_HEADER = "[tool.hatch.build.targets.wheel.force-include]"
-
-
-def _stage_subagents(root: Path, dist: Path) -> Path | None:
-    """Export the committed ``subagents/`` tree to a staging dir, or ``None``.
-
-    Exported from git rather than copied from the working tree, and that is the
-    safety property rather than a convenience: a developer who has run
-    ``subagents/install.sh`` has four venvs in there (hundreds of MB) and a
-    ``.env`` holding a live credential, and ``force-include`` bypasses hatch's
-    exclusion patterns, so a directory reference would ship both. What is
-    committed is exactly what should ship, so that is what is asked for.
-
-    ``None`` when the checkout has no such tree -- publishing from a clone that
-    does not carry it is not an error, it is a wheel without the vendored agents,
-    which is what every stable release is.
-    """
-    listed = subprocess.run(  # noqa: S603 - argv is built here
-        ["git", "ls-files", "subagents"],  # noqa: S607 - git off PATH, like every other tool this script drives
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    if listed.returncode != 0 or not listed.stdout.strip():
-        print("No committed subagents/ tree; the wheel will carry no vendored agents.", flush=True)
-        return None
-
-    staging = dist / "subagents-staged"
-    staging.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.Popen(  # noqa: S603 - argv is built here
-        ["git", "archive", "HEAD", "subagents"],  # noqa: S607 - as above
-        cwd=root,
-        stdout=subprocess.PIPE,
-    )
-    # --strip-components drops the leading `subagents/`, so the staging dir *is*
-    # the tree rather than holding a copy of it one level down.
-    extract = subprocess.run(  # noqa: S603 - argv is built here
-        ["tar", "-x", "--strip-components", "1", "-C", str(staging)],  # noqa: S607 - as above
-        stdin=archive.stdout,
-    )
-    if archive.stdout is not None:
-        archive.stdout.close()
-    if archive.wait() != 0 or extract.returncode != 0:
-        raise PublishError("git archive of subagents/ failed")
-
-    folders = sorted(p.name for p in staging.iterdir() if (p / "subagent.json").is_file())
-    print(f"Staged {len(folders)} vendored agent(s) for the wheel: {', '.join(folders)}", flush=True)
-    return staging
-
-
-def _with_subagents_included(pyproject_text: str, staged: Path) -> str:
-    """Add the staged tree to the wheel's force-include table.
-
-    Applied to the same temporary rewrite that stamps the version, so it is
-    restored with it. That is deliberate and is the whole reason this lives here
-    rather than in ``pyproject.toml``: the vendored agents ship to the beta
-    channel only. The GitHub release workflow builds from the committed
-    pyproject, which does not carry this line, so a stable release is unaffected
-    -- no size change, no four extra rows for anyone who did not opt into beta.
-    """
-    if _FORCE_INCLUDE_HEADER not in pyproject_text:
-        raise PublishError(f"{_FORCE_INCLUDE_HEADER} is not in pyproject.toml any more")
-    return pyproject_text.replace(
-        _FORCE_INCLUDE_HEADER,
-        f'{_FORCE_INCLUDE_HEADER}\n"{staged.as_posix()}" = "raven/subagents"',
-        1,
-    )
-
-
 def _build(root: Path, version: str) -> tuple[Path, Path]:
     """Build the wheel at ``version``, returning ``(wheel, constraints)``.
 
@@ -214,15 +145,11 @@ def _build(root: Path, version: str) -> tuple[Path, Path]:
     if not (root / "ui/dist/index.html").is_file():
         raise PublishError("ui/dist/index.html did not land")
 
-    staged = _stage_subagents(root, dist)
-
     pyproject = root / "pyproject.toml"
     original = pyproject.read_text(encoding="utf-8")
     stamped, count = _PYPROJECT_VERSION_RE.subn(f'version = "{version}"', original, count=1)
     if count != 1:
         raise PublishError("Could not find the version line in pyproject.toml")
-    if staged is not None:
-        stamped = _with_subagents_included(stamped, staged.relative_to(root))
 
     # uv.lock records the project's own version, so `uv export` rewrites it to
     # match the stamp and leaves the checkout claiming to be a beta. That
@@ -270,6 +197,22 @@ def _verify_wheel(wheel: Path) -> None:
         raise PublishError("page assets missing from wheel")
     if any("node_modules" in name for name in names):
         raise PublishError("node_modules leaked into wheel")
+    # The sub-agent tree degrades quietly in the other direction: a wheel built
+    # from an sdist simply has no folders, and onboarding step 5 reports an empty
+    # installation rather than failing.
+    if not any(name.endswith("/subagent.json") for name in names):
+        raise PublishError("vendored sub-agents missing from wheel")
+    leaked = [name for name in names if _is_secret_entry(name)]
+    if leaked:
+        raise PublishError(f"secrets leaked into wheel: {leaked}")
+
+
+def _is_secret_entry(name: str) -> bool:
+    """A filled-in secrets file rather than the template beside it."""
+    leaf = name.rsplit("/", 1)[-1]
+    if not (leaf == ".env" or leaf.startswith(".env.")):
+        return False
+    return not leaf.endswith((".example", ".sample", ".template"))
 
 
 def _upload(client: httpx.Client, url: str, token: str, body: bytes) -> None:
