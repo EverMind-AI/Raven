@@ -273,37 +273,29 @@ def test_a_profile_suffix_cannot_smuggle_a_superseded_flow_label():
     # restoration on the candidate-selection arm); dr@2.2 joined it when dr@2.3 shipped.
     # The just-superseded label carries the highest smuggle risk (it is closest to the
     # current one), so it leads the list.
-    for smuggled in ("dr@2.3-futurex", "dr@2.2-futurex", "dr@2.1-futurex", "dr@2.0-futurex",
-                     "dr@1.9-futurex", "dr@1.4-web", "dr@1"):
+    # dr@3.4-futurex leads the list from 2026-08-25: under the launch convention it
+    # is the label whose batch just closed, so it is both the newest member of the
+    # tuple and the one a stale config is most likely to still be pinned to.
+    for smuggled in ("dr@3.4-futurex", "dr@2.3-futurex", "dr@2.2-futurex", "dr@2.1-futurex",
+                     "dr@2.0-futurex", "dr@1.9-futurex", "dr@1.4-web", "dr@1"):
         with pytest.raises(Exception):
             DRFlowConfig(enabled=True, version=smuggled)
 
-    # A folded label is refused too, but as its own class and with its own text:
-    # upstream carried dr@3.5-dr@3.7 before the 2026-08-20 fold, so their semantics
-    # ARE this build's and "predates" would be a false statement about them. Both
-    # tuples are read off the class for the same reason the current label is - a
-    # literal here is one more place the next fold has to reach.
-    # Read off an INSTANCE, the way the validator reads them: pydantic wraps a
-    # private attr on the class, so ``DRFlowConfig._FOLDED_VERSIONS`` is a
+    # Read off an INSTANCE, the way the validator reads it: pydantic wraps a private
+    # attr on the class, so ``DRFlowConfig._SUPERSEDED_VERSIONS`` on the class is a
     # ``ModelPrivateAttr`` rather than the tuple.
     tuples = DRFlowConfig()
-    for folded in tuples._FOLDED_VERSIONS:
-        for pinned in (folded, f"{folded}-askuser"):
-            with pytest.raises(Exception, match="folded into"):
-                DRFlowConfig(enabled=True, version=pinned)
-        assert DRFlowConfig(enabled=False, version=folded).version == folded
 
     # The current label, its suffixed form, and a future one must survive. All derived
     # from the field default: a test that hardcodes the version is one more place a bump
     # has to reach, which is exactly the drift this check exists to catch. The literal
     # list here was the fourth such place found on 2026-08-04.
     #
-    # "Future" is the next label NEITHER tuple claims, not current + 0.1: the fold
-    # burned dr@3.5-dr@3.7 as names, so the next bump after dr@3.4 is dr@3.8 and
-    # a probe that just increments the minor lands on a rejected label. Walking the
-    # tuples keeps that derived - the next fold moves the answer, not this test.
+    # "Future" is the next label the superseded tuple does not claim, not current +
+    # 0.1 - the two coincide today but a re-numbering would separate them, and this
+    # test must not be the place that has to notice.
     current = DRFlowConfig.model_fields["version"].default
-    burned = set(tuples._SUPERSEDED_VERSIONS) | set(tuples._FOLDED_VERSIONS)
+    burned = set(tuples._SUPERSEDED_VERSIONS)
     major, minor = current.rsplit(".", 1)
     bump = int(minor)
     while True:
@@ -319,38 +311,56 @@ def test_a_profile_suffix_cannot_smuggle_a_superseded_flow_label():
     assert DRFlowConfig(enabled=False, version="dr@2.0").version == "dr@2.0"
 
 
-def test_the_folded_label_message_survives_the_next_bump(monkeypatch):
-    """The fold target is history; the label to set is the present. One string
-    cannot read both off the field default.
+def test_the_bump_ritual_moves_the_old_label_into_the_superseded_tuple():
+    """Under the launch convention (user's call, 2026-08-25) a label names the code
+    a BATCH ran under, so it advances when a batch closes rather than when a
+    distribution changes. That makes "bump the default" and "supersede the label the
+    batch just closed" a SINGLE ritual, and doing only the first half is silent: the
+    old label stays loadable with the flow on, so a config nobody re-synced keeps
+    stamping arms with a rung this build no longer is.
 
-    Written as a bump simulation because the bug is invisible today: while the
-    current label IS the fold target, reading the target off the default gives the
-    right answer by coincidence. The first version of this message did exactly
-    that, so a bump to dr@3.8 would have had it claim "dr@3.5 was folded into
-    dr@3.8" - true of no rung, and pointing the reader at one that absorbed
-    nothing. That is the same loss of join-ability these commits exist to prevent,
-    committed by the error message meant to prevent it."""
+    This replaces ``test_the_folded_label_message_survives_the_next_bump``, which
+    guarded the fold tier's error text. The tier is gone (dr@3.5-dr@3.7 are ordinary
+    future rungs again), so that test's subject no longer exists - but the failure it
+    belonged to, "the label and the build drift apart with no runtime symptom", is
+    exactly what this one guards under the new convention.
+
+    Both halves are derived, never spelled: a literal here is one more place the next
+    bump has to reach, which is the drift these checks exist to catch.
+    """
     from raven.config.raven import DRFlowConfig
 
-    folded, target = "dr@3.7", "dr@3.4"
-    assert DRFlowConfig()._FOLDED_VERSIONS[folded] == target
+    tuples = DRFlowConfig()
+    current = DRFlowConfig.model_fields["version"].default
+    superseded = set(tuples._SUPERSEDED_VERSIONS)
 
-    # Today: the target is the current label, so "only the name changed" holds.
-    with pytest.raises(ValidationError, match="only the name changed"):
-        DRFlowConfig(enabled=True, version=folded)
+    # Half one: the current label must NOT be superseded - otherwise every enabled
+    # config in the tree, including the ones the version gate calls synchronised,
+    # fails to load. That is not a hypothetical: it is what a colleague's bump on
+    # shared main did on 2026-08-20.
+    assert current not in superseded, f"{current!r} is both the default and superseded"
+    assert DRFlowConfig(enabled=True, version=current).version == current
 
-    # After a bump past the fold target, that sameness expires and the message has
-    # to say so instead of continuing to assert it. monkeypatch restores the
-    # default, which matters: every other test in the suite reads it.
-    monkeypatch.setattr(DRFlowConfig.model_fields["version"], "default", "dr@3.8")
-    with pytest.raises(ValidationError) as excinfo:
-        DRFlowConfig(enabled=True, version=folded)
-    message = str(excinfo.value)
-    assert f"folded into {target!r}" in message
-    assert f"{target!r} has since been superseded by 'dr@3.8'" in message
-    assert "set drFlow.version to 'dr@3.8'" in message
-    assert "only the name changed" not in message
+    # Half two: the rung immediately below the current one must BE superseded, which
+    # is what "its batch closed" means. Walking down from the default keeps this
+    # derived through a re-numbering.
+    major, minor = current.rsplit(".", 1)
+    previous = f"{major}.{int(minor) - 1}"
+    assert previous in superseded, (
+        f"{previous!r} sits directly below the default {current!r} but is not in "
+        "_SUPERSEDED_VERSIONS - the bump moved the default without retiring the "
+        "label whose batch closed"
+    )
+    with pytest.raises(ValidationError, match="predates this build"):
+        DRFlowConfig(enabled=True, version=previous)
 
+    # ...and a suffixed form of it, because the match is on the base label.
+    with pytest.raises(ValidationError, match="predates this build"):
+        DRFlowConfig(enabled=True, version=f"{previous}-futurex")
+
+    # An anchor arm keeps its historical label: flow off means there are no flow
+    # semantics to name, so the validator must stay out of the way.
+    assert DRFlowConfig(enabled=False, version=previous).version == previous
 
 def test_the_shipped_example_configs_load_on_this_build():
     """The examples are the only surface a new user touches, and nothing else

@@ -221,10 +221,18 @@ async def turn_cancel(
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
          double error), so this emit is the one signal that clears the front-end
          turn slot — it must always fire.
-      4. Await the handle so the turn is provably unwound (the sink's TurnFailed
-         handler drops the active-turn slot) before returning, so the next
-         ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
-      5. Return ``{cancelled: True}``.
+      4. Await the handle so the turn is provably unwound before returning, so
+         the next ``turn.send`` cannot race a half-unwound turn into a phantom
+         -32003. For a started turn the sink's TurnFailed handler drops the
+         active-turn slot along the way.
+      5. Drop the slot if it still holds this handle: a turn cancelled before
+         it started (still queued on its lane, or waiting on its origin pool)
+         emits no terminating event, so the sink never fires ``clear_active``
+         -- without this the slot outlives the turn and every later
+         ``turn.send`` on the session answers -32003 until process restart.
+         Identity-guarded, because by now the sink may have dropped the slot
+         and a NEXT turn may own it.
+      6. Return ``{cancelled: True}``.
 
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
@@ -253,7 +261,11 @@ async def turn_cancel(
 
     # Drain so the sink has dropped the active-turn slot before returning.
     # handle.result() returns None on cancellation (does not raise).
-    await handle.result()
+    try:
+        await handle.result()
+    finally:
+        if _active_turns.get(parsed.session_key) is handle:
+            _active_turns.pop(parsed.session_key, None)
 
     return {"cancelled": True}
 

@@ -1,4 +1,4 @@
-"""Agent rows discovered from the ``subagents/`` tree, registered as ``cli``.
+"""Agent rows discovered from the ``subagents/`` tree.
 
 Four raven builds ship beside this one under ``subagents/`` -- separate forks at
 separate versions, each with its own checkout, venv and credential -- and each
@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from loguru import logger
 
 if TYPE_CHECKING:
-    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
 __all__ = [
     "api_key_present",
@@ -64,11 +64,14 @@ __all__ = [
     "venv_ready",
 ]
 
-_PLACEHOLDER_FIELDS = ("command", "resumeCommand")
+_PLACEHOLDER_FIELDS = ("command", "resumeCommand", "cwd")
 """The manifest fields carrying ``{SUBAGENT_DIR}`` / ``{PYTHON}``. Exactly the
-pair each folder's own ``install.py`` substitutes in its ``resolve()`` -- the
-four installers are byte-identical, and a third field resolved here but not
-there would mean a hand-registered row and a discovered one disagreeing."""
+set each folder's own ``install.py`` substitutes in its ``resolve()``, and a
+field resolved here but not there would mean a hand-registered row and a
+discovered one disagreeing. ``cwd`` is on the list for the acp manifests: an
+acp entry with no ``cwd`` falls back to the calling task's workspace, which is
+part of the pool's launch key -- so every new workspace would relaunch the
+server and kill the sessions the old one was serving."""
 
 
 def subagents_root() -> Path | None:
@@ -359,20 +362,27 @@ def _scan(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
         yield folder, entry, reason
 
 
-def discover_vendored_rows(root: Path | None = None) -> list["ThirdPartyCliSubagentConfig"]:
-    """Every discovered folder as a ``cli`` row, name-sorted for a stable roster.
+def discover_vendored_rows(
+    root: Path | None = None,
+) -> list["ThirdPartyCliSubagentConfig | ThirdPartyAcpSubagentConfig"]:
+    """Every discovered folder as a config row, name-sorted for a stable roster.
 
     The name is the manifest's own (``Raven-Code``, not ``raven-code``) so a row
     written by that folder's ``install.py`` collides with the discovered one and
     overrides it instead of appearing twice.
 
+    The manifest's own ``kind`` picks the schema: ``acp`` for a folder that
+    serves its agent over ACP (raven-research), ``cli`` for the rest. Validating
+    an acp manifest as cli would reject it on the ``kind`` literal, and the
+    folder would silently vanish from the roster.
+
     ``enabled`` is the readiness verdict: a folder that cannot start is listed and
     disabled rather than dropped, so it stays visible to the operations view while
     staying out of the roster the dispatching model reads.
     """
-    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
-    rows: list[ThirdPartyCliSubagentConfig] = []
+    rows: list[ThirdPartyCliSubagentConfig | ThirdPartyAcpSubagentConfig] = []
     for folder, entry, reason in _scan(root):
         try:
             # Both have to hold: a folder that declares itself off stays off, and
@@ -381,7 +391,8 @@ def discover_vendored_rows(root: Path | None = None) -> list["ThirdPartyCliSubag
             # simply overwrote it, so `"enabled": false` in a manifest was a field
             # the code accepted and ignored.
             declared = bool(entry.get("enabled", True))
-            rows.append(ThirdPartyCliSubagentConfig.model_validate({**entry, "enabled": declared and reason.ready}))
+            model = ThirdPartyAcpSubagentConfig if entry.get("kind") == "acp" else ThirdPartyCliSubagentConfig
+            rows.append(model.model_validate({**entry, "enabled": declared and reason.ready}))
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping vendored sub-agent in {}: {}", folder.name, exc)
     return rows

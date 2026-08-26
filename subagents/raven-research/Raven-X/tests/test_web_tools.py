@@ -587,6 +587,81 @@ async def test_a_resolver_failure_no_longer_refuses_the_fetch(monkeypatch):
     assert client.calls == 1
 
 
+# ---------------------------------------------------------------------------
+# Encoding-lost guard: a page decoded as U+FFFD runs is refetched, then flagged
+# ---------------------------------------------------------------------------
+
+
+class _SequenceReaderClient:
+    """Reader client that serves scripted responses and records request headers."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.headers_seen = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, headers=None, **kwargs):
+        self.headers_seen.append(dict(headers or {}))
+        return self._responses.pop(0)
+
+
+GARBLED_PAGE = "Title: " + "\ufffd" * 40 + " AI Agent report"
+
+
+@pytest.mark.asyncio
+async def test_a_garbled_page_is_refetched_past_the_reader_cache(monkeypatch):
+    client = _SequenceReaderClient(
+        [_FakeResponse(text=GARBLED_PAGE), _FakeResponse(text="clean body")]
+    )
+    _patch_reader(monkeypatch, client)
+
+    out = json.loads(await WebFetchTool().execute(url="https://x.example/"))
+
+    assert out["text"] == "clean body"
+    assert "encoding_lost" not in out and "warning" not in out
+    assert "x-no-cache" not in client.headers_seen[0]
+    assert client.headers_seen[1]["x-no-cache"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_a_page_garbled_past_the_retry_is_flagged_and_not_digested(monkeypatch):
+    client = _SequenceReaderClient(
+        [_FakeResponse(text=GARBLED_PAGE), _FakeResponse(text=GARBLED_PAGE)]
+    )
+    _patch_reader(monkeypatch, client)
+    digest_calls = []
+
+    async def digest(text, info):
+        digest_calls.append(info)
+        return "distilled"
+
+    tool = WebFetchTool(digest_fn=digest, digest_threshold_chars=10)
+    out = json.loads(await tool.execute(url="https://x.example/", info_to_extract="anything"))
+
+    assert out["encoding_lost"] is True
+    assert "unreliable" in out["warning"]
+    assert out["text"] == GARBLED_PAGE
+    assert digest_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_stray_replacement_char_is_not_a_lost_encoding(monkeypatch):
+    page = "a legitimate page can carry the odd \ufffd of its own " * 3
+    client = _SequenceReaderClient([_FakeResponse(text=page)])
+    _patch_reader(monkeypatch, client)
+
+    out = json.loads(await WebFetchTool().execute(url="https://x.example/"))
+
+    assert out["text"] == page
+    assert "encoding_lost" not in out
+    assert len(client.headers_seen) == 1
+
+
 class _FlakySearchClient(_FlakyReaderClient):
     async def post(self, *args, **kwargs):
         return await self.get(*args, **kwargs)

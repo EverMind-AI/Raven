@@ -249,6 +249,9 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     complete = next(e for e in tool_events if e.phase == ToolPhase.COMPLETE)
     assert complete.tool_call_id == "t1" and complete.result_preview == "tool-ran"
     assert complete.truncated is False
+    # Display-only (never read by the model): the loop's true iteration
+    # counter rides START.
+    assert start.iteration == 1
     # The tool-call hint rides NoticeKind.TOOL_HINT (kept distinct from PROGRESS so
     # an outlet gates it on send_tool_hints), not merged into PROGRESS.
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)

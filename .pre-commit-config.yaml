@@ -22,7 +22,11 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        # Vendored sub-agent builds are byte copies of an upstream commit
+        # (subagents/TREE_HASHES); restyling them breaks that contract.
+        exclude: '^subagents/'
       - id: end-of-file-fixer
+        exclude: '^subagents/'
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files

@@ -228,6 +228,11 @@ class ChannelsConfig(Base):
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
+    # CLI tool-progress rendering (display only, never reaches the model):
+    # "lines" prints one line per tool call, "live" adds an updating status
+    # line with iteration/tool counts. TTY only — without one (redirected
+    # stdout, rollout subprocesses) tool progress is off regardless of style.
+    progress_style: Literal["off", "lines", "live"] = "lines"
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     discord: DiscordConfig = Field(default_factory=DiscordConfig)
@@ -269,6 +274,39 @@ class AgentDefaults(Base):
     subtracted across it. Expect the measured delta to SHRINK: the flow's primary
     mechanism since dr@1.4 is overflow prevention, and 32 of the 33 points in the
     dr@3.0 corpus verdict came from answering at all rather than answering better."""
+    context_window_authoritative: bool = False
+    """Let ``context_window_tokens`` above WIN over the model catalog.
+
+    Off by default, so every config that does not set it is byte-identical: the
+    catalog keeps beating the configured number, with the warning line in
+    ``AgentLoop.__init__`` as the only trace.
+
+    It exists because "fallback" and "declaration" are two different intents and
+    one field was serving both. Measured 2026-08-21 across every config in this
+    repo and in ``pipeline/configs``: **9 of them state a window the catalog
+    silently overrides** - ``dr33_web_dsv4f_{base,dr}128`` state 131,072 and run
+    1,000,000; ``futurex_openrouter`` states 65,536 on ``anthropic/claude-opus-5``
+    and runs 1,000,000; ``cost_probe_web_dr_deepseekv4flash`` states 65,536 and
+    runs 1,000,000. None of those nine is a fallback that failed to resolve; each
+    is an operator writing a working point and not getting it.
+
+    ⚠️ The cost of NOT having this is not a wrong label, it is a silent no-op of
+    the mechanism under test. On ``eval_web_dr33_dsv4f_20260817`` the effective
+    window was 1M, so ``_fit_request`` returned at its first branch on all 3,484
+    arm-items, all five overflow counters read 0, and the DR flow's primary
+    mechanism since dr@1.4 - overflow prevention - could not fire at all. That
+    batch measured the flow minus the thing the flow is for. 4,948 of its treated
+    calls averaged ~142K prompt tokens, so a 128K working point does bite.
+
+    Applies on both arms because it sits on ``agents.defaults``, not on
+    ``drFlow`` - which is the whole point: ``DRFlowConfig.context_window_tokens``
+    can only reach the treated arm, so using THAT to pin a working point hands
+    the two arms two different windows, the arm-correlated shape
+    ``AgentLoop.__init__`` already warns about one screen up.
+
+    Setting it does not make the number safe, only honoured: crossing a working
+    point still needs a fresh anchor pair and still forbids subtracting across
+    the line."""
     temperature: float = 0.1
     # Repetition penalty forwarded to OpenAI-compatible backends that accept
     # it in the request body (sglang / vLLM). None = not sent.

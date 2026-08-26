@@ -394,6 +394,7 @@ def register(app: typer.Typer) -> None:
             max_iterations=config.agents.defaults.max_tool_iterations,
             empty_recovery=limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
+            context_window_authoritative=config.agents.defaults.context_window_authoritative,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             brave_api_key=config.tools.web.search.api_key or None,
@@ -443,14 +444,24 @@ def register(app: typer.Typer) -> None:
         # cron.on_job is wired inside run_interactive once the spine scheduler
         # exists — cron reminders submit CRON turns through it.
 
-        # Show spinner when logs are off (no output to miss); skip when logs are on
-        def _thinking_ctx():
-            if logs:
-                from contextlib import nullcontext
+        # Tool-progress renderer shared by the -m and interactive paths below.
+        # Spinner only when logs are off (loguru on stderr fights a rich Live;
+        # the animated spinner itself is safe with prompt_toolkit input).
+        # Entering _thinking_ctx resets the per-turn counters.
+        from raven.cli._progress_line import ProgressRenderer, resolve_mode
 
-                return nullcontext()
-            # Animated spinner is safe to use with prompt_toolkit input handling
-            return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
+        _pch = agent_loop.channels_config
+        _progress = ProgressRenderer(
+            console,
+            mode=resolve_mode(
+                _pch.progress_style if _pch else "lines",
+                is_terminal=console.is_terminal,
+                logs=logs,
+            ),
+            spinner=not logs,
+            max_iterations=agent_loop.max_iterations or 0,
+        )
+        _thinking_ctx = _progress.thinking_ctx
 
         async def _start_backend_or_release() -> None:
             """Start the memory backend, releasing what it took if it refuses.
@@ -502,14 +513,15 @@ def register(app: typer.Typer) -> None:
                         agent_loop,
                         "cli",
                         lambda t: _print_agent_response(t, render_markdown=markdown),
-                        render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
+                        render_notice=_progress.on_notice,
+                        render_tool=_progress.on_tool,
                         send_progress=bool(ch.send_progress) if ch else False,
                         send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                     )
                     # A one-shot spawn rarely finishes before the hard-exit below (same
                     # as the bus path), but wire submit for parity with REPL/TUI.
                     agent_loop.subagents.set_submit(scheduler.submit)
-                    with _thinking_ctx():
+                    with _thinking_ctx(message):
                         handle = scheduler.submit(
                             TurnRequest(
                                 origin=Origin.USER,
@@ -611,7 +623,8 @@ def register(app: typer.Typer) -> None:
                     agent_loop,
                     cli_channel,
                     lambda t: _print_agent_response(t, render_markdown=markdown),
-                    render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
+                    render_notice=_progress.on_notice,
+                    render_tool=_progress.on_tool,
                     render_marker=_render_nudge_marker,
                     send_progress=bool(_ch.send_progress) if _ch else False,
                     send_tool_hints=bool(_ch.send_tool_hints) if _ch else False,

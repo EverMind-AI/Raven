@@ -89,6 +89,7 @@ try:
     from eval_clean_adapter import extract as _clean_extract
     from eval_clean_adapter import salvage_committed as _salvage_committed
     from eval_clean_adapter import _think_closing_tag_required as _think_tag_required
+    from eval_clean_adapter import _flow_enabled as _flow_enabled_for_arm
     _VIS_SRC = "eval_clean_adapter.extract"
 except Exception as _exc:  # pragma: no cover
     _VIS_SRC = f"(unavailable: {type(_exc).__name__}) —— answer_visible 不可信"
@@ -101,6 +102,9 @@ except Exception as _exc:  # pragma: no cover
 
     def _think_tag_required(_run):  # type: ignore[misc]
         return True
+
+    def _flow_enabled_for_arm(_run):  # type: ignore[misc]
+        return None
 
 
 @functools.lru_cache(maxsize=8)
@@ -351,7 +355,16 @@ def per_question_config(config: str, qtok: str, sample_id: int) -> str:
     if not cep:
         return config
     base = cep.rstrip("/").split("/r/")[0]      # 幂等:已带 /r/<token> 的不叠加
-    cfg["tools"]["web"]["corpusEndpoint"] = f"{base}/r/{_BATCH_TOK}_{_ARM_TOK}__{qtok}"
+    # ★ 20260825 Framework:同一条臂上跑第二遍时,两遍会写进**同一个**服务端日志桶 ——
+    # 上面那条 20260803 的注释记的是同一个缺陷少一层聚合(当时补的是 `_BATCH_TOK`),
+    # 这里少的是 `sample_id`。**客户端账本(`web_ledger_env`)一直是带 `_s{sample_id}` 的**,
+    # 只有服务端这条漏了 ⇒ 任何从 /r/ 日志算的量(gold 露头率、Selection 段拆分)在两遍
+    # 批次上读到的是两遍的**并集**,而且没有任何办法事后拆开。条件重跑(COND-DEAD)
+    # 与「带证据开局的第二遍」都会踩到,web 轴不受影响(它不走 corpusEndpoint)。
+    # ⚠️ 只在 sample_id != 0 时加后缀:URL 可能被工具错误文本回显给模型(见上),
+    # 单遍批次因此逐字节不变,新增的只是第二遍自己的桶。
+    _sfx = "" if sample_id == 0 else f"_s{sample_id}"
+    cfg["tools"]["web"]["corpusEndpoint"] = f"{base}/r/{_BATCH_TOK}_{_ARM_TOK}__{qtok}{_sfx}"
     CFG_ROOT.mkdir(parents=True, exist_ok=True)
     out = CFG_ROOT / f"{qtok}_s{sample_id}.json"
     out.write_text(json.dumps(cfg, ensure_ascii=False))
@@ -697,7 +710,24 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
     ws.mkdir(parents=True, exist_ok=True)
     # ★ 20260818 Test(转 FutureX 报告):run_dir 必须在 `config` 被 per_question_config()
     # 重绑成逐题渲染路径*之前*存下来 —— arm_env.json 只活在批级目录,不在渲染件旁边。
-    _run_dir_for_tag = Path(config).parent
+    # ★ 20260825 Framework(修 Test 在 dr@3.4 活体数据上定位的仪器缺陷,存证件
+    # `INSTRUMENT_DEFECT_visibility_rundir.md`):上面那条注释**说得对、修的位置也对,
+    # 但进门时值就已经错了** —— 调用方 `main()` 传进来的是 `render_runtime_config()`
+    # 写到系统临时目录的注钥渲染件,于是 `Path(config).parent` 是 `/tmp`,那里没有
+    # `arm_env.json`,`_think_tag_required` 回落类默认 True、`_flow_enabled` 回落 None
+    # ⇒ 本臂 875 行 `answer_visible_bar` 结构上只能取到 "unknown"、
+    # `answer_visible_runtime` 只能取到 None(恒定值 ⇒ 按铁律不可用于任何结论)。
+    # ⇒ 通则:**「在 X 改写它之前存下来」只有在进入时它是对的才成立**;更稳的做法是
+    # 根本不要从可变参数反推身份 —— `DATA` 就是批级臂目录(`_ARM_TOK = _tok(DATA.name)`
+    # 即 `run_<arm>`),由 env 一次算定,没有任何调用方能重绑它。反推在这里已经错过两次
+    # (第一次 `per_question_config`,第二次 `render_runtime_config`),不留第三次。
+    # ⚠️ 这个修法**不改任何键的定义**,只把喂给它的输入修对:`answer_visible` 因此会
+    # 从 False 翻成 True。已核这不动任何已发表读数 —— 二级终点 `answer_rate` 走
+    # `pipeline/answer_rate_endpoint.py`,它拿批级臂目录**重算**(dr@3.4 base128 记的
+    # 97.37% 就是这么来的),从不读 traj_raw 的这一列;翻的只是诊断列本身。
+    # 而 dr@3.4 那批之所以事后还能被正确标注,恰恰是因为 `answer_visible_bar` 在
+    # 3,500 行上全是 "unknown" —— 它作为**测量**是惰性的,作为**溯源标记**正常工作。
+    _run_dir_for_tag = DATA
     config = per_question_config(config, qtok, sample_id)
     env = web_ledger_env(env, qtok, sample_id)
     message = msg_prefix + seed["question"]
@@ -799,6 +829,8 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
     #     的"落盘 vs 复算"交叉核对 rc=1 报错),`answerless_cause="diag_error"` 进枚举。
     #     ⇒ 仪器坏掉的后果从"批次死"变成"分析时一道红灯",而不是静默偏置。
     answer_visible = None
+    answer_visible_runtime = None
+    answer_visible_bar = "diag_error"
     finish_shape = "diag_error"
     answerless_cause = None
     answerless_budget = None
@@ -813,6 +845,24 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
                        or not _think_tag_required(_run_dir_for_tag))
         _visible = _clean_extract(_raw_ans, exempt_closing_tag=_exempt_tag)
         answer_visible = bool((_visible or "").strip())
+        # ★ 20260821 Framework:上面那把尺子在**锚点臂上与运行时反号**,而 `answer_visible`
+        # 本身喂着已发表读数(见 eval_clean_adapter._think_closing_tag_required 的 docstring)
+        # ⇒ 原键逐字节不动,校正列并排放,与 `answerless_shape_exempt` 那次同一条纪律。
+        # 运行时的真实判据是 `loop/main.py:581` + `:2814`:
+        #   required = (self._dr_flow is not None) and think_closing_tag_required and not oob
+        # 而这里的 helper 走 `load_raven_config(...).dr_flow.think_closing_tag_required`,
+        # 加载器对 flow-off 配置照样物化 `DRFlowConfig()` ⇒ 拿到类默认 True。实测:
+        # base128 → enabled=False/think_req=True(严格),dsv4f dr128 → True/False(宽松)
+        # ⇒ 通道分离后端上锚点严、处理臂宽,一条**按侧偏移**(缺陷 #12 那个形状)。
+        # `_flow_on is None` ⇒ 取不到,落 None + bar="unknown",不许当 False(缺数据≠0)。
+        _flow_on = _flow_enabled_for_arm(_run_dir_for_tag)
+        _rt_exempt = _exempt_tag or (_flow_on is False)
+        answer_visible_bar = ("unknown" if _flow_on is None
+                              else "lenient" if _rt_exempt else "strict")
+        answer_visible_runtime = (
+            None if _flow_on is None
+            else bool((_clean_extract(_raw_ans, exempt_closing_tag=_rt_exempt) or "").strip())
+        )
         _closed = "</think>" in _raw_ans.lower()
         finish_shape = ("closed_with_answer" if answer_visible else
                         "closed_but_silent" if _closed else
@@ -883,6 +933,8 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
                                "n_search": info["n_search"], "n_fetch": info["n_fetch"]}
     except Exception as _diag_exc:   # noqa: BLE001 —— 见上面 ② :仪器不许杀死批次
         answer_visible = None
+        answer_visible_runtime = None
+        answer_visible_bar = "diag_error"
         finish_shape = "diag_error"
         answerless_cause = "diag_error"
         # 与 `answerless_cause` 一起进 diag_error,不留 None —— None 在这根轴上
@@ -890,10 +942,46 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
         answerless_budget = "diag_error"
         answerless_diag = {"error": f"{type(_diag_exc).__name__}: {_diag_exc}",
                            "visibility_source": _VIS_SRC}
+    # ★ 20260825 Framework:窗口 / 完成预算 / 恢复计数器提到顶层,每行都落。
+    # 三条理由,每条都是本项目已经付过费的形状:
+    #  ① `effective_context_window` —— 缺陷 #14(声明值是 fallback 不是声明)。此前
+    #     唯一的来源是 `pipeline/stamp_system_prompt.py` 自己调 resolver 复算一遍,
+    #     而那既不知道 `contextWindowAuthoritative`,又依赖外网(models.dev 实测 403)
+    #     ⇒ 同一份配置两天可以得到两个答案。现在由 run 自己盖章,不许再反推。
+    #  ② `final_completion_cap` / `max_context_used` —— 两个数一直存在,但一个只在
+    #     **答不出来**那条分支里进 `answerless_diag`、一个只活在 `observers.budget`
+    #     里。「嵌进一层就等于不存在」是 `rejected_on_elided` 那次的原话:字段一直在
+    #     落盘,查顶层键的人判它缺失。要按臂比"谁被压过完成预算"就必须每行都有。
+    #  ③ 三个 recovery 计数器 —— 死转桶的上游。条件重跑要逐臂比较死转处理方式
+    #     (缺陷 #12:一侧被处理过而三道主门结构上看不见),没有它们比不了。
+    # 取不到一律 None,不填 0:「缺数据≠0 分」在这个项目里是硬规矩,而这四个字段
+    # 恰好都有一个合法的 0 值,填 0 就把"没记到"和"真的是 0"永久混在一起了。
+    _te_row = _final_turn_end(traj)
+    _budget_obs: dict = {}
+    for _t in traj or ():
+        if isinstance(_t, dict):
+            _b = (_t.get("observers") or {}).get("budget")
+            if isinstance(_b, dict):
+                _budget_obs = _b
     res = {
         "harness_error": harness_error,
+        "effective_context_window": _te_row.get("effective_context_window"),
+        "context_window_source": _te_row.get("context_window_source"),
+        "final_completion_cap": _te_row.get("final_completion_cap"),
+        "max_context_used": _budget_obs.get("max_context_used"),
+        "recovery_counters": ({k: _te_row[k] for k in
+                               ("loop_nudges", "post_tool_nudges",
+                                "prefill_retries", "empty_retries")
+                               if k in _te_row} or None),
+        # 区分"导入失败"与"参数值错"的唯一字段,此前只在异常分支落盘 ⇒ 正常行拿不到
+        # 它(Test 在 dr@3.4 上定位缺陷时得靠逐值复现才排除前者)。每行都落。
+        "visibility_source": _VIS_SRC,
         # dr@2.3 A2 新键(旧键一字不动)
         "answer_visible": answer_visible,
+        # 20260821:上一行的校正列。`answer_visible` 用的尺子在 flow-off 臂上与运行时
+        # 反号(见上面的推导);这两个键复现运行时**自己**用的那把,并把用了哪把说出来。
+        "answer_visible_runtime": answer_visible_runtime,
+        "answer_visible_bar": answer_visible_bar,
         "finish_shape": finish_shape,
         "answerless_cause": answerless_cause,
         # 20260813 新增:与 answerless_cause 正交的「撞的是哪个预算」轴。见上面的推导。
@@ -1042,9 +1130,17 @@ async def main() -> None:
         print(f"[ws] 清理上一批残留工作区:{WS_ROOT}")
     WS_ROOT.mkdir(parents=True, exist_ok=True)
     (DATA / "workspaces_root.txt").write_text(str(WS_ROOT) + "\n")
-    write_jsonl(WS_MAP, [{"qid": s["qid"], "ws_token": _tok(s["qid"], 12),
-                          "arm_token": _ARM_TOK, "batch_token": _BATCH_TOK}
-                         for s in seeds])
+    # ★ 20260825 Framework:`--only` 的定点补跑会把 `seeds` 过滤成子集,而这一行原来是
+    # **覆盖**写 ⇒ 一次子集补跑会把这条臂的 ws_map 从 875 行削成子集大小。
+    # 后果不是"少了几行":`ws_map.jsonl` 是账本 token ↔ qid 的**唯一**离线回联件
+    # (`report_compute_aligned.verify_tier` 的 docstring 写明"不重新推导哈希"),
+    # 而它损坏时的表现是一个**看起来完全正常的** `+0.00pp b=0 c=0`。
+    # ⇒ `--only` 时合并而不是覆盖,且旧行优先(它们对应真正跑过的那一遍)。
+    _wsmap_rows = {r["qid"]: r for r in (read_jsonl(WS_MAP) if (args.only and WS_MAP.exists()) else [])}
+    for _s in seeds:
+        _wsmap_rows.setdefault(_s["qid"], {"qid": _s["qid"], "ws_token": _tok(_s["qid"], 12),
+                                           "arm_token": _ARM_TOK, "batch_token": _BATCH_TOK})
+    write_jsonl(WS_MAP, [_wsmap_rows[k] for k in sorted(_wsmap_rows)])
     env = rollout_env()
     # SERPER 恒需(web_search);教师密钥按 provider 判断:deepseek 直连需 DEEPSEEK_API_KEY,
     # openrouter 需 OPENROUTER_API_KEY,custom(Volc 网关 Kimi)网关免密不检查。

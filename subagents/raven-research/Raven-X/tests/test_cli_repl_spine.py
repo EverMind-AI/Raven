@@ -24,7 +24,7 @@ from raven.spine import (
     Usage,
 )
 from raven.spine.delivery import Outlet
-from raven.spine.events import Reasoning
+from raven.spine.events import Reasoning, ToolEvent, ToolPhase
 
 
 def _src(channel="cli", chat_id="c1") -> Source:
@@ -153,6 +153,23 @@ async def test_cli_outlet_renders_reasoning_as_progress():
     assert notices == ["searching the web..."]
 
 
+async def test_cli_outlet_forwards_tool_events_when_wired():
+    seen: list[ToolEvent] = []
+    outlet = CliOutlet("cli", lambda t: None, render_tool=seen.append)
+    ev = ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="web_search", arguments={"query": "q"})
+    await outlet.deliver(ev)
+    # Forwarded as-is: START/COMPLETE pairing and rendering are the callback's
+    # (cli/_progress_line.py), the outlet stays a router.
+    assert seen == [ev]
+
+
+async def test_cli_outlet_eats_tool_events_without_render_tool():
+    rendered: list[str] = []
+    outlet = CliOutlet("cli", rendered.append, render_notice=rendered.append, send_progress=True)
+    await outlet.deliver(ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="t"))
+    assert rendered == []  # eaten, status quo for surfaces that don't wire it
+
+
 async def test_cli_outlet_eats_reasoning_without_progress():
     # No render_notice (interactive REPL before wiring) -> eaten, status quo.
     rendered: list[str] = []
@@ -248,6 +265,33 @@ async def test_repl_loop_renders_each_reply_before_the_next_prompt():
         "prompt",
         "exit",
     ]
+
+
+async def test_repl_loop_hands_the_question_to_thinking():
+    # The turn's display language is picked from the user's own question, and
+    # entering the context is the only per-turn boundary an outlet-side renderer
+    # gets (the hub routes no lifecycle events).
+    seen: list[str] = []
+    events: list[str] = []
+
+    def _thinking(question: str):
+        seen.append(question)
+        return nullcontext()
+
+    scheduler, hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None)
+    await run_repl_loop(
+        read_input=_make_reader(events, ["美联储会加息吗", "Will the Fed hike?", "exit"]),
+        submit=scheduler.submit,
+        wait_idle=hub.wait_idle,
+        channel="cli",
+        chat_id="c",
+        is_exit=lambda c: c == "exit",
+        handle_slash=lambda c: False,
+        thinking=_thinking,
+        on_exit=lambda: None,
+    )
+    await teardown()
+    assert seen == ["美联储会加息吗", "Will the Fed hike?"]
 
 
 async def test_repl_loop_handles_empty_reply_without_hanging():

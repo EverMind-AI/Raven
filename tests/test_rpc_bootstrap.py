@@ -104,6 +104,34 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
     assert cron.stopped is False
 
 
+async def test_the_snapshot_backfill_is_scheduled_except_on_the_acp_channel(monkeypatch) -> None:
+    """An acp row's statefulness comes from its capability snapshot, and this
+    hook is the only writer that needs no human -- unscheduled, a fresh install
+    reads every acp agent stateless and the instance picker hides them until
+    someone opens a settings page and clicks Test. On the acp channel the stack
+    is itself a subagent child, where verifying would cascade (each child
+    verifying its own row launches another child).
+    """
+    from raven.agent.subagent import probe
+
+    scheduled: list = []
+    monkeypatch.setattr(probe, "schedule_snapshot_verification", lambda manager: scheduled.append(manager) or None)
+
+    loop = _FakeLoop(_FakeCron())
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    try:
+        assert scheduled == [loop.subagents]
+    finally:
+        await stack.teardown()
+
+    acp_loop = _FakeLoop(_FakeCron())
+    acp_stack = await bootstrap.build_rpc_stack(_sink, agent_loop=acp_loop, channel="acp")
+    try:
+        assert scheduled == [loop.subagents]
+    finally:
+        await acp_stack.teardown()
+
+
 async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> None:
     from raven import browser as browser_module
     from raven.cli import tui_commands

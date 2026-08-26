@@ -14,6 +14,7 @@ from raven.agent.fetch_gate import FetchGate
 from raven.agent.harness_text import fetch_gate_notice
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.tools.web import fetch_result_ok
+from raven.security.trust import unwrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,39 @@ class FetchGateObserver(AgentHook):
     @property
     def name(self) -> str:
         return "FetchGateObserver"
+
+    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+        """Record a ``web_search`` call made on an iteration where it was withheld.
+
+        ★ 20260825: **observation only, deliberately** — same scope as
+        ``AskUserGate.before_execute_tools``, which leaves such a call to execute
+        "so the model reads the fallback string and goes back to work".
+
+        It exists because this gate's design note claimed that withholding the tool
+        makes re-requesting it "not an available move", and that is false:
+        ``ToolRegistry.execute`` resolves against the REGISTRY, and
+        ``HookDecision.modified_tools`` is scoped to the iteration and never edits
+        the registry (``hook/base.py`` says so). A withheld tool can still be named
+        and still runs.
+
+        Worse, before this counter the bypass was **invisible**: ``observe_search``
+        counts every ``web_search`` result including bypassed ones, so the streak
+        keeps climbing and ``gate_closed_now`` stays True — a fully bypassed turn and
+        a fully honoured turn produced identical counters. Observed willingness of
+        this model to name un-offered tools on dr@3.4 is low but non-zero (``exec``
+        ×9 on base128, a hallucinated ``search`` ×1 on dr128), and a tool that was
+        advertised, called 15+ times, then silently withdrawn is an untested
+        condition. Whoever enables this knob has to be able to see it.
+        """
+        state = ctx.metadata.setdefault("fetch_gate", {})
+        if not state.get("gate_closed_now"):
+            return HookDecision()
+        proposed = list(getattr(ctx.response, "tool_calls", None) or [])
+        n = sum(1 for c in proposed if getattr(c, "name", "") == _GATED_TOOL)
+        if n:
+            state["gate_called_when_closed"] = int(
+                state.get("gate_called_when_closed") or 0) + n
+        return HookDecision()
 
     async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
         messages = ctx.messages or []
@@ -57,7 +91,20 @@ class FetchGateObserver(AgentHook):
             elif m.get("name") == "web_fetch":
                 # Same predicate the client-side ledger writes its ``ok`` column
                 # from, imported rather than re-spelled; see ``fetch_result_ok``.
-                self._gate.observe_fetch(fetch_result_ok(m.get("content")))
+                # ★ 20260825: unfence FIRST. ``fetch_result_ok`` decides by
+                # ``json.loads``, and what lands in ``messages`` is the FENCED
+                # string, so before this line the predicate returned False for
+                # 100% of real fetches - the streak was never zeroed, the gate
+                # never reopened, and the release valve was unreachable. Measured
+                # on dr@3.4: intended 11.1% of items vs shipped 38.9%, with the
+                # action permanent instead of released on the next page opened.
+                # The two callers of ``fetch_result_ok`` were reading two different
+                # STRINGS while sharing one predicate - the ledger gets the raw
+                # return, this seam gets the fenced one - which is the failure the
+                # predicate's own docstring says it exists to prevent, one layer up.
+                self._gate.observe_fetch(
+                    fetch_result_ok(unwrap_untrusted(m.get("content")))
+                )
         state["watermark"] = len(messages)
 
         closed = self._gate.evaluate()

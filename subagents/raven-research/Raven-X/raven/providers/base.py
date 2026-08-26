@@ -242,6 +242,24 @@ class LLMResponse:
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
+    # ★ 20260825: which upstream actually served this call, when the wire says so.
+    # A gateway model id names the gateway, not the machine that ran the weights -
+    # `deepseek/deepseek-v4-flash` had 17+ OpenRouter upstreams at once - and EACH
+    # upstream holds its own prompt cache, so an `auto` switch presents as a
+    # cache_read collapse with no local cause. Reconstruction is strictly impossible
+    # (the id is identical for every upstream), which is why it has to ride on the
+    # response object rather than be inferred downstream.
+    #
+    # ⚠️ These two fields exist because the first attempt at recording the upstream
+    # shipped as a structural no-op: the recorder read `provider`/`id` off the dict
+    # handed to `after_llm_call`, and that dict is hand-built from three keys
+    # (content/finish_reason/usage) while `LLMResponse` carried neither field. 0 rows
+    # out of 67,693. Reading end verified, writing end never checked - and a field
+    # nobody writes is indistinguishable from a backend that reports nothing.
+    serving_upstream: str | None = None
+    upstream_call_id: str | None = None
+    # Which source answered, so a future zero is diagnosable instead of ambiguous.
+    upstream_source: str | None = None
 
     @property
     def has_tool_calls(self) -> bool:

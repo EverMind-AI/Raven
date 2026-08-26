@@ -841,6 +841,49 @@ class LiteLLMProvider(LLMProvider):
                 usage["cache_read_input_tokens"] = int(cache_read)
             if cache_write:
                 usage["cache_creation_input_tokens"] = int(cache_write)
+            # ★ 20260825 Framework: reasoning tokens, flattened the same way the two
+            # cache counts above are. Without this line the key never reaches the
+            # usage dict, and ``UsageSnapshot.reasoning_tokens`` stays the constant 0
+            # it has been since the field was declared - which is why a first attempt
+            # at reading ``completion_tokens_details`` downstream was still a no-op.
+            #
+            # It is a BREAKDOWN of ``completion_tokens``, never an addition: pricing
+            # already charges the whole completion, so adding it would double-bill.
+            # It matters on this working point because the measured split on
+            # window-hitting items is 87-95% own reasoning against 2-4% retrieved
+            # content, and that had to be reconstructed by hand from trajectories.
+            _c_details = getattr(response.usage, "completion_tokens_details", None)
+            _reasoning = (
+                getattr(_c_details, "reasoning_tokens", None) if _c_details is not None
+                else None
+            )
+            if _reasoning is None and isinstance(_c_details, dict):
+                _reasoning = _c_details.get("reasoning_tokens")
+            if _reasoning:
+                usage["reasoning_tokens"] = int(_reasoning)
+
+        # ★ 20260825 Framework: pull the serving upstream off the RAW response here,
+        # the one place that still has it. Three sources tried in order, and WHICH one
+        # answered is recorded - a bare None cannot say whether the wire was silent or
+        # whether we looked in the wrong place, and that ambiguity is exactly what made
+        # the previous version's 0-out-of-67,693 unreadable.
+        #   1. `response.provider`      - OpenRouter puts it at the top level
+        #   2. `_hidden_params`         - where LiteLLM parks non-OpenAI extras
+        #   3. `model_extra`            - pydantic's bucket for undeclared fields
+        _upstream = _upstream_src = None
+        for _src, _val in (
+            ("response.provider", getattr(response, "provider", None)),
+            ("_hidden_params", (getattr(response, "_hidden_params", None) or {}).get("provider")
+             if isinstance(getattr(response, "_hidden_params", None), dict) else None),
+            ("model_extra", (getattr(response, "model_extra", None) or {}).get("provider")
+             if isinstance(getattr(response, "model_extra", None), dict) else None),
+        ):
+            if isinstance(_val, str) and _val:
+                _upstream, _upstream_src = _val, _src
+                break
+        _call_id = getattr(response, "id", None)
+        if not isinstance(_call_id, str) or not _call_id:
+            _call_id = None
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
@@ -854,6 +897,9 @@ class LiteLLMProvider(LLMProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason or "stop",
             usage=usage,
+            serving_upstream=_upstream,
+            upstream_call_id=_call_id,
+            upstream_source=_upstream_src,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
         )

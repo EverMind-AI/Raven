@@ -91,6 +91,35 @@ def terminal_state(metadata: dict[str, Any]) -> dict[str, Any]:
         # fetch_floor.searches a selection-biased subsample of the search-heavy tail:
         # mean 83.7 over the 80 items present against a true mean of 58.1 over all 120.
         out["fetch_floor"] = _scalar_snapshot(fetch_floor)
+    # ★ 20260825 Framework: dr@3.3's fetchGate wrote its counters every iteration -
+    # with a comment saying a counter that appears only on firing cannot tell "did
+    # not fire" from "was not installed" - and then this function never exported the
+    # namespace, so none of them reached ``traj_raw.jsonl``. ``fetch_gate.py`` states
+    # acceptance counts firings off the trajectory rather than off a hook, precisely
+    # because "a key that only exists inside the hook has been dropped by a
+    # serialisation allowlist here before". It was dropped again, one level up: the
+    # hardening went into ``_scalar_snapshot`` (no per-KEY whitelist) while THIS list
+    # is a per-NAMESPACE whitelist with the same failure mode. Unconditional, like
+    # ``fetch_floor`` above and for its reason.
+    fetch_gate = metadata.get("fetch_gate")
+    if fetch_gate:
+        # ★ 20260825: hand-written reducer -- this must NOT route through
+        # `_scalar_snapshot`. `gate_streak_at_fire` is `list[int]` and
+        # `_scalar_snapshot` passes only bool/int/float/str, so it was silently
+        # dropped -- and it is the only pre-registered first-class field that
+        # carries position (`gate_fired` is a bare count that cannot say WHICH
+        # search the gate fired on), so the section-17.6 score-independent
+        # mechanism check ("after a removed web_search, is the next action a
+        # fetch") could not locate the firing point in `traj_raw` at all. This
+        # is the third time the family was eaten by a serialisation filter
+        # (per-key whitelist, per-namespace whitelist, now per-value-type), and
+        # `_scalar_snapshot`'s own docstring already says the summary-list
+        # namespaces are hand-written -- `loopscan`/`spin_breaker` both do;
+        # this one was routed wrong at birth.
+        out["fetch_gate"] = {
+            **_scalar_snapshot(fetch_gate),
+            "gate_streak_at_fire": [int(x) for x in (fetch_gate.get("gate_streak_at_fire") or ())],
+        }
     budget = metadata.get("budget")
     if budget:
         out["budget"] = {k: v for k, v in budget.items() if isinstance(v, int)}

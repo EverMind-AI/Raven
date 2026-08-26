@@ -442,6 +442,7 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
+        context_window_authoritative: bool = False,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         web_corpus_endpoint: str | None = None,
@@ -549,10 +550,52 @@ class AgentLoop:
         # four times for the "N copies of one number" shape. So the attribute itself now
         # holds the resolved value, and ``_window_for(model)`` remains only for the
         # per-call model override.
+        # ``context_window_authoritative`` (default False) is the difference between
+        # "fallback" and "declaration". Off, this line is byte-identical to before and
+        # the catalog wins. On, the operator's number wins - because the failure of NOT
+        # honouring it is not a wrong label but a silent no-op of the mechanism under
+        # test: on eval_web_dr33_dsv4f_20260817 the catalog resolved 1M, ``_fit_request``
+        # returned at its first branch on all 3,484 arm-items, all five overflow
+        # counters read 0, and overflow prevention - the flow's primary mechanism since
+        # dr@1.4 - could not fire. The flag sits on ``agents.defaults`` so it moves BOTH
+        # arms; ``DRFlowConfig.context_window_tokens`` below can only reach the treated
+        # one, which is the arm-correlated shape this comment block warns about.
+        self._window_is_authoritative = bool(context_window_authoritative)
+        _catalog_window = resolve_context_window(self.model)
         self.context_window_tokens = (
-            resolve_context_window(self.model) or context_window_tokens
+            context_window_tokens
+            if self._window_is_authoritative
+            else (_catalog_window or context_window_tokens)
         )
-        if self.context_window_tokens != context_window_tokens:
+        # Which of the three sources actually won, decided HERE and carried as a
+        # value. "128K because an operator pinned it" and "128K because the catalog
+        # happens to say 128K" are indistinguishable downstream, and only the first
+        # is a working-point change - so the distinction has to be recorded, not
+        # re-derived. Re-deriving it at stamp time would also mean calling the
+        # catalog again from inside the turn: ``models.dev/api.json`` answered 403
+        # on 2026-08-21, so the same config can resolve two different windows on two
+        # days. Resolving once, at construction, is the only point where the answer
+        # is guaranteed to match the window the turn actually ran under.
+        self._window_source = (
+            "pinned" if self._window_is_authoritative
+            else "catalog" if _catalog_window
+            else "config_fallback"
+        )
+        if self._window_is_authoritative:
+            _catalog = _catalog_window
+            if _catalog and _catalog != context_window_tokens:
+                # Loud on purpose, and in the direction that matters: somebody pinned a
+                # working point BELOW what the backend can do, which is a deliberate
+                # experimental choice and must be visible in the log of the arm that
+                # made it, not inferable only from the config.
+                logger.warning(
+                    "context window: PINNED to configured {} for {} "
+                    "(catalog says {}); contextWindowAuthoritative=true",
+                    context_window_tokens,
+                    self.model,
+                    _catalog,
+                )
+        elif self.context_window_tokens != context_window_tokens:
             # One line, not a silent override: the catalog beating a pinned
             # ``contextWindowTokens`` has already invalidated one cross-model
             # comparison (one arm ran its configured 65k, the other its
@@ -1200,6 +1243,12 @@ class AgentLoop:
         the note told the model it was at 110% of a window it was nowhere near,
         while not one tool result had been elided.
         """
+        # An authoritative window must also win for a per-call model override,
+        # otherwise the budget note and the spin breaker would read the catalog
+        # while the trimmer reads the pin - the exact "N copies of one number"
+        # divergence ``__init__`` folded away, re-introduced one layer down.
+        if getattr(self, "_window_is_authoritative", False):
+            return self.context_window_tokens
         return resolve_context_window(model or self.model) or self.context_window_tokens
 
     async def _decide_turn_mode(self, session: Session, content: Any) -> None:
@@ -2178,6 +2227,39 @@ class AgentLoop:
         out_toks = int(usage.get("completion_tokens", 0) or 0)
         cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
         cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
+        # ★ 20260825 Framework: ``UsageSnapshot.reasoning_tokens`` has existed, been
+        # accumulated, copied and persisted since the field was declared, and was
+        # never once assigned - a constant 0 for its whole life. That is the same
+        # alarm as a ruler stuck at a non-zero value: a field nobody fills reads
+        # exactly like a backend that reports nothing.
+        #
+        # It matters on this working point specifically. The measured split on
+        # window-hitting items is 87-95% of the context being the model's OWN
+        # reasoning against 2-4% retrieved content, and that number had to be
+        # reconstructed by hand from trajectories. It is a BREAKDOWN of
+        # ``completion_tokens``, not an addition to it (OpenAI convention, which
+        # OpenRouter passes through), so it must never be added to ``output_tokens``
+        # - pricing already charges the whole completion.
+        # TWO producers, so two shapes, and both have to be read here:
+        #   - ``LiteLLMProvider._parse_response`` flattens it beside the two cache
+        #     counts, so the key arrives flat. The bench path (chat_with_retry) is
+        #     this one.
+        #   - ``_llm_call_stream`` accumulates ``_usage_dict(chunk.usage)``, which is
+        #     ``usage.model_dump()`` verbatim, so the key arrives NESTED under
+        #     ``completion_tokens_details``.
+        # A first version of this code read only the nested shape and was a no-op on
+        # the path that matters - reading exactly like a backend that reports nothing.
+        # That is the whole reason ``reasoning_tokens`` sat at a constant 0 from the
+        # day the field was declared: readers were added, the writer never was.
+        _rt = usage.get("reasoning_tokens")
+        if _rt is None:
+            _ctd = usage.get("completion_tokens_details")
+            if isinstance(_ctd, dict):
+                _rt = _ctd.get("reasoning_tokens")
+        try:
+            reasoning_t = int(_rt or 0)
+        except (TypeError, ValueError):
+            reasoning_t = 0
 
         # Normalize to fresh-only.
         if prompt_t >= cache_read + cache_write and (cache_read + cache_write) > 0:
@@ -2192,6 +2274,7 @@ class AgentLoop:
             output_tokens=out_toks,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
+            reasoning_tokens=reasoning_t,
             estimated_cost_usd=cost,
             session_key=session_key or None,
         )
@@ -2628,6 +2711,11 @@ class AgentLoop:
             else None
         )
         hook_rollbacks = 0
+        # list, not int: the rollback helper is a closure that already declares
+        # ``nonlocal`` for what it must reassign; a one-slot list keeps this
+        # additive counter out of that declaration, so a future edit to the
+        # nonlocal list cannot silently stop it from accumulating.
+        injected_counter = [0]
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
 
@@ -2671,6 +2759,7 @@ class AgentLoop:
                     notes=list(decision.notes),
                 )
             if decision.rollback_inject:
+                nonlocal_injected = 0
                 for m in decision.rollback_inject:
                     entry = dict(m)
                     entry.setdefault("timestamp", self._now_fn().isoformat())
@@ -2687,6 +2776,8 @@ class AgentLoop:
                         # episodes and a profile out of harness text.
                         entry["_flow_synthetic"] = True
                     messages.append(entry)
+                    nonlocal_injected += 1
+                injected_counter[0] += nonlocal_injected
             iteration -= 1
             pending_gen_overrides = overrides or None
             logger.info(
@@ -2843,6 +2934,18 @@ class AgentLoop:
                     "content": response.content,
                     "finish_reason": response.finish_reason,
                     "usage": response.usage,
+                    # ★ 20260825 Framework: this hand-built three-key dict is WHY the
+                    # upstream recorder wrote 0 rows out of 67,693 - the recorder read
+                    # `provider`/`id` off exactly this object, and neither key was ever
+                    # put in it. Keys are omitted (not None-filled) when the wire is
+                    # silent, so "we never asked" stays distinguishable from "it
+                    # answered nothing" and non-gateway rows keep their old shape.
+                    **({"provider": response.serving_upstream}
+                       if getattr(response, "serving_upstream", None) else {}),
+                    **({"id": response.upstream_call_id}
+                       if getattr(response, "upstream_call_id", None) else {}),
+                    **({"upstream_source": response.upstream_source}
+                       if getattr(response, "upstream_source", None) else {}),
                 },
                 usage_snapshot,
             )
@@ -2959,6 +3062,7 @@ class AgentLoop:
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                "iteration": iteration,
                             },
                         )
                     tool_t0 = time.monotonic()
@@ -3344,7 +3448,39 @@ class AgentLoop:
                 # stack answerless_shape reads all-answerless by construction - read
                 # it only alongside this flag.
                 "closing_tag_waived_oob": final_reasoning_oob,
+                # 20260821: rollbacks that HAPPENED, beside the ones that were
+                # refused. ``hook_rollbacks`` was a local: the cap-hit counter
+                # ``rollbacks_refused`` was stamped and the successful ones were
+                # not, so "no rollback row" and "eight rollbacks under the cap"
+                # were the same record. Two independent readers need this:
+                # (1) the same law as ``synthesized_on_exhaustion`` - a
+                #     suppression that cannot be counted is indistinguishable
+                #     from one that never ran;
+                # (2) prompt-cache accounting. A rollback does
+                #     ``del messages[iter_msg_base:]`` and re-appends injected
+                #     scaffolding, so the prefix past that point is rewritten and
+                #     re-paid at full price. Offline on the dsv4f batch the treated
+                #     arm showed ~3,916 partial cache invalidations (>16k re-paid
+                #     while cache_read stayed non-zero), 8.6% of iterations,
+                #     mean 4.55 per question - under this cap of 8, and correlating
+                #     with turn count at r=+0.75. Whether those ARE these was not
+                #     decidable from disk, because neither this counter nor the
+                #     serving upstream was recorded. Both are now.
+                "hook_rollbacks": hook_rollbacks,
+                "injected_on_rollback": injected_counter[0],
                 "salvage_committed_at_terminal": salvage_committed,
+                # ★ 20260825 Framework: the key above is read HERE, and the terminal
+                # seam commits BELOW it, so it is True exactly when a salvage landed at
+                # the ITERATION seam and False for every terminal-seam commit - the
+                # opposite of what its name says. It is left byte-identical because
+                # published rows used it; these are the corrected columns beside it,
+                # the same discipline as ``answerless_shape``/``answer_visible``.
+                # ``salvage_seam`` is refreshed after the terminal hook below, so it is
+                # the only key here that can say "terminal". Same for ``answerless``:
+                # it still reads True for an item a terminal salvage just answered
+                # (the stamp predates the commit), so read ``answerless_corrected``.
+                "salvage_seam": "iteration" if salvage_committed else None,
+                "answerless_corrected": answerless,
                 "overflows": overflows,
                 "clamps": clamp_retries,
                 "elisions": compress_retries,
@@ -3353,6 +3489,27 @@ class AgentLoop:
                 "iterations_used": iteration,
                 "llm_calls": llm_calls,
                 "final_completion_cap": completion_cap,
+                # ★ 20260825 Framework: the window this turn actually ran under, and
+                # where that number came from. Defect #14's whole lesson is that the
+                # DECLARED window is a fallback, not a declaration - on the dsv4f batch
+                # the configured 131,072 never took effect and the effective window was
+                # 1M, which is why five overflow counters read 0 and were read as a
+                # broken instrument. The only reliable fix is for the run to stamp its
+                # own effective value; reconstructing it from the config is exactly the
+                # move that failed. Note the counters below and these two are the same
+                # kind of field: a number that decided behaviour and left no record.
+                "effective_context_window": self.context_window_tokens,
+                "context_window_source": self._window_source,
+                # The three empty-recovery counters, until now pure locals. Each one
+                # costs the turn an extra generation and each one is upstream of the
+                # dead-turn bucket a conditional rerun triggers on - and a rerun policy
+                # has to be compared PER ARM (defect #12: one side got a treatment the
+                # three main gates could not see). Same shape as ``hook_rollbacks``
+                # before 2026-08-21: "never fired" and "fired N times" were one record.
+                "loop_nudges": loop_nudges,
+                "post_tool_nudges": post_tool_nudges,
+                "prefill_retries": prefill_retries,
+                "empty_retries": empty_retries,
             }
         if hook_ctx is not None and answerless:
             hook_ctx.messages = messages
@@ -3362,6 +3519,8 @@ class AgentLoop:
                 final_content = str(decision.short_circuit_result)
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
+                hook_ctx.metadata["turn_end"]["salvage_seam"] = "terminal"
+                hook_ctx.metadata["turn_end"]["answerless_corrected"] = False
                 # The terminal seam commits after the stamp above, so the corrected
                 # counter has to be refreshed here or it would still read True for an
                 # item that just produced an answer.
@@ -4369,6 +4528,8 @@ class AgentLoop:
                 await emit(Reasoning(content=text))
 
         async def on_tool(phase: str, info: dict[str, Any]) -> None:
+            # .get() for iteration: not every emitter sends it (the TUI
+            # runner's synthetic message-tool complete does not).
             if phase == "start":
                 await emit(
                     ToolEvent(
@@ -4376,6 +4537,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        iteration=info.get("iteration", 0),
                     )
                 )
             else:

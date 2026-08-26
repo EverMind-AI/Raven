@@ -127,6 +127,7 @@ upgrade_commands.register(app)
 # Subcommand registrations
 # ============================================================================
 
+from raven.cli.acp_commands import acp_app
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
 from raven.cli.provider_commands import provider_app
@@ -134,6 +135,7 @@ from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
 from raven.cli.skill_commands import skill_app
 
+app.add_typer(acp_app, name="acp")
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
 app.add_typer(provider_app, name="provider")
