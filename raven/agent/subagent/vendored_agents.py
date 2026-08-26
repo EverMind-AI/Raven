@@ -468,6 +468,14 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
                 name,
             )
             continue
+        if name in by_name and _kind_changed(cfg, by_name[name]):
+            logger.info(
+                "Stored sub-agent {!r} is kind {!r} but its folder now declares {!r}; using the discovered one",
+                name,
+                getattr(cfg, "kind", None),
+                getattr(by_name[name], "kind", None),
+            )
+            continue
         if name not in by_name:
             order.append(name)
         else:
@@ -495,6 +503,35 @@ def _fill_owns(cfg: Any, discovered: Any) -> Any:
         return cfg.model_copy(update={"owns": found})
     except Exception:  # noqa: BLE001 - a duck-typed row must not sink the table
         return cfg
+
+
+def _kind_changed(cfg: Any, discovered: Any) -> bool:
+    """Whether a stored row's transport disagrees with what its folder declares now.
+
+    The same class of staleness as :func:`_launcher_is_gone`, replaced for the
+    same reason. ``kind`` is not a user preference but a structural fact about how
+    the folder is launched -- an acp entry's ``command`` starts a server spawned
+    once per connection, a cli entry's starts a process spawned once per task --
+    so a row naming the old transport does not launch the agent a different way,
+    it fails to launch it as the folder now works.
+
+    Without this, a folder that moves to acp is invisible to every install that
+    had already registered it: ``install.py`` wrote a complete cli row, that row
+    wins on name, and the manifest an upgrade updated never reaches the roster.
+    The alternative was asking each user to re-run the tree's installer with
+    ``--prune-stale``, which is a migration note nobody reads and no way to tell
+    who is still on the old transport.
+
+    A wholesale swap rather than a field merge, for the reason the caller's
+    docstring gives: the two kinds carry different fields -- ``resumeCommand`` and
+    ``idSource`` on one, ``cwd`` and ``readyTimeoutMs`` on the other -- so there
+    is no field-by-field result that is a valid entry of either kind.
+
+    Both sides must actually declare one: a duck-typed row that reports no kind is
+    left to the config-wins path rather than replaced on a missing attribute.
+    """
+    stored, found = getattr(cfg, "kind", None), getattr(discovered, "kind", None)
+    return bool(stored and found and stored != found)
 
 
 def _launcher_is_gone(cfg: Any) -> bool:

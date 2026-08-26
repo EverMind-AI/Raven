@@ -3165,3 +3165,84 @@ async def test_a_user_chunk_that_echoes_the_prompt_is_not_a_steer() -> None:
     await feed("do the thing")
     await feed("the docs first")
     assert [(e["t"], e["text"]) for e in col.events] == [("user", "the docs first")]
+
+
+async def test_a_pinned_cwd_launches_there_but_the_session_follows_the_caller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two directories an acp entry deals in must not be the same one.
+
+    ``cwd`` on the entry is part of the pool's launch key, so an entry that would
+    otherwise relaunch its server on every workspace change pins it. But the
+    ``cwd`` of ``session/new`` is the *turn's* working directory: the agent binds
+    it as the session's ``workdir`` and its tools resolve paths against it. Sent
+    the pinned value, a vendored agent ran every task inside its own folder --
+    relative paths did not resolve, and what it wrote landed in the vendored
+    checkout rather than the caller's tree.
+    """
+    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp.pool import AcpConnectionPool
+
+    pinned = tmp_path / "vendored-folder"
+    pinned.mkdir()
+    caller = tmp_path / "callers-project"
+    caller.mkdir()
+
+    launched: list[Any] = []
+    real_acquire = AcpConnectionPool.acquire
+
+    async def spy_acquire(self: Any, *args: Any, **kwargs: Any) -> Any:
+        launched.append(kwargs.get("cwd"))
+        return await real_acquire(self, *args, **kwargs)
+
+    opened: list[tuple[str, Any]] = []
+    real_request = AcpClient.request
+
+    async def spy_request(self: Any, method: str, params: Any = None, **kwargs: Any) -> Any:
+        if method in ("session/new", "session/load"):
+            opened.append((method, (params or {}).get("cwd")))
+        return await real_request(self, method, params, **kwargs)
+
+    monkeypatch.setattr(AcpConnectionPool, "acquire", spy_acquire)
+    monkeypatch.setattr(AcpClient, "request", spy_request)
+
+    backend = build_third_party_backend(stub_config("pinned", cwd=str(pinned)))
+    await backend.run("a", task_id="t1", workspace=caller, executor=None)
+
+    assert launched == [str(pinned)], "the launch key must keep the entry's pinned cwd"
+    assert opened == [("session/new", str(caller))], "the session must run in the caller's workspace"
+
+
+async def test_an_unpinned_entry_uses_the_caller_for_both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary on the split above: with no pinned ``cwd`` both values are the
+    caller's workspace, which is what every preset and hand-written acp row has
+    always done -- so the split changes nothing for them."""
+    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp.pool import AcpConnectionPool
+
+    caller = tmp_path / "callers-project"
+    caller.mkdir()
+
+    launched: list[Any] = []
+    real_acquire = AcpConnectionPool.acquire
+
+    async def spy_acquire(self: Any, *args: Any, **kwargs: Any) -> Any:
+        launched.append(kwargs.get("cwd"))
+        return await real_acquire(self, *args, **kwargs)
+
+    opened: list[Any] = []
+    real_request = AcpClient.request
+
+    async def spy_request(self: Any, method: str, params: Any = None, **kwargs: Any) -> Any:
+        if method == "session/new":
+            opened.append((params or {}).get("cwd"))
+        return await real_request(self, method, params, **kwargs)
+
+    monkeypatch.setattr(AcpConnectionPool, "acquire", spy_acquire)
+    monkeypatch.setattr(AcpClient, "request", spy_request)
+
+    backend = build_third_party_backend(stub_config("unpinned"))
+    await backend.run("a", task_id="t1", workspace=caller, executor=None)
+
+    assert launched == [str(caller)]
+    assert opened == [str(caller)]

@@ -96,9 +96,9 @@ def env_value(name: str) -> str | None:
 
 
 def resolve(entry: dict, python: str) -> dict:
-    """Substitute the install-time placeholders in every command field."""
+    """Substitute the install-time placeholders in every field that carries them."""
     resolved = dict(entry)
-    for field in ("command", "resumeCommand"):
+    for field in ("command", "resumeCommand", "cwd"):
         if template := resolved.get(field):
             resolved[field] = template.replace("{SUBAGENT_DIR}", str(HERE)).replace("{PYTHON}", python)
     return resolved
@@ -162,7 +162,7 @@ def main() -> int:
     python = args.python or env_value("SUBAGENT_PYTHON") or sys.executable
     entry = resolve(template, python)
 
-    if unresolved := [f for f in ("command", "resumeCommand") if "{SUBAGENT_DIR}" in str(entry.get(f, ""))]:
+    if unresolved := [f for f in ("command", "resumeCommand", "cwd") if "{SUBAGENT_DIR}" in str(entry.get(f, ""))]:
         raise SystemExit(f"error: placeholders left unresolved in {', '.join(unresolved)}")
 
     print(json.dumps(entry, indent=2, ensure_ascii=False))
