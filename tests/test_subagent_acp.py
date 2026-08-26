@@ -1584,6 +1584,94 @@ async def test_forget_logs_when_an_advertised_session_delete_fails(
     assert any("session/delete" in message and "failed" in message for message in captured)
 
 
+async def test_a_retracted_request_cancels_the_handler_still_answering_it() -> None:
+    """An agent that takes a question back leaves a form on somebody's screen.
+
+    The retraction is the only signal there is: nothing else tells raven that the
+    run stopped listening, so an unhandled one leaves the sheet up for the whole
+    of the question broker's own budget, answering into a turn that has ended.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+
+    started = asyncio.Event()
+    retracted = asyncio.Event()
+
+    async def parks(method: str, params: dict) -> object:
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            retracted.set()
+            raise
+        return {"action": "decline"}
+
+    client = await AcpClient.launch(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "elicits_then_retracts"},
+        on_request=parks,
+        on_notification=lambda method, params: asyncio.sleep(0),
+    )
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        await client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            timeout=15.0,
+        )
+        await asyncio.wait_for(started.wait(), 5.0)
+        await asyncio.wait_for(retracted.wait(), 5.0)
+    finally:
+        await client.close()
+
+
+async def test_an_id_no_dict_can_hold_does_not_kill_the_connection() -> None:
+    """The peer's ids are indexed now, and a dict key has to be hashable.
+
+    An unhashable one raises inside `_dispatch`, which `_read_stdout` answers by
+    logging and leaving its loop -- and the `finally` there fails every request in
+    flight, so one malformed notification ends the connection mid-turn. The empty
+    index hides it: `dict.pop` on an empty dict never hashes what it is asked for,
+    so this only bites while an answer is outstanding, which is exactly when a
+    retraction arrives.
+
+    The stub ends the turn only once raven has answered the request whose id it
+    could not index, so a connection that died reports as a failed prompt.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+
+    answered: list[str] = []
+
+    async def parks_then_answers(method: str, params: dict) -> object:
+        if (params.get("message") or "") == "park":
+            await asyncio.sleep(3600)
+        answered.append(str(params.get("message")))
+        return {"action": "decline"}
+
+    client = await AcpClient.launch(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "malformed_ids"},
+        on_request=parks_then_answers,
+        on_notification=lambda method, params: asyncio.sleep(0),
+    )
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        result = await client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            timeout=15.0,
+        )
+        assert result["stopReason"] == "end_turn"
+        assert answered == ["answer"], answered
+    finally:
+        await client.close()
+
+
 async def test_an_unserialisable_handler_result_does_not_vanish_unretrieved() -> None:
     """A handler result `json.dumps` rejects must not be lost as an unretrieved task.
 

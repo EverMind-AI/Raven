@@ -388,6 +388,56 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
     assert got == {"action": "accept", "content": {"b": "x", "c": "x"}}
 
 
+async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() -> None:
+    """The agent took its question back, so the rest of the form is not ours to ask.
+
+    Cancelling the answering task is all an inbound `$/cancel_request` can do, and
+    `QuestionBroker.await_question` answers a cancellation with the question's
+    default rather than propagating one -- so it arrives inside `_one` as an empty
+    answer, which is a user's skip. Read that way the form goes on to put its next
+    field to a run that has already stopped listening.
+    """
+    import asyncio
+
+    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp.elicitor import Elicitor
+
+    asked: list[str] = []
+    parked = asyncio.Event()
+
+    class Parks:
+        async def ask(self, prompt, choices, conversation_id):
+            asked.append(prompt)
+            parked.set()
+            # Answered rather than parked, so a form that went on after the
+            # retraction reports below instead of parking the suite.
+            if len(asked) > 1:
+                return "late"
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # What the broker does with a cancellation: its own default.
+                return ""
+
+    start_ask_turn(Parks(), conversation_id="tui:c-retract")
+    task = asyncio.create_task(
+        Elicitor("A", "h").elicit(
+            {
+                "sessionId": "s",
+                "mode": "form",
+                "message": "m",
+                "requestedSchema": {"type": "object", "properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
+            }
+        )
+    )
+    await parked.wait()
+
+    task.cancel()
+
+    assert await task == {"action": "cancel"}
+    assert len(asked) == 1, asked
+
+
 async def test_url_and_unknown_modes_decline() -> None:
     from raven.agent.acp.elicitor import Elicitor
 

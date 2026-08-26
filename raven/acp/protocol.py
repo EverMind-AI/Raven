@@ -58,6 +58,15 @@ AUTH_REQUIRED = -32000
 RESOURCE_NOT_FOUND = -32002
 REQUEST_CANCELLED = -32800
 
+CANCEL_REQUEST_METHOD = "$/cancel_request"
+"""Retract a request whose answer this side will no longer read.
+
+Protocol-level and explicitly optional -- a receiver MAY act on it -- so it
+is a courtesy, not a handshake: nothing answers it and nothing waits for it.
+The reference SDK sends exactly this when a request's cancellation signal
+fires, which is what makes it the right thing for raven to send too.
+"""
+
 STOP_REASONS = frozenset(
     {
         "end_turn",
@@ -155,6 +164,7 @@ def negotiated_version(requested: Any) -> int:
 
 __all__ = [
     "AUTH_REQUIRED",
+    "CANCEL_REQUEST_METHOD",
     "INTERNAL_ERROR",
     "INVALID_PARAMS",
     "INVALID_REQUEST",

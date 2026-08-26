@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -48,6 +49,10 @@ ANSWER_FIELD = "answer"
 
 # The notification the runtime emits when ``ask_user`` fires.
 CLARIFY_METHOD = "clarify.request"
+
+# And the one retracting it: the question timed out, or its turn was cancelled,
+# so nothing will read the answer any more.
+CLARIFY_CLOSED_METHOD = "clarify.closed"
 
 # How long to wait for a person, as opposed to for a program.
 # ``DEFAULT_REQUEST_TIMEOUT_S`` (300s) is the budget for a protocol round trip,
@@ -93,6 +98,9 @@ class AcpQuestions:
         # Kept so the connection can wait for them at shutdown rather than
         # cancelling a round trip that is about to answer.
         self._tasks: set[asyncio.Task[None]] = set()
+        # The same tasks, by the broker's request_id, so ``clarify.closed`` can
+        # find the one round trip it retracts. A set cannot answer that.
+        self._asking: dict[str, asyncio.Task[None]] = {}
         self.routes: dict[str, int] = {}
 
     def set_broker(self, broker: Any) -> None:
@@ -122,6 +130,8 @@ class AcpQuestions:
         through -- and blocking it for the minutes a person takes to answer would
         stall every other frame on the connection behind this one.
         """
+        if method == CLARIFY_CLOSED_METHOD:
+            return self._retract(params)
         if method != CLARIFY_METHOD or self._broker is None or not isinstance(params, dict):
             return False
         request_id = params.get("request_id")
@@ -138,8 +148,34 @@ class AcpQuestions:
         choices = [c for c in (params.get("choices") or ()) if isinstance(c, str) and c]
         task = asyncio.create_task(self._ask(request_id, session_id, question, choices))
         self._tasks.add(task)
+        self._asking[request_id] = task
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(partial(self._forget, request_id))
         return True
+
+    def _retract(self, params: Any) -> bool:
+        """Stop asking a question the runtime has already given up on.
+
+        Cancelling the round trip is what reaches the client: ``OutboundRequests``
+        retracts a request it stops waiting for. Without this the client keeps a
+        form on screen for the rest of *its* budget, and the answer a person then
+        types lands in a request the broker resolved minutes ago.
+
+        Returns whether anything was retracted, so a close for a question this
+        surface never asked stays on the dropped tally rather than reading as
+        served.
+        """
+        request_id = params.get("request_id") if isinstance(params, dict) else None
+        task = self._asking.pop(request_id, None) if isinstance(request_id, str) else None
+        if task is None:
+            return False
+        task.cancel()
+        return True
+
+    def _forget(self, request_id: str, task: asyncio.Task[None]) -> None:
+        """Drop the index entry, unless a later question already replaced it."""
+        if self._asking.get(request_id) is task:
+            del self._asking[request_id]
 
     async def drain(self) -> None:
         """Wait for in-flight questions, then give up on what is left.
@@ -333,4 +369,4 @@ class AcpQuestions:
 MAX_CHOICES = 8
 
 
-__all__ = ["ANSWER_FIELD", "CLARIFY_METHOD", "MAX_CHOICES", "AcpQuestions"]
+__all__ = ["ANSWER_FIELD", "CLARIFY_CLOSED_METHOD", "CLARIFY_METHOD", "MAX_CHOICES", "AcpQuestions"]

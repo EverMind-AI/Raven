@@ -1121,7 +1121,9 @@ a per-conversation lock, because the question broker allows one pending question
 conversation and fail-safes an overlapping one to its default - which here would read as a
 skip nobody ever saw. The lifetime is the backend's, since a sub-agent asks after the turn
 that spawned it has replied: `clarify.closed` retracts a question that can no longer be
-answered, and a run that ends cancels the elicitor it attached.
+answered, a run that ends cancels the elicitor it attached, and `$/cancel_request` from the
+sub-agent retracts the one request it names - the only signal there is that the run behind a
+question has stopped listening, since a sub-agent that gives up says nothing else.
 _Avoid_: reading it as the same kind of thing as **Unattended Approval**. That one is
 answered by raven with nobody in the loop; this one exists only to reach somebody, and
 declines when a dispatch has no reachable user.

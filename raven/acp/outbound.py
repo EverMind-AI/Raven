@@ -108,6 +108,17 @@ class OutboundRequests:
         try:
             self._emit(protocol.request(request_id, method, params))
             return await asyncio.wait_for(future, timeout)
+        except (TimeoutError, asyncio.CancelledError):
+            # Nothing on this side will read the answer now, and the client is
+            # still holding whatever it put in front of a person -- a permission
+            # sheet, an elicitation form -- with no way to learn that. This
+            # notification is the only way to tell it, and it is one-way: a
+            # client that ignores it is no worse off than before. Not sent for
+            # the other two exits, which need no retraction: an error means the
+            # client already answered, and a close means it is gone.
+            if not self._closed:
+                self._emit(protocol.notification(protocol.CANCEL_REQUEST_METHOD, {"requestId": request_id}))
+            raise
         finally:
             # Popped here rather than in ``resolve``: a timeout and a cancellation
             # both leave the entry behind otherwise, and a late response would

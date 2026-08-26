@@ -19,6 +19,7 @@ import shlex
 import signal
 from collections import deque
 from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import Any
 
 from loguru import logger
@@ -26,6 +27,7 @@ from loguru import logger
 from raven.agent.acp import protocol
 from raven.agent.acp.journal import FrameJournal
 from raven.agent.acp.protocol import (
+    CANCEL_REQUEST_METHOD,
     AcpConnectionError,
     AcpProtocolError,
     AcpRemoteError,
@@ -107,6 +109,21 @@ or raises to turn into an error response."""
 NotificationHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
+def _indexable(request_id: Any) -> bool:
+    """Whether a peer's request id can be used as a dict key.
+
+    The schema's `RequestId` is null, an integer or a string, all of which a dict
+    can hold, so no conforming peer fails this. It is checked because the peer is
+    a third-party binary and the rest of this loop is deliberately built to
+    survive whatever one emits: an unhashable id raises `TypeError` from the
+    index, `_read_stdout` answers that by leaving its loop, and its `finally`
+    then fails every request in flight -- ending the connection mid-turn over a
+    notification that should have cost nothing. `_resolve` guards its own id for
+    the same reason.
+    """
+    return request_id is None or isinstance(request_id, (str, int))
+
+
 class AcpClient:
     """A live JSON-RPC connection to one ACP agent process."""
 
@@ -156,6 +173,9 @@ class AcpClient:
         # connection. Requests carry their own id and are independent, so
         # answering out of arrival order is sound.
         self._answer_tasks: set[asyncio.Task] = set()
+        # The same tasks, by the agent's request id, so a ``$/cancel_request``
+        # can find the one answer it retracts. A set cannot answer that.
+        self._answering: dict[Any, asyncio.Task] = {}
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -567,9 +587,25 @@ class AcpClient:
         params = frame.get("params")
         params = params if isinstance(params, dict) else {}
         if "id" in frame:
-            task = asyncio.create_task(self._answer_request(frame["id"], str(method), params))
+            request_id = frame["id"]
+            task = asyncio.create_task(self._answer_request(request_id, str(method), params))
             self._answer_tasks.add(task)
-            task.add_done_callback(self._answer_tasks.discard)
+            if _indexable(request_id):
+                self._answering[request_id] = task
+                task.add_done_callback(partial(self._forget_answer, request_id))
+            else:
+                # Answered but not indexed. Still answered because an unanswered
+                # request stalls the agent's turn for the life of the session,
+                # and nothing is lost by leaving it out: a retraction naming the
+                # same id could not be indexed either.
+                logger.debug("acp agent {!r}: request id {!r} cannot be indexed", self.name, request_id)
+                task.add_done_callback(self._answer_tasks.discard)
+            return
+        if method == CANCEL_REQUEST_METHOD:
+            # Handled here rather than passed on: the notification carries no
+            # sessionId, so a router that fans out on one can only log it as
+            # unroutable.
+            self._retract(params.get("requestId"))
             return
         if self._on_notification is not None:
             try:
@@ -578,6 +614,33 @@ class AcpClient:
                 logger.opt(exception=True).warning(
                     "acp agent {!r}: notification handler for {} failed: {}", self.name, method, exc
                 )
+
+    def _retract(self, request_id: Any) -> None:
+        """Stop answering a request the agent has taken back.
+
+        Cancelling the task is the whole of it. What that reaches is whatever the
+        handler was waiting on -- for an elicitation, a question standing in front
+        of a person -- which is told the question is dead on its way out, the same
+        as any other cancelled round trip. Nothing suppresses the response that
+        may still follow: answering a retracted request is allowed, and the agent
+        drops a response it no longer holds a promise for.
+        """
+        if not _indexable(request_id):
+            logger.debug("acp agent {!r}: retraction names an unusable id {!r}", self.name, request_id)
+            return
+        task = self._answering.pop(request_id, None)
+        if task is None:
+            # Already answered, or never ours. Both are ordinary: the retraction
+            # races the answer it is trying to beat.
+            return
+        logger.debug("acp agent {!r}: request {} was retracted, cancelling its answer", self.name, request_id)
+        task.cancel()
+
+    def _forget_answer(self, request_id: Any, task: asyncio.Task) -> None:
+        """Drop both index entries, unless a later request already replaced one."""
+        self._answer_tasks.discard(task)
+        if self._answering.get(request_id) is task:
+            del self._answering[request_id]
 
     async def _answer_request(self, request_id: Any, method: str, params: dict[str, Any]) -> None:
         """Answer an agent-initiated request, always with something.

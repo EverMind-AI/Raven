@@ -29,6 +29,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``permission``   - asks ``session/request_permission`` with a real option list and
                      answers the prompt with the ``optionId`` raven chose, so a test can
                      assert *which* option it picked rather than only that it answered.
+- ``malformed_ids`` - sends a request id and a retraction id that no dict can
+  hold, while an earlier answer is still in flight.
+- ``elicits_then_retracts`` - asks ``elicitation/create``, then retracts it with
+  ``$/cancel_request`` and ends the turn without ever reading an answer.
 - ``elicits_then_streams`` - asks ``elicitation/create`` and does not wait for an
                      answer, then streams three chunks and ends the turn. Proves a
                      handler that blocks on a human does not stall delivery on the
@@ -77,6 +81,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 MODE = os.environ.get("ACP_STUB_MODE", "ok")
 
@@ -134,9 +139,24 @@ _AWAITING_ELICITATION: list = []
 # Prompts held open until the client cancels them (cancel_aware / cancel_deaf).
 _AWAITING_CANCEL: list = []
 
+# A request id no dict can hold, and the prompt waiting on its answer
+# (malformed_ids). The schema says a RequestId is null, an integer or a
+# string; this is what a peer that does not read the schema can still send.
+_UNHASHABLE_ID = [7]
+_AWAITING_MALFORMED: list = []
+
 
 def handle_response(frame) -> None:
     """Finish a held prompt once raven has answered the permission or elicitation request."""
+    if MODE == "malformed_ids":
+        # The turn ends only when raven answers the request whose id no dict
+        # can hold, so a read loop that died on the retraction before it shows
+        # up as a failed prompt rather than as a quiet difference.
+        if frame.get("id") != _UNHASHABLE_ID or not _AWAITING_MALFORMED:
+            return
+        request_id, session_id = _AWAITING_MALFORMED.pop(0)
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if _AWAITING_ELICITATION:
         content = ((frame.get("result") or {}).get("content")) or {}
         picked = content.get("backend") or "no-answer"
@@ -297,6 +317,66 @@ def handle_prompt(request_id, params) -> None:
             }
         )
         sys.exit(0)
+    if MODE == "elicits_then_retracts":
+        # Asks, then takes it back the way the reference SDK does when a request's
+        # cancellation signal fires, and ends the turn without reading an answer.
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9003,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "which one?",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {"first": {"type": "string"}, "second": {"type": "string"}},
+                    },
+                },
+            }
+        )
+        # Long enough that the client has certainly started answering: the point
+        # of the mode is a retraction that lands mid-form, not before it.
+        time.sleep(0.3)
+        notify("$/cancel_request", {"requestId": 9003})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "malformed_ids":
+        # Both places raven indexes a peer's id: a retraction's `requestId`, and
+        # an inbound request's own `id`. The retraction goes second, while the
+        # first request is still unanswered, because an empty index never hashes
+        # the key it is asked for and so hides the whole thing.
+        _AWAITING_MALFORMED.append((request_id, session_id))
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9004,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "park",
+                    "requestedSchema": {"type": "object", "properties": {"a": {"type": "string"}}},
+                },
+            }
+        )
+        time.sleep(0.3)
+        notify("$/cancel_request", {"requestId": [1]})
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": _UNHASHABLE_ID,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "answer",
+                    "requestedSchema": {"type": "object", "properties": {"a": {"type": "string"}}},
+                },
+            }
+        )
+        return
     if MODE == "two_messages":
         # The order measured on codex-acp: a preamble in several chunks, the
         # tool calls it announced, then the answer itself.
