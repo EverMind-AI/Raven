@@ -148,7 +148,7 @@ async def test_every_origin_records_the_playbook_address(tmp_path):
     assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1"} in stub.contexts
 
 
-def test_a_playbook_config_that_is_on_registers_creation_but_no_loader_without_content(tmp_path) -> None:
+def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path) -> None:
     """The one path production takes: construct the loop *with* a playbook config.
 
     Every other test in the suite assembles the playbook runtime directly, which
@@ -159,10 +159,13 @@ def test_a_playbook_config_that_is_on_registers_creation_but_no_loader_without_c
     but writing one warning line. Asserting on the registry is what makes that
     reachable -- a runtime that fails to build registers no tools.
 
-    ``create_playbook`` registers whenever the feature is on -- an empty library
-    is exactly when capturing the first workflow matters. The loader does not:
-    registered only once something is offered, because a tool that can answer
-    nothing but "unknown" is a tool the model should not have been given.
+    Both tools register whenever the feature is on, and the empty library is the
+    case that decides it. The loader used to wait for content, on the grounds
+    that a tool answering nothing but "unknown" should not be offered -- but
+    ``create_playbook`` writes the first one *into this conversation*, and the
+    tool that loads it did not exist until the next process. Its description
+    says there is nothing installed when there is nothing installed, which costs
+    a sentence and keeps the pair reachable together.
     """
     from raven.config.schema import PlaybookConfig
 
@@ -176,7 +179,8 @@ def test_a_playbook_config_that_is_on_registers_creation_but_no_loader_without_c
 
     assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
     assert loop.tools.has("create_playbook")
-    assert not loop.tools.has("load_playbook")
+    assert loop.tools.has("load_playbook")
+    assert "No playbooks are installed" in loop.tools.get("load_playbook").description
 
 
 def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:

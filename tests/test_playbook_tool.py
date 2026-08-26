@@ -54,14 +54,14 @@ def _spec(name="weekly-feedback", **over):
     return PlaybookSpec(**base)
 
 
-def _runtime(tmp_path, specs, dag_tool=None):
+def _runtime(tmp_path, specs, dag_tool=None, disabled_source=None):
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
     for spec in specs:
         store.save(spec)
     executor = PlaybookExecutor(
         dag_tool=dag_tool or FakeDagTool(),
     )
-    return PlaybookRuntime(store=store, executor=executor)
+    return PlaybookRuntime(store=store, executor=executor, disabled_source=disabled_source)
 
 
 @pytest.fixture
@@ -135,33 +135,117 @@ class FakeGenerator:
         return GeneratedPlaybook(spec=_spec(name="placeholder"), notes=["Assumption: weekly cadence"])
 
 
-def _create_tool(tmp_path, generator=None):
+def _create_tool(tmp_path, generator=None, *, adopt_ok=True):
     from raven.agent.tools.create_playbook import CreatePlaybookTool
 
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
-    switched = []
-    tool = CreatePlaybookTool(generator or FakeGenerator(), store, lambda n, d: switched.append((n, d)) or True)
-    return tool, store, switched
+    switched: list[tuple[str, bool]] = []
+    adopted: list[str] = []
+
+    def _adopt(name: str) -> bool:
+        adopted.append(name)
+        return adopt_ok
+
+    tool = CreatePlaybookTool(
+        generator or FakeGenerator(),
+        store,
+        lambda n, d: switched.append((n, d)) or True,
+        adopt=_adopt,
+    )
+    return tool, store, switched, adopted
 
 
-async def test_create_lands_in_user_layer_disabled(tmp_path):
-    tool, store, switched = _create_tool(tmp_path)
+def test_switching_one_off_takes_effect_without_a_restart(tmp_path):
+    """The deny list is read, not remembered.
+
+    It used to be copied into the runtime at construction, so `raven playbook
+    disable x` changed a file that nothing would read again until the process
+    restarted -- and the user had no way to know that the command they had just
+    run was waiting on one.
+    """
+    deny: set[str] = set()
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], disabled_source=lambda: frozenset(deny))
+
+    assert runtime.names() == ["weekly-scan"]
+    assert runtime.empty is False
+
+    deny.add("weekly-scan")
+
+    assert runtime.names() == []
+    assert runtime.empty is True
+    # Still loaded, so the user naming it outright on the CLI still resolves.
+    assert runtime._specs["weekly-scan"].name == "weekly-scan"
+
+    deny.clear()
+
+    assert runtime.names() == ["weekly-scan"]
+
+
+def test_a_playbook_written_mid_conversation_is_adopted_without_a_restart(tmp_path):
+    """The library was read once at construction, so a playbook created in a
+    conversation was invisible to the tool whose job is to load it until the
+    next process. Loading the one file that changed rather than rescanning: the
+    caller knows the name, and a rescan would parse every other file to learn
+    nothing."""
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    store.save(_spec(name="monthly-scan"))
+
+    assert runtime.names() == ["weekly-scan"]
+
+    assert runtime.adopt("monthly-scan") is True
+
+    assert runtime.names() == ["monthly-scan", "weekly-scan"]
+
+
+def test_adopting_a_name_that_was_never_written_is_reported_not_raised(tmp_path):
+    """The creating tool turns this into a reply that says which half happened;
+    raising here would fail the turn that produced the file instead."""
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+
+    assert runtime.adopt("never-written") is False
+    assert runtime.names() == ["weekly-scan"]
+
+
+async def test_create_lands_in_the_user_layer_and_is_usable_at_once(tmp_path):
+    """It used to be written onto the deny list for review. That read as caution
+    and behaved as a dead end: the only way off the list was a CLI command, and
+    the runtime had read the list once at start, so even that did nothing until
+    the next process. Disabling stays available; it is not the starting state."""
+    tool, store, switched, adopted = _create_tool(tmp_path)
 
     out = await tool.execute("weekly-scan", "every monday pull feedback then summarize")
 
     assert store.origin_of("weekly-scan") == "user"
-    assert switched == [("weekly-scan", True)]
-    assert "disabled" in out
-    assert "enable weekly-scan" in out
+    assert switched == []
+    assert adopted == ["weekly-scan"]
+    assert "available now" in out
+    assert "disabled" not in out
     # The generator's open questions reach the user through the reply too.
     assert "Assumption: weekly cadence" in out
     # The stored name is the tool argument, not whatever the model drafted.
     assert store.load("weekly-scan").name == "weekly-scan"
 
 
+async def test_a_playbook_that_cannot_be_loaded_back_says_which_half_happened(tmp_path):
+    """ "Created" on its own would send the caller to load a name that does not
+    resolve, and the next thing it reads is the tool saying that name is not in
+    the library -- two rounds to learn one thing."""
+    tool, store, _switched, adopted = _create_tool(tmp_path, adopt_ok=False)
+
+    out = await tool.execute("weekly-scan", "every monday pull feedback then summarize")
+
+    assert adopted == ["weekly-scan"]
+    assert "could not be loaded back" in out
+    assert "not available in this conversation" in out
+    # Written all the same: the file is the deliverable, and hiding that it
+    # landed would leave a name that cannot be created again either.
+    assert store.origin_of("weekly-scan") == "user"
+
+
 async def test_create_refuses_an_existing_name_without_generating(tmp_path):
     generator = FakeGenerator()
-    tool, store, switched = _create_tool(tmp_path, generator)
+    tool, store, switched, _adopted = _create_tool(tmp_path, generator)
     store.save(_spec(name="weekly-scan"))
 
     out = await tool.execute("weekly-scan", "whatever")
@@ -172,7 +256,7 @@ async def test_create_refuses_an_existing_name_without_generating(tmp_path):
 
 
 async def test_create_degrades_generation_failure_to_an_error_reply(tmp_path):
-    tool, store, switched = _create_tool(tmp_path, FakeGenerator(fail=True))
+    tool, store, switched, _adopted = _create_tool(tmp_path, FakeGenerator(fail=True))
 
     out = await tool.execute("weekly-scan", "whatever")
 
@@ -183,7 +267,7 @@ async def test_create_degrades_generation_failure_to_an_error_reply(tmp_path):
 
 async def test_create_refuses_a_traversal_name_before_generating(tmp_path):
     generator = FakeGenerator()
-    tool, store, switched = _create_tool(tmp_path, generator)
+    tool, store, switched, _adopted = _create_tool(tmp_path, generator)
 
     for bad in ("../escape", "/tmp/absolute", "UPPER"):
         out = await tool.execute(bad, "whatever")

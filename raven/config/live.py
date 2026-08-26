@@ -108,6 +108,24 @@ class LiveConfig:
         return node
 
 
+def disabled_playbook_names(live: LiveConfig) -> frozenset[str]:
+    """The playbooks the user has switched off, read live.
+
+    One spelling, unlike :func:`disabled_tool_names`: nothing writes this list
+    from a settings page, so ``playbooks.disabled`` is the only name it has on
+    disk (``config/update.set_playbook_disabled``, ``raven playbook disable``).
+
+    Read here rather than captured at loop start so that switching one off takes
+    effect on the next model call instead of the next process. The list is the
+    only per-machine playbook state -- playbook.md is the distribution unit and
+    carries no switch -- so this is the whole of what disabling can enforce.
+    """
+    value = live.get("playbooks.disabled")
+    if not isinstance(value, list):
+        return frozenset()
+    return frozenset(str(x) for x in value if isinstance(x, str))
+
+
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
     """The operator's off switches, as the tool registry wants them.
 

@@ -404,8 +404,8 @@ def set_playbook_disabled(
     state). The list is the only per-machine playbook state: playbook.md is
     the distribution unit and carries no switch, so disable adds the name
     here and enable removes it — for builtin and user playbooks alike. The
-    runtime reads the list once at loop start; a change applies on the next
-    agent/gateway start.
+    runtime reads the list on every model call (``config.live``), so a change
+    applies to the next one rather than to the next process.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)

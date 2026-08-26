@@ -18,7 +18,7 @@ hook); nothing here watches the directory.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from loguru import logger
@@ -47,6 +47,7 @@ class PlaybookRuntime:
         store: PlaybookStore,
         executor: PlaybookExecutor,
         disabled: Iterable[str] = (),
+        disabled_source: "Callable[[], frozenset[str]] | None" = None,
         router: RouterSizes | None = None,
     ) -> None:
         # No provider and no model here any more. Both existed for the gate --
@@ -63,17 +64,25 @@ class PlaybookRuntime:
         #: Reset when that pair finally dispatches, so a second, genuinely new
         #: run of the same playbook starts with a fresh budget.
         self._gap_rounds: dict[tuple[str, str], int] = {}
+        self._store = store
         self._specs: dict[str, PlaybookSpec] = {}
-        #: Loaded but not offered. The deny list is config
-        #: (``playbooks.disabled``), not file content, so a hand-written directory
-        #: participates the moment it exists. A disabled playbook stays *loaded*
-        #: because ``raven playbook run`` still resolves it -- that is the user's
-        #: own hand, and nothing about disabling should stop them naming one
-        #: outright. What it does mean is that the model never sees it, which is
-        #: the whole of what disabling can enforce now that no passive matcher
-        #: remains to mute.
-        self._disabled: set[str] = set()
-        deny = set(disabled)
+        #: Where the deny list is read from, asked on every access rather than
+        #: captured here. A switch that was captured needed a restart to take
+        #: effect, which is not something a user can be expected to know about a
+        #: preference they just changed. ``disabled`` stays for the callers that
+        #: have a fixed list and no config file (the CLI's explicit run, tests);
+        #: the two are unioned, so neither surface can lose its entries.
+        #:
+        #: The list is config (``playbooks.disabled``), not file content, so a
+        #: hand-written directory participates the moment it exists. A disabled
+        #: playbook stays *loaded* because ``raven playbook run`` still resolves
+        #: it -- that is the user's own hand, and nothing about disabling should
+        #: stop them naming one outright. What it does mean is that the model
+        #: never sees it, which is the whole of what disabling can enforce now
+        #: that no passive matcher remains to mute.
+        self._disabled_source = disabled_source
+        self._fixed_disabled = frozenset(disabled)
+        deny = self.disabled()
         for pid in store.list_ids():
             try:
                 spec = store.load(pid)
@@ -83,9 +92,8 @@ class PlaybookRuntime:
             self._specs[pid] = spec
             if pid in deny:
                 logger.info("Playbook {!r} is disabled in config; not offered to the model", pid)
-                self._disabled.add(pid)
-        offered = {pid: s.triggers for pid, s in self._specs.items() if pid not in self._disabled}
-        self._index = TriggerIndex(offered)
+        self._reindex()
+        offered = {pid: spec.triggers for pid, spec in self._specs.items() if pid not in deny}
         if collisions := find_collisions(offered):
             # Shared vocabulary is no longer ambiguity to adjudicate -- nothing
             # dispatches off a keyword. Both playbooks simply become visible
@@ -95,8 +103,52 @@ class PlaybookRuntime:
         logger.info(
             "Playbook runtime loaded {} playbook(s), {} disabled",
             len(self._specs),
-            len(self._disabled),
+            len(self._specs.keys() & deny),
         )
+
+    def disabled(self) -> frozenset[str]:
+        """The names not on offer right now, read rather than remembered."""
+        if self._disabled_source is None:
+            return self._fixed_disabled
+        try:
+            return self._fixed_disabled | self._disabled_source()
+        except Exception:  # noqa: BLE001 - a bad read must not cost the turn its library
+            logger.warning("playbooks: could not read the disabled list; offering everything else")
+            return self._fixed_disabled
+
+    def _reindex(self) -> None:
+        """Rebuild the trigger index over what is currently offered.
+
+        Called after the library changes rather than on every read: the index
+        normalizes the whole vocabulary once, which is the work the per-turn
+        ranking exists not to redo. The deny list is *not* baked into it -- a
+        name switched off between two calls has to disappear without anything
+        being rebuilt, so :meth:`listing` filters at the point of use.
+        """
+        self._index = TriggerIndex({pid: s.triggers for pid, s in self._specs.items()})
+
+    def adopt(self, name: str) -> bool:
+        """Take a playbook that was just written into the live library.
+
+        The library was read once at construction, so a playbook created mid
+        conversation was invisible until the process restarted -- including to
+        the tool whose whole job is to load it. Loading the one file that
+        changed rather than rescanning: the caller knows the name, and a rescan
+        would parse every other file to learn nothing.
+
+        Returns False when the file cannot be read, which is reported by the
+        caller rather than raised: a playbook that was written but cannot be
+        parsed back is worth saying out loud, and is not a reason to fail the
+        turn that wrote it.
+        """
+        try:
+            self._specs[name] = self._store.load(name)
+        except Exception as exc:  # noqa: BLE001 - the caller reports it
+            logger.warning("Playbook {!r} was written but could not be loaded back: {}", name, exc)
+            return False
+        self._reindex()
+        logger.info("Playbook {!r} adopted into the live library", name)
+        return True
 
     @property
     def dag_tool(self) -> Any:
@@ -108,7 +160,7 @@ class PlaybookRuntime:
         """Whether there is anything to offer. Disabled entries do not count:
         the tool exists to be called, and one that can only answer "that is
         turned off" is a tool the model should not have been given."""
-        return not (set(self._specs) - self._disabled)
+        return not (set(self._specs) - self.disabled())
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
         """Record this turn's reply address and pass it to the executor."""
@@ -123,7 +175,7 @@ class PlaybookRuntime:
         would turn a recall miss into "the model cannot reach it at all", even
         when the user has just named the playbook out loud.
         """
-        return sorted(set(self._specs) - self._disabled)
+        return sorted(set(self._specs) - self.disabled())
 
     def listing(self, message: str = "") -> list[tuple[str, str]]:
         """``(name, detail)`` for the playbooks worth describing in full this turn.
@@ -135,8 +187,9 @@ class PlaybookRuntime:
         Without the parameter table it can only guess key names, and a guessed key
         is dropped silently and comes back as the same question.
         """
+        deny = self.disabled()
         chosen = select_playbooks(
-            {pid: spec for pid, spec in self._specs.items() if pid not in self._disabled},
+            {pid: spec for pid, spec in self._specs.items() if pid not in deny},
             message,
             # The index this object already built at load: it normalized the whole
             # vocabulary once, which is the work the ranking would otherwise redo
@@ -187,7 +240,7 @@ class PlaybookRuntime:
         themselves.
         """
         spec = self._specs.get(name)
-        if spec is None or (name in self._disabled and not allow_disabled):
+        if spec is None or (name in self.disabled() and not allow_disabled):
             return None
         cid = self._context.get("session_key") or ""
         key = (cid, name)
