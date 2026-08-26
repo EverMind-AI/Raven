@@ -36,16 +36,19 @@ class LazyProvider(LLMProvider):
         self._initial_endpoint_label = initial_endpoint_label
         self._provider: LLMProvider | None = None
         self._lock = threading.Lock()
+        # Deliberately not ``_lock``: that one is held for the whole build, and
+        # the build is the litellm import. Guarding the callback with it makes
+        # wiring the callback wait out the very import prewarm exists to hide.
+        self._callback_lock = threading.Lock()
         self._on_built: Callable[[], None] | None = None
+        self._on_built_fired = False
 
     def _built(self) -> LLMProvider:
         if self._provider is None:
             with self._lock:
                 if self._provider is None:
                     self._provider = self._factory()
-                    callback = self._on_built
-                    if callback is not None:
-                        self._invoke_on_built(callback)
+                    self._fire_on_built()
         return self._provider
 
     @property
@@ -68,12 +71,33 @@ class LazyProvider(LLMProvider):
     def on_built(self, callback: "Callable[[], None] | None") -> None:
         """Setting this after the build already happened (prewarm can finish
         before the constructor gets here) still fires the callback once,
-        rather than silently missing the one build event there is."""
-        with self._lock:
+        rather than silently missing the one build event there is.
+
+        Never waits on a build in flight: the callback is recorded, and
+        whichever of the two finishes second is the one that fires it (see
+        ``_fire_on_built``). This setter runs on ``AgentLoop``'s construction
+        path, which is the startup path -- blocking here would hand back the
+        seconds ``prewarm`` just moved off it.
+        """
+        with self._callback_lock:
             self._on_built = callback
-            already_built = self._provider is not None
-        if already_built and callback is not None:
-            self._invoke_on_built(callback)
+        if self._provider is not None:
+            self._fire_on_built()
+
+    def _fire_on_built(self) -> None:
+        """Invoke the callback at most once per instance.
+
+        Called from both ends of the race the split lock opens: the build
+        finishing and the callback being wired. Either can be second, and
+        without the latch a setter landing between the build's assignment and
+        its own call here would have both of them fire.
+        """
+        with self._callback_lock:
+            callback = self._on_built
+            if callback is None or self._on_built_fired:
+                return
+            self._on_built_fired = True
+        self._invoke_on_built(callback)
 
     @staticmethod
     def _invoke_on_built(callback: Callable[[], None]) -> None:

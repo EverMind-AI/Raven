@@ -25,7 +25,10 @@ export interface FoldRow {
   calls?: readonly FoldCall[]
   /** Known call duration. Preferred over deriving one from `atMs`. */
   durationMs?: number
-  /** The id a fold keys on, seeded from the first call of the turn. */
+  /** A fold key for a turn whose rows carry no call of their own. Weaker than
+   *  the call ids below: a source that mints it per read (the instance reader's
+   *  `live-<n>` / `log-<n>` row ordinals) holds a fold across polls but not
+   *  across the settle, so it is used only when the turn called nothing. */
   foldSeed?: string
   /** A `tool` row's own verb, for when no earlier row announced its call. */
   name?: string
@@ -185,17 +188,25 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
   // Carried onto the message and used as its fold key. A turn still running is
   // handed over as a fresh object every few hundred milliseconds, so a fold
   // keyed on the object closes itself; the call ids hold still.
-  let foldId: string | undefined
+  //
+  // Two candidates, and the turn's first call id wins. That id is the
+  // transport's own and is the same string in a live read and in the settled
+  // one, which is what a fold opened mid-turn needs to survive the settle. A
+  // `foldSeed` can be weaker than that -- see its note on `FoldRow` -- so it
+  // stands in only for a turn that called nothing.
+  let foldCall: string | undefined
+  let foldSeed: string | undefined
   const pending = new Map<string, EpisodeTool>()
 
   const flush = () => {
     if (episodes.length || answer) {
-      msgs.push({ episodes, foldId, kind: 'episodes', role: 'assistant', text: answer })
+      msgs.push({ episodes, foldId: foldCall ?? foldSeed, kind: 'episodes', role: 'assistant', text: answer })
     }
 
     episodes = []
     answer = ''
-    foldId = undefined
+    foldCall = undefined
+    foldSeed = undefined
     pending.clear()
   }
 
@@ -211,7 +222,8 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
       continue
     }
 
-    foldId ??= row.foldSeed
+    foldCall ??= row.calls?.[0]?.id
+    foldSeed ??= row.foldSeed
 
     if (row.role === 'tool') {
       const tool = row.toolCallId ? pending.get(row.toolCallId) : undefined

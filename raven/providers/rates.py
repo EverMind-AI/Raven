@@ -594,6 +594,24 @@ def _trustworthy_ceiling(entry: dict | None) -> int | None:
     return int(ceiling)
 
 
+def _litellm_ready() -> bool:
+    """Whether LiteLLM is imported *and* done initializing.
+
+    ``sys.modules`` gains the key when the import starts, not when it ends, so
+    membership alone is true for the seconds the module body is still running.
+    A caller that reads it that way and then imports does not get the cheap
+    hit it asked for: it blocks on LiteLLM's module import lock until the
+    thread already importing it is finished -- the exact wait ``allow_import``
+    exists to refuse. ``__spec__._initializing`` is the flag CPython's own
+    import machinery reads to tell a live import from a finished one; a module
+    carrying no spec is one no import is still running.
+    """
+    module = sys.modules.get("litellm")
+    if module is None:
+        return False
+    return not getattr(getattr(module, "__spec__", None), "_initializing", False)
+
+
 def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
@@ -605,7 +623,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
     """
-    if not allow_import and "litellm" not in sys.modules:
+    if not allow_import and not _litellm_ready():
         return None
     try:
         from raven.providers.litellm_setup import import_litellm
@@ -656,14 +674,15 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     bound only over-trims, where this module's documented default (65536) would
     over-estimate an 8k model by a factor of eight.
 
-    ``allow_import=False`` answers only from a LiteLLM already sitting in
-    ``sys.modules``: importing it costs ~2-7s, and a caller passing this
-    (``AgentLoop`` construction, before the lazy provider's prewarm thread has
-    had a chance to import it) wants the cheap tiers only, not to trigger the
-    same import it is trying to defer. Once LiteLLM is imported the check is
-    free and the lookup proceeds exactly as with ``allow_import=True``.
+    ``allow_import=False`` answers only from a LiteLLM that has already
+    finished importing (see ``_litellm_ready``): importing it costs ~2-7s, and
+    a caller passing this (``AgentLoop`` construction, racing the lazy
+    provider's prewarm thread over that same import) wants the cheap tiers
+    only, not to wait out the import it is trying to defer. Once LiteLLM is in
+    hand the check is free and the lookup proceeds exactly as with
+    ``allow_import=True``.
     """
-    if not allow_import and "litellm" not in sys.modules:
+    if not allow_import and not _litellm_ready():
         return None
     try:
         from raven.providers.litellm_setup import import_litellm

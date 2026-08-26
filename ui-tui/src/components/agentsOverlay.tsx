@@ -11,7 +11,7 @@ import type { GatewayClient } from '../gatewayClientStub.js'
 import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
 import type { DagNodeResult, SubagentContextResult, TranscriptMessage } from '../rpc/generated.js'
 import type { Theme } from '../theme.js'
-import type { Msg, SubagentLiveRef, SubagentNode, SubagentProgress } from '../types.js'
+import type { SubagentLiveRef, SubagentNode, SubagentProgress } from '../types.js'
 
 import {
   $delegationState,
@@ -42,7 +42,7 @@ import {
   treeTotals,
   widthByDepth
 } from '../lib/subagentTree.js'
-import { buildToolTrailLine, compactPreview } from '../lib/text.js'
+import { compactPreview } from '../lib/text.js'
 import { MessageLine } from './messageLine.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
@@ -360,25 +360,37 @@ function GanttStrip({
   )
 }
 
-function OverlaySection({
+/** One collapsible section of a node's detail pane.
+ *
+ * `scope` is what the section belongs to (the run) and `id` is which section it
+ * is; together they are the state key. The title is display only, so a title
+ * that changes while the run finishes does not take the reader's fold with it.
+ *
+ * Exported for the test that pins that key down; nothing else renders one. */
+export function OverlaySection({
   children,
   count,
   defaultOpen = false,
+  id,
+  scope,
   title,
   t
 }: {
   children: ReactNode
   count?: number
   defaultOpen?: boolean
+  id: string
+  scope: string
   title: string
   t: Theme
 }) {
   const openMap = useStore($overlaySectionsOpen)
-  const open = title in openMap ? openMap[title]! : defaultOpen
+  const key = `${scope}:${id}`
+  const open = key in openMap ? openMap[key]! : defaultOpen
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box onClick={() => toggleOverlaySection(title, defaultOpen)}>
+      <Box onClick={() => toggleOverlaySection(key, defaultOpen)}>
         <Text color={t.color.label}>
           <Text color={t.color.accent}>{open ? '▾ ' : '▸ '}</Text>
           {title}
@@ -404,40 +416,6 @@ const TRANSCRIPT_TAIL_MSGS = 6
 const TRANSCRIPT_POLL_MS = 600
 const CONSOLE_TAIL_CHARS = 1200
 
-/** The wire rows the main transcript's mapper would drop from a live tail:
- * tool results after the last text-bearing message. Mid-run those are the
- * newest activity — exactly what the watcher opened this pane for. */
-const trailingToolMsg = (rows: TranscriptMessage[]): Msg | null => {
-  let lastText = -1
-
-  rows.forEach((r, i) => {
-    if ((r.role === 'assistant' || r.role === 'user' || r.role === 'system') && (r.text ?? '').trim()) {
-      lastText = i
-    }
-  })
-
-  const trailing = rows.slice(lastText + 1).filter(r => r.role === 'tool')
-
-  if (trailing.length === 0) {
-    return null
-  }
-
-  return {
-    kind: 'trail',
-    role: 'system',
-    text: '',
-    tools: trailing.map(r =>
-      buildToolTrailLine(
-        r.name ?? 'tool',
-        typeof r.context === 'string' ? r.context : '',
-        undefined,
-        undefined,
-        r.duration_ms != null ? r.duration_ms / 1000 : undefined
-      )
-    )
-  }
-}
-
 /**
  * The run's own transcript, read back while it runs.
  *
@@ -448,20 +426,26 @@ const trailingToolMsg = (rows: TranscriptMessage[]): Msg | null => {
  *
  * Rendered through `toTranscriptMessages` + `MessageLine` — the exact pipeline
  * a resumed main session draws with — so a delegated run reads like the main
- * agent, not like a second renderer that drifts. The console tail (a cli
- * lane's raw output) has no main-agent equivalent and stays a dim block.
+ * agent, not like a second renderer that drifts. That pipeline and nothing
+ * beside it: a tail of tool results past the last narrated row is claimed by
+ * the mapper itself, and the fallback that used to append them as generic trail
+ * lines drew every one of them a second time, under a renderer this view had
+ * otherwise retired. The console tail (a cli lane's raw output) has no
+ * main-agent equivalent and stays a dim block.
  */
 function LiveTranscript({
   cols,
   gw,
   live,
   refInfo,
+  scope,
   t
 }: {
   cols: number
   gw: GatewayClient
   live: boolean
   refInfo: SubagentLiveRef
+  scope: string
   t: Theme
 }) {
   const [msgs, setMsgs] = useState<null | TranscriptMessage[]>(null)
@@ -521,7 +505,7 @@ function LiveTranscript({
 
   if (refInfo.kind === 'spawn' && !callId) {
     return (
-      <OverlaySection defaultOpen t={t} title="Transcript">
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
         <Text color={t.color.muted}>queued — nothing has run yet</Text>
       </OverlaySection>
     )
@@ -529,7 +513,7 @@ function LiveTranscript({
 
   if (!msgs || msgs.length === 0) {
     return (
-      <OverlaySection defaultOpen t={t} title="Transcript">
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
         <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
       </OverlaySection>
     )
@@ -542,21 +526,35 @@ function LiveTranscript({
     .join('')
     .slice(-CONSOLE_TAIL_CHARS)
 
-  const mapped = toTranscriptMessages(rows)
-  const trailing = trailingToolMsg(rows)
-  const items = trailing ? [...mapped, trailing] : mapped
+  // `openTurn` while the run is in flight: its last rows are provisional -- the
+  // transport republishes a synthesized trailing row for what the agent has said
+  // since its last step, and the next step absorbs it -- so a shelf drawn off
+  // them would name a turn that has not closed.
+  const items = toTranscriptMessages(rows, { openTurn: live })
   const tail = items.slice(-TRANSCRIPT_TAIL_MSGS)
   const dropped = items.length - tail.length
 
   return (
-    <OverlaySection count={rows.length} defaultOpen t={t} title={live ? 'Transcript · live' : 'Transcript'}>
+    <OverlaySection
+      count={rows.length}
+      defaultOpen
+      id="transcript"
+      scope={scope}
+      t={t}
+      title={live ? 'Transcript · live' : 'Transcript'}
+    >
       {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
 
+      {/* Keyed by the row's place in the whole transcript, not in the window:
+          this window slides, so a window-relative key hands the instance that
+          held row N to row N+1 as the tail moves -- and with it any state that
+          lives in the row (an artifact shelf's show-more, a long system
+          message's expansion). */}
       {tail.map((m, i) => (
         <MessageLine
           cols={Math.max(40, cols - 6)}
           isStreaming={live && i === tail.length - 1 && m.role === 'assistant'}
-          key={i}
+          key={dropped + i}
           msg={m}
           t={t}
         />
@@ -639,12 +637,13 @@ function Detail({
           gw={gw}
           live={item.status === 'running' || item.status === 'queued'}
           refInfo={item.liveRef}
+          scope={item.id}
           t={t}
         />
       ) : null}
 
       {localTokens > 0 || localCost > 0 ? (
-        <OverlaySection defaultOpen t={t} title="Budget">
+        <OverlaySection defaultOpen id="budget" scope={item.id} t={t} title="Budget">
           {localTokens > 0 ? (
             <Field
               name="tokens"
@@ -676,7 +675,7 @@ function Detail({
       ) : null}
 
       {filesRead.length > 0 || filesWritten.length > 0 ? (
-        <OverlaySection count={filesRead.length + filesWritten.length} t={t} title="Files">
+        <OverlaySection count={filesRead.length + filesWritten.length} id="files" scope={item.id} t={t} title="Files">
           {filesWritten.slice(0, 8).map((p, i) => (
             <Text color={t.color.statusGood} key={`w-${i}`} wrap="truncate-end">
               +{p}
@@ -694,7 +693,7 @@ function Detail({
       ) : null}
 
       {toolLines.length > 0 ? (
-        <OverlaySection count={toolLines.length} defaultOpen t={t} title="Tool calls">
+        <OverlaySection count={toolLines.length} defaultOpen id="tools" scope={item.id} t={t} title="Tool calls">
           {toolLines.map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.muted}>·</Text> {line}
@@ -704,7 +703,7 @@ function Detail({
       ) : null}
 
       {outputTail.length > 0 ? (
-        <OverlaySection count={outputTail.length} defaultOpen t={t} title="Output">
+        <OverlaySection count={outputTail.length} defaultOpen id="output" scope={item.id} t={t} title="Output">
           {outputTail.map((entry, i) => (
             <Text color={entry.isError ? t.color.error : t.color.text} key={i} wrap="wrap">
               <Text bold color={entry.isError ? t.color.error : t.color.accent}>
@@ -717,7 +716,7 @@ function Detail({
       ) : null}
 
       {item.notes.length ? (
-        <OverlaySection count={item.notes.length} t={t} title="Progress">
+        <OverlaySection count={item.notes.length} id="progress" scope={item.id} t={t} title="Progress">
           {item.notes.slice(-6).map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.label}>·</Text> {line}
@@ -727,7 +726,7 @@ function Detail({
       ) : null}
 
       {item.summary ? (
-        <OverlaySection defaultOpen t={t} title="Summary">
+        <OverlaySection defaultOpen id="summary" scope={item.id} t={t} title="Summary">
           <Text color={t.color.text} wrap="wrap">
             {item.summary}
           </Text>

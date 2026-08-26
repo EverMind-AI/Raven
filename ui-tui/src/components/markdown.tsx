@@ -133,6 +133,26 @@ export const INLINE_RE = new RegExp(
 
 const indentDepth = (s: string) => Math.floor(s.replace(/\t/g, '  ').length / 2)
 
+// A list row is a marker column beside a text column, not a marker written
+// into the wrapped string -- same reason the quote rule below is a border.
+// Inline, the marker is part of the text the wrapper sees, so `• ` becomes a
+// prefix the content has to fit after: a body with no break opportunity (CJK
+// runs, a long path, an identifier) is moved whole onto the next row, leaving
+// the marker orphaned on a row of its own, and continuation rows fall back to
+// the row's left edge instead of the text column. As columns, the marker
+// spans the row's height and the body wraps inside its own width.
+const listRow = (key: number, indent: number, marker: string, t: Theme, body: ReactNode): ReactNode => (
+  <Box key={key} paddingLeft={indent}>
+    <Box flexShrink={0} width={stringWidth(marker) + 1}>
+      <Text color={t.color.muted}>{marker}</Text>
+    </Box>
+
+    <Box flexGrow={1} minWidth={0}>
+      <Text wrap="wrap-trim">{body}</Text>
+    </Box>
+  </Box>
+)
+
 const splitRow = (row: string) =>
   row
     .trim()
@@ -812,12 +832,7 @@ function MdImpl({ avail, compact, t, text }: MdProps) {
         const marker = task ? (task[1]!.toLowerCase() === 'x' ? '☑' : '☐') : '•'
 
         nodes.push(
-          <Box key={key} paddingLeft={indentDepth(bullet[1]!) * 2}>
-            <Text wrap="wrap-trim">
-              <Text color={t.color.muted}>{marker} </Text>
-              <MdInline t={t} text={task ? task[2]! : bullet[2]!} />
-            </Text>
-          </Box>
+          listRow(key, indentDepth(bullet[1]!) * 2, marker, t, <MdInline t={t} text={task ? task[2]! : bullet[2]!} />)
         )
         i++
 
@@ -829,12 +844,7 @@ function MdImpl({ avail, compact, t, text }: MdProps) {
       if (numbered) {
         start('list')
         nodes.push(
-          <Box key={key} paddingLeft={indentDepth(numbered[1]!) * 2}>
-            <Text wrap="wrap-trim">
-              <Text color={t.color.muted}>{numbered[2]}. </Text>
-              <MdInline t={t} text={numbered[3]!} />
-            </Text>
-          </Box>
+          listRow(key, indentDepth(numbered[1]!) * 2, `${numbered[2]}.`, t, <MdInline t={t} text={numbered[3]!} />)
         )
         i++
 

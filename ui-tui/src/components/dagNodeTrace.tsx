@@ -127,8 +127,11 @@ const TraceBox = ({
 
       {fit.shown.length > 0 ? (
         <Box flexDirection="column" flexGrow={1}>
+          {/* `hidden` offsets the key out of the window, so a row keeps its
+              instance as the tail slides instead of inheriting the previous
+              row's state (see the same note in `agentsOverlay`). */}
           {fit.shown.map((msg, index) => (
-            <MessageLine cols={inner} key={index} msg={msg} t={t} />
+            <MessageLine cols={inner} key={fit.hidden + index} msg={msg} t={t} />
           ))}
         </Box>
       ) : (

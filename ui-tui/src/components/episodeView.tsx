@@ -239,6 +239,10 @@ const ASIDE_RULE = {
 // transcript's own prose column: the reasoning reads as the same column of text
 // as the answer under it, with the rule out in the margin the reply marker
 // occupies. Indenting the block instead left two ragged left edges.
+//
+// The margin is on top, not bottom: every follower (the reply, the next
+// segment) already opens with one, so a bottom margin here put the answer two
+// blank rows below the scratch work while the label sat flush against it.
 const ReasoningBlock = memo(function ReasoningBlock({
   onToggle,
   t,
@@ -260,7 +264,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
       borderRight={false}
       borderStyle={ASIDE_RULE}
       borderTop={false}
-      marginBottom={1}
+      marginTop={1}
       onClick={onToggle}
       paddingLeft={1}
       width={width}
@@ -307,15 +311,22 @@ const ActivityRow = memo(function ActivityRow({
   const color = failed ? t.color.error : t.color.muted
 
   return (
-    <Box paddingLeft={depth}>
-      {running ? (
-        <NoSelect fromLeftEdge>
-          <Text>
-            <Spinner color={t.color.accent} variant="tool" />{' '}
-          </Text>
-        </NoSelect>
-      ) : null}
-      <Box flexGrow={1} minWidth={0} onClick={onToggle}>
+    <Box>
+      {/* The spinner goes in the marker margin the reasoning row and the reply
+          glyph already share, not inline ahead of the label. Inline, a row's
+          text sat two columns right of every other row for as long as the call
+          ran and snapped back when it landed -- the running row, the one a
+          reader is actually watching, was the only row aligned with nothing. */}
+      <Box flexShrink={0} width={INDENT}>
+        {running ? (
+          <NoSelect fromLeftEdge>
+            <Text>
+              <Spinner color={t.color.accent} variant="tool" />
+            </Text>
+          </NoSelect>
+        ) : null}
+      </Box>
+      <Box flexGrow={1} minWidth={0} onClick={onToggle} paddingLeft={Math.max(0, depth - INDENT)}>
         <Text color={color} dim={!failed} wrap="truncate-end">
           {label}
           {note ? ` · ${note}` : ''}
@@ -406,12 +417,23 @@ const WorkSegment = memo(function WorkSegment({
     // the argument modulo a display transform (a stripped scheme, quotes). A
     // containment test is too loose here: `ruff check` is a prefix of `ruff
     // check raven/ ui-tui/` and would have swallowed a real argument.
-    const echoed = Boolean(rowDetail) && sameArgument(rowDetail, argument)
+    //
+    // Suppressed only when there is output to show in its place: a call still
+    // running has none, and dropping the argument as well is what opened an
+    // empty slab on the one call a reader most wants to look inside. The row
+    // truncates to its width where the block wraps, so even an echoed argument
+    // is more than the row was showing.
+    const echoed = Boolean(rowDetail) && shown.length > 0 && sameArgument(rowDetail, argument)
+    const body = echoed ? '' : argument
+
+    if (!body && !shown.length) {
+      return null
+    }
 
     return (
       <Box key={`d:${tool.id}`} paddingLeft={depth}>
         <DetailBlock
-          argument={echoed ? '' : argument}
+          argument={body}
           compact={compact}
           onToggle={onCollapse}
           output={hidden > 0 ? [...shown, `… +${hidden}`] : shown}
@@ -423,6 +445,13 @@ const WorkSegment = memo(function WorkSegment({
   }
 
   // ── Running: the summary so far, plus only the call in hand ──
+  //
+  // Quiet by default and openable all the same. What a reader wants from a call
+  // is most urgent while it runs -- the command a two-minute `exec` is actually
+  // running is a question that cannot wait for it to finish -- so the rows here
+  // carry the same toggles the settled ones do. Only the default differs: the
+  // stretch stays compressed to the summary and the call in hand until the
+  // reader opens it (see `detailDefaultOpen`, which does not fire in flight).
   if (inFlight) {
     const latest = [...tools].reverse().find(tool => !tool.done) ?? tools[tools.length - 1]!
     const done = totalDurationMs(tools.filter(tool => tool.done))
@@ -430,19 +459,14 @@ const WorkSegment = memo(function WorkSegment({
     const elapsed = elapsedOf(latest, now)
 
     // One call in the whole stretch means the summary IS the call: printing
-    // both gives the same sentence twice, under two spinners.
+    // both gives the same sentence twice, under two spinners. So it opens the
+    // way a settled lone call does -- its row straight into its detail.
     if (solo) {
       return (
         <Box flexDirection="column">
-          <ActivityRow
-            depth={INDENT}
-            label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-            running
-            t={t}
-            time={durationLabel(elapsed, true)}
-            width={summaryRoom}
-          />
+          {callRow(latest, INDENT, toggleSelf)}
           {dagFor(latest, INDENT + STEP)}
+          {isOpen ? detailFor(latest, INDENT, toggleSelf) : null}
         </Box>
       )
     }
@@ -452,21 +476,38 @@ const WorkSegment = memo(function WorkSegment({
         <ActivityRow
           depth={INDENT}
           label={toolsSummary(tools, summaryRoom)}
-          running
+          onToggle={toggleSelf}
+          // Opened, the running call's own row carries the spinner, and two of
+          // them twitching at once is what this row's was competing with.
+          running={!isOpen}
           t={t}
           time={durationLabel(done, false)}
           width={summaryRoom}
         />
-        {/* The spinner above already says "in flight"; a second one on the
-            call in hand just makes two things twitch at once. */}
-        <ActivityRow
-          depth={INDENT + STEP}
-          label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-          t={t}
-          time={durationLabel(elapsed, true)}
-          width={summaryRoom}
-        />
-        {dagFor(latest, INDENT + STEP * 2)}
+        {isOpen ? (
+          tools.map(tool => (
+            <Box flexDirection="column" key={tool.id}>
+              {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
+              {dagFor(tool, INDENT + STEP * 2)}
+              {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
+            </Box>
+          ))
+        ) : (
+          <>
+            {/* The spinner above already says "in flight"; a second one on the
+                call in hand just makes two things twitch at once. */}
+            <ActivityRow
+              depth={INDENT + STEP}
+              label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
+              onToggle={() => toggleCall(latest.id)}
+              t={t}
+              time={durationLabel(elapsed, true)}
+              width={summaryRoom}
+            />
+            {dagFor(latest, INDENT + STEP * 2)}
+            {openCalls.has(latest.id) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
+          </>
+        )}
       </Box>
     )
   }
@@ -655,7 +696,12 @@ export const EpisodeView = memo(function EpisodeView({
     // (which renders unconditionally there regardless). Only a multi-call
     // stretch's fold state means "show one row per call," which a dag call
     // should still default open.
-    const detailDefaultOpen = hasDag && seg.tools.length > 1
+    //
+    // Never while the stretch is still running, though: in flight that state
+    // also decides whether every call gets a row, and a stretch that unfolds
+    // itself as the calls land is the churn the compressed live view exists to
+    // avoid. A reader's own open still stands -- `foldOpen` reads it first.
+    const detailDefaultOpen = hasDag && seg.tools.length > 1 && !seg.live
 
     return (
       <WorkSegment
@@ -719,30 +765,36 @@ export const EpisodeView = memo(function EpisodeView({
 // message. One scope per *view* therefore put every turn's first thought under
 // one key, and opening one turn's reasoning opened all of them.
 //
-// Two stable discriminators, in this order:
+// Three stable discriminators, in this order:
 //
-//  - the message's first tool call, which is the transport's own id and is the
-//    same string before and after the turn lands, so a fold survives the settle
-//    read as well as the polls;
-//  - the row the message was folded from (`foldId`), for a turn that called
-//    nothing at all -- it only thought and answered. That message's text grows
-//    while it streams, so it is replaced on every poll, and keying it on the
-//    object closed the reader's fold each time.
-//
-// The object is the last resort, for a message that came from neither -- the
-// main transcript's own rows, which are not replaced while they are read.
+//  - the turn the message came from (`foldId`): minted at message.start and
+//    published on the turn state, so the live view names this scope before the
+//    turn has called anything, and the committed message names the same one.
+//    A resumed transcript sets it from the fold's own first call id
+//    (`episodeFold`), which is the string the live read used, so the two agree
+//    across a restart as well;
+//  - the message's first tool call, for a message that carries no `foldId` --
+//    the transport's own id, and the same string before and after the settle;
+//  - the object, as a last resort, for a message that came from neither. Only
+//    safe for rows that are not replaced while they are read: a message rebuilt
+//    on every poll gets a new id each time, which closes the reader's fold.
 const foldIds = new WeakMap<object, string>()
 let foldSeq = 0
 
+/** One transcript view's fold namespace for one turn. A live read and the
+ * settled row MUST resolve to the same string, or every fold the reader opened
+ * mid-turn is lost the moment the turn lands. */
+export const turnFoldScope = (viewKey: string, turnId: string): string => `${viewKey}:${turnId}`
+
 const messageFoldId = (msg: Msg): string => {
+  if (msg.foldId !== undefined) {
+    return msg.foldId
+  }
+
   const firstCall = msg.episodes?.find(ep => ep.tools.length > 0)?.tools[0]?.id
 
   if (firstCall !== undefined) {
     return firstCall
-  }
-
-  if (msg.foldId !== undefined) {
-    return msg.foldId
   }
 
   const hit = foldIds.get(msg)
@@ -772,7 +824,7 @@ export const EpisodeMessage = memo(function EpisodeMessage({
   // The view is read here rather than threaded down as a prop: only one
   // transcript is ever on screen, and this is the adapter that knows which. The
   // message part keeps two turns in that view from sharing a fold.
-  const scope = `${viewKeyOf(useStore($directChat).active)}:${messageFoldId(msg)}`
+  const scope = turnFoldScope(viewKeyOf(useStore($directChat).active), messageFoldId(msg))
 
   return <EpisodeView cols={cols} compact={compact} episodes={msg.episodes ?? []} scope={scope} t={t} text={msg.text} />
 })

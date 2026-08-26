@@ -6,9 +6,13 @@ import { render } from 'ink-testing-library'
 import React from 'react'
 import { describe, expect, it } from 'vitest'
 
-import type { Episode, EpisodeTool } from '../types.js'
+import type { DirectTurn } from '../rpc/generated.js'
+import type { Episode, EpisodeTool, Msg } from '../types.js'
 
-import { EpisodeView } from '../components/episodeView.js'
+import { $directChat, viewKeyOf } from '../app/directChatStore.js'
+import { resetFolds, toggleFold } from '../app/foldStore.js'
+import { EpisodeMessage, EpisodeView, turnFoldScope } from '../components/episodeView.js'
+import { foldDirectTurns } from '../domain/directEpisodes.js'
 import { TOOL_PREVIEW_ROWS } from '../domain/episodeSummary.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
@@ -218,6 +222,161 @@ describe('EpisodeView', () => {
     expect(f).toContain('fetched 3 urls')
     expect(f).toContain('example.com/three')
     expect(f).not.toContain('example.com/one')
+  })
+
+  it('keeps a fold opened while the turn ran open once the turn lands', () => {
+    const cmd = 'ruff check raven/ ui-tui/ --output-format concise'
+    const running = [step(0, 'linting', [call('a', 'exec', cmd, { done: false, durationMs: undefined })])]
+    const landed = [step(0, 'linting', [call('a', 'exec', cmd, { resultPreview: 'All checks passed' })])]
+    // What `streamingAssistant` names for the running turn, and what
+    // `EpisodeMessage` recomputes for the row it settles into.
+    const scope = turnFoldScope(viewKeyOf($directChat.get().active), 't7')
+
+    // The reader's click, mid-run.
+    toggleFold(scope, 'seg:a')
+
+    const live = frame(<EpisodeView cols={92} episodes={running} live scope={scope} t={DEFAULT_THEME} />)
+    const settled = frame(
+      <EpisodeMessage
+        cols={92}
+        msg={{ episodes: landed, foldId: 't7', kind: 'episodes', role: 'assistant', text: '' }}
+        t={DEFAULT_THEME}
+      />
+    )
+
+    expect(live).toContain('--output-format')
+    expect(settled).toContain('--output-format')
+
+    resetFolds()
+  })
+
+  // The same invariant for the instance conversation view, whose rows come from
+  // the other producer. Its `call_id` is a row ordinal the backend mints per
+  // read -- `live-<n>` for a turn in flight, `log-<n>` once the record holds it
+  // -- so a fold keyed on that string is dropped at exactly the settle it has to
+  // survive. The turn's own call id is the same in both reads.
+  it('keeps that fold open in the instance view, whose row ordinals change at the settle', () => {
+    const cmd = 'ruff check raven/ ui-tui/ --output-format concise'
+    const rows = (seed: string): DirectTurn[] => [
+      { at_ms: 1, call_id: `${seed}-0`, content: 'lint it', role: 'user' },
+      {
+        at_ms: 2,
+        call_id: `${seed}-1`,
+        content: '',
+        role: 'assistant',
+        tool_calls: [{ arguments: JSON.stringify({ command: cmd }), id: 'call_abc123', name: 'exec' }]
+      },
+      {
+        at_ms: 3,
+        call_id: `${seed}-2`,
+        content: 'All checks passed',
+        role: 'tool',
+        tool_call_id: 'call_abc123'
+      }
+    ]
+    const turnOf = (seed: string) => foldDirectTurns(rows(seed)).find(m => m.kind === 'episodes')!
+    const live = turnOf('live')
+    const settled = turnOf('log')
+
+    expect(live.foldId).toBe('call_abc123')
+    expect(settled.foldId).toBe('call_abc123')
+
+    const scope = turnFoldScope(viewKeyOf($directChat.get().active), 'call_abc123')
+
+    toggleFold(scope, 'seg:call_abc123')
+
+    const render = (msg: Msg) => frame(<EpisodeMessage cols={92} msg={msg} t={DEFAULT_THEME} />)
+
+    expect(render(live)).toContain('--output-format')
+    expect(render(settled)).toContain('--output-format')
+
+    resetFolds()
+  })
+
+  it('keeps a running row on the same column as the reasoning row', () => {
+    const episodes: Episode[] = [
+      {
+        index: 0,
+        narration: '',
+        reasoning: 'weighing whether to sleep first or echo first, and for how long',
+        reasoningMs: 1000,
+        tools: [
+          call('s', 'exec', 'sleep 5 && echo done', {
+            done: false,
+            durationMs: undefined,
+            startedAt: Date.now() - 5000
+          })
+        ]
+      }
+    ]
+
+    const columnOf = (frame: string, needle: string) =>
+      frame
+        .split('\n')
+        .find(l => l.includes(needle))!
+        .indexOf(needle)
+
+    const running = view(episodes, { live: true })
+    const settled = view([step(0, '', [call('s', 'exec', 'sleep 5 && echo done', { durationMs: 5000 })])])
+
+    // The spinner belongs in the marker margin, so the label starts where every
+    // other row's text starts -- and does not jump left when the call lands.
+    expect(columnOf(running, 'ran ')).toBe(columnOf(running, 'reasoning'))
+    expect(columnOf(running, 'ran ')).toBe(columnOf(settled, 'ran '))
+  })
+
+  it('opens the call in hand while it is still running', () => {
+    const cmd = 'pytest tests/integration/test_dag_smoke.py -x -q --maxfail=1 --timeout=600'
+    const episodes = [
+      step(0, 'checking', [
+        call('a', 'read_file', 'conftest.py'),
+        call('b', 'exec', cmd, { done: false, durationMs: undefined })
+      ])
+    ]
+
+    // Closed, the row names the programs and keeps the command for the detail --
+    // which is the whole reason a running call has to be openable.
+    const closed = view(episodes, { live: true })
+    expect(closed).toContain('ran pytest')
+    expect(closed).not.toContain('--maxfail=1')
+
+    const open = view(episodes, { live: true, openKeys: ['call:b'] })
+    expect(open).toContain('--maxfail=1')
+  })
+
+  it('lists every call of a running stretch once the reader opens it', () => {
+    const episodes = [
+      step(0, 'fetching', [
+        call('a', 'web_fetch', 'https://example.com/one'),
+        call('b', 'web_fetch', 'https://example.com/two'),
+        call('c', 'web_fetch', 'https://example.com/three', { done: false, durationMs: undefined })
+      ])
+    ]
+
+    const open = view(episodes, { live: true, openKeys: ['seg:a'] })
+
+    expect(open).toContain('example.com/one')
+    expect(open).toContain('example.com/three')
+  })
+
+  it('opens a lone running call straight into its detail', () => {
+    const cmd = 'ruff check raven/ ui-tui/ --output-format concise'
+    const episodes = [step(0, 'linting', [call('r', 'exec', cmd, { done: false, durationMs: undefined })])]
+
+    expect(view(episodes, { live: true })).not.toContain('--output-format')
+    expect(view(episodes, { live: true, openKeys: ['seg:r'] })).toContain('--output-format')
+  })
+
+  it('keeps the argument in the block of a call that has no output yet', () => {
+    // The row and the argument are the same text here, which is normally the
+    // one case the block drops it -- but with no result to show in its place
+    // that left the reader an empty slab.
+    const episodes = [
+      step(0, 'looking', [call('l', 'list_dir', '~/.raven/sessions', { done: false, durationMs: undefined })])
+    ]
+    const open = view(episodes, { live: true, openKeys: ['seg:l'] })
+
+    expect(open.split('~/.raven/sessions')).toHaveLength(3)
   })
 
   it('caps a long result inside the detail block', () => {

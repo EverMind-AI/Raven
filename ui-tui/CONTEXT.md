@@ -49,6 +49,16 @@ further into its Detail Block. A single-call segment skips the middle depth, sin
 folded row already names the call.
 _Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this replaces.
 
+**Turn Artifact Shelf**:
+The block a closed turn ends with, naming the files it changed and delivered ("Files
+changed this turn"). Its boundary is a user row -- typed, or one the runtime opened -- a
+system row, or the end of the rows; the shape of an assistant row is not one, since a row
+carrying text and no tool call is as much an agent between two steps as the end of a turn.
+A live read (`openTurn`) withholds the trailing shelf, matching the main agent, which
+appends its own once the turn completes and shows none while it runs.
+_Avoid_: "artifact panel"/"delivery list" -- one block holds both halves, and it belongs to
+a turn rather than to the session.
+
 **Codex Verb Rule**:
 An entry in `CODEX_VERBS` (`ui-tui/src/domain/codexTools.ts`) giving one codex tool its
 folding style. The verb is codex's own name verbatim — only `unit` and `style` are the

@@ -321,6 +321,52 @@ describe('createChatStream — cancel preserves streamed content', () => {
     expect(assistant!.text).toContain('[interrupted]')
   })
 
+  it('does not settle the status to ready when a turn starts inside the interrupt cooldown', async () => {
+    vi.useFakeTimers()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ appendMessage: () => {}, rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
+      type: 'error'
+    })
+    expect(getUiState().status).toBe('interrupted')
+
+    // A second prompt inside the 800ms cooldown: the window must not outlive
+    // the idle it was describing.
+    await stream.send('again')
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
+    vi.advanceTimersByTime(2000)
+
+    expect(getUiState().status).not.toBe('ready')
+    expect(getUiState().busy).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('settles the status to ready after an interrupt when nothing else starts', async () => {
+    vi.useFakeTimers()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ appendMessage: () => {}, rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
+      type: 'error'
+    })
+
+    vi.advanceTimersByTime(2000)
+
+    expect(getUiState().status).toBe('ready')
+    vi.useRealTimers()
+  })
+
   it('appends the failure detail to the error line when present', async () => {
     const sysCalls: string[] = []
     const fake = makeFakeRpc()
@@ -503,12 +549,14 @@ describe('createChatStream — turn artifacts', () => {
       payload: { code: -32000, message: 'turn failed', reason }
     })
 
-    expect(appended).toContainEqual(expect.objectContaining({
-      artifacts: expect.objectContaining({
-        deliveries: [expect.objectContaining({ name: 'report.pdf' })]
-      }),
-      kind: 'artifacts'
-    }))
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        artifacts: expect.objectContaining({
+          deliveries: [expect.objectContaining({ name: 'report.pdf' })]
+        }),
+        kind: 'artifacts'
+      })
+    )
   })
 
   it('keeps deliveries after a local force reset with no later terminal event', async () => {
