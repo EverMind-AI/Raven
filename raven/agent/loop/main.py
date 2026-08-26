@@ -1472,6 +1472,12 @@ class AgentLoop:
             # would apply on the next call while ``enable`` waited for the next
             # process. ``_withheld_tool_names`` above avoids this the same way.
             disabled_source=self._disabled_playbook_names,
+            # The live table, asked rather than copied, and the view its own
+            # docstring reserves for validating: a row that is switched off is
+            # still a resolvable reference, and ``apply_agents`` rebuilds this
+            # registry in place, so a copy taken here would go stale against the
+            # very dispatch it is meant to agree with.
+            known_agents=self.subagents.registry.all_names,
             router=RouterSizes(top_k=cfg.router.top_k, over_fetch_factor=cfg.router.over_fetch_factor),
         )
 
