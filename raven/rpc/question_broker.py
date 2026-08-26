@@ -29,6 +29,14 @@ SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 
 DEFAULT_TIMEOUT_S = 600.0
 
+CLARIFY_REQUEST_METHOD = "clarify.request"
+"""The notification carrying a question to whatever surface is bound."""
+
+CLARIFY_CLOSED_METHOD = "clarify.closed"
+"""The notification retracting one. Named here beside the request rather than
+spelled at each site, because a ``send_frame`` adapter has to tell them apart to
+know what it can render."""
+
 
 class QuestionUndeliverableError(Exception):
     """A ``send_frame`` adapter could not put the question in front of anyone.
@@ -66,6 +74,9 @@ class QuestionBroker:
         # Reverse index request_id -> conversation_id so :meth:`reply` can
         # accept either handle.
         self._by_request: dict[str, str] = {}
+        # Kept by reference: asyncio holds only a weak reference to a task, and
+        # an unrefed one can be collected mid-send.
+        self._close_tasks: set[asyncio.Task] = set()
 
     async def await_question(
         self,
@@ -115,6 +126,7 @@ class QuestionBroker:
         self._by_request[request_id] = conversation_id
         if timeout_s is None:
             timeout_s = self.default_timeout_s
+        answered = False
         try:
             # ``clarify.request`` is the ui-tui frontend's existing multi-choice
             # prompt contract ({question, choices, request_id} -> ClarifyPrompt ->
@@ -123,7 +135,7 @@ class QuestionBroker:
             await self._send_frame(
                 {
                     "jsonrpc": "2.0",
-                    "method": "clarify.request",
+                    "method": CLARIFY_REQUEST_METHOD,
                     "params": {
                         "conversation_id": conversation_id,
                         "request_id": request_id,
@@ -138,7 +150,9 @@ class QuestionBroker:
                     },
                 }
             )
-            return await asyncio.wait_for(future, timeout_s)
+            answer = await asyncio.wait_for(future, timeout_s)
+            answered = True
+            return answer
         except (asyncio.TimeoutError, asyncio.CancelledError):
             return default
         except QuestionUndeliverableError as exc:
@@ -160,6 +174,39 @@ class QuestionBroker:
             if current is not None and current.request_id == request_id:
                 self._pending.pop(conversation_id, None)
             self._by_request.pop(request_id, None)
+            if not answered:
+                self._close(conversation_id, request_id)
+
+    def _close(self, conversation_id: str, request_id: str) -> None:
+        """Tell the surface a question can no longer be answered.
+
+        Only the unanswered exits need it: a surface that sent an answer has
+        already dropped its own prompt, and closing then would race the next
+        question's request. Mirrors ``approval.closed``, which exists because a
+        frontend timer is best-effort and every backend outcome has to be told.
+
+        Spawned rather than awaited from the ``finally``: one of those exits is a
+        cancelled turn, and awaiting while the calling task unwinds a
+        cancellation raises ``CancelledError`` again -- costing both this
+        notification and the default the agent loop is waiting for.
+        """
+        frame = {
+            "jsonrpc": "2.0",
+            "method": CLARIFY_CLOSED_METHOD,
+            "params": {"conversation_id": conversation_id, "request_id": request_id},
+        }
+        try:
+            task = asyncio.get_running_loop().create_task(self._send_frame(frame))
+        except RuntimeError:
+            # No running loop: the process is going down and so is the surface.
+            return
+        self._close_tasks.add(task)
+        task.add_done_callback(self._forget_close)
+
+    def _forget_close(self, task: asyncio.Task) -> None:
+        self._close_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("question_broker: clarify.closed was not delivered: {}", task.exception())
 
     def pending_req(self, conversation_id: str) -> str | None:
         """Return the pending request_id for a conversation, else ``None``."""

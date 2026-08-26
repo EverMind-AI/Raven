@@ -532,3 +532,154 @@ def test_a_file_change_with_no_path_anywhere_keeps_the_truthful_key() -> None:
     }
 
     assert CodexDialect().subject_field(update) == ("path", "")
+
+
+def test_claude_code_merges_a_question_with_its_custom_box() -> None:
+    from raven.agent.acp.elicitation import fields
+    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "question_0": {
+                "type": "string",
+                "title": "Which backend?",
+                "oneOf": [{"const": "redis"}, {"const": "memcached"}],
+            },
+            "question_0_custom": {"type": "string", "title": "Other"},
+            "question_1": {
+                "type": "string",
+                "title": "Which TTL?",
+                "oneOf": [{"const": "60"}, {"const": "600"}],
+            },
+            "question_1_custom": {"type": "string", "title": "Other"},
+        },
+    }
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["question_0", "question_1"]
+    assert [f.custom_name for f in merged] == ["question_0_custom", "question_1_custom"]
+    assert merged[0].options == ["redis", "memcached"]
+
+
+def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
+    from raven.agent.acp.elicitation import fields
+    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+
+    schema = {"type": "object", "properties": {"notes_custom": {"type": "string"}}}
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["notes_custom"]
+    assert merged[0].custom_name is None
+
+
+def test_the_default_dialect_pairs_nothing() -> None:
+    from raven.agent.acp.elicitation import fields
+    from raven.agent.subagent.acp_dialects.base import AcpDialect
+
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "string", "enum": ["x"]}, "a_custom": {"type": "string"}},
+    }
+    assert [f.name for f in AcpDialect().pair_fields(fields(schema))] == ["a", "a_custom"]
+
+
+def test_claude_code_merges_a_custom_box_written_before_its_question() -> None:
+    """`properties` order is the adapter's own, not a contract this can lean on.
+
+    Folding decided while walking the properties in order cannot see a sibling
+    written ahead of its question: that one survives as a question of its own,
+    so the user is asked the same thing twice and the free-text box arrives as
+    a standalone prompt -- the exact shape the merge exists to prevent.
+    """
+    from raven.agent.acp.elicitation import fields
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "question_0_custom": {"type": "string", "title": "Other"},
+            "question_0": {
+                "type": "string",
+                "title": "Which backend?",
+                "oneOf": [{"const": "redis"}, {"const": "memcached"}],
+            },
+        },
+    }
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["question_0"]
+    assert merged[0].custom_name == "question_0_custom"
+
+
+def test_claude_code_pairs_by_the_adapters_marker_not_by_the_spelling() -> None:
+    """The adapter states the pairing outright, so the spelling need not match.
+
+    `_meta._askUserQuestionCustomAnswer.questionId` names the property the
+    free-text half belongs to; a sibling named anything at all still folds.
+    """
+    from raven.agent.acp.elicitation import fields
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "pick": {"type": "string", "title": "Backend", "oneOf": [{"const": "redis"}, {"const": "memcached"}]},
+            "free_form": {
+                "type": "string",
+                "title": "Other",
+                "_meta": {"_askUserQuestionCustomAnswer": {"questionId": "pick", "isCustomAnswer": True}},
+            },
+        },
+    }
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["pick"]
+    assert merged[0].custom_name == "free_form"
+
+
+def test_claude_code_leaves_an_unmarked_lookalike_as_a_question_of_its_own() -> None:
+    """A marked request has said which siblings are pairs; the rest are not.
+
+    `<name>_custom` also spells an independent free-text property that merely
+    shares a prefix, and folding that one loses a question the schema asked:
+    it is never put to the user, and its answer only ever surfaces if the enum
+    half happens to be answered off-enum.
+    """
+    from raven.agent.acp.elicitation import fields
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "question_0": {"type": "string", "title": "Backend", "oneOf": [{"const": "redis"}]},
+            "question_0_custom": {
+                "type": "string",
+                "title": "Other",
+                "_meta": {"_askUserQuestionCustomAnswer": {"questionId": "question_0", "isCustomAnswer": True}},
+            },
+            "shipping_method": {"type": "string", "title": "Shipping", "oneOf": [{"const": "air"}]},
+            "shipping_method_custom": {
+                "type": "string",
+                "title": "Custom shipping instructions",
+                "description": "Anything the carrier needs to know.",
+            },
+        },
+    }
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["question_0", "shipping_method", "shipping_method_custom"]
+    assert [f.custom_name for f in merged] == ["question_0_custom", None, None]
+
+
+def test_claude_code_does_not_fold_a_custom_box_the_schema_requires() -> None:
+    """Folding keeps only the survivor's `required`, so a demanded key would go.
+
+    An on-enum answer would then be accepted as content missing a key the
+    `requestedSchema` lists as required. Two questions is the lesser cost.
+    """
+    from raven.agent.acp.elicitation import fields
+
+    schema = {
+        "type": "object",
+        "required": ["backend_custom"],
+        "properties": {
+            "backend": {"type": "string", "title": "Backend", "oneOf": [{"const": "redis"}, {"const": "memcached"}]},
+            "backend_custom": {"type": "string", "title": "Other"},
+        },
+    }
+    merged = ClaudeCodeDialect().pair_fields(fields(schema))
+    assert [f.name for f in merged] == ["backend", "backend_custom"]
+    assert [f.custom_name for f in merged] == [None, None]

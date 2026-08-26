@@ -21,7 +21,9 @@ into the sink.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from raven.agent.acp.asker import start_ask_turn
 from raven.agent.spine_runner import AgentTurnRunner
+from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.shell import ApprovalResponder, ExecTool
 from raven.rpc.subscriptions import SubscriptionEmitter
@@ -130,6 +132,20 @@ def make_dag_progress_sink(emitter: SubscriptionEmitter) -> Callable[[str, str, 
     return _sink
 
 
+class _AskViaTool:
+    """Adapts `AskUserTool.ask_direct` to the `Asker` protocol.
+
+    Bound per turn but resolved per question, which is what lets a transport
+    bind its broker after the tool was registered.
+    """
+
+    def __init__(self, tool: AskUserTool) -> None:
+        self._tool = tool
+
+    async def ask(self, prompt: str, choices: list[str] | None, conversation_id: str) -> str | None:
+        return await self._tool.ask_direct(prompt, choices, conversation_id)
+
+
 class RpcTurnRunner(AgentTurnRunner):
     """Runs a TUI turn through the agent loop's native run_turn (stream=True), so
     token/reasoning/tool/Text all flow through the hub to the RpcOutlet (one
@@ -172,6 +188,14 @@ class RpcTurnRunner(AgentTurnRunner):
                 conversation_id=cid,
                 turn_id=req.turn_id or "",
             )
+        # Same rebinding and the same origin gate as the shell approval above: a
+        # CRON or otherwise background turn has no reader, and an ACP sub-agent's
+        # question there must decline rather than wait on nobody.
+        ask_tool = tools.get("ask_user") if tools is not None else None
+        start_ask_turn(
+            _AskViaTool(ask_tool) if req.origin is Origin.USER and isinstance(ask_tool, AskUserTool) else None,
+            conversation_id=cid,
+        )
         # A CRON turn is not a user turn: it runs non-streaming (one reply, not a
         # token stream) and its reply text is captured for the cron fan-out, which
         # delivers a cron.delivered event to every session (the cron:<job_id>

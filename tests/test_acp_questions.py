@@ -214,6 +214,43 @@ class TestTheElicitationRoute:
         assert client.asked("session/request_permission")
 
 
+class TestHowLongAHumanIsGiven:
+    async def test_the_default_outlasts_the_budget_the_asking_side_holds(self):
+        """A question to a person is not a protocol round trip.
+
+        Measured on 2026-08-26: this defaulted to the generic 300s request
+        timeout while the client side holds an ask_user question open for 600s.
+        A raven asking a nested raven abandoned the request at minute five,
+        logged a TimeoutError and silently moved to its next question, so the
+        answer a person was still typing had nowhere to land -- and the next
+        question then queued behind a lock the abandoned one still held.
+        """
+        from raven.rpc.question_broker import DEFAULT_TIMEOUT_S as ASK_USER_BUDGET_S
+
+        seen: list[float] = []
+        client = _Client(lambda f: {"result": {"action": "decline"}})
+        outbound = OutboundRequests(emit=client.emit)
+        client.outbound = outbound
+        inner = outbound.call
+
+        async def spy(method, params, *, timeout):
+            seen.append(timeout)
+            return await inner(method, params, timeout=timeout)
+
+        outbound.call = spy  # type: ignore[method-assign]
+        translator = UpdateTranslator(emit=client.emit)
+        translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id="sub"))
+        # No `timeout_s`: the default is what `raven/acp/server.py` constructs with.
+        questions = AcpQuestions(outbound=outbound, translator=translator, broker=_Broker(), emit=client.emit)
+        questions.set_client(ClientCapabilities.from_params({"clientCapabilities": FORM}))
+
+        assert questions.handle(CLARIFY_METHOD, _clarify()) is True
+        await _settle(questions)
+
+        assert seen, "the client was never asked"
+        assert seen[0] > ASK_USER_BUDGET_S
+
+
 class TestThePermissionRoute:
     def _pick_first(self, frame):
         return {"result": {"outcome": {"outcome": "selected", "optionId": frame["params"]["options"][0]["optionId"]}}}

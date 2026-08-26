@@ -29,6 +29,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.acp import elicitation
 from raven.agent.acp.client import UNHANDLED
 
 PERMISSION_METHOD = "session/request_permission"
@@ -102,4 +103,36 @@ def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[
     return handle
 
 
-__all__ = ["PERMISSION_METHOD", "auto_approver", "permission_outcome"]
+def request_dispatcher(
+    name: str,
+    observe: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    *,
+    elicitors: Any = None,
+) -> "Any":
+    """The connection's `on_request`: permissions, elicitations, nothing else.
+
+    One handler rather than a chain, because the two answers have nothing in
+    common and the third case -- everything raven does not serve -- has to stay
+    an explicit `method not found`.
+    """
+    approve = auto_approver(name, observe)
+
+    async def handle(method: str, params: dict[str, Any]) -> Any:
+        if method != elicitation.METHOD:
+            return await approve(method, params)
+        if elicitors is None:
+            return elicitation.decline()
+        try:
+            answer = await elicitors.answer(params)
+        except Exception as exc:  # noqa: BLE001 - a declared capability must answer
+            logger.warning("acp agent {!r}: elicitation failed, declining: {}", name, exc)
+            return elicitation.decline()
+        # No run owns this session, or the scope was `requestId` -- an auth-phase
+        # elicitation with no session at all. Declining is the answer; `-32601`
+        # would deny a capability raven advertised.
+        return answer if answer is not None else elicitation.decline()
+
+    return handle
+
+
+__all__ = ["PERMISSION_METHOD", "auto_approver", "permission_outcome", "request_dispatcher"]

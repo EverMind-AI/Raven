@@ -151,6 +151,11 @@ class AcpClient:
         self._closed = False
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
+        # Answering runs off the read loop: a handler may block on a human
+        # (elicitation), and awaiting it here stops every other session on this
+        # connection. Requests carry their own id and are independent, so
+        # answering out of arrival order is sound.
+        self._answer_tasks: set[asyncio.Task] = set()
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -250,10 +255,14 @@ class AcpClient:
         for task in (self._reader_task, self._stderr_task):
             if task is not None:
                 task.cancel()
+        answer_tasks = list(self._answer_tasks)
+        for task in answer_tasks:
+            task.cancel()
         # Awaited, not just cancelled: an un-awaited cancelled task logs a
         # "Task exception was never retrieved" warning on some paths, and the
         # child must be reaped here rather than left as a zombie.
         pending_tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
+        pending_tasks.extend(answer_tasks)
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         if self._proc.returncode is None:
@@ -551,7 +560,9 @@ class AcpClient:
         params = frame.get("params")
         params = params if isinstance(params, dict) else {}
         if "id" in frame:
-            await self._answer_request(frame["id"], str(method), params)
+            task = asyncio.create_task(self._answer_request(frame["id"], str(method), params))
+            self._answer_tasks.add(task)
+            task.add_done_callback(self._answer_tasks.discard)
             return
         if self._on_notification is not None:
             try:
@@ -601,10 +612,18 @@ class AcpClient:
             logger.info("acp agent {!r}: no answer for {}, told it method not found", self.name, method)
 
     async def _send_quietly(self, frame: dict[str, Any], *, session: str | None = None) -> None:
-        """Send from inside the read loop, where a write failure is not the caller's."""
+        """Send from the request's own answer task, where nothing awaits the result.
+
+        Broader than a connection failure on purpose: this task has no caller to
+        raise to, so anything that stops the frame reaching the wire -- a dead
+        connection, or a handler result `protocol.encode` cannot serialise --
+        must be logged and swallowed here, or it escapes as an exception the
+        task is never asked for, reported only as "Task exception was never
+        retrieved" at GC time, with the request left unanswered either way.
+        """
         try:
             await self._send(frame, session=session)
-        except AcpConnectionError as exc:
+        except Exception as exc:  # noqa: BLE001 - the answer task has no caller to raise to
             logger.debug("acp agent {!r}: could not answer request: {}", self.name, exc)
 
     def _resolve(self, frame: dict[str, Any]) -> None:

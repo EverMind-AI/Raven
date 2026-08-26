@@ -143,10 +143,19 @@ async def _deliver_question_to_channel(frame: dict, *, sources: dict, hub) -> No
     Raises :class:`QuestionUndeliverableError` rather than returning when there is no
     live source: a silent drop left the broker waiting out its whole budget on a
     question that was never rendered.
+
+    Only a question is rendered. This sink is the broker's entire surface here, so
+    every frame it emits arrives -- including ``clarify.closed``, which carries no
+    question and whose whole purpose is retracting a prompt a chat channel never
+    held one of. Rendering it put an empty message in the user's chat on every
+    timed-out or cancelled question. A whitelist rather than a skip-list so the
+    next notification the broker grows is dropped here too, not delivered blank.
     """
-    from raven.rpc.question_broker import QuestionUndeliverableError
+    from raven.rpc.question_broker import CLARIFY_REQUEST_METHOD, QuestionUndeliverableError
     from raven.spine import Text
 
+    if frame.get("method") != CLARIFY_REQUEST_METHOD:
+        return
     params = frame.get("params", {})
     qcid = params.get("conversation_id", "")
     source = sources.get(qcid)

@@ -31,6 +31,12 @@ CLIENT_CAPABILITIES: dict[str, Any] = {
     # route file access through raven and stall on a method that answers with an
     # error. Flipping either to true is the approval work, not this layer's.
     "fs": {"readTextFile": False, "writeTextFile": False},
+    # Form only. `url` elicitation is for out-of-band OAuth, payment and
+    # credential collection, so advertising it would let a sub-agent send the
+    # user to an arbitrary URL to enter them. The two are independently
+    # advertisable, so omitting one is a supported subset rather than a
+    # half-honoured capability.
+    "elicitation": {"form": {}},
 }
 
 METHOD_NOT_FOUND = -32601

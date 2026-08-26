@@ -26,7 +26,7 @@ from loguru import logger
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient, end_drain
 from raven.agent.acp.journal import open_journal
-from raven.agent.acp.permissions import auto_approver
+from raven.agent.acp.permissions import request_dispatcher
 
 # Budget for the one `initialize` a new connection owes, when the caller does
 # not say. Generous because an adapter fetched by `npx` may be downloading
@@ -97,6 +97,44 @@ class _SessionRouter:
         await sink(method, params)
 
 
+class _SessionElicitors:
+    """Which run answers an `elicitation/create` for a given session.
+
+    A separate registry rather than a second job for `_SessionRouter`, because a
+    router sink returns nothing and an elicitation needs an answer. Same
+    attach/detach discipline, including the identity check, for the same reason.
+    """
+
+    def __init__(self, agent: str) -> None:
+        self._agent = agent
+        self._elicitors: dict[str, Any] = {}
+
+    def attach(self, session_id: str, elicitor: Any) -> None:
+        self._elicitors[session_id] = elicitor
+
+    def detach(self, session_id: str, elicitor: Any) -> None:
+        # Identity-checked for the reason `_SessionRouter.detach` documents: an
+        # unconditional pop lets a finishing run tear down a later run's
+        # answering path, and the symptom is that run's questions declining.
+        if self._elicitors.get(session_id) is elicitor:
+            del self._elicitors[session_id]
+
+    def current(self, session_id: str) -> Any:
+        return self._elicitors.get(session_id)
+
+    async def answer(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        """The answer for one request, or `None` when no run owns it."""
+        session_id = params.get("sessionId")
+        elicitor = self._elicitors.get(session_id) if isinstance(session_id, str) else None
+        if elicitor is None:
+            # Not an error: a request-scoped elicitation carries no sessionId at
+            # all, and a session's run may already have finished by the time this
+            # arrives. `request_dispatcher` declines either way.
+            logger.debug("acp agent {!r}: no elicitor for session {!r}, declining", self._agent, session_id)
+            return None
+        return await elicitor.elicit(params)
+
+
 class _Connection:
     """A client, the router whose lifetime is tied to it, and one lock per session."""
 
@@ -104,12 +142,14 @@ class _Connection:
         self,
         client: AcpClient,
         router: _SessionRouter,
+        elicitors: _SessionElicitors,
         launch: str = "",
         initialize: Any = None,
         handshake_bytes: int = 0,
     ) -> None:
         self.client = client
         self.router = router
+        self.elicitors = elicitors
         self.handshake_bytes = handshake_bytes
         """Where the ``initialize`` exchange ends in the journal.
 
@@ -204,6 +244,7 @@ class AcpConnectionPool:
                 await existing.client.close()
 
             router = _SessionRouter(name)
+            elicitors = _SessionElicitors(name)
             # Opened before launch so the handshake is the head of the file: the
             # `initialize` exchange belongs to the connection, not to whichever
             # call happened to be the one that started it.
@@ -218,7 +259,9 @@ class AcpConnectionPool:
                 # not of whichever backend happens to hold the turn, and every
                 # caller leaving it unset is how an unanswered request came to
                 # cancel turns.
-                on_request=on_request if on_request is not None else auto_approver(name, observe=router.dispatch),
+                on_request=on_request
+                if on_request is not None
+                else request_dispatcher(name, router.dispatch, elicitors=elicitors),
                 on_notification=router.dispatch,
                 journal=journal,
             )
@@ -247,7 +290,12 @@ class AcpConnectionPool:
             # After the handshake, so a call's own range starts where its own
             # work does and a reader can still find the handshake at [0, here).
             connection = _Connection(
-                client, router, key, initialize, handshake_bytes=journal.offset if journal is not None else 0
+                client,
+                router,
+                elicitors,
+                key,
+                initialize,
+                handshake_bytes=journal.offset if journal is not None else 0,
             )
             self._connections[name] = connection
             return connection

@@ -535,6 +535,18 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         setStatus('waiting for input…')
 
         return
+      case 'clarify.closed': {
+        const clarify = getOverlayState().clarify
+
+        // Id-matched for the reason `approval.closed` is: the backend fail-safes
+        // a superseded question to its default, and that close can land after
+        // the next question's request has already replaced the overlay.
+        if (clarify?.requestId === String(ev.payload.request_id ?? '')) {
+          patchOverlayState({ clarify: null })
+        }
+
+        return
+      }
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
 

@@ -461,6 +461,7 @@ window.RavenIslands = {
        the server -- the caller keeps the transport and passes the answer on. */
     approveSheet: approve.open,
     clarifySheet: clarify.open,
+    clarifyClose: clarify.close,
   },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine

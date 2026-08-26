@@ -29,6 +29,14 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``permission``   - asks ``session/request_permission`` with a real option list and
                      answers the prompt with the ``optionId`` raven chose, so a test can
                      assert *which* option it picked rather than only that it answered.
+- ``elicits_then_streams`` - asks ``elicitation/create`` and does not wait for an
+                     answer, then streams three chunks and ends the turn. Proves a
+                     handler that blocks on a human does not stall delivery on the
+                     same connection.
+- ``elicits_and_waits`` - asks ``elicitation/create`` and holds the prompt open
+                     until raven answers it, then reports what was chosen. For the
+                     end-to-end path: an agent's question reaching a real human and
+                     the answer coming back into the same turn.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
                      boundary in the chunks themselves.
@@ -104,12 +112,24 @@ _PENDING: list = []
 # Prompts held open until raven answers the permission request they triggered.
 _AWAITING_PERMISSION: list = []
 
+# Elicitations held open until raven answers (elicits_and_waits).
+_AWAITING_ELICITATION: list = []
+
 # Prompts held open until the client cancels them (cancel_aware / cancel_deaf).
 _AWAITING_CANCEL: list = []
 
 
 def handle_response(frame) -> None:
-    """Finish a held prompt once raven has answered the permission request."""
+    """Finish a held prompt once raven has answered the permission or elicitation request."""
+    if _AWAITING_ELICITATION:
+        content = ((frame.get("result") or {}).get("content")) or {}
+        picked = content.get("backend") or "no-answer"
+        request_id, session_id = _AWAITING_ELICITATION.pop(0)
+        update(
+            session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"using:{picked}"}}
+        )
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if not _AWAITING_PERMISSION:
         return
     outcome = ((frame.get("result") or {}).get("outcome")) or {}
@@ -180,6 +200,48 @@ def handle_prompt(request_id, params) -> None:
             }
         )
         _AWAITING_PERMISSION.append((request_id, session_id))
+        return
+    if MODE == "elicits_and_waits":
+        _AWAITING_ELICITATION.append((request_id, session_id))
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9002,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "which backend?",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {"backend": {"type": "string", "enum": ["redis", "memcached"]}},
+                    },
+                },
+            }
+        )
+        return
+    if MODE == "elicits_then_streams":
+        # Asks and does NOT wait: the test asserts the client's read loop is
+        # still delivering updates while the question is unanswered.
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9001,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "which one?",
+                    "requestedSchema": {"type": "object", "properties": {"pick": {"type": "string"}}},
+                },
+            }
+        )
+        for i in range(3):
+            update(
+                session_id,
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"chunk{i}"}},
+            )
+        ok(request_id, {"stopReason": "end_turn"})
         return
     if MODE == "two_messages":
         # The order measured on codex-acp: a preamble in several chunks, the
