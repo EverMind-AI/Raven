@@ -70,7 +70,24 @@ export const userDisplay = (text: string) => {
   return `${prefix || '(message)'} [long message]`
 }
 
-export const toTranscriptMessages = (rows: unknown): Msg[] => {
+/**
+ * Rows as the transcript draws them, with each closed turn's artifact shelf
+ * folded in at the boundary that closed it.
+ *
+ * A turn is opened by a user row (typed, or one the runtime opened -- see
+ * `origin`), so those rows and the end of the list are the only turn boundaries
+ * there are. The shape of an assistant row is NOT one: a row that carries text
+ * and no tool call is what an agent looks like between two steps as often as at
+ * the end of a turn, and reading it as a boundary published a partial shelf
+ * mid-turn and reset the tally the rest of the turn was still filling.
+ *
+ * `openTurn` says these rows end inside a turn that has not closed -- a live
+ * read, or a tail slice of one -- and withholds the trailing shelf. It is what
+ * keeps a delegated run reading like the main agent, whose own shelf is
+ * appended once, on `message.complete` (see `chatStream.appendArtifacts`);
+ * mid-turn it shows none. Earlier turns in the same rows still get theirs.
+ */
+export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean } = {}): Msg[] => {
   if (!Array.isArray(rows)) {
     return []
   }
@@ -186,17 +203,15 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     folded.push({
       role,
       text: typeof text === 'string' ? text : '',
-      ...(calls.length ? { calls, foldSeed: calls[0]!.id } : {}),
+      ...(calls.length ? { calls } : {}),
       ...(reasoning ? { reasoning } : {}),
       ...(reasoningMs != null ? { reasoningMs } : {})
     })
-
-    if (role === 'assistant' && !calls.length) {
-      flushArtifacts()
-    }
   }
 
-  flushArtifacts()
+  if (!opts.openTurn) {
+    flushArtifacts()
+  }
 
   return foldRowsIntoEpisodes(folded)
 }

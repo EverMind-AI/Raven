@@ -195,6 +195,20 @@ describe('fitTraceTail', () => {
     expect(fit.shown.at(-1)).toEqual(msgs.at(-1))
   })
 
+  it('draws no artifact shelf, since a tail slice can only see part of the run', () => {
+    const msgs: TranscriptMessage[] = [
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/tmp/report.md' }), id: 'w1', name: 'write_file' }]
+      } as unknown as TranscriptMessage,
+      { role: 'tool', text: 'wrote report.md' } as unknown as TranscriptMessage,
+      say('Now let me check it.')
+    ]
+
+    expect(fitTraceTail(msgs, 8, 60).shown.some(msg => msg.kind === 'artifacts')).toBe(false)
+  })
+
   it('never exceeds the row budget', () => {
     const msgs = Array.from({ length: 40 }, (_unused, i) => line(`m${i}`))
     const fit = fitTraceTail(msgs, 8, 60)

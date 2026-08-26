@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { Box, type ScrollBoxHandle, Text } from '@hermes/ink'
+import { Box, type ScrollBoxHandle, stringWidth, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react'
 import unicodeSpinners from 'unicode-animations'
@@ -22,7 +22,7 @@ import { fmtDuration } from '../domain/messages.js'
 import { stickyPromptFromViewport } from '../domain/viewport.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { buildSubagentTree, treeTotals } from '../lib/subagentTree.js'
-import { fmtK } from '../lib/text.js'
+import { clipToWidth, clipToWidthFromEnd, fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot, useViewportSnapshot } from '../lib/viewportStore.js'
 
 const FACE_TICK_MS = 2500
@@ -316,6 +316,14 @@ export function GoodVibesHeart({ tick, t }: { tick: number; t: Theme }) {
   return <Text color={color}>♥</Text>
 }
 
+/** The ` - ` rule drawn between the status rule's two slots. */
+const RULE_WIDTH = 3
+
+/** Columns the left slot keeps even when the right label would take the row.
+ * Enough for the status word and its dot, which is the part that must never be
+ * the thing that disappears. */
+const MIN_LEFT_WIDTH = 12
+
 export function StatusRule({
   cwdLabel,
   cols,
@@ -345,7 +353,29 @@ export function StatusRule({
   // When an update is available, the bottom-right slot shows the upgrade nudge
   // in place of the cwd/branch label (dynamic, no extra line).
   const rightLabel = updateAvailable ? `↑ Update available — run ${updateCommand || 'raven upgrade'}` : cwdLabel
-  const leftWidth = Math.max(12, cols - rightLabel.length - 3)
+
+  // The three slots are budgeted to add up to `cols` exactly, and the right one
+  // is clipped to the width it was given.
+  //
+  // `height={1}` is a claim about this row, not a clamp on it: with the right
+  // slot left unbounded (a bare Text of whatever length the label happened to
+  // be) the row rendered wider than the terminal, and the columns past the edge
+  // wrapped onto the row below -- which is where the live-agents strip draws, so
+  // a long branch name surfaced as a tail glued to a strip row ("dag 21sagent_live_view)").
+  // The old arithmetic could not avoid it: a MIN_LEFT floor on the left slot
+  // with nothing capping the right one guarantees overflow once the label passes
+  // `cols - MIN_LEFT - rule`.
+  //
+  // Widths are display columns, never `String.length`: a cwd with a CJK
+  // directory name is twice its character count on screen, so counting
+  // characters under-reserved and overflowed a terminal that was wide enough.
+  const room = Math.max(0, cols - RULE_WIDTH)
+  const rightWidth = Math.max(0, Math.min(stringWidth(rightLabel), room - MIN_LEFT_WIDTH))
+  const leftWidth = Math.max(0, room - rightWidth)
+  // A path keeps its tail and prose keeps its head, the same split
+  // `episodeSummary` draws for tool arguments: the end of `~/w/raven (branch)`
+  // is what says where you are, while a sentence cut from the front is unreadable.
+  const rightText = updateAvailable ? clipToWidth(rightLabel, rightWidth) : clipToWidthFromEnd(rightLabel, rightWidth)
 
   return (
     <Box height={1}>
@@ -388,7 +418,11 @@ export function StatusRule({
       </Box>
 
       <Text color={t.color.border}> ─ </Text>
-      <Text color={updateAvailable ? t.color.warn : t.color.label}>{rightLabel}</Text>
+      <Box flexShrink={0} width={rightWidth}>
+        <Text color={updateAvailable ? t.color.warn : t.color.label} wrap="truncate-end">
+          {rightText}
+        </Text>
+      </Box>
     </Box>
   )
 }

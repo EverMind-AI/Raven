@@ -138,10 +138,13 @@ const clear = (t: Timer): null => {
   return null
 }
 
+let foldSeq = 0
+
 class TurnController {
   bufRef = ''
   private dagPromptsByCall = new Map<string, Record<string, string>>()
   episodes: Episode[] = []
+  private turnFoldId = ''
   private lastEpisodeStartMs = 0
   interrupted = false
   lastStatusNote = ''
@@ -271,7 +274,13 @@ class TurnController {
     // with nothing accrued yet, fall back to the bare interrupted indicator.
     if (episodesMode) {
       if (workEpisodes.length) {
-        appendMessage({ kind: 'episodes', role: 'assistant', text: interruptedText, episodes: workEpisodes })
+        appendMessage({
+          episodes: workEpisodes,
+          foldId: this.turnFoldId,
+          kind: 'episodes',
+          role: 'assistant',
+          text: interruptedText
+        })
 
         return
       }
@@ -613,7 +622,13 @@ class TurnController {
       const workEpisodes = this.episodes.filter(ep => ep.tools.length > 0 || hasMeaningfulReasoning(ep.reasoning ?? ''))
 
       if (workEpisodes.length) {
-        finalMessages.push({ kind: 'episodes', role: 'assistant', text: finalText, episodes: workEpisodes })
+        finalMessages.push({
+          episodes: workEpisodes,
+          foldId: this.turnFoldId,
+          kind: 'episodes',
+          role: 'assistant',
+          text: finalText
+        })
       } else if (segments.length || hasDetails(finalDetails)) {
         // No episode boundaries arrived (e.g. an older gateway that doesn't emit
         // episode.start) but the turn did run tools/reasoning — fall back to the
@@ -1010,6 +1025,10 @@ class TurnController {
   }
 
   startMessage() {
+    // Minted per turn rather than taken from `turn_id`: this is a fold
+    // namespace, and both message.start handlers reach here without a typed
+    // payload. Uniqueness within the session is all a namespace needs.
+    this.turnFoldId = `t${++foldSeq}`
     this.endReasoningPhase()
     this.clearReasoning()
     this.activeTools = []
@@ -1020,7 +1039,15 @@ class TurnController {
     this.interrupted = false
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
-    patchTurnState({ activity: [], outcome: '', subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
+    patchTurnState({
+      activity: [],
+      foldId: this.turnFoldId,
+      outcome: '',
+      subagents: [],
+      toolTokens: 0,
+      tools: [],
+      turnTrail: []
+    })
   }
 
   /**

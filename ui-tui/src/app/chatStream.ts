@@ -53,7 +53,7 @@ import { applyDagEvent, applySubagentStatus } from './liveAgentsStore.js'
 import { scheduleLiveAgentsRefresh } from './liveAgentsSync.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
-import { patchUiState } from './uiStore.js'
+import { getUiState, patchUiState } from './uiStore.js'
 
 /**
  * Minimal RpcClient surface the chat path needs. Defining this locally lets
@@ -96,6 +96,9 @@ export interface ChatStreamOptions {
 
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
+
+/** How long an interrupt's `interrupted` hint stands before the prompt settles back to `ready`. */
+const STATUS_COOLDOWN_MS = 800
 
 export interface ChatStreamHandle {
   attach: () => Promise<void>
@@ -380,6 +383,7 @@ const dispatch = (
 }
 
 const onMessageStart = (state: InternalState, ev: MessageStartEvent): void => {
+  clearStatusCooldown()
   state.artifacts = { changes: [], deliveries: [] }
   state.turns.set(MAIN_VIEW_KEY, ev.payload.turn_id)
   markRunning(null)
@@ -484,6 +488,20 @@ const onError = (
   patchTurnState({ activity: [], outcome: '' })
 }
 
+// The cooldown below, held so a turn that starts inside its window can cancel
+// it. Unguarded, it patched `ready` over a turn that was already running: Ctrl+C
+// then a new prompt inside 800ms left the status line claiming the session was
+// idle. Kept the way the ack watchdog keeps its own -- a handle plus a re-check
+// at fire time -- rather than trusting the window to be short enough.
+let cooldownTimer: null | ReturnType<typeof setTimeout> = null
+
+const clearStatusCooldown = (): void => {
+  if (cooldownTimer !== null) {
+    clearTimeout(cooldownTimer)
+    cooldownTimer = null
+  }
+}
+
 const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: string) => void): void => {
   // Mirror the visible end-state of turnController.interruptTurn without
   // routing through the legacy `session.interrupt` RPC: preserve the streamed
@@ -495,10 +513,18 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
   turnController.clearStatusTimer()
   patchUiState({ status: 'interrupted' })
   // Reset to 'ready' after the brief cooldown window so the prompt looks
-  // settled if the user is just watching.
-  setTimeout(() => {
+  // settled if the user is just watching -- but only if the session is still
+  // idle when it fires.
+  clearStatusCooldown()
+  cooldownTimer = setTimeout(() => {
+    cooldownTimer = null
+
+    if (getUiState().busy) {
+      return
+    }
+
     patchUiState({ status: 'ready' })
-  }, 800)
+  }, STATUS_COOLDOWN_MS)
 }
 
 export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
@@ -642,6 +668,10 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     // event's disarm lands on a live timer). It is NOT re-armed below.
     sending.add(view)
     markRunning(active)
+    // Cleared at submit, not just at message.start: that is where the legacy
+    // path clears its own (`useSubmission`), and it closes the window between a
+    // prompt going out and the server's ack coming back.
+    clearStatusCooldown()
     armAckWatchdog(view)
     let result: TurnSendResult
     try {

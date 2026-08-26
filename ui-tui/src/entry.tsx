@@ -24,7 +24,7 @@ import { setupGracefulExit } from './lib/gracefulExit.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
 import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
-import { resetTerminalModes } from './lib/terminalModes.js'
+import { resetTerminalModes, resetTerminalModesOnStart } from './lib/terminalModes.js'
 import { installWriteLog } from './lib/writeLog.js'
 import { DEFAULT_THEME } from './theme.js'
 
@@ -55,8 +55,10 @@ if (!process.stdin.isTTY) {
 }
 
 // Start from a clean slate. If a previous TUI crashed or was kill -9'd, the
-// terminal tab can still have mouse/focus/paste modes enabled.
-resetTerminalModes()
+// terminal tab can still have mouse/focus/paste modes enabled. The startup
+// variant, because the shell's screen is still the one on display here -- see
+// TERMINAL_MODE_RESET_ON_START.
+resetTerminalModesOnStart()
 
 // `raven tui --check` is a no-IPC smoke path: import chain + terminal
 // reset succeeding is the signal we want. The socket transport made

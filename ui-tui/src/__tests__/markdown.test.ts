@@ -258,6 +258,43 @@ describe('Md wrapping', () => {
 
     expect(lines.some(line => line.startsWith(' hi  ok'))).toBe(true)
   })
+
+  // A CJK run carries no break opportunity, so the whole body is one word to
+  // the wrapper. At the widths where that word fits a row on its own but not
+  // after `• `, an inline marker was left alone on its row and the body
+  // started at the row's left edge instead of the text column.
+  it('keeps a bullet marker on the row its unbreakable body starts on', () => {
+    const text = '- **code_detail**（Raven-Code）：依赖前两者，用调研结果给网站加一个详细页面'
+
+    for (const width of [69, 70, 71, 72]) {
+      const lines = renderPlain(
+        React.createElement(
+          Box,
+          { flexDirection: 'column', width },
+          React.createElement(Md, { t: DEFAULT_THEME, text })
+        )
+      ).filter(line => line.trim())
+
+      expect(lines.some(line => line.startsWith('• code_detail'))).toBe(true)
+      expect(lines.every(line => line.trim() !== '•')).toBe(true)
+      expect(lines.every(line => line.startsWith('• ') || /^ {2}\S/.test(line))).toBe(true)
+    }
+  })
+
+  it('aligns list continuation rows under the text column', () => {
+    const lines = renderPlain(
+      React.createElement(
+        Box,
+        { flexDirection: 'column', width: 20 },
+        React.createElement(Md, { t: DEFAULT_THEME, text: '9. alpha beta gamma delta\n- one two three four five' })
+      )
+    )
+
+    expect(lines).toContain('9. alpha beta gamma')
+    expect(lines).toContain('   delta')
+    expect(lines).toContain('• one two three four')
+    expect(lines).toContain('  five')
+  })
 })
 
 describe('Md link labels', () => {

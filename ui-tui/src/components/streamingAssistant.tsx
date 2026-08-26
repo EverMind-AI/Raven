@@ -9,11 +9,12 @@ import { memo } from 'react'
 import type { AppLayoutProgressProps } from '../app/interfaces.js'
 import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
 
+import { $directChat, viewKeyOf } from '../app/directChatStore.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { appendToolShelfMessage } from '../lib/liveProgress.js'
 import { DagPanel } from './dagPanel.js'
-import { EpisodeView } from './episodeView.js'
+import { EpisodeView, turnFoldScope } from './episodeView.js'
 import { MessageLine } from './messageLine.js'
 import { TodoPanel } from './todoPanel.js'
 
@@ -34,6 +35,8 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const streaming = useTurnSelector(state => state.streaming)
   const activeTools = useTurnSelector(state => state.tools)
   const episodes = useTurnSelector(state => state.episodes)
+  const foldId = useTurnSelector(state => state.foldId)
+  const directChat = useStore($directChat)
   const showStreamingArea = Boolean(streaming)
 
   if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length) {
@@ -44,7 +47,18 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   // flat segment/tool/stream stack.
   if (ui.transcript === 'episodes') {
     return (
-      <EpisodeView cols={cols} compact={compact} episodes={episodes} live t={ui.theme} text={streaming || undefined} />
+      <EpisodeView
+        cols={cols}
+        compact={compact}
+        episodes={episodes}
+        live
+        // The scope this turn's own history row will read (`EpisodeMessage`),
+        // named here rather than defaulted, so a call the reader opened while it
+        // ran is still open once the turn lands.
+        scope={turnFoldScope(viewKeyOf(directChat.active), foldId)}
+        t={ui.theme}
+        text={streaming || undefined}
+      />
     )
   }
 

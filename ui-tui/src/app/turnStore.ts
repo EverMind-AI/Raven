@@ -15,6 +15,7 @@ const buildTurnState = (): TurnState => ({
   activity: [],
   dagRuns: [],
   episodes: [],
+  foldId: '',
   outcome: '',
   reasoning: '',
   reasoningActive: false,
@@ -81,6 +82,11 @@ export interface TurnState {
   // turn may issue several DAG calls, so this is a list, not a single run.
   dagRuns: DagRunState[]
   episodes: Episode[]
+  // This turn's fold namespace, minted at message.start and stamped onto the
+  // episodes message the turn commits. The live view and the settled row read
+  // the same string, which is what keeps a fold the reader opened mid-turn open
+  // once the turn lands (see `turnFoldScope`).
+  foldId: string
   outcome: string
   reasoning: string
   reasoningActive: boolean

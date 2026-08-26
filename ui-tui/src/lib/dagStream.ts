@@ -142,7 +142,10 @@ export const fitTraceTail = (
   const limit = Math.min(messages.length, DAG_TRACE_FIT_MAX_ROWS)
 
   for (let take = 1; take <= limit; take++) {
-    const folded = toTranscriptMessages(messages.slice(-take))
+    // Always `openTurn`: this is a tail slice, so the changes it can see are a
+    // fraction of the run's by construction, and the box is six rows -- a shelf
+    // naming that fraction would cost a real step its row.
+    const folded = toTranscriptMessages(messages.slice(-take), { openTurn: true })
     const used = folded.reduce((total, msg) => total + estimatedMsgHeight(msg, cols, TRACE_ESTIMATE), 0)
 
     if (used > rows && taken > 0) {

@@ -261,6 +261,101 @@ describe('toTranscriptMessages: resumed tool calls', () => {
     ])
   })
 
+  it('keeps every call of a live delegated tail, so no trail fallback is needed', () => {
+    // The shape a run in flight publishes (raven/agent/subagent/backends/turn_rows.py):
+    // one assistant row per call, narration only on the row that had any, and the
+    // tool results after it. Every one of those results sits past the last
+    // text-bearing row -- which is why a fallback used to re-draw them as generic
+    // trail lines. The mapper claims them on its own.
+    const rows = [
+      {
+        role: 'assistant',
+        text: 'Let me read the site files',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/site' }), id: 'c0', name: 'list_dir' }]
+      },
+      { duration_ms: 120, role: 'tool', text: 'index.html style.css', tool_call_id: 'c0' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/site/index.html' }), id: 'c1', name: 'read_file' }]
+      },
+      { duration_ms: 340, role: 'tool', text: '<!doctype html>', tool_call_id: 'c1' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/site/style.css' }), id: 'c2', name: 'read_file' }]
+      },
+      { duration_ms: 90, role: 'tool', text: 'body { margin: 0 }', tool_call_id: 'c2' }
+    ]
+
+    const msgs = toTranscriptMessages(rows, { openTurn: true })
+    const tools = msgs.flatMap(msg => msg.episodes ?? []).flatMap(ep => ep.tools)
+
+    expect(tools.map(tool => tool.id)).toEqual(['c0', 'c1', 'c2'])
+    expect(tools.map(tool => tool.name)).toEqual(['list_dir', 'read_file', 'read_file'])
+    expect(tools.map(tool => tool.resultPreview)).toEqual([
+      'index.html style.css',
+      '<!doctype html>',
+      'body { margin: 0 }'
+    ])
+    expect(tools.map(tool => tool.durationMs)).toEqual([120, 340, 90])
+    expect(msgs.some(msg => msg.kind === 'trail')).toBe(false)
+  })
+
+  it('keeps one turn on one shelf when the agent narrates between two steps', () => {
+    const rows = [
+      { role: 'user', text: 'build the site' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/tmp/index.html' }), id: 'w1', name: 'write_file' }]
+      },
+      { role: 'tool', text: 'wrote index.html', tool_call_id: 'w1' },
+      { role: 'assistant', text: 'Now let me verify the files are on disk.' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ file_path: '/tmp/style.css' }), id: 'e1', name: 'edit_file' }]
+      },
+      { role: 'tool', text: 'edited style.css', tool_call_id: 'e1' },
+      { role: 'assistant', text: 'Done.' }
+    ]
+
+    const shelves = toTranscriptMessages(rows).filter(msg => msg.kind === 'artifacts')
+
+    expect(shelves).toHaveLength(1)
+    expect(shelves[0]!.artifacts?.changes).toEqual([
+      { change: 'new', ext: 'HTML', name: 'index.html' },
+      { change: 'edit', ext: 'CSS', name: 'style.css' }
+    ])
+  })
+
+  it('withholds the trailing shelf for an open turn, keeping the closed one before it', () => {
+    const rows = [
+      { role: 'user', text: 'first prompt' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/tmp/done.md' }), id: 'w1', name: 'write_file' }]
+      },
+      { role: 'tool', text: 'wrote done.md', tool_call_id: 'w1' },
+      { role: 'assistant', text: 'first answer' },
+      { role: 'user', text: 'second prompt' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [{ arguments: JSON.stringify({ path: '/tmp/wip.md' }), id: 'w2', name: 'write_file' }]
+      },
+      { role: 'tool', text: 'wrote wip.md', tool_call_id: 'w2' },
+      { role: 'assistant', text: 'Now let me check it.' }
+    ]
+
+    const shelves = toTranscriptMessages(rows, { openTurn: true }).filter(msg => msg.kind === 'artifacts')
+
+    expect(shelves).toHaveLength(1)
+    expect(shelves[0]!.artifacts?.changes).toEqual([{ change: 'new', ext: 'MD', name: 'done.md' }])
+  })
+
   it('still renders an orphaned tool row that no announcing call claimed', () => {
     const msgs = toTranscriptMessages([
       { role: 'user', text: 'find it' },
