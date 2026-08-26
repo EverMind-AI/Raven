@@ -132,8 +132,32 @@ const rpc = {
     };
     setTimeout(tick, wait);
   },
+  /* One call, held until the socket it was made on opens. Registered with
+     `addEventListener` rather than by assigning the handlers, because
+     `connect()` owns `onopen`/`onclose` and overwriting either would take the
+     connection's own bookkeeping with it. `once`, so a call cannot be sent
+     twice and a rejected one cannot be settled again. */
+  whenOpen(ws, method, params) {
+    return new Promise((resolve, reject) => {
+      ws.addEventListener('open', () => { this.call(method, params).then(resolve, reject); }, { once: true });
+      ws.addEventListener('close', () => reject({ code: -1, message: 'not connected' }), { once: true });
+    });
+  },
   call(method, params) {
-    if (!this.open) return Promise.reject({ code: -1, message: 'not connected' });
+    /* A socket still shaking hands is not a missing gateway.
+       The page's first paint schedules its own loads -- the settings island
+       defers its fetch by one task, which is nowhere near the round trip this
+       socket takes -- so those landed in the window between `connect()` being
+       called and the socket opening, and the reader was told "load failed: not
+       connected" on every single reload. Waiting for THIS connect to settle is
+       the whole fix: a socket that is closed, closing, or absent still fails
+       fast, and a socket that never opens rejects when it closes rather than
+       leaving the caller hanging. */
+    if (!this.open) {
+      const ws = this.ws;
+      if (ws && ws.readyState === WebSocket.CONNECTING) return this.whenOpen(ws, method, params);
+      return Promise.reject({ code: -1, message: 'not connected' });
+    }
     const id = this.next++;
     this.ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} }));
     return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
