@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/6c6f585a-21b6-4e7b-9187-acffe59d0c10)
+![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -17,13 +17,23 @@
 
 # Raven
 
-Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.com/EverMind-AI/EverOS), with opt-in Deep Research for multi-source investigation.
+Raven is the open-source, **self-improving Agent Harness** you can run today. It brings terminal-first execution, local tracing, long-term memory, skills, evaluation, and reusable workflows into one system for long-running AI work.
 
-Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
+## The Harness of Harnesses
 
-**Update:** Raven added Deep Research. Enable it with `raven deep-research enable`
-to give the agent access to MiroThinker-backed, multi-source research when a
-task needs deeper investigation.
+As AI agents move from narrow tasks toward long-running, cross-domain work, manually designing a single, ever-larger harness stops scaling. A harness optimized for one model or domain also cannot provide every capability needed for general intelligence.
+
+**Raven** also names the broader research and ecosystem direction behind this work: **The Harness of Harnesses**. It aims to automatically build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network**.
+
+| **Trusted** | **Persistent** | **Evolving** |
+| --- | --- | --- |
+| Capability is earned through verified performance, not self-declared labels. | Verified results, task state, and long-term memory carry across executors. | Every real run improves capability profiles, skills, routing, and the network itself. |
+
+Raven does not treat a model and its harness as a fixed pair. Through a continuous **evaluation -> execution -> verification -> memory -> feedback** loop, it discovers, composes, and improves the right capabilities for each task. Validated work becomes reusable experience, allowing both individual agents and the wider capability network to evolve.
+
+The Raven evaluation spans **22 Agent benchmark tasks** across task quality, cost, and key mechanism gains. The reported results show broad performance and efficiency improvements over existing agent systems while advancing the **quality-cost Pareto frontier**.
+
+> Raven names both the runnable open-source harness in this repository and the broader multi-agent research and ecosystem direction described above.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
