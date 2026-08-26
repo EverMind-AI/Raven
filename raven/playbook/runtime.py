@@ -49,6 +49,7 @@ class PlaybookRuntime:
         executor: PlaybookExecutor,
         disabled: Iterable[str] = (),
         disabled_source: "Callable[[], frozenset[str]] | None" = None,
+        known_agents: "Callable[[], Iterable[str]] | None" = None,
         router: RouterSizes | None = None,
     ) -> None:
         # No provider and no model here any more. Both existed for the gate --
@@ -67,7 +68,20 @@ class PlaybookRuntime:
         self._gap_rounds: dict[tuple[str, str], int] = {}
         self._store = store
         self._specs: dict[str, PlaybookSpec] = {}
+        #: Parsed, and refused by the structural check. Kept rather than dropped
+        #: because the reason is usually not in the file: an agent switched off,
+        #: or one not added yet. Fixing that changes the agent table and not the
+        #: playbook, so a refusal that was forgotten would need the file touched
+        #: to be reconsidered -- a restart-shaped failure in the shape that is
+        #: worse than a restart, since the corrective action succeeds and changes
+        #: nothing. Re-checked on every refresh, which costs no read and no parse.
+        self._refused: dict[str, PlaybookSpec] = {}
         self._index: TriggerIndex | None = None
+        #: The agent table to validate against, asked rather than copied. It has
+        #: to be the live one: ``apply_agents`` rebuilds the registry in place,
+        #: which is what the dispatch resolves against, so any copy taken at
+        #: construction can refuse a playbook the graph would have run.
+        self._known_agents_source = known_agents
         #: Where the deny list is read from, asked on every access rather than
         #: captured here. A switch that was captured needed a restart to take
         #: effect, which is not something a user can be expected to know about a
@@ -147,6 +161,7 @@ class PlaybookRuntime:
         current = self._store.fingerprints()
         for gone in set(self._fingerprints) - set(current):
             self._specs.pop(gone, None)
+            self._refused.pop(gone, None)
             logger.info("Playbook {!r} is no longer in the library", gone)
         changed = [name for name, digest in current.items() if self._fingerprints.get(name) != digest]
         known_agents = self._known_agents()
@@ -167,10 +182,13 @@ class PlaybookRuntime:
                 # not on the table cannot run, and offering it spends a turn to
                 # find that out. Said at warning level because a file the user
                 # can see in their library and the model cannot use is exactly
-                # the kind of gap nobody thinks to ask about.
+                # the kind of gap nobody thinks to ask about. Kept, so that
+                # fixing the agent table is enough -- see ``_refused``.
                 logger.warning("Playbook {!r} is not usable and is not being offered: {}", name, "; ".join(errors))
                 self._specs.pop(name, None)
+                self._refused[name] = spec
                 continue
+            self._refused.pop(name, None)
             self._specs[name] = spec
             if first_sight:
                 # Every arrival that did not come through ``adopt`` -- a
@@ -179,21 +197,46 @@ class PlaybookRuntime:
                 # not that writing to it is hard: ``write_file`` is a general
                 # capability and the directory is an ordinary directory.
                 logger.info("Playbook {!r} appeared in the library at {}", name, self._store.path_for(name))
+        # Every refusal reconsidered against the table as it stands now. No file
+        # is read and nothing is parsed: these specs are already in hand, and the
+        # thing that changed is usually the agent table rather than the file.
+        promoted = []
+        for name, spec in list(self._refused.items()):
+            if validate_structure(spec, known_agents=known_agents, allow_blank_fillable=True):
+                continue
+            self._specs[name] = spec
+            del self._refused[name]
+            promoted.append(name)
+            logger.info("Playbook {!r} is usable now and is being offered", name)
         self._fingerprints = current
-        if changed or self._index is None:
+        if changed or promoted or self._index is None:
             self._reindex()
 
     def _known_agents(self) -> list[str] | None:
-        """The agent table the graph will be dispatched against, or None.
+        """Every name a node reference can resolve to, or None if unknown.
 
-        Read off the executor rather than held here: it is the same table the
-        dispatch resolves node names against, and a second copy would let this
-        refuse a playbook the graph would have run. ``None`` when there is no
-        table, which is ``validate_structure``'s own way of saying "do not check
-        the names at all" rather than checking them against a guess.
+        ``AgentRegistry.all_names`` and deliberately not the enabled subset or
+        the model-facing enum: its own docstring is the rule this follows --
+        being on the table is what makes a reference resolvable, whether this
+        machine has that agent switched on is a runtime condition with its own
+        error, and the legacy aliases resolve too. ``raven playbook validate``
+        already asks that view, and two surfaces disagreeing about one file is
+        worse than either answer alone.
+
+        Asked through a callable for the reason the deny list is: the table is
+        rebuilt in place by ``apply_agents`` without a restart, so anything held
+        here would be the stale copy. ``None`` when no source was wired, which is
+        ``validate_structure``'s own way of saying "do not check the names at
+        all" rather than checking them against a guess.
         """
-        roster = getattr(self._executor, "_roster_cache", None)
-        return sorted(roster) if roster else None
+        if self._known_agents_source is None:
+            return None
+        try:
+            names = sorted(self._known_agents_source())
+        except Exception:  # noqa: BLE001 - a bad read must not cost the library its files
+            logger.warning("playbooks: could not read the agent table; not checking agent names")
+            return None
+        return names or None
 
     def _reindex(self) -> None:
         """Rebuild the trigger index over what is currently offered.

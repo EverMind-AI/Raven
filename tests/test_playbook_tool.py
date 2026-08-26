@@ -54,14 +54,20 @@ def _spec(name="weekly-feedback", **over):
     return PlaybookSpec(**base)
 
 
-def _runtime(tmp_path, specs, dag_tool=None, disabled_source=None, disabled=()):
+def _runtime(tmp_path, specs, dag_tool=None, disabled_source=None, disabled=(), known_agents=None):
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
     for spec in specs:
         store.save(spec)
     executor = PlaybookExecutor(
         dag_tool=dag_tool or FakeDagTool(),
     )
-    return PlaybookRuntime(store=store, executor=executor, disabled=disabled, disabled_source=disabled_source)
+    return PlaybookRuntime(
+        store=store,
+        executor=executor,
+        disabled=disabled,
+        disabled_source=disabled_source,
+        known_agents=known_agents,
+    )
 
 
 @pytest.fixture
@@ -268,8 +274,7 @@ def test_a_playbook_naming_an_agent_that_does_not_exist_is_not_offered(tmp_path)
     nothing else, so a graph naming an agent that is not on the table used to
     load fine and be offered, and the turn that called it found out.
     """
-    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
-    runtime._executor.set_roster({"Raven": "the generalist"})
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: ["Raven"])
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
 
     # A name the store's own migration will not rewrite: `data-raven` in `_spec`
@@ -303,8 +308,7 @@ def test_a_field_left_for_the_caller_is_not_read_as_a_defect(tmp_path):
     by name and the run proceeds. Refusing them at the door would refuse the
     hand-written shape this refresh exists to make visible.
     """
-    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
-    runtime._executor.set_roster({"Raven": "the generalist"})
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: ["Raven"])
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
 
     store.save(
@@ -316,6 +320,61 @@ def test_a_field_left_for_the_caller_is_not_read_as_a_defect(tmp_path):
 
     assert "left-blank" in runtime.names()
     assert "left for you" in dict(runtime.listing())["left-blank"]
+
+
+def test_a_refusal_is_reconsidered_when_the_agent_table_changes(tmp_path):
+    """The half that made the refusal unrecoverable.
+
+    The reason a playbook is refused is usually not in the playbook: an agent
+    switched off, or one not added yet. Fixing that changes the agent table, not
+    the file -- so a refusal that was forgotten needed the file touched to be
+    looked at again, which is a restart-shaped failure in the worse shape: the
+    user's corrective action succeeds, reports success, and changes nothing.
+
+    `apply_agents` exists so that adding an agent needs no restart, so this has
+    to hold within one process.
+    """
+    table = ["Raven"]
+    runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    store.save(
+        _spec(
+            name="needs-hermes",
+            nodes=[NodeSpec(id="pull", subagent="hermes", node_summary="pull it", prompt_template="do it")],
+        )
+    )
+
+    assert runtime.names() == []
+
+    # The agent arrives. The playbook's bytes do not move.
+    table.append("hermes")
+
+    assert runtime.names() == ["needs-hermes"]
+
+
+def test_reconsidering_a_refusal_costs_no_parse(tmp_path):
+    """Which is what makes reconsidering every refresh affordable: the spec is
+    already in hand, and only the table it is checked against changed."""
+    table = ["Raven"]
+    runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    store.save(
+        _spec(
+            name="needs-hermes",
+            nodes=[NodeSpec(id="pull", subagent="hermes", node_summary="pull it", prompt_template="do it")],
+        )
+    )
+    runtime.names()  # parses it once, refuses it
+
+    calls: list[str] = []
+    original = runtime._store.load
+    runtime._store.load = lambda name: (calls.append(name), original(name))[1]  # type: ignore[method-assign]
+
+    runtime.names()
+    table.append("hermes")
+    assert runtime.names() == ["needs-hermes"]
+
+    assert calls == [], f"a refusal was re-read from disk: {calls}"
 
 
 def test_a_library_nobody_touched_is_not_reparsed(tmp_path):

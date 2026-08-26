@@ -161,8 +161,9 @@ class PlaybookStore:
 
     def load(self, name: str) -> PlaybookSpec:
         if self.is_shadowing(name) and name not in self._shadow_warned:
-            # Once per store instance, not per load: the runtime reloads the
-            # library each loop start and the point is a hint, not a nag.
+            # Once per store instance, not per load: the runtime re-reads the
+            # library before every model call, so a per-load line would repeat
+            # for the life of the process, and this is a hint rather than a nag.
             self._shadow_warned.add(name)
             logger.warning(
                 "User playbook {!r} shadows the builtin of the same name; the user file wins",

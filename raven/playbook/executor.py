@@ -18,8 +18,12 @@ agent on the shared table and the graph tool looks it up, which is what removed
 the synthetic ``pb-<node>`` names every step used to run under.
 
 Stateless by design: a plan either runs, or comes back as questions the
-caller relays to the user. The user's next message re-enters matching from
-scratch, which is what lets v1 ship without a confirm-state machine.
+caller relays to the user, and the caller decides what to do with the answer --
+it holds the conversation and calls again. Nothing here waits, which is what
+lets this ship without a confirm-state machine. (It used to say the next
+message re-entered matching: there is no matching left to re-enter. The passive
+funnel that judged one message before the turn is gone, and trigger words now
+decide which playbooks get *described* to the model, never which one runs.)
 """
 
 from __future__ import annotations
