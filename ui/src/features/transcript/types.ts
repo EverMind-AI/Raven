@@ -68,6 +68,14 @@ export interface CallData {
   /* Set once a `dag.get` has been asked for, so a card whose arguments carried no
      graph asks once rather than on every re-render. */
   asked: boolean
+  /* The provider's id for this tool call, which is what a dag run names itself
+     the child of. The card is bound to its run through this rather than through
+     "the newest dag card that has no run yet": the run announces itself on a
+     side channel that is not ordered against the tool events, so the guess was
+     wrong exactly when two things raced -- and a card that lost the race then
+     took no update for the rest of the run. Empty for a card restored from
+     history, whose events are long gone and which binds through its result. */
+  callId: string
 }
 
 export interface StepData {
@@ -241,7 +249,7 @@ export interface StepHandle {
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void
-  tool(name: string, args: unknown, display?: string | null): CallHandle
+  tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle
   seal(): void
 }
 

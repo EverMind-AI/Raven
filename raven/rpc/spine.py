@@ -84,7 +84,11 @@ def _dag_payload(name: str, payload: dict) -> dict:
             }
             for node in payload.get("nodes") or []
         ]
-        return {**common, "nodes": nodes}
+        # The line the whole graph was dispatched with. Dropped here until now,
+        # which left the sheet above the composer titled by the generic word on
+        # every live run -- and correctly titled only after a reload, because
+        # `dag.get` carries it and this event did not.
+        return {**common, **_present(payload, ("task_summary",)), "nodes": nodes}
     if name == "dag_node_updated":
         return {
             **common,

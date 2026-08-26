@@ -881,6 +881,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .daggraph .nd .id {
   font-size: var(--dag-id-size); fill: var(--text); font-weight: 600; font-family: var(--mono);
 }
+/* A node titled by its summary is titled by a sentence, and a sentence set in
+   the key face reads as a key. The mono stays for the id, which is one. */
+.daggraph .nd .id.prose { font-family: inherit; font-weight: 600; }
 .daggraph .nd .ag { font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono); }
 .daggraph .nd .tm {
   font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono);
@@ -924,12 +927,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dagc .nhd .st { font-size: 10.5px; color: var(--faint); flex: none; }
 /* The door to what actually happened. Explicit, because selecting a node and
    opening its transcript are different intentions: the panel takes half the
-   window, and comparing two nodes' configuration is the commoner one. */
-.dagc .nhd .go {
+   window, and comparing two nodes' configuration is the commoner one.
+   Not `.go`: that is the composer's send button, a 30px circle, and this link
+   inherited its width and its grid centring from it -- so the label was clipped
+   to a couple of characters however much room the row had. */
+.dagc .nhd .orun {
   margin-left: auto; flex: none; font: inherit; font-size: 11px; background: none;
   border: 0; color: var(--muted); cursor: pointer; padding: 0; white-space: nowrap;
 }
-.dagc .nhd .go:hover { color: var(--amber); text-decoration: underline; }
+.dagc .nhd .orun:hover { color: var(--amber); text-decoration: underline; }
 .dagc .rows { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
 .dagc .rows > .k { color: var(--faint); }
 .dagc .rows > .v { color: var(--text); min-width: 0; }

@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
+
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -1144,8 +1147,37 @@ describe('transcript island, the delegation verbs', () => {
     /* Dispatched rather than `.click()`: a node box is an SVG <g>, and
        SVGElement has no click() in jsdom. */
     act(() => { pickNode(card, 0) })
-    act(() => { card.querySelector<HTMLElement>('.npanel .go')!.click() })
+    act(() => { card.querySelector<HTMLElement>('.npanel .orun')!.click() })
     expect(opened).toEqual([['run-7', 'alpha']])
+  })
+
+  /* The cascade, which no DOM test here can see: happy-dom renders the markup
+     with no stylesheet attached, so a class that collides with a global rule
+     looks fine in every other test in this file and is wrong only on screen.
+     The collision that prompted this dressed the run link in `.go`, which is
+     the composer's send button -- a 30px circle with grid centring -- and the
+     label was clipped to two characters however wide the panel got. */
+  it('dresses the node panel in no class the page sizes globally', () => {
+    const css = readFileSync('src/styles/page.css', 'utf8') as string
+    /* Bare single-class rules only: those are the ones that apply to any element
+       wearing the name, wherever it is. A scoped rule (`.dagc .nhd .nm`) cannot
+       reach into another feature and is not what this is about. */
+    const boxed = new Set<string>()
+    for (const rule of css.matchAll(/(?:^|\n)\.([a-z][\w-]*)\s*\{([^}]*)\}/g)) {
+      if (/(?:^|;|\s)(?:width|height)\s*:/.test(rule[2] as string)) boxed.add(rule[1] as string)
+    }
+    /* The guard is only worth anything if the stylesheet actually has such
+       rules to collide with. */
+    expect(boxed.size).toBeGreaterThan(0)
+
+    const card = dagCard()
+    act(() => { pickNode(card, 0) })
+    const worn = new Set<string>()
+    card.querySelectorAll('.npanel, .npanel *').forEach((el) => {
+      el.classList.forEach((name) => worn.add(name))
+    })
+    expect([...worn].filter((name) => boxed.has(name))).toEqual([])
+    expect(worn.has('orun')).toBe(true)
   })
 
   /* Called directly, not through the chip: React swallows an exception thrown
@@ -1618,6 +1650,161 @@ describe('transcript island, delegated calls', () => {
     const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
     return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
   }
+
+  const dagNodeStates = (card: HTMLElement): string[] =>
+    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st as string)
+
+  it('binds a graph that announced itself before its tool row', () => {
+    /* The two do not travel together. The dag tool publishes its progress on its
+       own channel rather than through the delivery hub (raven/rpc/spine.py), so
+       nothing orders the announcement against `tool.start`. Binding by "the
+       newest dag card with no run yet" was therefore a guess, and a card that
+       lost that race took no update for the rest of the run: it sat at "all
+       waiting" while the sheet above the composer drew the same graph finishing.
+       The run names the tool call it belongs to; that is the binding. */
+    act(() => {
+      const st = mount.step()
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-early',
+        tool_call_id: 'call-1',
+        nodes: [{ id: 'alpha', subagent: 'Raven', depends_on: [] },
+          { id: 'beta', subagent: 'Raven', depends_on: ['alpha'] }],
+      })
+      st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'beta' }] }, null, 'call-1')
+      mount.dagFeed('dag.node_updated',
+        { run_id: 'r-early', tool_call_id: 'call-1', node: 'alpha', status: 'completed' })
+      st.seal()
+    })
+    const card = openDagCard()
+
+    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    /* And the run has an identity while it is still running, rather than only
+       once the call returns and the id can be read back out of its result. */
+    expect(dagField(card, 'gui.dag.run_id')).toBe('r-early')
+  })
+
+  it('gives each of two graphs in one turn its own updates', () => {
+    /* One turn can dispatch several. Under the old guess the second card claimed
+       whichever run announced itself next, so with the announcements interleaved
+       both graphs' nodes landed on one card and the other never moved. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'alpha2' }] }, null, 'call-1')
+      st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-2',
+        tool_call_id: 'call-2',
+        nodes: [{ id: 'beta', subagent: 'Raven', depends_on: [] },
+          { id: 'beta2', subagent: 'Raven', depends_on: ['beta'] }],
+      })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-1',
+        tool_call_id: 'call-1',
+        nodes: [{ id: 'alpha', subagent: 'Raven', depends_on: [] },
+          { id: 'alpha2', subagent: 'Raven', depends_on: ['alpha'] }],
+      })
+      mount.dagFeed('dag.node_updated',
+        { run_id: 'r-1', tool_call_id: 'call-1', node: 'alpha', status: 'failed' })
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
+
+    expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
+    expect(dagNodeStates(cards[0] as HTMLElement)).toEqual(['failed', 'pending'])
+    expect(dagNodeStates(cards[1] as HTMLElement)).toEqual(['pending', 'pending'])
+  })
+
+  it('does not let a claimed card be claimed again by the next graph', () => {
+    /* The ordering the two-graph case above cannot reach, because there both
+       tool rows land before either announcement. Here A's row, then A's
+       announcement, then B's announcement, then B's row.
+
+       The by-id claim has to clear the fallback, which means both maps must hold
+       the SAME entry -- built twice, the identity check can never be true, the
+       fallback stays armed pointing at a card that already has its run, and B's
+       announcement lands on A: A takes r-2 and both graphs' nodes, B never
+       binds. That is worse than the guess this replaced, which at least left A
+       alone. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'alpha2' }] }, null, 'call-1')
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-1',
+        tool_call_id: 'call-1',
+        nodes: [{ id: 'alpha', subagent: 'Raven', depends_on: [] },
+          { id: 'alpha2', subagent: 'Raven', depends_on: ['alpha'] }],
+      })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-2',
+        tool_call_id: 'call-2',
+        nodes: [{ id: 'beta', subagent: 'Raven', depends_on: [] },
+          { id: 'beta2', subagent: 'Raven', depends_on: ['beta'] }],
+      })
+      st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
+
+    expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
+    expect(cards.map((c) => [...c.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.node)))
+      .toEqual([['alpha', 'alpha2'], ['beta', 'beta2']])
+  })
+
+  it('buffers a raced announcement once, not twice', () => {
+    /* The announcement branch used to fall through into the unbound guard, which
+       found the array it had just created and pushed the same event onto it
+       again -- so the opening replayed as [started, started, node_updated].
+       Nothing on screen can see that: `merge` is idempotent and `fromStarted`
+       yields `pending`, which the stage guard refuses to regress with. Both are
+       accidents rather than intentions, so the buffer's own contents are what
+       this pins. */
+    act(() => {
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-gap',
+        tool_call_id: 'call-1',
+        nodes: [{ id: 'alpha', subagent: 'Raven', depends_on: [] }],
+      })
+      mount.dagFeed('dag.node_updated',
+        { run_id: 'r-gap', tool_call_id: 'call-1', node: 'alpha', status: 'running', started_at: 1_000_000 })
+    })
+
+    expect(store._earlyForTests())
+      .toEqual([['call-1', 'dag.run_started'], ['call-1', 'dag.node_updated']])
+  })
+
+  it('keeps a node that reported inside the same gap', () => {
+    /* The buffer holds the whole opening, not just the announcement. A node can
+       finish while the tool row is still in flight, and dropping that report
+       left the node drawn as waiting until the run's completion restated it --
+       by which time its own clock was gone. */
+    act(() => {
+      const st = mount.step()
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r-gap',
+        tool_call_id: 'call-1',
+        nodes: [{ id: 'alpha', subagent: 'Raven', depends_on: [] },
+          { id: 'beta', subagent: 'Raven', depends_on: ['alpha'] }],
+      })
+      mount.dagFeed('dag.node_updated', {
+        run_id: 'r-gap',
+        tool_call_id: 'call-1',
+        node: 'alpha',
+        status: 'completed',
+        started_at: 1_000_000,
+        ended_at: 1_020_000,
+      })
+      st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'beta' }] }, null, 'call-1')
+      st.seal()
+    })
+    const card = openDagCard()
+
+    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    /* And with its own clock, which is the part the completion event could not
+       have put back. */
+    expect(card.querySelector('.nd .tm')?.textContent).toBe(store.durText(20_000))
+  })
 
   it('carries the graph line into the fields, in full, where the row cannot show it', () => {
     /* `.wrow .ar` is a one-line ellipsis with no `title` attribute (page.css),

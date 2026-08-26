@@ -115,7 +115,10 @@ function onEvent(ev) {
   } else if (ev.type === 'tool.start') {
     killStatus();
     const st = ensureStep();
-    const h = st.tool(p.name || 'tool', p.arguments, p.display);
+    /* The call id travels with the row: a `run_subagent_dag` names it on every
+       progress event, and it is what binds the graph to this card rather than to
+       whichever dag card happened to be the newest. */
+    const h = st.tool(p.name || 'tool', p.arguments, p.display, p.tool_call_id);
     live.open.set(p.tool_call_id, { h, st, t0: Date.now(), name: p.name, args: p.arguments });
     /* The workspace panel gets the WHOLE argument object, not the one-line
        display string: edit_file's old_text/new_text is the diff. */
@@ -211,31 +214,13 @@ function onEvent(ev) {
     });
   } else if (ev.type === 'dag.node_updated') {
     dagFlowFeed(ev.type, p);
-    const d = RavenIslands.dag.run(sheetSession());
-    if (d && d.run_id === p.run_id) {
-      const n = d.nodes.get(p.node);
-      if (n) {
-        n.status = p.status;
-        n.started_at = p.started_at || n.started_at;
-        n.ended_at = p.ended_at || n.ended_at;
-        RavenIslands.dag.touch();
-      }
-    }
+    /* Through the island rather than into the run's node map from here: what a
+       report means to a node is one definition, next to the model it moves, and
+       the copy that lived here had drifted into inventing a clock. */
+    RavenIslands.dag.advance(sheetSession(), p);
   } else if (ev.type === 'dag.run_completed') {
     dagFlowFeed(ev.type, p);
-    const d = RavenIslands.dag.run(sheetSession());
-    if (d && d.run_id === p.run_id) {
-      /* Each file's status is the run's own last word on that node. */
-      (p.files || []).forEach((f) => {
-        const n = d.nodes.get(f.node);
-        if (n) { n.status = f.status; n.ended_at = n.ended_at || Date.now(); }
-      });
-      d.summary = p.summary || null;
-      d.dir = p.dir || null;
-      d.done = true;
-      d.folded = true;
-      RavenIslands.dag.touch();
-    }
+    RavenIslands.dag.settle(sheetSession(), p);
   }
 }
 

@@ -34,6 +34,14 @@ interface FittedLabels {
 
 const CARD_LAYERS = 5
 
+/* What a node's box is titled by. The summary is what the model was required to
+   write about this step -- "research the current hot topics and pick two" -- and
+   the id is a key: a playbook namespaces it, so a graph's ids share their first
+   twenty characters and differ in the tail the box has least room for. The id is
+   still reachable, one row down in the node panel, where the fields a dependency
+   or a run dir is keyed by belong. */
+export const nodeLabel = (n: DagNode): string => n.node_summary || n.id
+
 export function visibleLayers(nodes: DagNode[], limit = CARD_LAYERS): {
   hiddenLayers: number
   nodes: DagNode[]
@@ -115,7 +123,7 @@ export function DagGraph({
   const metaY = card ? 28 : 32
   const clockY = card ? 28 : 19
   const labelRoom = dims.W - labelX - (card ? 9 : 40)
-  const fitKey = JSON.stringify([dims.W, surface, shown.map((n) => n.id)])
+  const fitKey = JSON.stringify([dims.W, surface, shown.map(nodeLabel)])
   const fit = fitted?.key === fitKey ? fitted.values : null
 
   useLayoutEffect(() => {
@@ -124,7 +132,7 @@ export function DagGraph({
     if (els.length !== shown.length) return
     const first = els[0]
     if (!first || typeof first.getComputedTextLength !== 'function') return
-    const raw = shown.map((n) => n.id)
+    const raw = shown.map(nodeLabel)
     const values = fitLabels(raw, labelRoom, (label, i) => {
       const el = els[i] as SVGTextElement
       el.textContent = label
@@ -161,15 +169,18 @@ export function DagGraph({
               }}>
               <rect width={dims.W} height={dims.H} rx={9} />
               <Mark status={n.status} x={markX} y={dims.H / 2} />
-              <text x={labelX} y={idY} className="id" ref={(el) => {
+              <text x={labelX} y={idY} className={n.node_summary ? 'id prose' : 'id'} ref={(el) => {
                 if (el) refs.current.set(n.id, el)
                 else refs.current.delete(n.id)
-              }}>{fit?.get(n.id) ?? n.id}</text>
+              }}>{fit?.get(n.id) ?? nodeLabel(n)}</text>
               <text x={labelX} y={metaY} className="ag">{n.subagent + handle}</text>
               <text x={dims.W - (card ? 9 : 11)} y={clockY} textAnchor="end" className="tm">
                 {card && n.status === 'running' ? '' : took(n, now)}
               </text>
-              <title>{`${n.id} \u00b7 ${n.subagent}${n.instance ? ' @' + n.instance : ''}`}</title>
+              {/* Both, because the box shows one of them truncated: the summary is
+                  what the step is for, the id is what everything else keys on. */}
+              <title>{[n.node_summary, n.id, n.subagent + (n.instance ? ' @' + n.instance : '')]
+                .filter(Boolean).join(' \u00b7 ')}</title>
             </g>
           )
         })}

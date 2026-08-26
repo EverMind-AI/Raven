@@ -528,7 +528,7 @@ function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): 
         <span className="nm">{n.node_summary || n.id}</span>
         <span className="st">{t('gui.dag.st_' + st, undefined, st)}{n.started_at ? ' · ' + dag.took(n, Date.now()) : ''}</span>
         {c.runId ? (
-          <button type="button" className="go"
+          <button type="button" className="orun"
             onClick={(e) => { e.stopPropagation(); store.openDagNode(c.runId as string, n.id) }}>
             {t('gui.dag.open_run')}
           </button>

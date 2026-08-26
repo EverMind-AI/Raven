@@ -81,8 +81,34 @@ describe('the shared DAG renderer', () => {
     expect(host.querySelector('.dagcap')).toBeNull()
   })
 
+  it('titles a node by what it is for, keeping the id in reach', () => {
+    /* The id is a key, not a name: a playbook namespaces every node with its own
+       name and run tag, so a graph's ids share their first twenty characters and
+       differ in the tail the box has least room for. The summary is what the
+       model was required to write about the step. The id stays in the tooltip
+       and in the node panel's fields, where a dependency and a run dir are
+       keyed by it. */
+    const nodes = [{ ...node('daily-digest-36e275-scan'), node_summary: 'read the pages' }]
+    draw(nodes, 'sheet')
+
+    expect(host.querySelector('.id')!.textContent).toBe('read the pages')
+    expect(host.querySelector('.nd title')!.textContent)
+      .toBe('read the pages \u00b7 daily-digest-36e275-scan \u00b7 raven')
+    /* Set in the reading face rather than the key face: a sentence in mono reads
+       as an identifier. */
+    expect(host.querySelector('.id')!.getAttribute('class')).toBe('id prose')
+  })
+
+  it('falls back to the id for a node whose graph carried no summary', () => {
+    /* A run started before the field existed, and a model that skipped it. */
+    draw([node('scan-news')], 'sheet')
+
+    expect(host.querySelector('.id')!.textContent).toBe('scan-news')
+    expect(host.querySelector('.id')!.getAttribute('class')).toBe('id')
+  })
+
   it('fits the card and sheet labels through the same measured pass', () => {
-    const nodes = [node('project-tag-fetch-metadata'), node('project-tag-parse')]
+    const nodes = [node('project-tag-fetch-metadata-and-normalise'), node('project-tag-parse')]
     draw(nodes, 'card')
     const card = [...host.querySelectorAll('.id')].map((el) => el.textContent || '')
     expect(card[0]).not.toContain('project-tag-')

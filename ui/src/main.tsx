@@ -270,6 +270,13 @@ window.RavenIslands = {
        the summary lines are no longer published: their only caller was the
        imperative builder that this replaces. */
     start: dagSheet.start,
+    /* A node reported, and the run had its last word. Both were written out by
+       hand in the live layer against the run's node map, which is how the
+       completion branch came to invent an end stamp for a node that never sent
+       one -- and how a node that finished early came to read as having taken the
+       whole graph. */
+    advance: dagSheet.advance,
+    settle: dagSheet.settle,
     touch: dagSheet.touch,
     sync: dagSheet.sync,
     forget: dagSheet.forget,

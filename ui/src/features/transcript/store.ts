@@ -305,6 +305,7 @@ export function dropLane(lane: Lane): void {
   lanes.delete(lane)
   stopFlush(lane)
   for (const [id, f] of dagLive) if (f.lane === lane) dagLive.delete(id)
+  for (const [id, f] of dagByCall) if (f.lane === lane) dagByCall.delete(id)
   if (dagPending && dagPending.lane === lane) dagPending = null
 }
 
@@ -544,6 +545,7 @@ function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
    to be loose enough to hand them. */
 export interface DagFeedPayload {
   run_id?: string
+  tool_call_id?: string
   node?: string
   status?: string
   started_at?: number
@@ -552,10 +554,57 @@ export interface DagFeedPayload {
   nodes?: Array<Record<string, unknown>>
 }
 
-/* The trail's dag card is bound to its run through these: run_id arrives on
-   the first dag.* event, and the newest unbound card claims it. */
+/* The trail's dag card is bound to its run through these.
+ *
+ * `tool_call_id` is the binding, and it is on every dag event the gateway sends:
+ * the run names the tool call it belongs to, so neither side has to guess. What
+ * it replaces was a guess -- the newest dag card with no run yet claimed the
+ * next `dag.run_started` -- and the guess is wrong whenever the announcement
+ * beats the tool row it belongs under. The two travel on different channels (the
+ * dag tool publishes its own progress rather than going through the delivery
+ * hub, see raven/rpc/spine.py), so nothing orders them, and a card that lost
+ * that race then dropped every node update for the rest of the run: it sat at
+ * "3 nodes, all waiting" while the sheet above the composer drew the same graph
+ * finishing.
+ *
+ * `dagPending` stays as the fallback for a server that sends no `tool_call_id`,
+ * and `dagEarly` holds an announcement that arrived before its card, so the
+ * ordering stops mattering in both directions. */
 let dagPending: { lane: Lane; call: CallData } | null = null
 const dagLive = new Map<string, { lane: Lane; call: CallData }>()
+const dagByCall = new Map<string, { lane: Lane; call: CallData }>()
+/* What a run said before its card existed, in arrival order, per tool call.
+   Only ever holds events for a run that has announced itself and found nobody
+   -- an update for any other unknown run is an update for another card's run,
+   and buffering those would be a leak with no reader. */
+const dagEarly = new Map<string, Array<[string, DagFeedPayload]>>()
+/* A card that never arrives would otherwise buffer for the life of the page.
+   The window this covers is one tool event wide; anything past this is not the
+   race it was built for. */
+const EARLY_MAX = 64
+
+/* A card just appeared. It takes whatever announced itself while it was in
+   flight, and otherwise stands as the fallback claimant.
+ *
+ * One object in both maps, not two that describe the same card: the identity is
+ * how `dagFeed` knows the claim it just made was the fallback's and clears it.
+ * Built twice, that check could never be true for a card claimed by id, so the
+ * fallback stayed armed pointing at a card that already had its run -- and the
+ * NEXT graph to announce itself before its own row landed on that card, taking
+ * its run id and merging its nodes in. Worse than the guess this replaced, which
+ * at least left the first card alone. */
+function claimRun(lane: Lane, call: CallData): void {
+  const owner = { lane, call }
+  dagPending = owner
+  if (!call.callId) return
+  dagByCall.set(call.callId, owner)
+  const early = dagEarly.get(call.callId)
+  if (!early) return
+  dagEarly.delete(call.callId)
+  /* In arrival order, through the same door a live event comes in by: the first
+     is the announcement, which binds, and the rest apply to what it bound. */
+  early.forEach(([type, p]) => dagFeed(type, p))
+}
 
 /* Which agent a spawn named, from the model's own arguments. Both spellings:
    the field was renamed `agent` -> `subagent`, and these arguments are recorded
@@ -586,14 +635,47 @@ function openFirstFailure(call: CallData): void {
   call.selAuto = true
 }
 
+/* Test seam: what each raced opening is holding, as (call id, event) pairs.
+   Applying an announcement twice is invisible on screen -- `merge` is
+   idempotent and `fromStarted` cannot walk a status back -- so the buffer's own
+   contents are the only place the claim "buffered once" can be checked. */
+export const _earlyForTests = (): Array<[string, string]> =>
+  [...dagEarly].flatMap(([id, evs]) => evs.map((e): [string, string] => [id, e[0]]))
+
 export function dagFeed(type: string, p: DagFeedPayload | null): void {
   if (!p) return
-  if (type === 'dag.run_started' && dagPending) {
-    dagLive.set(String(p.run_id), dagPending)
-    dagPending = null
+  const callId = p.tool_call_id ? String(p.tool_call_id) : ''
+  if (type === 'dag.run_started') {
+    /* By id when the run named one, and only otherwise by "whoever asked last".
+       Both clear the fallback: a claim that has been made must not be made
+       twice, or the next graph the turn dispatches lands on this card. */
+    const owner = (callId && dagByCall.get(callId)) || dagPending
+    if (owner) {
+      dagLive.set(String(p.run_id), owner)
+      if (owner === dagPending) dagPending = null
+    } else if (callId) {
+      /* The announcement outran the tool row. Kept for the card to collect when
+         it arrives rather than dropped, which is what left the graph unbound.
+         Returning here rather than falling through to the unbound guard below,
+         which would find the array this line just created and push the same
+         event onto it a second time. Harmless while an announcement is
+         idempotent, and the duplicate sits adjacent to the original so it
+         replays before any node report -- but both of those are accidents of
+         how the array is built, and the first thing that makes a run's opening
+         count for something inherits a double-fire with nothing covering it. */
+      dagEarly.set(callId, [[type, p]])
+      return
+    }
   }
   const f = dagLive.get(String(p.run_id))
-  if (!f) return
+  if (!f) {
+    /* A node that reported inside the same gap. Buffered only behind an
+       announcement already waiting for this call, so this is the rest of one
+       run's opening rather than a bucket for every event nothing claims. */
+    const waiting = callId ? dagEarly.get(callId) : undefined
+    if (waiting && waiting.length < EARLY_MAX) waiting.push([type, p])
+    return
+  }
   const { lane, call } = f
   if (type === 'dag.run_started') {
     call.runId = String(p.run_id)
@@ -616,6 +698,7 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
   } else if (type === 'dag.run_completed') {
     ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
     dagLive.delete(String(p.run_id))
+    if (call.callId) dagByCall.delete(call.callId)
     openFirstFailure(call)
     bump(lane, call)
   }
@@ -665,7 +748,12 @@ function hydrateDag(lane: Lane, call: CallData): void {
   })
 }
 
-function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], display?: string | null): CallData {
+function newCallData(
+  id: ReturnType<typeof actId>,
+  kind: CallData['kind'],
+  display?: string | null,
+  callId?: string | null,
+): CallData {
   const a = id.args
   const c: CallData = {
     v: 0, id: nextId(), kind, name: id.name, args: a, via: id.via, srv: id.srv,
@@ -674,6 +762,7 @@ function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], displ
     done: false, ok: true, ms: 0, res: '', truncated: false,
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
     open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
+    callId: callId ? String(callId) : '',
   }
   if (kind === 'dag') c.runTitle = String(a.task_summary || '')
   if (kind === 'spawn') {
@@ -789,7 +878,7 @@ export function newStep(lane: Lane): StepHandle {
       seg.sayCaret = true
       scheduleFlush(lane, seg)
     },
-    tool(name: string, args: unknown, display?: string | null): CallHandle {
+    tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle {
       thinkDone()
       const id = actId(name || 'tool', args)
       // `load_playbook` is a dag call too, from the card's point of view: a
@@ -802,10 +891,10 @@ export function newStep(lane: Lane): StepHandle {
       // pending slot unclaimed, which `callDone` clears.
       const DAG_CALLS = ['run_subagent_dag', 'load_playbook']
       const kind: CallData['kind'] = id.name === 'spawn' ? 'spawn' : DAG_CALLS.includes(id.name) ? 'dag' : 'plain'
-      const c = newCallData(id, kind, display)
+      const c = newCallData(id, kind, display, callId)
       const grew = seg.calls.length === 1
       seg.calls.push(c)
-      if (kind === 'dag') dagPending = { lane, call: c }
+      if (kind === 'dag') claimRun(lane, c)
       poke(lane)
       paintWork(lane, seg, grew)
       bumpList(lane)
@@ -1410,6 +1499,8 @@ export function openSpawn(agent: string, label: string): void {
 export function _resetForTests(): void {
   lanes.clear()
   dagLive.clear()
+  dagByCall.clear()
+  dagEarly.clear()
   dagPending = null
   segId = 0
 }
