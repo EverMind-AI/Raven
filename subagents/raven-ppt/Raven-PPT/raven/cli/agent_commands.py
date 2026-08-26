@@ -63,6 +63,7 @@ _NON_AUTH_HINTS = {
     "network": "Hint: network problem; check connectivity and retry.",
     "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
     "server": "Hint: provider-side error; retry later or switch models.",
+    "empty_completion": "Hint: the provider answered with nothing; retry or switch models.",
     "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
     "billing": "Hint: billing or quota issue; check your provider account.",
 }
@@ -248,6 +249,7 @@ def register(app: typer.Typer) -> None:
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             brave_api_key=config.tools.web.search.api_key or None,
+            web_search_max_results=config.tools.web.search.max_results,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),

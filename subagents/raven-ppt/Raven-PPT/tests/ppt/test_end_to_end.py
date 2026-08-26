@@ -2,7 +2,7 @@
 
 Deterministic on purpose. A run with a model in it proves that a model can drive
 these tools; this proves the tools themselves hold together -- that ingest writes
-what the gates read, that the backend's page mapping survives to the design pass,
+what the gates read, that the backend's page mapping survives execution,
 that a refusal actually refuses, and that a delivered file is the one that was
 measured. Those are the seams where the predecessor's two routes drifted apart,
 and none of them are visible from a unit test of either side.
@@ -20,7 +20,6 @@ from pathlib import Path
 import pytest
 
 from raven.ppt.contracts import (
-    Audience,
     DeckBrief,
     PageBudget,
     Project,
@@ -155,8 +154,8 @@ async def test_the_route_runs_from_materials_to_a_delivered_deck(workspace: Path
     from pptx import Presentation
 
     assert len(Presentation(str(delivered)).slides) == 3
-    # Page-to-code mapping survived from execution, which is what the design pass
-    # needs and what nothing downstream can reconstruct.
+    # Page-to-code mapping survived from execution, which is what matches a render
+    # back to the block that drew it and what nothing downstream can reconstruct.
     assert [source.page for source in result.data["outcome"].sources] == [1, 2, 3]
 
 
@@ -220,7 +219,6 @@ async def test_type_under_the_floor_is_reported_and_still_delivered(workspace: P
     floors = [f for f in result.findings if f.kind == "type_floor"]
     assert floors, [f.kind for f in result.findings]
     assert all(f.severity is Severity.WARNING for f in floors)
-    assert all(f.audience is Audience.DESIGNER for f in floors)
     assert Path(result.data["pptx_path"]).is_file()
 
 
@@ -259,7 +257,6 @@ async def test_a_deck_that_is_not_the_agreed_length_stops_delivery(workspace: Pa
     assert not result.ok
     budget = [f for f in result.findings if f.kind == "page_budget"]
     assert budget and budget[0].severity is Severity.BLOCKING
-    assert budget[0].audience is Audience.AUTHOR
     assert "16-20" in budget[0].message
     assert not (project.exports_dir / "TarViS.pptx").exists()
 

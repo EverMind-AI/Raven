@@ -15,9 +15,12 @@ build refuses until a brief exists, because a decision confirmed with a user and
 then ignored is worse than never having asked.
 
 Everything recorded here binds something. The page budget is checked against the
-built deck, the language against what the pages actually say, and the audience
-reaches the design pass. A field that could not be checked would have no business
-being confirmed with a user.
+built deck, the language against what the pages actually say, and whatever the user
+ruled out is quoted back by `ppt_build` on every build -- a prohibition agreed here
+and then not repeated is one nothing is holding by the time the pages are drawn. The
+audience binds differently: it is not re-quoted per build, it is what the brief the
+deck is written against says the deck is for. A field that could not be checked would
+have no business being confirmed with a user.
 """
 
 from __future__ import annotations
@@ -60,11 +63,12 @@ class PptBriefTool(Tool):
     name = "ppt_brief"
     description = (
         "Record what this deck is for: the language the audience reads, who they are and on what "
-        "occasion, and how many slides the talk has room for. Ask the user with ask_user first when "
-        "there is a user to ask -- these are their decisions, not inferences from the materials -- and "
-        "read them out of the task when there is not. The build refuses until this is recorded, because "
-        "all three are checked against the finished deck: the page count, the language of the copy, and "
-        "the audience the design is judged for."
+        "occasion, how many slides the talk has room for, and anything they ruled out. Ask the user "
+        "with ask_user first when there is a user to ask -- these are their decisions, not inferences "
+        "from the materials -- and read them out of the task when there is not. The build refuses until "
+        "this is recorded, because every field reaches the finished deck: the page count and the "
+        "language of the copy are checked against it, and the audience and whatever was ruled out are "
+        "restated to you on every build."
     )
     timeout_seconds = 30.0
 
@@ -77,7 +81,7 @@ class PptBriefTool(Tool):
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "project": {"type": "string", "description": "the deck project, as given to ppt_ingest"},
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
                 "language": {
                     "type": "string",
                     "description": (
@@ -90,7 +94,7 @@ class PptBriefTool(Tool):
                     "description": (
                         "who this is for and on what occasion, in one line: 'a top-tier AI conference oral', "
                         "'an internal engineering review', 'a non-technical exec update'. It decides how much "
-                        "the deck may assume, and it reaches the design pass"
+                        "the deck may assume, and it is quoted back on every build"
                     ),
                 },
                 "pages_low": {
@@ -109,6 +113,16 @@ class PptBriefTool(Tool):
                     "maxItems": 8,
                     "description": "anything else the user asked for, one line each",
                 },
+                "forbidden": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                    "description": (
+                        "what this deck may not use, one thing each: 'no icons', 'no comparison tables', "
+                        "'never name a competitor', 'no dark pages'. Only what the user actually ruled out, "
+                        "never a preference you inferred. Every build quotes these back in so many words"
+                    ),
+                },
             },
             "required": ["project", "language", "audience", "pages_low", "pages_high"],
         }
@@ -121,6 +135,7 @@ class PptBriefTool(Tool):
         pages_low: int,
         pages_high: int,
         notes: list[str] | None = None,
+        forbidden: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
         try:
@@ -133,6 +148,7 @@ class PptBriefTool(Tool):
                 audience=audience,
                 pages=PageBudget(low=int(pages_low), high=int(pages_high)),
                 notes=tuple(note for note in (notes or []) if note.strip()),
+                forbidden=tuple(rule.strip() for rule in (forbidden or []) if rule.strip()),
             )
         except (TypeError, ValueError) as exc:
             return _return.failed(str(exc))
@@ -156,5 +172,13 @@ class PptBriefTool(Tool):
                 ),
                 f"write the deck in {brief.language} for {brief.audience}, in {brief.pages} slides -- "
                 "all three are checked against the finished file",
+                *(
+                    [
+                        f"nothing in this deck uses {'; '.join(brief.forbidden)} -- every build says so "
+                        "again, and a page that brings one back is a page to rewrite"
+                    ]
+                    if brief.forbidden
+                    else []
+                ),
             ],
         )

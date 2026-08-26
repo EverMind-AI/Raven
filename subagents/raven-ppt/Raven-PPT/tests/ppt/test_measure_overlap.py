@@ -117,3 +117,46 @@ def test_a_mark_is_not_measured(tmp_path: Path) -> None:
     presentation.save(str(built))
 
     assert overlap_findings(built) == []
+
+
+def test_a_band_you_can_see_through_does_not_cover_what_is_under_it(tmp_path) -> None:
+    """The charts reference teaches a translucent layer over a drawn chart.
+
+    Read as opaque, a band at 45% across a chart's own value labels hides more
+    than the gate's threshold and refuses the deck -- for a page whose reading is
+    plain on the render.
+    """
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches, Pt
+
+    from raven.ppt.services.measure.geometry import fill_opacity, is_panel
+
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+
+    words = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    run = words.text_frame.paragraphs[0].add_run()
+    run.text = "the reading this page rests on"
+    run.font.size = Pt(20)
+
+    def band(opacity: int | None) -> object:
+        shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(1), Inches(6), Inches(1))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor.from_string("2E5AAC")
+        if opacity is not None:
+            colour = shape.fill.fore_color._xFill.find(f"{ns}srgbClr")
+            alpha = colour.makeelement(f"{ns}alpha", {})
+            alpha.set("val", str(opacity))
+            colour.append(alpha)
+        return shape
+
+    see_through, solid = band(45000), band(None)
+
+    assert fill_opacity(see_through) == pytest.approx(0.45)
+    assert fill_opacity(solid) == 1.0
+    assert not is_panel(see_through), "a 45% band is a layer, not a cover"
+    assert is_panel(solid), "a solid band still hides what is under it"

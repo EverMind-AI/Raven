@@ -187,7 +187,8 @@ async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
 
     await runner.run(req, emit, lambda: [])
 
-    assert "requires user approval" in loop.result.model_text
+    assert "needs approval" in loop.result.model_text
+    assert "nobody to ask" in loop.result.model_text
     assert executor.commands == []
     assert responder.requests == []
 

@@ -378,7 +378,32 @@ class LLMProvider(ABC):
     """
 
     _CHAT_RETRY_DELAYS = (1, 2, 4)
+    # A throttle is a wait, not a blip. The ladder above gives up seven seconds
+    # in, and a provider that is rate limiting is still rate limiting then: one
+    # 429 ended a run with twenty pages of a deck built, a quarter of an hour and
+    # two million tokens spent getting there. Six doublings off the ladder's own
+    # first step spans five minutes instead.
+    #
+    # Derived from that step rather than written out as its own ladder, so
+    # flattening `_CHAT_RETRY_DELAYS` flattens this with it: two ladders with one
+    # meaning between them is how a test that zeroed the delays sleeps for real.
+    _RATE_LIMIT_RETRY_FACTOR = 5
+    _RATE_LIMIT_RETRY_STEPS = 6
     _SENTINEL = object()
+
+    def retry_delays(self, classification: "ErrorClassification | None" = None) -> tuple[float, ...]:
+        """The backoff ladder for one failure: one sleep per entry, then a last try.
+
+        Per category rather than one ladder for everything, because the two
+        failures ask for opposite waits: a dropped connection is usually gone by
+        the second attempt, and a rate limit outlasts every attempt a
+        connection-shaped ladder makes.
+        """
+        base = tuple(float(delay) for delay in self._CHAT_RETRY_DELAYS)
+        if classification is None or classification.category != "rate_limit" or not base:
+            return base
+        head = base[0] * self._RATE_LIMIT_RETRY_FACTOR
+        return tuple(head * 2**step for step in range(self._RATE_LIMIT_RETRY_STEPS))
 
     def __init__(self, api_key: str | None = None, api_base: str | None = None):
         self.api_key = api_key
@@ -758,7 +783,8 @@ class LLMProvider(ABC):
     ) -> LLMResponse:
         """Run a single model through the retry ladder, classifying each failure.
 
-        ``len(_CHAT_RETRY_DELAYS)`` sleeping attempts + 1 final no-sleep attempt.
+        One sleeping attempt per ``retry_delays`` entry + 1 final no-sleep
+        attempt, on the ladder the failure's own category asks for.
         Retries only ``retryable`` errors (with jittered backoff); a
         non-retryable error returns immediately. The returned error response
         always carries an ``error_classification`` so the caller (model-chain
@@ -766,10 +792,15 @@ class LLMProvider(ABC):
         """
         from raven.providers import prompt_cache
 
-        total_attempts = len(self._CHAT_RETRY_DELAYS) + 1
-        last_response: LLMResponse | None = None
+        # Widened once a failure names itself, not chosen up front: the category
+        # is only known after the call fails, and a rate limit needs a ladder a
+        # network blip would waste minutes on.
+        delays = self.retry_delays()
         dropped_cache_control = False
-        for attempt in range(1, total_attempts + 1):
+        attempt = 0
+        while True:
+            attempt += 1
+            total_attempts = len(delays) + 1
             exc: Exception | None = None
             try:
                 response = await self.chat(
@@ -794,9 +825,14 @@ class LLMProvider(ABC):
             # exception); else classify the exception we caught, else the string.
             classification = response.error_classification or self.classify_error(exc, response.content or None)
             response.error_classification = classification
+            # Longest ladder seen, never a shorter one: a throttle followed by a
+            # dropped connection is still a throttled model, and re-reading the
+            # ladder off the newest failure alone would cut the wait back down
+            # and spend the remaining attempts inside the same 429.
+            delays = max(delays, self.retry_delays(classification), key=len)
+            total_attempts = len(delays) + 1
             if exc is not None and not response.content:
                 response.content = format_llm_error(exc, classification, provider=getattr(self, "provider_name", None))
-            last_response = response
 
             # Why an upstream can refuse this at all: see
             # ``providers.prompt_cache.suppress``. Learned from the refusal, once
@@ -811,10 +847,10 @@ class LLMProvider(ABC):
                 messages, tools = prompt_cache.strip(messages, tools)
                 continue
 
-            if not classification.retryable or attempt == total_attempts:
+            if not classification.retryable or attempt >= total_attempts:
                 return response
 
-            delay = self._jittered(self._CHAT_RETRY_DELAYS[attempt - 1])
+            delay = self._jittered(delays[attempt - 1])
             logger.warning(
                 "LLM error [{}] (attempt {}/{}) model={}, retrying in {:.1f}s: {}",
                 classification.category,
@@ -825,8 +861,6 @@ class LLMProvider(ABC):
                 (response.content or "")[:120],
             )
             await asyncio.sleep(delay)
-
-        return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
 
     def can_serve(self, model: str) -> bool:
         """Whether this provider instance's credentials and wire can serve this model.

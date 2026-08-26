@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import (
     EMU_PER_POINT,
     Rect,
@@ -113,7 +113,6 @@ def word_collisions(words: Sequence[WordBox], per_page: int = COLLISIONS_PER_PAG
                         kind="word_collision",
                         severity=Severity.BLOCKING,
                         page=page,
-                        audience=Audience.DESIGNER,
                         message=(
                             f"in the render, {first.text[:24]!r} is painted over {second.text[:24]!r} -- "
                             "two pieces of text are occupying the same place"
@@ -158,7 +157,6 @@ def rule_strikes(
                         kind="rule_strike",
                         severity=Severity.WARNING,
                         page=page,
-                        audience=Audience.DESIGNER,
                         message=(
                             f"a divider line strikes through the text {word.text[:28]!r} -- in the render "
                             "the rows have grown taller than drawn, and the line no longer sits between them"
@@ -225,7 +223,6 @@ def card_overflows(
                     kind="card_overflow",
                     severity=Severity.WARNING,
                     page=page,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"{len(escaped) - len(shown)} more card(s) on this page overflow the same way. "
                         f"They are not listed one by one because the row itself is what is too small"
@@ -264,7 +261,6 @@ def _card_overflow(page: int, home: Rect, items: Sequence[tuple[WordBox, Rect]])
         kind="card_overflow",
         severity=Severity.WARNING,
         page=page,
-        audience=Audience.DESIGNER,
         message=f"{len(items)} word(s) of this card's copy escape it in the render ({sample}): {advice}",
         detail=detail,
     )
@@ -324,7 +320,6 @@ def crowded_panels(
                     kind="crowded_panel",
                     severity=Severity.WARNING,
                     page=page,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"in the render, {word.text[:28]!r} sits {gap / 72:.3f}in from the {side} edge of its "
                         f"panel -- the copy is touching the rim rather than sitting inside it. "
@@ -506,7 +501,6 @@ def _empty_finding(
         kind="excessive_whitespace",
         severity=Severity.WARNING,
         page=page,
-        audience=Audience.DESIGNER,
         message=message,
         detail={
             "region": region,
@@ -565,7 +559,6 @@ def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVER
                     kind="orphan_line",
                     severity=Severity.WARNING,
                     page=number,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"'{head[:30]}' breaks with {last!r} alone on the second line -- the box is "
                         f"{box.width / 72:.2f}in and the label needs a hair more. Widen it, or say it in fewer "
@@ -674,7 +667,6 @@ def unseparated_blocks(pptx_path: Path, words: Sequence[WordBox], per_page: int 
                     kind="unseparated_blocks",
                     severity=Severity.WARNING,
                     page=number,
-                    audience=Audience.DESIGNER,
                     message=(
                         f"'{head}' starts {gap / 72:.2f}in under the block above it, which sets its own lines "
                         f"{pitch / 72:.2f}in apart -- the gap between the two groups is no wider than the gaps "
@@ -752,7 +744,6 @@ def _paragraph_gap(shape, lines: list[list[WordBox]], page: int) -> Finding | No
             kind="unseparated_blocks",
             severity=Severity.WARNING,
             page=page,
-            audience=Audience.DESIGNER,
             message=(
                 f"'{head}' is a new paragraph in the same box and starts {gap / 72:.2f}in under the line above "
                 f"it, which is the {pitch / 72:.2f}in this box uses between its own lines -- the groups read as "
@@ -878,7 +869,6 @@ def clipped_copy(pptx_path: Path, words: Sequence, page_texts: Mapping[int, str]
                 kind="clipped_copy",
                 severity=Severity.WARNING,
                 page=page,
-                audience=Audience.DESIGNER,
                 message=(
                     f"the render shows {share:.0%} of what this page says"
                     + (f", and stops mid-word on {missing}" if missing else "")

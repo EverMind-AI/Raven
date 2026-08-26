@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.ppt.contracts import Audience, Finding, Severity
+from raven.ppt.contracts import Finding, Severity
 
 # How many differing colours the message shows. Enough to recognise which deck is
 # which; a full twelve-slot diff is a table nobody reads to decide a one-line fix.
@@ -52,7 +52,6 @@ def house_style_findings(pptx_path: Path, template: Path | None) -> list[Finding
         Finding(
             kind="house_style",
             severity=Severity.BLOCKING,
-            audience=Audience.AUTHOR,
             message=(
                 f"this deck's theme is not {Path(template).name}'s, so it was not built inside the template "
                 f"the user gave: {'; '.join(differing[:_SHOWN])}. Open the deck with "
@@ -116,6 +115,13 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
     reads as three decks, and a title box narrower than the template's is what sends
     copy off the canvas when wrapping is off.
 
+    The place is the box and where the copy sits in it. A row anchored to the bottom of
+    a 0.98in box and one anchored to its top are the same rectangle and 0.375in apart on
+    the render, which is what a deck alternating cloned and composed pages came back as:
+    cloned titles starting at y=53px and composed ones at y=23px, same glyph height,
+    every second page. Nothing about the box says which of the two a page chose, so the
+    anchor is read separately and compared to the template's own.
+
     Only the pages the deck composed. A cloned page carries the template's own title row
     by construction -- the closing page of one deck puts its title mid-page, which is the
     template's design and was this check's first false positive. Which pages those are
@@ -125,7 +131,7 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
     if prototypes is None or not Path(prototypes).is_file():
         return []
     from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck
-    from raven.ppt.services.template.house import house_style
+    from raven.ppt.services.template.house import house_style, title_anchor
     from raven.ppt.services.template.menu import menu, roles
 
     house = house_style(Path(prototypes))
@@ -155,23 +161,41 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
         title = _title_of(rows, wanted[2])
         left, top = title.left / EMU_PER_INCH, title.top / EMU_PER_INCH
         width = (title.width or 0) / EMU_PER_INCH
+        height = (title.height or 0) / EMU_PER_INCH
         off = max(abs(left - wanted[0]), abs(top - wanted[1]))
         narrow = wanted[2] - width
-        if off <= TITLE_DRIFT_IN and narrow <= TITLE_WIDTH_DRIFT_IN:
+        anchored = title_anchor(slide, title)
+        drifted = off > TITLE_DRIFT_IN or narrow > TITLE_WIDTH_DRIFT_IN
+        unanchored = house.title.anchor is not None and anchored != house.title.anchor
+        if not drifted and not unanchored:
             continue
+        said = []
+        if drifted:
+            said.append(
+                f"this page's title sits at ({left:.2f}, {top:.2f}) {width:.2f}in wide and the template puts "
+                f"its own at ({wanted[0]:.2f}, {wanted[1]:.2f}) {wanted[2]:.2f}in, on {house.title.pages} of "
+                f"its pages. Put the title in that box: it is the one element every page of the deck shares, "
+                f"and a box narrower than the template's is what sends a long title off the canvas"
+            )
+        if unanchored:
+            said.append(
+                f"this page's title is anchored {anchored} in its box and the template anchors its own "
+                f"{house.title.anchor}, so the two sets of pages put the same line up to {height:.2f}in apart "
+                f'while every box agrees. Pass anchor="{house.title.anchor}" to the call that writes it '
+                f"-- `title_row_as_code` in the house style is that call with the anchor already in it"
+            )
         findings.append(
             Finding(
                 kind="title_row",
                 severity=Severity.WARNING,
                 page=number,
-                audience=Audience.DESIGNER,
-                message=(
-                    f"this page's title sits at ({left:.2f}, {top:.2f}) {width:.2f}in wide and the template puts "
-                    f"its own at ({wanted[0]:.2f}, {wanted[1]:.2f}) {wanted[2]:.2f}in, on {house.title.pages} of "
-                    f"its pages. Put the title in that box: it is the one element every page of the deck shares, "
-                    f"and a box narrower than the template's is what sends a long title off the canvas"
-                ),
-                detail={"at": [round(left, 2), round(top, 2), round(width, 2)], "house": list(wanted)},
+                message=". ".join(said),
+                detail={
+                    "at": [round(left, 2), round(top, 2), round(width, 2)],
+                    "house": list(wanted),
+                    "anchor": anchored,
+                    "house_anchor": house.title.anchor,
+                },
             )
         )
     return findings

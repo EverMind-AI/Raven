@@ -37,6 +37,21 @@ EXCERPT_WINDOWS = 3
 # How many figures are listed by name. Past this the list stops being read.
 MAX_LISTED_FIGURES = 40
 
+# How each of a figure's two captions is introduced, and the line that says which
+# is which. Two claims of different kinds: the source's caption is what the author
+# of the figure printed under it, and the inspected one is a sentence a model wrote
+# by looking at the pixels. `caption or visual_caption` collapsed them into one
+# string, so the second reached the page, and the checks that argue from a figure,
+# wearing the first's authority -- a marketing banner arrived captioned as the
+# architecture of the system it advertises, and the page credited it.
+SOURCE_CAPTION_LEAD = "source caption"
+INSPECTED_CAPTION_LEAD = "looks like"
+CAPTION_LEGEND = (
+    f'"{SOURCE_CAPTION_LEAD}" is what the source printed under the figure; '
+    f'"{INSPECTED_CAPTION_LEAD}" is what inspection saw in the pixels, '
+    "not the source's words -- describe it, never quote or credit it as one"
+)
+
 
 @dataclass(frozen=True)
 class Figure:
@@ -45,6 +60,9 @@ class Figure:
     The label and the caption are the load-bearing fields: "figure 7, 1200x800"
     says nothing about whether this deck has evidence for what it claims, and
     "Figure 3: ablation on memory length" says everything.
+
+    `caption` and `visual_caption` are both captions and are not the same claim --
+    see `CAPTION_LEGEND`. Nothing here presents one as the other.
     """
 
     figure_id: str
@@ -60,10 +78,23 @@ class Figure:
     def summary(self) -> str:
         said = self.label or self.kind
         size = f", {self.width_px}x{self.height_px}px" if self.width_px and self.height_px else ""
-        caption_text = self.caption or self.visual_caption
-        caption = f": {caption_text[:90]}" if caption_text else ""
         concern = f"; {self.concerns[0][:100]}" if self.concerns else ""
-        return f"{self.figure_id} ({said}{size}){caption}{concern}"
+        return f"{self.figure_id} ({said}{size}){self.captions()}{concern}"
+
+    def captions(self) -> str:
+        """Both captions this figure carries, each attributed to whoever wrote it.
+
+        Kept apart in the text a reader is handed and not only in the fields they
+        are stored in, which is where the distinction was being thrown away: a
+        model composing a page reads this line, and one string cannot say which
+        half of it a page may quote.
+        """
+        said = []
+        if self.caption:
+            said.append(f'{SOURCE_CAPTION_LEAD}: "{self.caption[:90]}"')
+        if self.visual_caption:
+            said.append(f"{INSPECTED_CAPTION_LEAD}: {self.visual_caption[:90]}")
+        return "; " + "; ".join(said) if said else ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +140,8 @@ class DeckState:
         if self.figures:
             listed = self.figures[:MAX_LISTED_FIGURES]
             lines.append(f"Figures extracted ({len(self.figures)}):")
+            if any(figure.visual_caption for figure in listed):
+                lines.append(f"  ({CAPTION_LEGEND})")
             lines += [f"  {figure.summary()}" for figure in listed]
             if len(self.figures) > len(listed):
                 lines.append(f"  ... and {len(self.figures) - len(listed)} more")
@@ -212,7 +245,7 @@ def _loose_templates(project: Project) -> tuple[str, ...]:
     otherwise free call. Two levels is where a user drops a file.
     """
     workspace = project.workspace
-    skip = {"ppt_projects", "exports"}
+    skip = {"deck", "out"}
     found: list[str] = []
     for pattern in ("*.pptx", "*/*.pptx"):
         for path in sorted(workspace.glob(pattern)):

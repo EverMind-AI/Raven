@@ -333,7 +333,13 @@ class WebFetchTool(Tool):
                 return
             seen.add(absolute)
             candidates.append(
-                {"url": absolute, "alt": alt.strip()[:160], "caption": caption.strip()[:200], "where": where, "rank": rank}
+                {
+                    "url": absolute,
+                    "alt": alt.strip()[:160],
+                    "caption": caption.strip()[:200],
+                    "where": where,
+                    "rank": rank,
+                }
             )
 
         if og := soup.find("meta", property="og:image"):

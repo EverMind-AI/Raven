@@ -10,16 +10,21 @@ which is a fact about the built page rather than a count standing in for one.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.services.measure.content import (
+    COLUMN_SQUEEZE,
     DIAGRAM_SHAPES,
     EVIDENCE_SHARE,
-    MAX_TABLE_COLUMNS,
+    SAFE_MARGIN_IN,
+    banded_tables,
     evidence_coverage,
     flat_formulas,
     native_tables,
+    planned_tables,
     unmarked_points,
     wide_tables,
 )
@@ -44,7 +49,6 @@ def test_a_deck_of_prose_pages_is_reported_once(deck: DeckBuilder) -> None:
     assert len(findings) == 1  # one deck-wide finding, not one per prose page
     assert findings[0].page is None
     assert findings[0].detail == {"pages_with_evidence": 1, "pages": 5, "share": 0.8, "structural": []}
-    assert findings[0].audience is Audience.AUTHOR
     assert "of 5 content pages" in findings[0].message
 
 
@@ -143,23 +147,222 @@ def test_a_page_that_places_a_picture_shows_something(deck: DeckBuilder, image) 
     assert evidence_coverage(deck.save()) == []
 
 
-def test_the_table_width_ceiling_is_eight_columns() -> None:
-    assert MAX_TABLE_COLUMNS == 8
+def test_a_column_is_squeezed_when_it_holds_more_than_it_has_room_for() -> None:
+    assert COLUMN_SQUEEZE > 1.0, "a column exactly as wide as its text is tight, not squeezed"
 
 
-def test_a_table_past_the_ceiling_is_reported(deck: DeckBuilder) -> None:
+def test_a_table_is_reported_for_its_narrow_columns_and_not_for_its_column_count(deck: DeckBuilder) -> None:
+    """The readable question is the width of a column, not how many there are.
+
+    This used to fire past eight columns, which is the wrong question twice: eight
+    short columns of figures read fine across a 13.3in canvas, and four columns of
+    phrases crammed into 2.4in do not. So the wide table below, whose columns have
+    room, is not reported -- and the narrow one, which has fewer columns, is.
+    """
     page = deck.page()
-    deck.table(page, 3, 9, top=1.0)
-    deck.table(page, 3, 8, top=4.0)
+    deck.table(page, 3, 12, top=1.0, width=12.0, cell="Q4")
+    deck.table(page, 3, 4, top=4.0, width=2.4, cell="Professional services transformation")
 
     findings = wide_tables(deck.save())
 
-    assert [finding.detail["columns"] for finding in findings] == [9]
+    assert len(findings) == 1, [finding.message for finding in findings]
+    assert findings[0].detail["columns"] == 4
     assert findings[0].severity is Severity.WARNING
-    assert findings[0].audience is Audience.AUTHOR
+    assert findings[0].detail["squeezed"][0]["needs_in"] > findings[0].detail["squeezed"][0]["has_in"]
 
 
-def test_a_native_office_table_is_reported_for_design_rebuild(deck: DeckBuilder) -> None:
+# A plan whose five columns of phrases want more width than a 13.333in page carries
+# even with every cell wrapped onto a second line. The same reading `ppt_outline`
+# makes before the program is written, which a live run answered with "the renderer
+# will wrap the cells onto a second line" and shipped.
+_WIDE_PLAN = {
+    "columns": [
+        "Professional services transformation",
+        "Managed detection and response retainer",
+        "Regulatory reporting and assurance desk",
+        "Platform modernisation programme office",
+        "Sustainability advisory and reporting",
+    ],
+    "rows": [
+        ["Annual contract value committed", "1.4", "2.2", "0.9", "3.1"],
+        ["Gross margin after ramp", "41%", "37%", "52%", "29%"],
+    ],
+    "reading": "which line carries the margin",
+}
+_NARROW_PLAN = {
+    "columns": ["Task", "TarViS", "Specialist"],
+    "rows": [["VIS", "48.3", "46.3"], ["VPS", "58.2", "56.1"]],
+    "reading": "one model against four specialists",
+}
+
+
+def _outline(plans: dict[int, dict]):
+    """An outline of numbered pages, each carrying the table plan given for it."""
+    from raven.ppt.contracts.outline import Outline, PagePlan
+
+    return Outline(
+        takeaway="one model, four tasks",
+        pages=tuple(
+            PagePlan(page=number, claim="a comparison", table_plan=plan) for number, plan in sorted(plans.items())
+        ),
+    )
+
+
+def test_a_page_that_planned_a_table_and_drew_none_is_refused(deck: DeckBuilder) -> None:
+    """The twin of `unplaced_figure`: a promise in the plan, read back off the file.
+
+    Blocking, because it is a disagreement between the plan and the deck rather than
+    a reading of a rendered page -- nothing about it is answered by making the page
+    smaller, and both ways out are one edit.
+    """
+    page = deck.page()
+    deck.text(page, "the comparison, described in prose instead", height=2.0)
+
+    findings = planned_tables(deck.save(), _outline({1: _NARROW_PLAN}))
+
+    assert [finding.kind for finding in findings] == ["unplaced_table"]
+    assert findings[0].severity is Severity.BLOCKING
+    assert findings[0].page == 1
+    assert findings[0].detail == {"columns": 3, "rows": 2}
+    # The plan named, so the author knows which table, and both answers offered.
+    assert "Task | TarViS | Specialist" in findings[0].message
+    assert "ppt_layout.table(" in findings[0].message
+    assert "ppt_outline again" in findings[0].message
+
+
+def test_a_page_that_drew_the_table_it_planned_is_reported_for_nothing(deck: DeckBuilder) -> None:
+    page = deck.page()
+    deck.table(page, 3, 3, top=1.0, width=9.0, cell="48.3")
+
+    assert planned_tables(deck.save(), _outline({1: _NARROW_PLAN})) == []
+
+
+def test_a_page_the_plan_gave_no_table_is_measured_for_nothing(deck: DeckBuilder) -> None:
+    """A table nobody planned is `wide_table`'s business; this reading has no plan."""
+    page = deck.page()
+    deck.table(page, 3, 4, top=1.0, width=2.4, cell="Professional services transformation")
+
+    assert planned_tables(deck.save(), _outline({1: {}})) == []
+    assert planned_tables(deck.save(), None) == []
+
+
+def test_a_built_table_smaller_than_its_plan_names_what_is_missing(deck: DeckBuilder) -> None:
+    """Columns both ways and rows only downwards, with the dropped heading named.
+
+    Reported rather than refused: the plan-time width warning tells an author to drop
+    the columns the claim does not rest on, so a refusal here would refuse the fix
+    that warning asks for.
+    """
+    page = deck.page()
+    frame = deck.table(page, 2, 2, top=1.0, width=9.0, cell="")
+    frame.table.cell(0, 0).text = "Task"
+    frame.table.cell(0, 1).text = "TarViS"
+
+    findings = planned_tables(deck.save(), _outline({1: _NARROW_PLAN}))
+
+    assert [finding.kind for finding in findings] == ["table_grid"]
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].detail == {
+        "planned_columns": 3,
+        "planned_rows": 3,
+        "drawn_columns": 2,
+        "drawn_rows": 2,
+        "tables": 1,
+    }
+    assert "'Specialist'" in findings[0].message
+    assert "1 planned row(s) are on no page" in findings[0].message
+
+
+def test_a_table_with_more_rows_than_its_plan_is_ordinary(deck: DeckBuilder) -> None:
+    """`group_rows` turns a row into a band and a total row is drawn under a rule --
+    both are rows `ppt_layout.table` adds that no plan names."""
+    page = deck.page()
+    frame = deck.table(page, 5, 3, top=1.0, width=9.0, cell="")
+    for index, head in enumerate(_NARROW_PLAN["columns"]):
+        frame.table.cell(0, index).text = head
+
+    assert planned_tables(deck.save(), _outline({1: _NARROW_PLAN})) == []
+
+
+def test_the_plan_time_width_warning_is_checked_against_the_table_that_was_drawn(deck: DeckBuilder) -> None:
+    """The forecast, and the file that settles it, in one finding.
+
+    `ppt_outline` said this page's plan wanted more width than any page carries; the
+    answer it got was an opinion about the renderer. Here the drawn table is beside
+    it, and the opinion has nothing left to stand on.
+    """
+    page = deck.page()
+    deck.table(page, 3, 5, top=1.0, width=2.4, cell="Professional services transformation")
+
+    findings = planned_tables(deck.save(), _outline({1: _WIDE_PLAN}))
+
+    assert [finding.kind for finding in findings] == ["table_room"]
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].detail["width_in"] > findings[0].detail["width_room_in"]
+    assert findings[0].detail["page_room_in"] == round(13.333 - 2 * SAFE_MARGIN_IN, 2)
+    assert "columns are narrower than what they hold" in findings[0].message
+    # Measured at the floor, so the one answer the plan-time reading already refused
+    # is refused again rather than being left open.
+    assert "wrapping the cells is not one of the answers" in findings[0].message
+
+
+def test_a_forecast_the_built_table_does_not_bear_out_is_not_reported(deck: DeckBuilder) -> None:
+    """Half the finding is the file. A plan measured too wide whose page then drew a
+    table that fits -- shorter cells, fewer of them, a second page -- has been
+    answered, and repeating the forecast over a page that solved it is the noise this
+    reading exists to replace."""
+    page = deck.page()
+    deck.table(page, 3, 5, top=1.0, width=11.0, cell="4.9")
+
+    assert planned_tables(deck.save(), _outline({1: _WIDE_PLAN})) == []
+
+
+def test_a_table_running_past_the_margin_bears_the_forecast_out_too(deck: DeckBuilder) -> None:
+    """The other way a page carries the forecast into the file: columns wide enough
+    for their own cells, on a table that simply does not fit between the margins."""
+    page = deck.page()
+    deck.table(page, 3, 5, top=1.0, left=1.0, width=12.0, cell="4.9")
+
+    findings = planned_tables(deck.save(), _outline({1: _WIDE_PLAN}))
+
+    assert [finding.kind for finding in findings] == ["table_room"]
+    assert "past the page's right margin" in findings[0].message
+
+
+def test_the_page_a_plan_is_held_against_is_the_grids_own_margin() -> None:
+    """The one number of the grid restated here, held against `ppt_layout`'s source.
+
+    The canvas is not restated: it comes off the built file, so a deck on a 4:3
+    template is measured against the page it really has.
+    """
+    from raven.ppt.services.assets.layout import layout_module_source
+
+    assert "\nMARGIN = 0.72\n" in layout_module_source()
+    assert SAFE_MARGIN_IN == 0.72
+
+
+def _projected(directory: Path, filename: str):
+    """A generated helper module as a build script imports it.
+
+    `ppt_layout` and `ppt_theme` are source strings projected into the build directory
+    rather than importable packages, so a test that wants the deck's own table helper
+    -- or the plain-dict themes it takes -- has to install them the way the script
+    backend does.
+    """
+    from types import SimpleNamespace
+
+    from raven.ppt.services.assets.script_helpers import script_helper_files
+
+    for name, text in script_helper_files().items():
+        (directory / name).write_text(text, encoding="utf-8")
+    path = directory / filename
+    namespace: dict = {"__file__": str(path), "__name__": path.stem}
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)  # noqa: S102
+    return SimpleNamespace(**namespace)
+
+
+def test_a_table_wearing_the_office_default_is_reported_for_design_rebuild(deck: DeckBuilder) -> None:
+    """A bare `add_table`, which python-pptx stamps with banding and the gallery style."""
     page = deck.page()
     deck.table(page, 4, 3, top=1.0)
 
@@ -167,8 +370,62 @@ def test_a_native_office_table_is_reported_for_design_rebuild(deck: DeckBuilder)
 
     assert [finding.kind for finding in findings] == ["native_table"]
     assert findings[0].severity is Severity.WARNING
-    assert findings[0].audience is Audience.DESIGNER
-    assert findings[0].detail == {"tables": 1}
+    assert findings[0].detail["tables"] == 1
+    assert findings[0].detail["wearing"] == ["banded rows", "the Office gallery style"]
+
+
+def test_the_decks_own_table_helper_is_not_reported(deck: DeckBuilder, tmp_path: Path) -> None:
+    """The gate used to fire on `has_table`, so `ppt_layout.table()` reported itself.
+
+    It is built on `add_table` -- nothing else puts a table in a .pptx -- and it takes
+    the banding and the gallery style off, which is the whole difference a reader sees.
+    A gate that fires on the best answer available teaches the author to avoid it.
+    """
+    layout = _projected(tmp_path, "ppt_layout.py")
+    theme = _projected(tmp_path, "ppt_theme.py").THEMES["warm-paper"]
+    rows = [
+        ["Benchmark", "TarViS", "Prior", "Delta"],
+        ["YouTube-VIS 2021", "51.2", "46.3", "+4.9"],
+        ["OVIS", "31.1", "27.4", "+3.7"],
+    ]
+    layout.table(deck.page(), layout.Box(0.72, 1.24, 12.60, 4.40), rows, theme)
+
+    assert native_tables(deck.save()) == []
+
+
+def test_every_style_the_table_helper_offers_stays_unreported(deck: DeckBuilder, tmp_path: Path) -> None:
+    """`header_tint` and `row_rules` add fills and rules of the deck's own, not Office's."""
+    layout = _projected(tmp_path, "ppt_layout.py")
+    theme = _projected(tmp_path, "ppt_theme.py").THEMES["ink-graphite"]
+    for style in ("minimal", "header_tint", "row_rules", "compact"):
+        layout.table(
+            deck.page(),
+            layout.Box(0.72, 1.24, 12.60, 4.40),
+            [["Head", "Value"], ["Row", "1"]],
+            theme,
+            style=style,
+        )
+
+    assert native_tables(deck.save()) == []
+
+
+def test_a_template_s_own_table_style_is_left_alone(deck: DeckBuilder) -> None:
+    """The gallery style is recognised by value, not by presence.
+
+    A table cloned out of a user's template carries the style its designer chose, and
+    that one is the house style -- the same rule `ppt_layout._drop_gallery_style`
+    follows when it takes python-pptx's own off.
+    """
+    from raven.ppt.services.measure.content import _DRAWINGML
+
+    page = deck.page()
+    shape = deck.table(page, 3, 3, top=1.0)
+    shape.table.horz_banding = False
+    shape.table.vert_banding = False
+    for named in shape.table._tbl.iter(f"{{{_DRAWINGML}}}tableStyleId"):  # noqa: SLF001 -- no API
+        named.text = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
+
+    assert native_tables(deck.save()) == []
 
 
 def test_an_escape_printed_as_characters_is_refused(deck: DeckBuilder) -> None:
@@ -218,7 +475,6 @@ def test_an_expression_written_as_prose_is_reported(deck: DeckBuilder) -> None:
 
     assert [f.kind for f in findings] == ["flat_formula"]
     assert findings[0].severity is Severity.WARNING
-    assert findings[0].audience is Audience.AUTHOR
     assert "formula()" in findings[0].message
 
 
@@ -285,7 +541,7 @@ def test_a_line_already_set_as_a_formula_is_left_alone(tmp_path) -> None:
         assert flat_formulas(built) == []
     finally:
         sys.path.remove(str(tmp_path))
-        for name in ("ppt_layout", "ppt_icons", "ppt_theme"):
+        for name in ("ppt_layout", "ppt_icons", "ppt_shapes", "ppt_theme"):
             sys.modules.pop(name, None)
 
 
@@ -307,7 +563,6 @@ def test_parallel_claims_with_no_mark_are_reported(deck: DeckBuilder) -> None:
     findings = unmarked_points(deck.save())
 
     assert [f.kind for f in findings] == ["unmarked_points"]
-    assert findings[0].audience is Audience.AUTHOR
     assert findings[0].detail["points"] == 2
     assert "points()" in findings[0].message
 
@@ -388,5 +643,78 @@ def test_points_writes_a_real_bullet_and_passes(tmp_path) -> None:
         assert not frame.paragraphs[0].text.startswith(("•", "·"))
     finally:
         sys.path.remove(str(tmp_path))
-        for name in ("ppt_layout", "ppt_icons", "ppt_theme"):
+        for name in ("ppt_layout", "ppt_icons", "ppt_shapes", "ppt_theme"):
             sys.modules.pop(name, None)
+
+
+def _paint(table, row: int, colour: str) -> None:
+    """Fill every cell of one row, the way `banding` does."""
+    from pptx.dml.color import RGBColor
+
+    for cell in table.rows[row].cells:
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor.from_string(colour)
+
+
+def test_a_table_tinting_alternate_rows_is_reported(deck: DeckBuilder) -> None:
+    """The one table dial the deck's own style does not want.
+
+    `table()` has banding off and says why; a run that read the first hundred lines of
+    `tables.md` and none of the dials past them turned it on for all three of its
+    tables, over a template already doing that work with its own palette.
+    """
+    page = deck.page()
+    shape = deck.table(page, 5, 4, top=1.0, width=12.0, cell="Mem0")
+    _paint(shape.table, 2, "E2CEA8")
+    _paint(shape.table, 4, "E2CEA8")
+
+    findings = banded_tables(deck.save())
+
+    assert [finding.kind for finding in findings] == ["banded_table"]
+    assert findings[0].detail["banded"] == [2, 4]
+    assert findings[0].severity is Severity.WARNING
+
+
+def test_a_band_crossing_a_filled_column_is_still_a_band(deck: DeckBuilder) -> None:
+    """The case the first version of this missed on every table it was written for.
+
+    A deck that filled its own column -- `fills={(None, 2): "ours"}`, which the dials
+    invite -- gives every banded row two tones, and a reading that wanted one tone
+    across the row found no band on three banded tables.
+    """
+    page = deck.page()
+    shape = deck.table(page, 5, 4, top=1.0, width=12.0, cell="Mem0")
+    from pptx.dml.color import RGBColor
+
+    for row in range(5):
+        cell = shape.table.rows[row].cells[2]
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor.from_string("E0C39D")
+    _paint(shape.table, 2, "E2CEA8")
+    _paint(shape.table, 4, "E2CEA8")
+    for row in (2, 4):
+        cell = shape.table.rows[row].cells[2]
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor.from_string("E0C39D")
+
+    findings = banded_tables(deck.save())
+
+    assert [finding.detail["banded"] for finding in findings] == [[2, 4]]
+
+
+def test_one_tinted_row_is_emphasis_and_not_banding(deck: DeckBuilder) -> None:
+    """`emphasize_rows` paints the row carrying the page's point. It does not alternate."""
+    page = deck.page()
+    shape = deck.table(page, 6, 4, top=1.0, width=12.0, cell="Mem0")
+    _paint(shape.table, 2, "E2CEA8")
+
+    assert banded_tables(deck.save()) == []
+
+
+def test_a_short_table_is_not_read_for_a_pattern(deck: DeckBuilder) -> None:
+    """Two body rows, one of them tinted, is not a pattern in either direction."""
+    page = deck.page()
+    shape = deck.table(page, 3, 4, top=1.0, width=12.0, cell="Mem0")
+    _paint(shape.table, 2, "E2CEA8")
+
+    assert banded_tables(deck.save()) == []

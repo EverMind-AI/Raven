@@ -8,12 +8,21 @@ AgentLoop and instead bind the helper to a minimal stand-in.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from raven.agent.loop import AgentLoop
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import (
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    StreamDelta,
+    parse_llm_error,
+)
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
 
 
@@ -37,6 +46,14 @@ class _FakeProvider:
 
     def emits_unparsed_reasoning(self) -> bool:
         return self._emits_unparsed_reasoning
+
+    def retry_delays(self, classification: Any = None) -> tuple[float, ...]:
+        """No waiting, and the same number of attempts a real provider makes."""
+        return (0.0, 0.0, 0.0)
+
+    # The real reading: a stand-in that classified differently would be testing
+    # itself rather than the loop's recovery.
+    classify_error = LLMProvider.classify_error
 
 
 def _bind_helper(provider: _FakeProvider):
@@ -291,8 +308,15 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     assert response.error_classification is classification
 
 
-async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
-    """Provider yields zero chunks → response.content == '' + finish_reason='stop'."""
+async def test_llm_call_stream_empty_stream_is_reported_as_a_failed_call() -> None:
+    """Zero chunks is not an answer: it is what an upstream error looks like here.
+
+    litellm has no mapping for a provider's ``finish_reason: "error"`` and
+    answers "stop", so a call that died upstream arrives as a completion holding
+    nothing. Returned as an empty reply it reads as the model choosing to say
+    nothing, and the turn ends on it with no error anywhere. So it is retried
+    first, and then reported.
+    """
     provider = _FakeProvider([])
     call = _bind_helper(provider)
 
@@ -302,9 +326,71 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
     assert isinstance(response, LLMResponse)
-    assert response.content == ""
-    assert response.tool_calls == []
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "empty_completion"
+    assert parse_llm_error(response.content) is not None
+    assert len(provider.chat_stream_calls) == len(provider.retry_delays()) + 1
+
+
+async def test_llm_call_stream_retries_a_refusal_at_the_door() -> None:
+    """A stream that failed before emitting anything is asked again.
+
+    One provider throttle used to end a run that had twenty pages of a deck
+    built: this branch had no retry at all, while the ladder ``chat()`` uses sat
+    on the other side of the streaming split.
+    """
+    throttled = StreamDelta(
+        content="Error calling LLM (rate_limit): 429 rate limit",
+        finish_reason="error",
+        error_classification=ErrorClassification("rate_limit", retryable=True, should_fallback=True),
+    )
+
+    class _ThrottledOnce(_FakeProvider):
+        async def chat_stream(self, **kwargs: Any):
+            self.chat_stream_calls.append(kwargs)
+            if len(self.chat_stream_calls) == 1:
+                yield throttled
+                return
+            yield StreamDelta(content="recovered")
+            yield StreamDelta(content=None, finish_reason="stop")
+
+    provider = _ThrottledOnce([])
+    response = await _bind_helper(provider)(messages=[], tools=None, model="m")
+
+    assert response.content == "recovered"
     assert response.finish_reason == "stop"
+    assert len(provider.chat_stream_calls) == 2
+
+
+async def test_llm_call_stream_does_not_replay_a_stream_cut_half_way() -> None:
+    """Tokens the caller has already seen are never rendered twice.
+
+    The wasteful case the no-retry rule was written for: a stream that failed
+    after emitting content has no free restart, so its error surfaces instead.
+    """
+    seen: list[str] = []
+
+    class _FailsMidStream(_FakeProvider):
+        async def chat_stream(self, **kwargs: Any):
+            self.chat_stream_calls.append(kwargs)
+            yield StreamDelta(content="half a sentence")
+            yield StreamDelta(
+                content="Error calling LLM (rate_limit): 429 rate limit",
+                finish_reason="error",
+                error_classification=ErrorClassification("rate_limit", retryable=True),
+            )
+
+    provider = _FailsMidStream([])
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.finish_reason == "error"
+    assert seen == ["half a sentence"]
+    assert len(provider.chat_stream_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -576,3 +662,44 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     )
 
     assert response.tool_calls[0].run_meta is not None
+
+
+async def test_llm_call_stream_returns_a_raised_upstream_error_classified() -> None:
+    """`chat_stream` raises; every recovery in the loop reads a returned response.
+
+    This is what ended three live runs. Only the stall was caught here, so a throttle,
+    a context overflow and a bad request each escaped this helper -- and with them every
+    recovery keyed on `response.error_classification`: the compress-and-retry never saw
+    the overflow that ended a run 19 pages in.
+    """
+
+    class _Raises(_FakeProvider):
+        async def chat_stream(self, **kwargs: Any):
+            self.chat_stream_calls.append(kwargs)
+            raise RuntimeError("Input length (262154) exceeds model's maximum context length (262144).")
+            yield  # pragma: no cover -- makes this an async generator
+
+    provider = _Raises([])
+    response = await _bind_helper(provider)(messages=[], tools=None, model="m")
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    # should_compress, so the loop elides old tool bodies and retries the iteration.
+    assert response.error_classification.category == "context_overflow"
+    assert response.error_classification.should_compress
+    assert parse_llm_error(response.content) is not None
+    # Not retried: a smaller window will not help, and compressing is the loop's job.
+    assert len(provider.chat_stream_calls) == 1
+
+
+async def test_a_cancelled_stream_stays_cancelled() -> None:
+    """CancelledError is a BaseException, so the broad handler must not swallow it."""
+
+    class _Cancelled(_FakeProvider):
+        async def chat_stream(self, **kwargs: Any):
+            self.chat_stream_calls.append(kwargs)
+            raise asyncio.CancelledError
+            yield  # pragma: no cover -- makes this an async generator
+
+    with pytest.raises(asyncio.CancelledError):
+        await _bind_helper(_Cancelled([]))(messages=[], tools=None, model="m")

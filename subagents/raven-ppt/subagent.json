@@ -1,7 +1,7 @@
 {
   "name": "Raven-PPT",
   "kind": "cli",
-  "description": "A powerful deck-building agent that can turn source documents into a fact-grounded .pptx, reviewing every rendered page before it publishes. Use this agent for slides built from material you already have. IMPORTANT: name each source document by absolute path in the task text - nothing else reaches it.",
+  "description": "A powerful deck-building agent that can turn source documents into a fact-grounded .pptx, reviewing every rendered page before it publishes. Use this agent for slides built from material you already have. IMPORTANT: the task text is the only channel that reaches it, so open the task with a fenced block naming the inputs by absolute path, then write the request below it:\n```raven-ppt\n{\"materials\": [\"/abs/notes.md\", \"/abs/figures.xlsx\"], \"template\": \"/abs/house.pptx\"}\n```\n`template` is optional and names the file the deck is built in, not evidence to quote. A path named only in prose is still picked up, but a quoted one survives spaces and non-ASCII punctuation, which prose does not.",
   "owns": "owns decks and slides built from source documents. Do not build the deck yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --job {agent_id} --session cli:{agent_id} --prompt-file {prompt_file}",

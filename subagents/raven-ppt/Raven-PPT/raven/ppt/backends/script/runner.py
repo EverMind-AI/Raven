@@ -150,12 +150,13 @@ async def run_script(
             stderr=(
                 f"no build script yet: write the program to {_relative(project, source)} with write_file -- "
                 "that whole path, relative to the workspace, because a bare build/build.py lands somewhere "
-                "this does not look. Then run the build again with just the project. ppt_theme.py and "
-                "ppt_icons.py are already beside it."
+                "this does not look. Then run the build again with just the project. ppt_layout.py, "
+                "ppt_charts.py, ppt_shapes.py, ppt_theme.py and ppt_icons.py are already beside it."
                 + (
                     "\nThis deck has a template: open it with "
                     "`Presentation(os.environ['PPT_TEMPLATE'])` instead of `Presentation()`, and take its "
-                    "palette and type from the template rather than from ppt_theme."
+                    "palette and type from ppt_theme, which holds the template's own and nothing else. "
+                    "ppt_template.py is beside the others, to clone a page out of PPT_TEMPLATE_SOURCE."
                     if template
                     else ""
                 )
@@ -241,11 +242,11 @@ async def run_script(
             stderr=message,
         )
 
-    # Two defects every deck arrives with, corrected before anything measures it:
+    # The defects every deck arrives with, corrected before anything measures it:
     # the empty placeholders a template's layout leaves on a page ("Click to add
-    # title" in Office) and the Office gallery style python-pptx stamps on every
-    # table. Neither is visible in a render, so neither can be found by measuring
-    # one -- see raven/ppt/services/tidy.py.
+    # title" in Office), the Office gallery style python-pptx stamps on every table,
+    # and the theme drop shadow it references on every shape it draws. Only the last
+    # of those shows up in a render -- see raven/ppt/services/tidy.py.
     for line in tidy(staging):
         log.debug("tidy: %s", line)
     staging.replace(target)

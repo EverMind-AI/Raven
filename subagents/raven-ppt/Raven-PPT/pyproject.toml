@@ -194,8 +194,15 @@ include = [
     "raven/ppt/services/assets/fonts/*.ttf",
     "raven/ppt/services/assets/fonts/*.txt",
     "raven/ppt/assets/templates/*.pptx",
-    "raven/skills/**/*.md",
-    "raven/skills/**/*.sh",
+    # The built-in skill library, entry documents and the references they load on
+    # demand. `raven/skills/` was the path here and no such directory exists: the
+    # runtime resolves `raven/memory_engine/skills/` (skill_local/registry.py), so
+    # the pattern matched nothing. The wheel ships them anyway, through
+    # `packages = ["raven"]` above, which is why nobody noticed -- a pattern that
+    # names a directory the tree does not have is still wrong, and it is what a
+    # reader consults before adding a target-level `include`.
+    "raven/memory_engine/skills/**/*.md",
+    "raven/memory_engine/skills/**/*.sh",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
     # Tracing dashboard viewer (dependency-free Node server + static client).

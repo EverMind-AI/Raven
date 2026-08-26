@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from raven.agent.tools.base import ToolResult
-from raven.ppt.contracts import Audience, Finding, Severity
+from raven.ppt.contracts import Finding, Severity
 from raven.ppt.tools import _return
 from raven.utils.helpers import image_block
 
@@ -49,14 +49,24 @@ def test_every_ask_is_voiced_not_only_the_first() -> None:
     assert "remove 17 filled colour bars" in body["next_step"]
 
 
-def test_findings_are_grouped_by_who_can_fix_them() -> None:
+def test_every_finding_is_the_author_s() -> None:
+    """There was a second bucket, `for_the_design_pass`, and it was read exactly as
+    written: 25 pairs of overlapping words stood through eight builds of one live run
+    because they were filed under somebody else. That actor is gone and `type_floor`,
+    which used to be its share, comes back with the rest."""
     findings = [
-        _finding(kind="density", severity=Severity.WARNING, message="295 words", audience=Audience.AUTHOR),
-        _finding(kind="type_floor", severity=Severity.WARNING, message="11.5pt body", audience=Audience.DESIGNER),
+        _finding(kind="density", severity=Severity.WARNING, message="295 words"),
+        _finding(kind="type_floor", severity=Severity.WARNING, message="11.5pt body"),
     ]
     grouped = _return.grouped(findings)
-    assert [f["kind"] for f in grouped["for_you"]] == ["density"]
-    assert [f["kind"] for f in grouped["for_the_design_pass"]] == ["type_floor"]
+    assert list(grouped) == ["for_you"]
+    assert [f["kind"] for f in grouped["for_you"]] == ["density", "type_floor"]
+
+
+def test_nothing_measured_is_no_bucket_at_all() -> None:
+    """Rather than an empty list, which reads as a check that ran and found nothing
+    when it is a deck nothing was measured on."""
+    assert _return.grouped([]) == {}
 
 
 def test_a_grouped_entry_keeps_the_sentence_the_model_acts_on() -> None:

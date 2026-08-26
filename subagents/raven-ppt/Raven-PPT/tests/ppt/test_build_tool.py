@@ -17,7 +17,6 @@ import pytest
 
 from raven.agent.tools.base import ToolResult
 from raven.ppt.contracts import (
-    Audience,
     BuildOutcome,
     DeckBrief,
     Finding,
@@ -63,12 +62,11 @@ class FakeViews:
 class FakeStage:
     def __init__(self, result: StageResult) -> None:
         self.result = result
-        self.calls: list[tuple[str | None, bool]] = []
+        self.calls: list[str | None] = []
         self.drafts: list[bool] = []
         self.backend = None
         self.measure = None
         self.profile = registry.get("script_author")
-        self.design_pass = object()
         self.destination = lambda p: p.exports_dir / "deck.pptx"
 
     async def run(
@@ -76,12 +74,11 @@ class FakeStage:
         project: Project,
         script: str | None = None,
         *,
-        polish: bool = True,
         slides=None,
         page_from: int = 1,
         draft: bool = False,
     ) -> StageResult:
-        self.calls.append((script, polish))
+        self.calls.append(script)
         self.drafts.append(draft)
         # The stage decides which pages the reply shows, because that is where the
         # deck is published and an unseen page has to refuse before delivery.
@@ -180,13 +177,44 @@ async def test_each_render_is_preceded_by_the_line_that_names_its_page(project: 
 
 
 @pytest.mark.asyncio
+async def test_a_planned_table_is_shown_as_a_table_and_not_as_a_dict(project: Project) -> None:
+    """The author was handed `{'columns': ('指标', '自研'), 'rows': ((...),)}` -- tuples,
+    quotes and all -- two lines above the planned points, which are rendered as a list."""
+    write_outline(
+        Outline(
+            takeaway="it works",
+            pages=(
+                PagePlan(
+                    page=1,
+                    claim="It works",
+                    carries="drawn table",
+                    table_plan={
+                        "columns": ("指标", "自研"),
+                        "rows": (("成本", "4.2"), ("延迟", "38ms")),
+                        "reading": "compare cost",
+                    },
+                ),
+            ),
+        ),
+        outline_path(project),
+    )
+
+    reply = await _tool(project, _ok(project, pages=1)).execute(project="tarvis", slides=[1])
+
+    assert isinstance(reply, ToolResult)
+    assert (
+        "Planned table information shape:\n  指标 | 自研\n  --- | ---\n  成本 | 4.2\n  延迟 | 38ms\n  Read it for: compare cost"
+        in (reply.blocks or [])[0]["text"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_page_s_findings_travel_with_that_page_s_picture(project: Project) -> None:
     finding = Finding(
         kind="card_overflow",
         severity=Severity.WARNING,
         message="'VIPSeg' runs 0.27in past the edge of its card",
         page=1,
-        audience=Audience.DESIGNER,
     )
     reply = await _tool(project, _ok(project, [finding])).execute(project="tarvis", slides=[1])
 
@@ -221,28 +249,36 @@ async def test_every_ask_is_voiced_not_only_the_first(project: Project) -> None:
 
 @pytest.mark.asyncio
 async def test_a_content_warning_is_addressed_to_the_author_with_the_reason(project: Project) -> None:
+    """It used to be written against `density`, a kind nothing has emitted for a release.
+
+    The dead `_ASK` line was what kept the test green, so the one thing it was checking
+    -- that a warning the author owns comes back with the move that answers it -- was
+    being checked against a finding that could not arrive.
+    """
     finding = Finding(
-        kind="density",
+        kind="evidence",
         severity=Severity.WARNING,
-        message="the page carries 295 words",
+        message="only 2 of 9 content pages show anything",
         page=7,
-        audience=Audience.AUTHOR,
     )
     body = _body(await _tool(project, _ok(project, [finding])).execute(project="tarvis"))
 
     assert body["ok"] is True
-    assert "comes back compartmented" in body["next_step"]
-    assert [f["kind"] for f in body["measured"]["for_you"]] == ["density"]
+    assert "put something on the pages that are all prose" in body["next_step"]
+    assert [f["kind"] for f in body["measured"]["for_you"]] == ["evidence"]
 
 
 @pytest.mark.asyncio
-async def test_designer_warnings_are_reported_but_not_asked_of_the_author(project: Project) -> None:
-    finding = Finding(
-        kind="type_floor", severity=Severity.WARNING, message="11.5pt body", page=3, audience=Audience.DESIGNER
-    )
+async def test_a_layout_warning_is_the_author_s_to_answer(project: Project) -> None:
+    """`type_floor` went to a second actor, under a heading naming it, and was left
+    alone: nobody else reads this reply now, so it comes back under `for_you` and is
+    voiced in the next step like every other warning."""
+    finding = Finding(kind="type_floor", severity=Severity.WARNING, message="11.5pt body", page=3)
     body = _body(await _tool(project, _ok(project, [finding])).execute(project="tarvis"))
 
-    assert [f["kind"] for f in body["measured"]["for_the_design_pass"]] == ["type_floor"]
+    assert [f["kind"] for f in body["measured"]["for_you"]] == ["type_floor"]
+    assert "for_the_design_pass" not in body["measured"]
+    assert "type_floor" in body["next_step"]
     # And the reply names the call that finishes the deck. It used to end at "look at
     # every page", which is not a next step for a model that has already looked: one run
     # rebuilt the same finished deck eight times, each reply identical.
@@ -296,38 +332,19 @@ async def test_one_page_comes_back_unasked(project: Project) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_design_pass_summary_keeps_the_notes_and_drops_the_machinery(project: Project) -> None:
-    design = {
-        "rounds": [
-            {"round": 1, "deck": {"notes": ["set a scale"]}, "pages": {2: {"notes": ["tightened"]}}, "refused": {}}
-        ],
-        "vocabulary": ["keep the rail"],
-        "outcome": "an object nobody should serialise",
-    }
-    body = _body(await _tool(project, _ok(project, design_pass=design)).execute(project="tarvis"))
-
-    assert body["design_pass"]["vocabulary"] == ["keep the rail"]
-    round_one = body["design_pass"]["rounds"][0]
-    assert round_one["deck"]["notes"] == ["set a scale"]
-    assert round_one["pages_judged"] == 1
-    assert round_one["page_decisions"]["2"]["notes"] == ["tightened"]
-    assert "outcome" not in body["design_pass"]
-
-
-@pytest.mark.asyncio
-async def test_the_design_pass_cannot_be_switched_off(project: Project) -> None:
-    """`polish` was a parameter and it was the one switch that turned off the only stage
-    that owns layout. A live run passed `polish=false` on eight consecutive finished
-    builds; a draft is not polished and a finished deck always is, so `draft` is the whole
-    choice (design doc D8)."""
+async def test_a_build_has_no_switch_that_skips_a_check(project: Project) -> None:
+    """`polish` was a parameter and it turned off the only stage that owned layout: a
+    live run passed `polish=false` on eight consecutive finished builds. That stage is
+    gone and so is the parameter, and no unknown argument may quietly stand in for it --
+    `draft` is the whole of the choice a caller gets."""
     stage = FakeStage(_ok(project))
     tool = PptBuildTool(
         workspace=project.workspace, stage=stage, views=FakeViews(), profile=registry.get("script_author")
     )
     await tool.execute(project="tarvis", polish=False)
     await tool.execute(project="tarvis")
-    assert [polish for _script, polish in stage.calls] == [True, True]
-    assert "polish" not in tool.parameters["properties"]
+    assert stage.calls == [None, None], "both builds ran the same way"
+    assert not {"polish", "design_pages", "design_setup"} & set(tool.parameters["properties"])
 
 
 @pytest.mark.asyncio
@@ -360,3 +377,44 @@ async def test_draft_is_passed_through(project: Project) -> None:
     await tool.execute(project=project.slug, draft=True)
 
     assert tool.stage.drafts == [True]  # type: ignore[attr-defined]
+
+
+async def test_a_deck_the_publish_step_refused_is_not_reported_as_delivered(project: Project) -> None:
+    """Two notes reach the reply and only one used to be read.
+
+    `outcome.note` is the script's; `result.note` is the stage's, and the stage puts a
+    publish refusal there -- an empty deck, a staged file that vanished, a deck that
+    changed between the check and the copy, a write that failed. None of those is a
+    blocking finding, so nothing in the reply was false one field at a time: it came
+    back `"ok": true`, with no `pptx_path`, and the first thing it told the author was
+    that the deck was delivered "at the export path above" and nothing refused it.
+    Nothing had been written at all, and the next move it invited was to look at the
+    pages of a file that did not exist.
+    """
+    refused = replace(_ok(project), ok=False, note="the built deck is empty")
+    refused = replace(refused, data={k: v for k, v in refused.data.items() if k != "pptx_path"})
+
+    reply = await _tool(project, refused).execute(project="tarvis")
+    body = _body(reply)
+
+    assert body["not_delivered"] == "the built deck is empty"
+    assert "pptx_path" not in body
+    assert "delivered" not in body["next_step"], body["next_step"]
+    assert body["next_step"].startswith("nothing was published: the built deck is empty")
+
+
+def test_the_slides_cap_cannot_exceed_the_batch_the_stage_renders() -> None:
+    """Naming more pages than the stage shows drops the surplus without saying so.
+
+    Two constants carry this name -- one here bounding what `slides` may hold, one in
+    the stage deciding how many renders a reply carries -- and the stage truncates
+    with `[:BATCH_VIEWS]`. Tighter here is a deliberate choice; looser is a request
+    the reply silently answers in part, which is how a model concludes it has looked
+    at a page nobody rendered.
+    """
+    from raven.ppt.stages.build import BATCH_VIEWS as RENDERED
+
+    tool = PptBuildTool(workspace=Path("/tmp"), stage=None, views=None, profile=registry.get("script_author"))
+
+    assert BATCH_VIEWS <= RENDERED
+    assert tool.parameters["properties"]["slides"]["maxItems"] == BATCH_VIEWS

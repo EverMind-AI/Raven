@@ -23,7 +23,7 @@ import shutil
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.contracts.sources import AssetKind, IngestOutcome, SourceAsset
 from raven.ppt.services.ingest import assets as asset_meta
 from raven.ppt.services.ingest import documents
@@ -54,6 +54,12 @@ def ingest_materials(materials_dir: Path, out_dir: Path) -> IngestOutcome:
         supported = "/".join(sorted(suffix.lstrip(".") for suffix in documents.SUPPORTED_SUFFIXES))
         raise FileNotFoundError(f"no supported materials ({supported}) under {materials_dir}")
     urls = documents.source_urls(out_dir / MANIFEST_FILE, sources)
+    # A recorded caption describes the *file*, so only a standalone image takes one:
+    # for a picture the file is the figure, while for a paper it would print one line
+    # under all twelve of its figures. Those already carry the caption their page
+    # prints beside each of them, and a caption read off the source beats a caption
+    # about the download every time.
+    captions = documents.source_captions(out_dir / MANIFEST_FILE, sources)
 
     chunks: list[str] = []
     found: list[SourceAsset] = []
@@ -80,7 +86,7 @@ def ingest_materials(materials_dir: Path, out_dir: Path) -> IngestOutcome:
             found.extend(_with_url(asset, url) for asset in content.assets)
             page_count += content.page_count
         elif suffix in documents.IMAGE_SUFFIXES:
-            found.append(_image_asset(source, materials_dir, figures_dir, url))
+            found.append(_image_asset(source, materials_dir, figures_dir, url, captions.get(source.resolve())))
         else:
             chunks.append(f"# Source: {source.name}\n\n{documents.read_text_source(source)}\n")
 
@@ -242,7 +248,6 @@ def _unread_findings(unread: list[Path], materials_dir: Path) -> list[Finding]:
         Finding(
             kind="unread_source",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=(
                 f"{named} could not be read, so nothing in {'them' if len(unread) > 1 else 'it'} is among this "
                 "deck's evidence -- converting an office document needs LibreOffice on this machine. Say so "
@@ -267,7 +272,6 @@ def _words_only_findings(words_only: list[Path]) -> list[Finding]:
         Finding(
             kind="words_only_source",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=(
                 f"{named} could not be converted on this machine, so {'they were' if len(words_only) > 1 else 'it was'} "
                 "read as text alone -- the words are in the evidence, the figures are not. Do not plan a page "
@@ -282,7 +286,13 @@ def _with_url(asset: SourceAsset, url: str | None) -> SourceAsset:
     return asset if url is None else replace(asset, source_url=url)
 
 
-def _image_asset(source: Path, materials_dir: Path, figures_dir: Path, url: str | None) -> SourceAsset:
+def _image_asset(
+    source: Path,
+    materials_dir: Path,
+    figures_dir: Path,
+    url: str | None,
+    caption: str | None = None,
+) -> SourceAsset:
     """Register a standalone image file as an asset.
 
     Decoded before it is copied: a truncated download is not a figure, and
@@ -309,6 +319,7 @@ def _image_asset(source: Path, materials_dir: Path, figures_dir: Path, url: str 
         kind=AssetKind.IMAGE,
         source_file=str(source.relative_to(materials_dir)),
         source_url=url,
+        caption=caption,
     )
 
 
@@ -352,7 +363,6 @@ def _findings(chars: int, pages: int) -> list[Finding]:
         Finding(
             kind="text_layer",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=(
                 f"only {chars} characters of text across {pages} source pages — these documents are "
                 "image-only (scanned, or a web-print export), so nothing here can read a number off them. "

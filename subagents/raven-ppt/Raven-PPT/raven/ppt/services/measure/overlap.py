@@ -27,11 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import EMU_PER_INCH, PICTURE, Rect, is_panel, iter_shapes, open_deck, page_box
 
 # This much of a shape hidden under later shapes and it is not on the page any more.
-# A figure half behind a panel is a design; a figure four fifths behind one is a
+# A figure half behind a panel is a design; a figure three fifths behind one is a
 # figure nobody sees.
 COVERED = 0.6
 # A shape this big is the page's ground -- a full-bleed photograph, a tinted half.
@@ -126,7 +126,6 @@ def _covered(pieces: list[Piece], page: int) -> list[Finding]:
                 kind="covered_shape",
                 severity=Severity.BLOCKING,
                 page=page,
-                audience=Audience.DESIGNER,
                 message=(
                     f"the {piece.kind} at shape {piece.index}"
                     + (f" ('{piece.head}')" if piece.head else "")

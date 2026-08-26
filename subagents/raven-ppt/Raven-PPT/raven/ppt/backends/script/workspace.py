@@ -68,6 +68,12 @@ def with_template_helpers(helpers: HelperSources | None, template) -> HelperSour
     that picked `ink-graphite` inside a green corporate template produced a deck
     that failed nothing. Now there is one theme in there and it is the
     template's, so the instruction and the guarantee agree.
+
+    That one theme is the template's palette as the author read it off the renders,
+    where it read one, and derived for whatever it did not say. The colours a file
+    declares and the colours its pages paint are not the same colours -- see
+    `services/template/palette.py` for the count -- so a reading taken off the pages
+    wins over one computed from the theme part.
     """
     from raven.ppt.services.assets import script_helpers
     from raven.ppt.services.template import helper_source, theme_name, theme_of
@@ -75,7 +81,9 @@ def with_template_helpers(helpers: HelperSources | None, template) -> HelperSour
     base = helpers or HelperSources()
     extra = {name: body for name, body in base.extra if name != script_helpers.THEME_DATA_FILENAME}
     extra[script_helpers.THEME_DATA_FILENAME] = json.dumps(
-        {theme_name(template.inventory): theme_of(template.inventory)}, ensure_ascii=False, indent=1
+        {theme_name(template.inventory): theme_of(template.inventory, template.palette)},
+        ensure_ascii=False,
+        indent=1,
     )
     extra[TEMPLATE_HELPER] = helper_source()
     return replace(base, extra=tuple(sorted(extra.items())))
@@ -104,7 +112,17 @@ def provision(project: Project, helpers: HelperSources | None = None) -> Path:
     in this directory, and a helper it edited by accident would fail in a way that
     reads as a bug in the deck rather than as a modified helper.
     """
+    from raven.ppt.services.assets import script_helpers
+
     project.build_dir.mkdir(parents=True, exist_ok=True)
     for name, body in (helpers or HelperSources()).files():
         (project.build_dir / name).write_text(body, encoding="utf-8")
+    # The skill's reference documents, under the relative path SKILL.md links to
+    # them by. They reach the author no other way: the skill pool reads SKILL.md
+    # and nothing beside it, and the workspace fence then refuses the path those
+    # links resolve to. A name here carries a directory, so it gets one.
+    for name, body in script_helpers.reference_files().items():
+        target = project.build_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
     return project.build_dir

@@ -132,10 +132,36 @@ class DeckBuilder:
             run.font.size = Pt(size)
         return shape
 
-    def table(self, slide: Any, rows: int, columns: int, *, left: float = 0.5, top: float = 1.0) -> Any:
-        from pptx.util import Inches
+    def table(
+        self,
+        slide: Any,
+        rows: int,
+        columns: int,
+        *,
+        left: float = 0.5,
+        top: float = 1.0,
+        width: float = 12.0,
+        cell: str | None = None,
+        points: float = 14.0,
+    ) -> Any:
+        """A table, optionally with the same string in every cell.
 
-        return slide.shapes.add_table(rows, columns, Inches(left), Inches(top), Inches(12), Inches(2))
+        `cell` and `width` are here because the readable question about a table is
+        whether a column has room for what it holds, so a table with no text in it
+        cannot be too narrow for anything.
+        """
+        from pptx.util import Inches, Pt
+
+        frame = slide.shapes.add_table(rows, columns, Inches(left), Inches(top), Inches(width), Inches(2))
+        if cell is not None:
+            for row in range(rows):
+                for column in range(columns):
+                    target = frame.table.cell(row, column)
+                    target.text = cell
+                    for paragraph in target.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            run.font.size = Pt(points)
+        return frame
 
     def picture(
         self,

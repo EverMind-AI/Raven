@@ -31,14 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import ToolResult
-from raven.ppt.contracts import Audience, Finding, Severity
+from raven.ppt.contracts import Finding, Severity
 from raven.utils.helpers import ContentPart
-
-# Kept in the payload under the audience that can act on them, because a page
-# holding three times what a slide holds comes back arranged into compartments
-# however often it is redesigned -- the design pass may rearrange a page but
-# never change what it says.
-_AUDIENCE_KEY = {Audience.AUTHOR: "for_you", Audience.DESIGNER: "for_the_design_pass"}
 
 
 def where(path: Path, workspace: Path) -> str:
@@ -47,7 +41,7 @@ def where(path: Path, workspace: Path) -> str:
     Every path a tool names is relative to the workspace, because a name is not an
     address. A live run was told its source was "tarvis.md" and spent two calls
     guessing where that was -- `materials/tarvis.md`, then `materials.md`, both
-    wrong, the file sitting at `ppt_projects/<slug>/sources/tarvis.md`. Two calls
+    wrong, the file sitting at `deck/sources/tarvis.md`. Two calls
     for a string the tool already held.
     """
     try:
@@ -72,7 +66,7 @@ def done(*, blocking: Sequence[Finding] = (), asks: Sequence[str] = (), **payloa
     if blocking:
         body["error"] = _one_line(blocking)
     if asks:
-        body["next_step"] = "; ".join(asks) + ". Then run the tool again."
+        body["next_step"] = "; ".join(asks) + (". Then run the tool again." if blocking else ".")
     return json.dumps(body, ensure_ascii=False)
 
 
@@ -83,16 +77,17 @@ def with_images(model_text: str, blocks: Iterable[ContentPart]) -> ToolResult:
 
 
 def grouped(findings: Iterable[Finding]) -> dict[str, Any]:
-    """Findings arranged the way their readers need them.
+    """Findings under the one key that says whose they are.
 
-    By audience first, because that decides who is being asked; severity is a
-    field on each entry rather than a second level of nesting, since a reader
-    filtering by it is filtering a list it already has in hand.
+    There were two, `for_you` and `for_the_design_pass`, when a second actor
+    could act on a page. There is not one any more, and the second key was read
+    exactly as it was written: a live run left 25 pairs of overlapping words
+    alone across eight builds because they were filed under somebody else. One
+    list, addressed to the author, is the whole of it -- severity is a field on
+    each entry rather than a second level of nesting, since a reader filtering
+    by it is filtering a list it already has in hand.
     """
-    out: dict[str, list[dict[str, Any]]] = {}
-    for finding in findings:
-        out.setdefault(_AUDIENCE_KEY[finding.audience], []).append(_entry(finding))
-    return dict(sorted(out.items()))
+    return {"for_you": [_entry(finding) for finding in findings]} if findings else {}
 
 
 def _entry(finding: Finding) -> dict[str, Any]:
@@ -121,8 +116,11 @@ def blocking_of(findings: Iterable[Finding], kinds: frozenset[str]) -> list[Find
     """The findings a profile has declared fatal.
 
     Severity comes from the measurement, but which kinds are fatal is the
-    route's call: a filled colour bar refuses a deck on the script route, where
-    prose alone never stopped it coming back, and is a warning on a route whose
-    engine draws the page furniture itself.
+    route's call: a page the build cannot map back to its own code is fatal on
+    the script route, where a render has to be matched to what drew it, and
+    means nothing on a route whose engine draws the page furniture itself.
+
+    A route may not call fatal a kind the check itself only reports; a test
+    holds the two together, because for a while nothing did.
     """
     return [f for f in findings if f.kind in kinds or f.severity is Severity.BLOCKING]

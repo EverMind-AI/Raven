@@ -1,14 +1,19 @@
 """Gates on a built deck. Everything here returns `Finding`.
 
-The four that can refuse a deck live here, and they are the four design doc D3
-names: a claim the materials never make, a figure cited as another figure, a
-filled colour bar, and a deck whose pages the pipeline cannot tell apart. Three
-are provenance or comprehension failures no layout can mitigate; the fourth is
-the one design tell that prose demonstrably could not stop.
+What a deck can be refused over is what it was agreed to be and what it credits:
+`citation` (a figure cited as another figure), `page_budget` and `language` (the
+two halves of the brief a built file can be held to), and `house_style` (a deck in
+somebody else's colours). The list this docstring used to give was design doc D3's
+and outlived it in two places: there has never been a check on a claim the materials
+never make -- no stage builds an index of the numbers in them -- and `band` was
+downgraded to a warning after three misfires (D17).
 
-Everything else a build knows about a page is a measurement, lives in
-`services.measure`, and is a WARNING. `check_deck` runs both and returns one
-list; the caller filters by audience and severity.
+Everything else here reports. `band` and `page_mapping` are readings of a built
+file, not verdicts on it; `thin_material` and the three `coverage` rows say what
+could not be checked rather than what is wrong. Measurements of the rendered page
+live in `services.measure` and are warnings for the reason D2 gives. `check_deck`
+runs both packages and returns one list; a route's `blocking_kinds` decides which
+of them stop publication, and every one of them is the author's to answer.
 """
 
 from raven.ppt.services.gates.bands import (
@@ -37,7 +42,6 @@ from raven.ppt.services.gates.registry import (
     by_page,
     check_deck,
     checks,
-    for_audience,
 )
 
 __all__ = [
@@ -57,7 +61,6 @@ __all__ = [
     "cited_labels",
     "data_mark_ids",
     "figure_labels",
-    "for_audience",
     "holds_text",
     "load_figure_catalog",
     "mapping_findings",

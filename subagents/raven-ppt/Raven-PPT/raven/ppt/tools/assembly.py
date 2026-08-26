@@ -28,7 +28,6 @@ from raven.ppt.services.template import bound
 from raven.ppt.stages._measure import DeckMeasurer
 from raven.ppt.stages._views import DeckViews
 from raven.ppt.stages.build import BuildStage
-from raven.ppt.stages.design_pass import DesignPass, TypeFloors
 from raven.ppt.stages.prepare import PrepareStage
 from raven.ppt.tools._composer import ProviderComposer
 from raven.ppt.tools.brief import PptBriefTool
@@ -49,12 +48,9 @@ def build_ppt_tools(
     *,
     profile: str = registry.DEFAULT,
     provider: Any | None = None,
-    designer_model: str | None = None,
-    design_pass: bool = True,
-    design_rounds: int = 2,
+    composer_model: str | None = None,
     render_dpi: int = 144,
     render_concurrency: int = 2,
-    design_concurrency: int = 6,
     deck_name: str = "deck.pptx",
     web_proxy: str | None = None,
     image_config: Any | None = None,
@@ -99,11 +95,6 @@ def build_ppt_tools(
         backend=backend,
         measure=measure,
         profile=chosen,
-        design_pass=(
-            _design_pass(provider, designer_model, views, measure, backend, design_rounds, design_concurrency)
-            if design_pass
-            else None
-        ),
         destination=lambda project: project.exports_dir / deck_name,
     )
     tools: list[Tool] = [
@@ -115,20 +106,11 @@ def build_ppt_tools(
         PptFigureInspectTool(
             workspace,
             views,
-            composer=ProviderComposer(provider=provider, model=designer_model or None)
+            composer=ProviderComposer(provider=provider, model=composer_model or None)
             if provider is not None
             else None,
         ),
-        # The outline gets the same second model the design pass gets, for the same
-        # reason: the copy on a page is written better looking at one page's claim
-        # against the materials than as one twentieth of a reply.
-        PptOutlineTool(
-            workspace,
-            composer=ProviderComposer(provider=provider, model=designer_model or None)
-            if provider is not None
-            else None,
-            views=views,
-        ),
+        PptOutlineTool(workspace),
         PptTemplateTool(workspace, views, provision=provision_script_workspace),
         PptBuildTool(workspace, stage, views, chosen),
     ]
@@ -139,7 +121,7 @@ def build_ppt_tools(
 def _prepare(provider: Any | None) -> PrepareStage:
     """The intake stage, with the ingest it drives and a model to read the task.
 
-    The composer is the main model rather than the designer's: reading a task is
+    The composer is the main model rather than the second one: reading a task is
     the author's own kind of work, and the isolation that matters here is the empty
     context rather than a different set of weights. Without a provider the stage
     still ingests the conventional materials directory and still asks the three
@@ -157,45 +139,12 @@ def _backend(helpers):
     installation belongs to neither and happens here, once, where the assets are
     known to be installed.
     """
+
     async def backend(project, script):
         return await run_script(project, script, helpers=helpers)
 
     backend.name = ScriptBackend.name
     return backend
-
-
-def _design_pass(
-    provider: Any | None,
-    model: str | None,
-    views: DeckViews,
-    measure: DeckMeasurer,
-    rebuild,
-    rounds: int,
-    concurrency: int,
-) -> DesignPass | None:
-    """The design pass, or None when there is no model to run it on.
-
-    None is the default rather than a degraded state, and `tools.ppt.designer.
-    enabled` is what turns it on -- see PptDesignerConfig for the measurements
-    that made it opt-in. A build without it still measures the deck and reports
-    everything, and the author can act on all of it. What is lost is the second
-    pair of eyes, not the checks.
-
-    It shares the stage's measurer and the stage's rebuild, so the numbers it is
-    handed between rounds are the numbers the stage will report at the end. Giving
-    it its own would let a page pass its own check and fail the one that matters.
-    """
-    if provider is None:
-        return None
-    return DesignPass(
-        renderer=views,
-        composer=ProviderComposer(provider=provider, model=model or None),
-        build=lambda project: rebuild(project, None),
-        measure=measure,
-        floors=TypeFloors(),
-        rounds=rounds,
-        concurrency=concurrency,
-    )
 
 
 def _warn_if_incomplete(profile: Profile, tools: list[Tool]) -> None:

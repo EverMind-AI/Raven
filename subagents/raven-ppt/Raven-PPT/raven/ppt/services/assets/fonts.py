@@ -20,15 +20,17 @@ from pathlib import Path
 # few percent in reserve for renderer-side substitution, so a face wider than
 # the measurement font pushes approved lines past their slot on the viewer's
 # machine. Each entry below was measured against that baseline over
-# representative deck text and lands at 0.81-1.02 of it -- inside the reserve,
-# and mostly under it, so real lines end early rather than overflowing.
+# representative deck text and lands at 0.79-1.14 of it.
 #
 # Each name also resolves two ways that matter. On this renderer fontconfig maps
-# it to a metric-compatible libre clone (Liberation, URW, Nimbus), so the review
-# renders the model inspects match what it measured. On the viewer's Windows or
-# macOS the same name resolves to the real face, whose metrics the clone was
-# built to match. A face that only exists on one of those two sides would make
-# the review renders lie, which is why the list is short.
+# it to a libre stand-in, so the review renders the model inspects are what it
+# measured. On the viewer's Windows or macOS the same name resolves to the real
+# face. A face that only exists on one of those two sides would make the review
+# renders lie, which is why the list is short.
+#
+# Four of the six get a *metric-compatible* stand-in -- Liberation, Nimbus and
+# URW were drawn to the widths of the faces they stand in for. Two do not, and
+# `FACE_WIDTH` below is what that costs.
 MEASURED_SAFE_FONTS: dict[str, str] = {
     "Arial": "neutral grotesque; Liberation Sans here, Arial on the viewer",
     "Helvetica": "precise grotesque; Nimbus Sans here, Helvetica/Arial on the viewer",
@@ -36,6 +38,43 @@ MEASURED_SAFE_FONTS: dict[str, str] = {
     "Cambria": "warm text serif with sturdy counters; DejaVu Serif here",
     "Century Schoolbook": "wide-counter text serif, high legibility; C059 here",
     "Bookman Old Style": "heavy editorial serif; URW Bookman here",
+}
+
+# How much wider than `ppt_layout._EMS` each face actually sets.
+#
+# That table is one class average per character class -- digit, cap, lower,
+# space, thin, other -- and it is what every generated box is sized from. It has
+# no face in it, so it answers the same for all six names above, and the six do
+# not set the same. Two of them have no metric-compatible stand-in installed:
+# `Cambria` resolves through fontconfig to DejaVu Serif and `Bookman Old Style`
+# to URW Bookman, neither of which was drawn to the widths of the face it is
+# standing in for, and both of which are wider.
+#
+# What that cost, measured: `horizontal_bar` gives its value labels a box of
+# `_em_width(widest) + 0.16in`, of which `write` spends 0.08 on its own margins,
+# so the estimate has 0.08in of headroom before a label breaks. At 14pt "12M"
+# estimates 0.342in and sets 0.446in in DejaVu Serif -- 0.104in over, and the
+# render folds it to "12" over "M". Reproduced in `warm-paper` and
+# `terracotta-craft` (Cambria) and in `plum-editorial` (Bookman Old Style); the
+# Arial, Helvetica and Times New Roman themes draw the same label on one line,
+# because their stand-ins are 5-10% over the estimate and the headroom covers it.
+#
+# Each factor is the largest ratio, over those character classes, of the class's
+# mean advance in the face fontconfig resolves the name to on this renderer
+# against the class's value in `_EMS`, rounded up to two places. Largest rather
+# than mean because this number reserves a box: a string is any mix of classes,
+# and the bound has to hold for the worst mix. Regular weight -- the callers that
+# set bold carry their own allowance for it.
+#
+# Re-measure when the renderer's font set changes: install a metric-compatible
+# Cambria stand-in and its factor drops to about the Times New Roman one.
+FACE_WIDTH: dict[str, float] = {
+    "Arial": 1.06,
+    "Helvetica": 1.06,
+    "Times New Roman": 1.05,
+    "Cambria": 1.22,
+    "Century Schoolbook": 1.14,
+    "Bookman Old Style": 1.15,
 }
 
 # CJK faces a theme may name, and why these two.

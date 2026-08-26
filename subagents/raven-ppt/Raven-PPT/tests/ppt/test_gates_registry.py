@@ -17,7 +17,7 @@ import pytest
 
 from raven.ppt.contracts.brief import DeckBrief, PageBudget
 from raven.ppt.contracts.build import BuildOutcome, PageSource
-from raven.ppt.contracts.findings import Audience, Finding, Severity, blocking, warnings
+from raven.ppt.contracts.findings import Finding, Severity, blocking, warnings
 from raven.ppt.contracts.outline import Outline, PagePlan
 from raven.ppt.services.gates.citations import figure_labels, load_figure_catalog
 from raven.ppt.services.gates.mapping import mapping_findings
@@ -27,7 +27,6 @@ from raven.ppt.services.gates.registry import (
     by_page,
     check_deck,
     checks,
-    for_audience,
 )
 from raven.ppt.services.measure.type_size import Span
 from raven.ppt.services.measure.words import WordBox
@@ -38,6 +37,32 @@ pytest.importorskip("pptx")
 # The text a template writes into a slot it means the author to fill. A page still
 # carrying it is a page whose own words were laid over the template's, not into them.
 PLACEHOLDER = "\u5355\u51fb\u6b64\u5904\u6dfb\u52a0\u957f\u4e00\u70b9\u7684\u526f\u6807\u9898"
+
+# A plan whose five columns of phrases want more width than a 13.333in page carries
+# even with every cell wrapped onto a second line -- the reading `ppt_outline` warns
+# about before the program is written, and which the deck's own table then confirms.
+_WIDE_PLAN = {
+    "columns": [
+        "Professional services transformation",
+        "Managed detection and response retainer",
+        "Regulatory reporting and assurance desk",
+        "Platform modernisation programme office",
+        "Sustainability advisory and reporting",
+    ],
+    "rows": [
+        ["Annual contract value committed", "1.4", "2.2", "0.9", "3.1"],
+        ["Delivery headcount at steady state", "18", "26", "11", "34"],
+        ["Gross margin after ramp", "41%", "37%", "52%", "29%"],
+        ["Renewal rate over three years", "88%", "74%", "91%", "63%"],
+    ],
+    "reading": "which line carries the margin",
+}
+# And a plan for a page built with no table on it at all.
+_UNDRAWN_PLAN = {
+    "columns": ["Task", "TarViS", "Specialist"],
+    "rows": [["VIS", "48.3", "46.3"], ["VPS", "58.2", "56.1"]],
+    "reading": "one model against four specialists",
+}
 
 
 @dataclass(frozen=True)
@@ -56,7 +81,21 @@ def sample(tmp_path: Path, image) -> Sample:
     figures.mkdir()
     (figures / "fig_two.png").write_bytes(image("fig_two.png", (40, 60, 200)).read_bytes())
     (tmp_path / "figures.json").write_text(
-        json.dumps({"assets": {"fig_two": {"source_label": "Figure 5"}}}), encoding="utf-8"
+        # And the caption nobody's source wrote, naming a product this deck's
+        # materials never mention -- the state a live run delivered, where a figure
+        # was captioned as the architecture of a system called SkillCorpus and the
+        # word appeared nowhere in the materials.
+        json.dumps(
+            {
+                "assets": {
+                    "fig_two": {
+                        "source_label": "Figure 5",
+                        "visual_caption": "an architecture diagram of the SkillCorpus retrieval pipeline",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
     )
 
     builder = DeckBuilder(tmp_path)
@@ -68,11 +107,17 @@ def sample(tmp_path: Path, image) -> Sample:
     page = builder.page()
     builder.panel(page, left=0.0, top=0.3, width=13.333, height=0.9)
     builder.text(page, ("Results: Video Panoptic Segmentation", 28.0), top=1.5, width=9.0, height=0.5)
+    # And its body one point under the size the ramp calls body. It clears every floor
+    # there is, so the floor row says nothing about it; it is not a step of the ramp
+    # either, which is what the type-scale row reports.
+    builder.text(page, ("这一页的正文字号是作者挑的十五磅，不是阶梯上的一档", 15.0), top=3.0, width=6.0)
 
     # 2: a page carrying a talk's worth of copy, and a table nobody can read.
     page = builder.page()
     builder.text(page, ("word " * 251, 16.0), height=4.0)
-    builder.table(page, 3, 9, top=5.0)
+    # Narrow columns rather than many of them: `wide_table` measures whether a
+    # column has room for what it holds, not how many columns there are.
+    builder.table(page, 3, 4, top=5.0, width=2.4, cell="Professional services transformation")
 
     # 3: a card for copy to escape, a hairline for it to be struck by, a shape
     # over the right edge, a label in a box too narrow to hold it, and a sentence
@@ -196,6 +241,10 @@ def sample(tmp_path: Path, image) -> Sample:
             pptx_path=builder.save(),
             outcome=BuildOutcome(ok=True, pages=4, sources=()),
             figure_labels=figure_labels(figures, load_figure_catalog(tmp_path / "figures.json")),
+            figure_catalogue=load_figure_catalog(tmp_path / "figures.json"),
+            # What this deck was given to read, which is the only thing a name in a
+            # caption can be checked against. It never says SkillCorpus.
+            materials="TarViS unifies four video segmentation tasks in one model.",
             words=words,
             type_spans=spans,
             # A brief this deck also fails: it agreed to be a one-page deck in
@@ -224,9 +273,14 @@ def sample(tmp_path: Path, image) -> Sample:
                 takeaway="one model, four tasks",
                 pages=(
                     PagePlan(page=1, claim="cover"),
-                    PagePlan(page=2, claim="a talk's worth of copy"),
+                    # Page 2 draws a four-column table and its plan names five, whose
+                    # own cells want more width than any page carries -- the grid row
+                    # and the room row, one for each half of a plan the file did not
+                    # keep.
+                    PagePlan(page=2, claim="a talk's worth of copy", table_plan=_WIDE_PLAN),
                     PagePlan(page=3, claim="a card, a rule and a label"),
-                    PagePlan(page=4, claim="results", prototype=1),
+                    # And a page whose plan names a table that was never drawn at all.
+                    PagePlan(page=4, claim="results", prototype=1, table_plan=_UNDRAWN_PLAN),
                 ),
             ),
         ),
@@ -316,25 +370,65 @@ def test_the_registry_and_the_dispatch_table_describe_the_same_checks() -> None:
     assert set(checks()) == set(DISPATCH)
 
 
-def test_every_check_produces_the_severity_and_audience_it_declares(sample: Sample) -> None:
+def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path: Path) -> None:
     """The dispatch table, asserted row by row, against two decks.
 
     This is the test that makes the table a specification rather than a comment:
     a check that quietly starts refusing a deck fails here instead of stalling a
     run.
 
-    Two decks and not one, because four of the rows fire on exactly the opposite
-    condition from the rest. The loaded deck trips every check there is; the bare
-    one has no index, no labels, no brief and no render, so what fires there is
-    the four that report which checks could not run. Between them they have to
-    cover the table.
+    Four decks and not one, because the rows fire on conditions that cannot all be
+    true of one file. The loaded deck trips every per-page check there is; the bare one
+    has no index, no labels, no brief and no render, so what fires there is the four
+    that report which checks could not run; the third is a whole deck of one
+    composition, which is the only shape `layout_variety` has an opinion about -- a
+    four-page sample cannot be a deck whose pages are all alike; and the fourth is one
+    banded table, which is a pattern down a table and not a property of any page.
+    Between them they have to cover the table.
     """
     loaded = check_deck(sample.deck)
     bare = check_deck(DeckUnderReview(pptx_path=sample.deck.pptx_path))
+    alike = check_deck(DeckUnderReview(pptx_path=_one_composition(tmp_path)))
+    banded = check_deck(DeckUnderReview(pptx_path=_a_banded_table(tmp_path)))
 
-    assert {finding.kind for finding in (*loaded, *bare)} == set(DISPATCH), "a row nothing produced"
-    for finding in (*loaded, *bare):
-        assert (finding.severity, finding.audience) == DISPATCH[finding.kind], finding.kind
+    every = (*loaded, *bare, *alike, *banded)
+    assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
+    for finding in every:
+        assert finding.severity == DISPATCH[finding.kind], finding.kind
+
+
+def _a_banded_table(tmp_path: Path) -> Path:
+    """One table tinting alternate rows, which is what `table(banding=True)` draws."""
+    from pptx.dml.color import RGBColor
+
+    builder = DeckBuilder(tmp_path)
+    shape = builder.table(builder.page(), 5, 4, top=1.0, width=12.0, cell="Mem0")
+    for row in (2, 4):
+        for cell in shape.table.rows[row].cells:
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor.from_string("E2CEA8")
+    return builder.save("banded.pptx")
+
+
+def _one_composition(tmp_path: Path) -> Path:
+    """Eight pages of the same panel, the same figure box and the same paragraph.
+
+    The defect `layout_variety` is for, in the smallest file that can carry it: nothing
+    is wrong with any one of these pages and a reader meets the same page eight times.
+    """
+    builder = DeckBuilder(tmp_path)
+    for number in range(8):
+        page = builder.page()
+        builder.panel(page, left=0.7, top=1.3, width=5.6, height=4.6)
+        builder.text(
+            page,
+            (f"第 {number + 1} 页的正文，写得足够长以算作一段而不是一个标签。", 16.0),
+            left=7.0,
+            top=1.3,
+            width=5.6,
+            height=4.6,
+        )
+    return builder.save("alike.pptx")
 
 
 def test_a_deck_with_nothing_behind_it_says_which_checks_did_not_run(sample: Sample) -> None:
@@ -357,22 +451,28 @@ def test_a_deck_with_nothing_behind_it_says_which_checks_did_not_run(sample: Sam
 def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample: Sample) -> None:
     """Design doc D3's blocking set, and nothing has crept into it.
 
-    Ten kinds, in three groups. Provenance: a page crediting a figure it does not
+    Eleven kinds, in three groups. Provenance: a page crediting a figure it does not
     show. What was agreed with the user -- its length, its language, and the
     template it was to be built inside, which includes two ways of not building
     inside it: pages still carrying the template's own placeholder copy, and pages
     that cloned a template page for its background and laid new text boxes over it.
     Both are refused for the same reason as `house_style`: the user handed over a
     template, and a deck that ships "click here to add a title" is not the deck they
-    asked for. Neither is answerable by the design pass, which may not rewrite a
-    word. And the measurements: copy painted over copy in the render, content a
+    asked for. And the measurements: copy painted over copy in the render, content a
     later shape paints over, and type a reader cannot make out against the ground it
     landed on -- #1A1A1A on #000000 is not a matter of degree.
 
-    Two kinds left this set (D3b). `page_mapping` protects the design pass's ability
-    to find a page's code, which is not something a reader sees. `prototype_kept`
+    Two kinds left this set (D3b). `page_mapping` protects the ability to match a
+    render back to the code that drew it, which is not something a reader sees. `prototype_kept`
     compares a page against a promise the outline made about it, and one run drew a
     better page than the promise -- refusing it asked for a worse one.
+
+    A third left it (D17): `band`. It was the one matter of taste that refused a
+    deck, held there by "prose demonstrably could not stop it", and three misfires
+    took the demonstrably away -- bar series read as accent strips, planes carrying
+    copy read as empty bands, and a template's own kicker rule refused by an eighth
+    of a millimetre. Each was patched with another exemption, and two runs lost a whole
+    stage to a band finding that was itself wrong. It still reports.
 
     That last one is the deliberate exception to D2, added after three live runs
     delivered decks with overlapping text: the rest of the measured layout problems
@@ -380,12 +480,17 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
     making the page worse -- but the type floor is measured too, so shrinking out of
     a collision only trades one finding for another, and the move a collision
     actually wants is a wider box, which costs the page nothing.
+
+    One joined it: `unplaced_table`, which belongs with what the deck and the plan
+    agreed between them rather than with the measurements. A page whose outline names
+    a table and whose file holds none is not a page that is nearly right, nothing
+    about it is answered by making the page smaller, and both ways out are one edit
+    -- the same argument that already makes `unplaced_figure` fatal on every route.
     """
     findings = check_deck(sample.deck)
 
     assert {finding.kind for finding in blocking(findings)} == {
         "citation",
-        "band",
         "page_budget",
         "language",
         "house_style",
@@ -395,16 +500,25 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "word_collision",
         "covered_shape",
         "literal_escape",
+        "unplaced_table",
     }
     assert {finding.kind for finding in warnings(findings)} == {
+        # A caption written by looking at a figure, naming something the materials
+        # never mention. A warning: the name may well be printed in the pixels, and
+        # the answer is one sentence rather than a rebuilt page.
+        "inferred_caption",
         "template_picture",
         "evidence",
         "wide_table",
         "native_table",
+        "table_grid",
+        "table_room",
+        "band",
         "flat_formula",
         "unmarked_points",
         "type_floor",
         "type_drift",
+        "type_scale",
         "clipped_copy",
         "thin_contrast",
         "rule_strike",
@@ -428,22 +542,6 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         # and the coverage check says so. The other two coverage kinds stay
         # quiet because the sample has labels and a brief.
         "unrendered",
-    }
-
-
-def test_content_problems_reach_the_author_and_never_the_design_pass(sample: Sample) -> None:
-    """The pass may rearrange a page and never rewrite it, so a page's lack of
-    evidence and its table width are the author's.
-
-    A character ceiling used to be in this list. What replaced it measures the
-    render instead -- `card_overflow`, `crowded_panel` -- and those are the design
-    pass's, because a page that overflows its card is a page laid out too small."""
-    findings = check_deck(sample.deck)
-    designer = {finding.kind for finding in for_audience(findings, Audience.DESIGNER)}
-
-    assert {"evidence", "wide_table"} & designer == set()
-    assert {"evidence", "wide_table", "citation", "page_mapping"} <= {
-        finding.kind for finding in for_audience(findings, Audience.AUTHOR)
     }
 
 
@@ -524,15 +622,14 @@ def _outcome(pages: int, sources: tuple[PageSource, ...] = (), ok: bool = True) 
 
 
 def test_a_deck_whose_pages_cannot_be_told_apart_is_reported() -> None:
-    """Reported, not refused: nothing after this point can act on the deck, and the
-    design pass it skips is where the defects would have been found -- but the pages
+    """Reported, not refused: what it costs is the ability to match a render back to
+    the block that drew it, which is how a page gets reviewed at all -- but the pages
     themselves may be perfectly good, and refusing them buys the reader nothing."""
     findings = mapping_findings(_outcome(4))
 
     assert len(findings) == 1
     assert findings[0].kind == "page_mapping"
     assert findings[0].severity is Severity.WARNING
-    assert findings[0].audience is Audience.AUTHOR
     assert findings[0].detail == {"pages": 4, "mapped": 0, "distinct_starts": 0}
 
 

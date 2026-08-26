@@ -35,7 +35,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck, picture_blob
 
 # A page counts as adapted when this share of its shapes sit where the template puts
@@ -95,7 +95,6 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
             Finding(
                 kind="template_underlay",
                 severity=Severity.BLOCKING,
-                audience=Audience.AUTHOR,
                 message=(
                     f"{'Page' if len(underlay) == 1 else 'Pages'} {', '.join(str(n) for n in underlay)} "
                     f"{'has' if len(underlay) == 1 else 'have'} the template's page cloned underneath and new "
@@ -125,7 +124,6 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
         Finding(
             kind="template_adherence",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=(
                 "this deck is built in the user's template and none of its pages came from the template's own "
                 + ", ".join(f"{role} (page {number})" for role, number in named.items())
@@ -200,7 +198,6 @@ def placeholder_copy(pptx_path: Path, template: Path | None) -> list[Finding]:
                     kind="placeholder_copy",
                     severity=Severity.BLOCKING,
                     page=number,
-                    audience=Audience.AUTHOR,
                     message=(
                         f"page {number} still says \u201c{text[:40]}\u201d, which is the template's own "
                         f"placeholder text. Replace it with what this page says, or drop the shape: pass it in "
@@ -262,11 +259,11 @@ def template_pictures(pptx_path: Path, template: Path | None) -> list[Finding]:
         Finding(
             kind="template_picture",
             severity=Severity.WARNING,
-            audience=Audience.AUTHOR,
             message=(
                 f"the template's own images are still showing in {count} on page(s) {where}. A template's photograph "
                 f"is a placeholder: it illustrates nothing this deck says. Replace it with a figure "
-                f"(`pictures={{n: 'figures/x.png'}}`, which crops to the frame rather than stretching), drop "
+                f"(`pictures={{n: FIGURES/'x.png'}}` with `FIGURES = Path(os.environ['PPT_FIGURES_DIR'])`, "
+                f"which crops to the frame rather than stretching), drop "
                 f"the frame (`drop=[n]`), or keep it if it is part of the design rather than a photograph"
             ),
             detail={"pages": {str(k): v for k, v in sorted(pages.items())}, "distinct": len(distinct)},
@@ -359,10 +356,10 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
 
     Neither was refusing to work. Both wrote a plan, and nobody read it back.
 
-    Blocking, and the author's: the fix is either the program (build the page on the
-    page it promised) or the outline (promise the page it was actually built on), and
-    both are the author's to choose. The design pass cannot help -- it may not decide
-    which prototype a page comes from.
+    Reported rather than refused (D3b): the fix is either the program (build the page
+    on the page it promised)
+    or the outline (promise the page it was actually built on), and both are the
+    author's to choose.
     """
     if template is None or outline is None or not Path(template).is_file():
         return []
@@ -396,7 +393,6 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
                 kind="prototype_kept",
                 severity=Severity.WARNING,
                 page=page.page,
-                audience=Audience.AUTHOR,
                 message=(
                     f"page {page.page} says in the outline that it is built on the template's page {wanted}, and "
                     f"{share:.0%} of its shapes sit where that page puts one.{instead} Build it on the page it "

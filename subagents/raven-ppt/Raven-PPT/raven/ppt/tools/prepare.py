@@ -42,9 +42,8 @@ class PptPrepareTool(Tool):
         "attached, binds a .pptx the request said to build inside, and when no user template is provided selects "
         "one tagged light template from the bundled defaults. It records the language, audience and "
         "page count the request already states. What it cannot do itself comes back as two lists: "
-        "questions to put to the user with "
-        "ask_user, and material to fetch with web_search and ppt_fetch. Call it first, and call it again "
-        "after answering either list."
+        "questions to put to the user with ask_user and record with ppt_brief, and material to fetch with "
+        "web_search and ppt_fetch. Call it first, and call it again once the material has been fetched."
     )
     timeout_seconds = 600.0
 
@@ -134,6 +133,8 @@ class PptPrepareTool(Tool):
             payload["gather"] = [errand.as_dict() for errand in plan.errands]
         if plan.notes:
             payload["notes"] = list(plan.notes)
+        if plan.stated.forbidden:
+            payload["forbidden"] = list(plan.stated.forbidden)
         script = str(script_path(deck).relative_to(self.workspace))
         payload["write_the_program_to"] = script
         return _return.done(asks=_asks(plan, state, script), **payload)
@@ -164,7 +165,12 @@ def _resume_payload(deck: Project, project: str, task: str) -> dict[str, Any] | 
     plan = load_plan(intake_path(deck))
     outline = load_outline(outline_path(deck))
     brief = load_brief(brief_path(deck))
-    assert plan is not None and outline is not None and brief is not None
+    # The same answer the misses above give, for the same reason: a resume needs all
+    # three records, and one of them absent means there is nothing to resume onto. It
+    # was an `assert`, which python -O removes -- and what ran then was `plan.topic`
+    # against None.
+    if plan is None or outline is None or brief is None:
+        return None
     payload: dict[str, Any] = {
         "project": project,
         "topic": plan.topic,
@@ -197,10 +203,32 @@ def _asks(plan: Any, state: Any, script: str) -> list[str]:
             f"put the {len(plan.questions)} question(s) under ask_user to the user with the ask_user tool, "
             "then record the answers with ppt_brief -- the build refuses until the brief exists"
         )
-    if plan.errands:
+    if plan.stated.forbidden and state.brief is None:
+        # The reading found a prohibition and the brief it belongs in could not be
+        # written, because some other field of it is still missing. Said here, or it
+        # is lost between the two calls: the brief is what carries a prohibition
+        # forward to every build, and nothing else does.
         asks.append(
-            f'get the {len(plan.errands)} item(s) under gather: web_search(kind="images") for pictures, '
-            "ppt_fetch to bring a URL into the project, then call ppt_prepare again"
+            "the request ruled out " + "; ".join(plan.stated.forbidden) + " -- pass that to ppt_brief as "
+            "forbidden=[...] along with the answers, because the brief is what keeps it in front of you "
+            "on every build"
+        )
+    if plan.errands:
+        # The sweep, and only the sweep. Searching belongs to `ppt_outline`, which is
+        # the first step that knows what a page has to show; asked here it is a
+        # question with no target, and one live run answered it with two logos and a
+        # marketing banner -- which made the errand look satisfied while the paper
+        # and the two benchmark posts its material cited went unswept.
+        asks.append(
+            f"get the {len(plan.errands)} item(s) under gather by sweeping what the material itself "
+            'cites: web_fetch(extractMode="images") on those URLs returns each picture with the caption '
+            "its author wrote, which no search result carries. Pass those words to ppt_fetch as its "
+            "caption -- nothing downstream can read them off the bytes, so a picture fetched without "
+            "them reaches the figure catalogue with nothing but its pixels to say what it is. A paper "
+            "cited as an abstract keeps its figures in the PDF, captions and all -- ppt_fetch that and "
+            "the ingest reads them off the page. This establishes what there is to choose from; which "
+            "picture a page needs is decided against the outline. ppt_fetch what you will use, then "
+            "call ppt_prepare again"
         )
     if state.template is None and state.unbound_templates:
         asks.append(

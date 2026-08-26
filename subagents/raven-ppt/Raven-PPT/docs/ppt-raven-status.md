@@ -3,7 +3,7 @@
 本文件记录**已验证的能力、证据、限制与待办**。设计与决策见 `docs/ppt-raven-design.md`；
 长效规则见 `raven/ppt/AGENTS.md`。三份文件不重复彼此的内容。
 
-基线：`upstream/main` @ `5a0c950`（EverMind-AI/Raven）。分支 `refactor/ppt_on_upstream`。
+基线：`upstream/main` @ `5a0c950`（EverMind-AI/Raven）。分支 `feat/ppt`。
 
 ---
 
@@ -11,19 +11,25 @@
 
 | 层 | 模块 | 状态 |
 | --- | --- | --- |
-| contracts | `project` / `findings` / `capability` / `deck` / `build` / `profile` / `stage` / `rendered` / `sources` | 完成 |
-| services | `ingest`（文档、图注、事实、图表、图片、去重） | 完成 |
-| services | `assets`（十套白底主题、180 图标、字体、脚本 helper 投影） | 完成 |
+| contracts | `project` / `brief` / `intake` / `outline` / `findings` / `capability` / `deck` / `build` / `profile` / `stage` / `rendered` / `sources` | 完成 |
+| services | `ingest`（文档、图注、章节、图表、表格、图片、去重） | 完成 |
+| services | `assets`（十套白底主题、1304 图标、字体，以及 `ppt_layout` / `ppt_charts` / `ppt_icons` / `ppt_theme` / `ppt_shapes` 五个脚本 helper 的投影） | 完成 |
 | services | `measure`（声明几何 + 渲染真值） | 完成 |
-| services | `gates`（事实、图注引用、色带、页-代码映射、门禁注册表） | 完成 |
+| services | `gates`（图注引用、色带、页-代码映射、页数/语言/素材体量、house style、"哪些检查没跑"、门禁注册表） | 完成 |
 | services | `render`（pptx→pdf→png、词框、联系表、能力探测） | 完成 |
 | services | `publish`（暂存、digest 校验、原子写、fail-closed） | 完成 |
 | services | `template`（准备副本、反编译成 python-pptx、克隆改写、清单、绑定） | 完成 |
+| services | `tidy` / `seen` / `state`（构建收尾机械修正、逐页看过留痕、项目状态） | 完成 |
 | backends | `script`（运行程序、块映射、提交守卫、脚本编辑） | 完成 |
-| stages | `build`（构建→测量→精修→再测量→发布）、`design_pass`（两段式设计环） | 完成 |
+| stages | `prepare`（读任务书、装齐作者工作区）、`build`（构建→测量→发布） | 完成 |
 | profiles | `script_author` / `slot_author` / `image_text` 三条路线声明 | 声明完成；后两条后端未实现 |
-| tools | `ppt_brief` / `ppt_ingest` / `ppt_fetch` / `ppt_template` / `ppt_build` + 唯一返回信封 | 完成 |
-| 接线 | `tools.ppt` 配置、agent loop 注册、三个 CLI 面 | 完成 |
+| tools | `ppt_prepare` / `ppt_brief` / `ppt_template` / `ppt_fetch` / `ppt_generate_image` / `ppt_ingest` / `ppt_figure_inspect` / `ppt_outline` / `ppt_build` + 唯一返回信封 | 完成 |
+| 接线 | `tools.ppt` 配置、agent loop 注册、三个 CLI 面（`agent_commands` / `gateway_commands` / `tui_commands`） | 完成 |
+
+**事实门禁不在这张表里，也不在代码里。** 曾有一道 `fact` 门禁（页面上的每个数字必须逐字
+出现在素材正文里），七次真实运行报出 10 条、全部误报，已整道删除（设计 D3a）。ingest 也
+没有 `facts` 段：留下的只有 `sections.py` 里的素材体量 `stated_chars`。`kind="fact"` 现在
+只作为测试夹具里的一个通用 finding 名存在，没有任何检查产出它。
 
 **路线 A（`script_author`）可端到端运行。** 路线 B（`slot_author`）与路线 C（`image_text`）
 已作为 profile 注册，但后端未实现，装配时返回空工具集并记一条 warning——不会注册一条
@@ -32,13 +38,13 @@
 ## 2. 验证证据
 
 ```
-uv run ruff format --check raven tests && uv run ruff check raven tests   # 通过
-uv run pytest tests/ppt -q                                               # 785 passed
-uv run pytest tests/ -q --ignore=tests/tui                                # 见下
+uv run --frozen --python 3.12 --all-extras pytest -q tests/ppt   # 2559 passed, 1 skipped
+uv run ruff format --check raven tests && uv run ruff check raven tests
+uv run pytest tests/ -q --ignore=tests/tui                       # 见下
 ```
 
-全量套件：**7288 passed / 9 failed / 20 errors / 36 skipped**。九条失败与二十条错误全部
-在原始 `upstream/main` 上以相同数量出现，与本分支无关，逐条核对如下：
+全量套件（移植收尾那一轮的读数）：**7288 passed / 9 failed / 20 errors / 36 skipped**。
+九条失败与二十条错误全部在原始 `upstream/main` 上以相同数量出现，与本分支无关，逐条核对如下：
 
 | 来源 | 数量 | 原因 |
 | --- | --- | --- |
@@ -53,8 +59,9 @@ uv run pytest tests/ -q --ignore=tests/tui                                # 见�
 
 ### 端到端（`tests/ppt/test_end_to_end.py`，无模型参与）
 
-六条，从 materials 到交付文件：干净 deck 交付；编造数字拒绝交付；页与代码无法对应拒绝交付；
-交付字节等于被测量的字节；字号低于下限只警告仍交付；渲染链每页产出一张图。
+七条，从 materials 到交付文件：干净 deck 交付；页与代码无法对应拒绝交付；交付字节等于被
+测量的字节；字号低于下限只警告仍交付；渲染链每页产出一张图；页数不是谈定的那个数拒绝交付；
+语言不是谈定的那种拒绝交付。**没有"编造数字拒绝交付"这一条**——那道门禁已删（设计 D3a）。
 
 ### 端到端抓出的真缺陷
 
@@ -90,7 +97,8 @@ uv run pytest tests/ -q --ignore=tests/tui                                # 见�
 ### 真实素材上的 ingest（TarViS 论文，8 页）
 
 11 个资产、10 个带 `source_label`，Figure 1–5 与 Table 1/2/4 全部正确归属；
-事实索引 309 个数字 / 307 个 stated / 90 个实体，materials.md 56110 字符。
+事实索引 309 个数字 / 307 个 stated / 90 个实体，materials.md 56110 字符。（事实索引本身
+已随 `fact` 门禁一起删除——ingest 现在留下的只有 `sections.py` 的分节索引与 `stated_chars`。）
 
 **同时暴露一个问题**：Figure 2 出现三次——它的三个子面板各自匹配到同一条图注，
 而"有图注就保留"这条规则（图注即否决权）让 bbox 去重放过了它们。后果不是判错，
@@ -120,7 +128,9 @@ uv run pytest tests/ -q --ignore=tests/tui                                # 见�
 有意为之且有测试的策略——`test_lowercase_words_do_not_globally_authorize_a_caps_phrase`
 断言 "FAST STEP CARE" 即使每个词都在素材里也应被拒，理由是"素材自己的词、且按素材的顺序"。
 两种读法各有道理：整段短语可能是编造的口号；而列头不是断言。实测代价是 12 条误拒，
-且作者随后离开工具自行交付。**这条需要你定。**
+且作者随后离开工具自行交付。**后来定了：整道 `fact` 门禁删除**（设计 D3a）——所以
+`ENTITY_RE`、caps 短语豁免、逐词回退这套判据在代码里都已不存在，上面这段是它被删掉的理由，
+不是当前行为。
 
 **(b) 门禁阻塞后，模型绕过工具自行交付。** 日志里可见 `exec` 做
 `cp build/build.py …` 然后 `PPT_OUTPUT=… python build.py` 再 `mkdir -p exports/tarvis`。
@@ -184,7 +194,9 @@ API 供应商侧的问题，将来换掉即可恢复"一次生成完整程序"�
 
 驱动不做任何压缩——工具结果与渲染图永久留在消息里。末轮请求估算：run6 最大，**约 80k
 tokens**（56 张渲染图 ≈ 69k），run5 68k，run7 33k。**没有任何一轮接近 1M。** 图片是主导
-成本（96dpi → 1280×720 ≈ 1.2k tokens/张），这也是渲染分批（`BATCH_VIEWS=12`）的理由。
+成本（96dpi → 1280×720 ≈ 1.2k tokens/张），这也是渲染分批的理由。分批常数现在是两个同名
+的不同东西：`tools/build.py` 的 `BATCH_VIEWS = 1`（一次 `ppt_build` 最多回几张渲染图）与
+`stages/build.py` 的 `BATCH_VIEWS = 3`（一批测量走几页）；渲染 dpi 是 144，即 1920×1080。
 生产形态下压缩归上游 `context_engine`（Curator + HistoryTrimmer），PPT 包按分层规定不碰。
 
 ### 模板贴合度可测（三档标定）
@@ -219,9 +231,25 @@ tokens**（56 张渲染图 ≈ 69k），run5 68k，run7 33k。**没有任何一�
 `(0.72, 0.14, 11.88, 6.56)`、正文区 `(0.72, 1.24, 11.88, 5.46)` 外加一行可直接粘贴的
 `Box(...)`。三份不同模板上都完整量出（title + ladder + safe + layout）。
 
+（**"只交出四页"这条已经反过来了**，见设计 D19：`ppt_template` 现在分批交出每一张可见示例页
+（`BATCH_PAGES = 8`、96dpi），`ppt_outline` 把没有声明 `prototype` 的内容页列进 asks，要求
+默认为每个内容页挑最近的示例页；自由构图只留给"改完也装不下这个信息形状"的页。量出来的
+house style 没有变，它现在是那条退路的落点。）
+
 **字号改从渲染读**（D10）：模板文本框普遍 `<a:normAutofit/>` 且不声明字号，旧普查跳过这类
 run，上表前三行全部报"干净"。`type_drift` 归组同槽位并报被缩小的副本；组内标准字号取观测
 最大值（autofit 只缩不放）。
+
+**字号阶梯的第二条**（`type_scale`，WARNING，读文件而不是读渲染）：`type_floor` 按 run 所属
+层级判下限（页脚 8pt、20 字以上正文 14pt、图注与短标签 10.8pt），一页正文全设 15pt 时每一层
+都过。/tmp/ab 的 37 份生成 deck、45 页实测：43 个正文块（≥20 字、非图注非页脚）里 15pt 占 15
+个，多于任何其他字号，而 `type_floor` 一条都不报。`type_scale` 只报"过了 14pt 下限、低于
+`BODY_PT`(16)、又不是阶梯上的一档"的正文块——45 页命中 11 页（24%），其中 10 页 `type_floor`
+完全没话说，剩下 1 页命中的是同页另一个 9pt 框。被否决的判据是"页面主导字号 < `BODY_PT`"：
+同一语料上命中 31 页（69%），因为图表的月份标签与 kicker 本来就是 `KICKER_PT` 且在带图的页上
+字数压过正文；那个数字改成 message 里的证据。模板里的字号不判：10 份内置模板 356 个正文块中
+335 个在 16pt 以下（269 个 12pt），克隆页按几何位置排除（复用 `measure.adherence` 的比较与
+0.05in 容差），260 页克隆实测 0 条。字号下限与阶梯都只回灌不硬拒（不变量 3）。
 
 **新门禁**：`covered_shape`（BLOCKING，z-order + 不透明 + 面积，合成页实测 98% 遮挡命中、
 卡片在图下方时不误报、整页背景画在最后时两条内容都命中）、`clipped_copy`（WARNING，
@@ -232,6 +260,13 @@ run，上表前三行全部报"干净"。`type_drift` 归组同槽位并报被�
 （四份真实 deck 的最大值 75 词）。真实内容页 200–467 字符，其中 467 的那页（对比表 + 两条
 结论 + 注）是评审认可的好页，故上限定在 700。大纲的 thin_page 下限随之从 4 条/80 字符提到
 5 条/140 字符：模板槽位不再是天花板之后，计划是唯一决定密度的东西。
+
+（**这两个数字后来都没有留在代码里。** 字符上限没了：`copy_density` / `MAX_CHARS_PER_PAGE`
+全仓不存在，一页多不多只由测量渲染结果决定。`thin_page` 也不再数条目和字符——同一个字符数
+在不同语言里是不同的一页，同一个正文框同一字号中文装 400 字、英文装 1168 字，所以那条下限
+对一种语言要求一页、对另一种只要求三分之一页；现在它只报"一条 `says`、无 figure、无 errand、
+无 prototype"这种无从构建的页，以及"表格页没有 `table_plan`"。素材体量的下限另立在
+`gates/brief.py` 的 `thin_material`：`CHARS_PER_PAGE = 80`、`COPY_PER_PAGE = 250`，WARNING。）
 
 **D9 之后的第一份产物**（opus5，自由构图内容页）：标题落在 house 标题行、左图右四项、
 统一字号、accent 只用在一条结论上，无卡片洞、无 autofit 缩字、无模板占位图。
@@ -325,36 +360,90 @@ sol **24 条 4 blocking**——2 条标题压角标（`word_collision`）、2 �
 无一处在符号内折行，且中间栏因栏宽不足自动在 `；` 处断成两行；`card()` 那页五张卡片的 icon
 在标题左侧、取主题橙色、导出后仍是可编辑的描边矢量。
 
-**精修改为默认关闭**（D13）：它删过 224 字并改写过三行，也是那 8 页色条的来源。
-`tools.ppt.designer.enabled` 默认 false，`test_a_provider_alone_does_not_switch_the_design_pass_on`
-锁住这一点——有 provider 不等于开精修。
+**精修阶段已删除**（D18）。先是默认关闭（D13：它删过 224 字、改写过三行，也是那 8 页色条的
+来源），此后没有一次运行证明值得打开，于是连同 `polish` 参数、`for_the_design_pass` 返回桶、
+两份设计 brief 与 `Finding.audience` 一起删掉。迭代改由每次 `ppt_build` 交回渲染图完成，
+`unseen_page`（BLOCKING）保证没有一页能在作者没看过渲染图的情况下交付。
+
+### 2.ab 把 API 交给模型写单页，看它卡在哪（3.8，28 份脚本 + 四路带返图迭代）
+
+不经工具层、直接把投影模块交给模型写一页并渲染，为的是分开"模型不会排版"和"我们的 API 不让它
+排"。**卡住的全部是拼写而非未知**——每一条都有轨迹为证，都已改成兼容或改成能执行的拒绝：
+
+| 轨迹里写的 | 原因 | 现在 |
+| --- | --- | --- |
+| `chevron_row(slide, box, T, labels)`、`timeline(slide, box, T, stops)` | 要计数、传了条目 | `len` 即计数；**不代写文案**（两份轨迹都自己写了，代写会叠字） |
+| `result.steps if hasattr(...) else result` | 兄弟调用一个返回列表、一个返回记录 | `chevron_row` 返回 `Row`，`.steps` 与 `.stops` 同名 |
+| `down.take(4.25)` + `skip(0.08)` 之后 `rest()` 说"什么都不剩" | `take` 每次偷收 0.28in gutter | 相邻取带，`skip` 是唯一间隙。21 页里 10 页自己写了 skip、被收两次；一页丢掉 4.85in 正文区的 1.12in |
+| `text_size(cap, inner.w, ...)` → `AttributeError: no attribute 'w'` | Stack 不答几何 | 代理区域几何；分割操作指向 `room` |
+| `Box.at(tx, y0, x1, y1)` | 与 `Box(x0,y0,x1,y1)` 同元数反语义 | 尺寸改关键字；拒绝信息把**两种读法的真实坐标都摆出来** |
+| `chev_h + gap + points_size(items, w)` | 度量返回 Box，被当高度 | 六个运算符回答"要 `.h` 还是 `.w`"；`box + box` 原本静默拼成 8 元组 |
+| `room = down.rest()` 然后 `take` 得到 0.00in | `rest()` 是消费、`room` 是查询，名字差一个词 | `take` 的拒绝点名 `room`，并指向 `short_by(*heights)` |
+
+28 份脚本从 23 通过升到 **26 通过**。四路带返图迭代（cards / process / timeline / one_number，各 3 轮）
+里 `one_number` 三轮都没修好，因为 `Box.at` 那条**在页面上但位置错**——渲染图和门禁都看不出来，
+改成拒绝后第三轮建成，`off_page` / `covered_shape` / `word_collision` / `card_overflow` 全部消失。
+
+**同期发现的两个默认值在花页面的钱**：`page()` 的 footer 默认开着，而 29 份实测页里 **0 份**画过
+页脚——每页白扔 0.58in（页高 12%）；`_HEADING_AIR=0.18` 从标题栏里扣，`crowded_panel` 因此在
+**4/4 页每轮**都报"标题墨迹距栏底 0.051in"，扫描后定为 0.10（`_HEAD_TOP` 改动只影响千分位）。
+
+### 2.ac 177 个 Office 预设逐张看过，68 个不能用
+
+按默认 adjustments 全部画出来做接触印相表（`office-1..8.png`），无一抛错，但 68 个不可用：
+12 个 `actionButton*`（灰图形是形状自带、不跟主题）、14 个伪 3D（`can`/`cube`/`curved*Arrow` 带死灰
+第二面）、12 个星爆、11 个剪贴画（`gear6`/`gear9` 齿是歪的）、9 个引线 callout（默认引线甩出框外）、
+4 个单边括号（默认渲染成实心板加刺，而 `bracePair` 是对的）、3 个 `*Tabs`、3 个 `chart*` 叠加物。
+词表收窄到 **109**，移出的名字 `find_presets` 仍能找到并标注原因。
+
+`chevron_row` 同时被判出实质缺陷：五步同一实心填充、无描边，扫描线量到缺口只有**一个像素的抗锯齿、
+与填充差 32 级**，读成一根长箭头。改为 `outline` 默认取 `theme["background"]` 的发丝线。
+
+### 2.ad 字号：模型从不用阶梯，而"一片灰"是配色表达的问题
+
+十份实测脚本里**字号阶梯常量用了 0 次**，手挑十三种字号（10–32），一页里 20/31 个文本块是 12pt 而
+无一到 16pt。补了 `type_scale`（WARNING）——45 页语料报 11 页（24%），全是 15pt，**其中 10 页
+`type_floor` 一句话都没说**；被否掉的"主导字号低于 BODY_PT"判据在 69% 的页上报，是噪音。
+另补 `the_largest_step_this_copy_takes`（向上度量：盒宽每 0.01in 扫 52 组零非单调、改一字符 5376 次
+仅 0.074% 跳两档、40/40 渲染一致），但**上限由作者命名**：从字符数推断角色两次都错（把
+`internationalization` 当句子压小、把 14 字无空格中文句当标签放到标题字号）。
+
+用色实测五份真 20 页稿子（同一模板）：accent 占填充面积 0.4%–12%，**四份不到 3%**，主色块是
+`surface` 或模型自造的更浅的灰。更根本的一层是表达方式——**模板 83% 用 `schemeClr` 主题色引用，
+我们 90% 写字面 `srgbClr`**。派生本身还漏了模板已有的槽位：模板 `bg2→lt2 = #F0F0F0`、
+`tx2→dk2 = #778495`，而我们把 `surface`/`muted` 算成 `#E6E6E6`/`#616161`；实测里模型绕过我们
+直接用了 `#F0F0F0`（两份稿子的主色块，占 45% 与 78%）和 `#778495`（41 次）。
 
 ## 3. 限制
 
 1. **路线 B 与路线 C 未实现**。只有声明与能力约束，后端与阶段待做。
-2. **精修环默认关闭**（设计 D13）。带真实模型跑过四次，结论是它让 deck 更差：删过 3420 字
-   里的 224 字、改写过三行、给 8 页加过色条。机械保证已补（`copy_rejection` 与 band 门禁），
-   但默认不开；`tools.ppt.designer.enabled = true` 打开。
-3. `evidence_coverage` 的"≥4 个绘制面板算证据"这一支在 python-pptx 1.0.2 下不可达
-   （凡 `.fill` 可解析的形状都报告有文本帧）。现状已被测试钉住，改动会改变校准过的行为。
+2. **没有第二双眼睛**（设计 D18）。精修环已删除，deck 的最后一眼就是作者看 `ppt_build` 返回的
+   渲染图。比例画错的图表、机械堆砌的版式这类没有任何测量能抓的问题，只有作者看得出来。
+3. `evidence_coverage` 只问"这一页有没有展示什么"，不问展示得够不够大。判据是图片 / 表格 /
+   图表 / 一组填充但自身无文字的形状（自带正文的卡片算隔间不算图示），两份真实 deck 都落在
+   6/8，与肉眼一致；但一张缩得太小的表和一张本来就该小的表，文件里没有东西能区分，那要读
+   渲染图。（判据原先要求"填充且无文本 frame"，在 python-pptx 里恒不成立、从未触发，已修。）
 4. **色带门禁只看顶层形状**，组内色带可逃过。参考版的零误报是在这个不对称下测出来的，
    放宽只会新增 findings。
-5. `wrapped_labels` 目前用免字体的宽度估算（真实字形宽度的下界），比旧实现少报。
+5. 宽度测量默认走打包字体的真实字形（`DeckUnderReview.measurer`，FreeType），只有字体缺失时
+   才退回免字体估算器；那条退路是真实宽度的下界，会少报——一份 20 页真实 deck 的 498 行里，
+   估算器在 80 行上偏窄，最多偏到 1.72×。
 6. `type_floors` 忽略画布高度参数；5.625in 画布会被量高约三分之一。
 7. 渲染服务无并发闸（有意：services 层无状态），限流在 `DeckViews`。
 8. **交付路径旁路无法在工具内封堵**：作者若离开工具自行 `cp` 到交付路径，门禁看不到。
    需要评测/交付侧校验，属产品决定。
-9. **技能文档未移植**。三条路线的 profile 各声明了一个 skill 名，但技能本体（旧仓库的
-   `ppt-visual-authoring-expert/SKILL.md` 406 行 + `AGENTS-ppt-build.md` 158 行）尚未落地。
-   旧版这两份文档里有 8 组规则各重复 4–6 次表述，合并时应让每条规则只在门禁代码里有唯一
-   权威表述、文档只引用——设计环的两份 brief 已经这么做了（字号数字从测量常量格式化进去）。
+9. **只有路线 A 的技能本体存在**：`raven/memory_engine/skills/ppt-script-authoring/SKILL.md`。
+   路线 B 与路线 C 的 profile 各声明了 `ppt-slot-authoring` / `ppt-image-text-authoring`，
+   磁盘上没有对应的 `SKILL.md`；装配时 `_warn_if_skill_missing` 会记一条 warning 而不是静默
+   放过。原则不变：每条规则只在门禁代码里有唯一权威表述，技能只引用。
 10. **交付文件名不可由作者指定**。`ppt_build` 不再暴露输出路径参数，名字来自
    `tools.ppt.deckName`。这是有意的（发布只允许落在 profile 决定的位置），但如果任务书
    指定了文件名，需要配置侧对齐。
-11. **版式上的装饰对所有校验不可见**。母版与版式自己画的东西不会进 `slide.shapes`，
-   所以读构建产物的校验（重叠、色带、词框）看不见它。两个后果同时成立：用户模板自己的
-   设计不会被门禁误拒；而文字压在模板的插画上时，没有任何测量会报重叠——实测渲染里已经
-   出现过（见 §2 模板路线）。这是模板路线目前最实际的缺口。
+11. **版式上的装饰只被一条检查看见**。母版与版式自己画的东西不会进 `slide.shapes`，所以读
+   构建产物的通用校验（`covered_shape`、色带、词框）一律看不见它。缺口已经补了一半：
+   `over_layout_art`（WARNING，`measure/inherited.py`）沿版式与母版读继承来的图元，报"文字
+   压在版式的装饰上、而版式在那儿本来留了空"。仍是 WARNING 而不是拒绝——刻意的叠放是正当
+   设计。剩下的一半没补：其余每一条读矩形的检查依然只看本页形状。
 
 ## 3.5 旧 fork 有、本仓库如何接的
 
@@ -368,7 +457,8 @@ sol **24 条 4 blocking**——2 条标题压角标（`word_collision`）、2 �
 `ppt_template(project, pages=[...])` 取示例页代码；`ppt_fetch` 下到 `.pptx` 时走同一条绑定。
 构建时程序拿到 `PPT_TEMPLATE`（清空示例页的副本，加页即继承母版/主题/画布）与
 `PPT_TEMPLATE_SOURCE`（还留着示例页的原件，克隆用），克隆改写的四个操作作为
-`ppt_template.py` 写进构建目录。设计环在有模板时会被告知调色板与字体是用户的、不归它改。
+`ppt_template.py` 写进构建目录。有模板时 `ppt_template` 的回复会告知作者调色板与字体是
+用户的、不归它改（这句原先说给设计环听，D18 删掉那个阶段之后收件人只剩作者）。
 
 ## 4. 待办
 
@@ -376,9 +466,7 @@ sol **24 条 4 blocking**——2 条标题压角标（`word_collision`）、2 �
 | --- | --- |
 | 路线 B 移植（保留不可替代核心：`layouts` 闭环预算、`text_fit`、`schema`、`svg_primitives` 方言、vendor 边界） | S10 |
 | 路线 C 实现（`imagegen` 服务、`background`/`place_text` 阶段、安全区契约） | S11 |
-| 带真实模型的端到端 | S9b |
 | harness 层分流（有无模板 / 有无素材 / 图够不够 / 大纲全不全 / 指令全不全） | 待定 |
-| `Finding` 补 `finding_id` 与 `repair_route`，让"修了三次还在"可查询 | 设计环 |
+| `Finding` 补 `finding_id` 与 `repair_route`，让"修了三次还在"可查询 | 待定（原挂在设计环上，D18 删掉那个阶段后无人接手） |
 | `LADDERS`/`DENSE_LADDERS`/`FONT_FLOORS_PX`、画布与安全区常量、`lint_title_casing`、`legibility_note` 目前无人接手 | 随 S10 |
-| profile 声明式 severity 分级（目前 profile 只能过滤不能改级） | S8b |
-| `caps_phrases` 持久化体积（词数 × 5 个窗口） | 评估 |
+| profile 声明式 severity 分级（目前 profile 只有 `blocking_kinds` 一个旋钮，且不得与门禁自己的 severity 冲突） | S8b |

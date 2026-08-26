@@ -42,6 +42,19 @@ _AGREEMENT = 2
 # body copy, and the deck sets those at whatever size the mark wants.
 _BODY_CHARS = 12
 
+_DRAWINGML = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PRESENTATIONML = "http://schemas.openxmlformats.org/presentationml/2006/main"
+_NAMESPACE = {"a": _DRAWINGML, "p": _PRESENTATIONML}
+
+# DrawingML's own words for the two settings that decide where a row's ink lands
+# inside a box that is otherwise identical, in `ppt_layout.write`'s spelling.
+_ANCHORS = {"t": "top", "ctr": "middle", "b": "bottom", "just": "top", "dist": "top"}
+_ALIGNS = {"l": "left", "ctr": "center", "r": "right", "just": "left", "dist": "left"}
+# What a text box with nothing declared anywhere above it comes out as, which is also
+# what `ppt_layout.write` does when the caller names neither.
+_DEFAULT_ANCHOR = "top"
+_DEFAULT_ALIGN = "left"
+
 
 @dataclass(frozen=True)
 class Row:
@@ -55,7 +68,17 @@ class Row:
     """rrggbb, or None when the run takes its colour from the theme."""
     face: str | None
     align: str | None
-    pages: int
+    anchor: str | None = None
+    """Where the copy sits inside the box: "top", "middle" or "bottom".
+
+    Measured because the box alone does not say where the ink lands, and the two
+    readings of one box differ by most of its height. This template's title
+    placeholder declares nothing and its master's declares `anchor="b"`, so a cloned
+    page's single-line title sinks to the bottom of a 0.98in row while a composed page
+    calling `write` -- which anchors to the top -- puts the same line 0.375in higher.
+    Measured on a delivered 20-page deck at 150 DPI: cloned titles start at y=53px,
+    composed ones at y=23px, the same 29px glyph height on both."""
+    pages: int = 1
     """How many of the template's content pages put this row in the same place."""
 
     def line(self) -> str:
@@ -68,7 +91,9 @@ class Row:
         if self.colour:
             parts.append(f"#{self.colour}")
         if self.align:
-            parts.append(self.align)
+            parts.append(f"{self.align}-aligned")
+        if self.anchor:
+            parts.append(f"anchored {self.anchor}")
         return ", ".join(parts)
 
 
@@ -130,9 +155,11 @@ class House:
             payload["title_row"] = self.title.line()
             payload["title_row_box_in"] = list(self.title.box)
             payload["title_row_on_pages"] = self.title.pages
+            payload["title_row_as_code"] = _as_code("TITLE_ROW", self.title)
         if self.subtitle and self.subtitle.pages >= _AGREEMENT:
             payload["subtitle_row"] = self.subtitle.line()
             payload["subtitle_row_box_in"] = list(self.subtitle.box)
+            payload["subtitle_row_as_code"] = _as_code("SUBTITLE_ROW", self.subtitle)
         if self.scale:
             payload["type_pt"] = dict(self.scale)
         if self.faces.get("text"):
@@ -143,10 +170,35 @@ class House:
         if body:
             payload["body_area_in"] = list(body)
             payload["body_area_as_code"] = (
-                f"from ppt_layout import Box; body = Box({body[0]:g}, {body[1]:g}, "
+                f"from ppt_layout import Box; body = Box.corners({body[0]:g}, {body[1]:g}, "
                 f"{body[0] + body[2]:g}, {body[1] + body[3]:g})"
             )
         return payload
+
+
+def _as_code(name: str, row: Row) -> str:
+    """The row as the one `write` call that puts copy where the template puts it.
+
+    The same argument `body_area_as_code` is here for, one field further on. The box
+    alone was reported and the box alone is not where the ink lands: the anchor and
+    the alignment decide that, both of them are the template's decision, and both of
+    `ppt_layout.write`'s defaults are the other answer. A live deck read the box,
+    wrote the title with the defaults, and every composed page put its title 0.375in
+    above every cloned one -- 5% of the page, on alternating pages, at the one place a
+    reader's eye returns to on every page of a deck.
+    """
+    left, top, width, height = row.box
+    call = [
+        f"{name} = Box.corners({left:g}, {top:g}, {left + width:g}, {top + height:g})",
+        f"write(slide, {name}, claim",
+    ]
+    if row.size_pt:
+        call.append(f"size={row.size_pt:g}")
+    if row.bold:
+        call.append("bold=True")
+    call.append(f'align="{row.align or _DEFAULT_ALIGN}"')
+    call.append(f'anchor="{row.anchor or _DEFAULT_ANCHOR}"')
+    return f"from ppt_layout import Box, write; {call[0]}; {', '.join(call[1:])}, colour=INK, font=FACE, cjk_font=HAN)"
 
 
 def house_style(path: Path, entries: tuple[PageEntry, ...] | None = None, pdf: Path | None = None) -> House | None:
@@ -271,14 +323,98 @@ def _rows(slide, canvas: tuple[float, float], on_page: dict[tuple[int, int], flo
         rest = [shape for _size, shape in up_top if shape._element is not placeholder._element]
         rest.sort(key=lambda shape: shape.top)
         below = [shape for shape in rest if shape.top >= placeholder.top]
-        return (_row(placeholder, on_page), _row(below[0], on_page) if below else None)
+        return (_row(placeholder, on_page, slide), _row(below[0], on_page, slide) if below else None)
     up_top.sort(key=lambda pair: (-pair[0], pair[1].top))
-    title = _row(up_top[0][1], on_page)
+    title = _row(up_top[0][1], on_page, slide)
     rest = [shape for size, shape in up_top[1:] if shape.top >= up_top[0][1].top]
-    return (title, _row(rest[0], on_page) if rest else None)
+    return (title, _row(rest[0], on_page, slide) if rest else None)
 
 
-def _row(shape, on_page: dict[tuple[int, int], float]) -> Row:
+def inherited_placeholders(slide, shape) -> list:
+    """`shape`, then every placeholder it inherits from, nearest first.
+
+    A slide's placeholder declares almost nothing -- the one on this template's own
+    pages is a bare `<a:bodyPr/>` -- and everything that decides how its copy is set
+    lives one or two files up: the layout's placeholder of the same `idx`, and the
+    master's of the same kind. python-pptx models the three files and none of the
+    inheritance between them, so a reading taken off the slide alone reports "nothing
+    declared" for every setting the template actually made.
+
+    The master is matched by kind rather than by index, which is how PowerPoint
+    resolves it: a master carries one title and one body placeholder, and every
+    body-ish placeholder on a layout inherits from that one body.
+    """
+    chain = [shape]
+    if not getattr(shape, "is_placeholder", False):
+        return chain
+    try:
+        kind = str(shape.placeholder_format.type or "")
+        index = shape.placeholder_format.idx
+    except (AttributeError, ValueError):
+        return chain
+    layout = getattr(slide, "slide_layout", None)
+    if layout is None:
+        return chain
+    for candidate in layout.placeholders:
+        if candidate.placeholder_format.idx == index:
+            chain.append(candidate)
+            break
+    master = getattr(layout, "slide_master", None)
+    if master is None:
+        return chain
+    titled = "TITLE" in kind
+    for candidate in master.placeholders:
+        on_master = str(candidate.placeholder_format.type or "")
+        if titled == ("TITLE" in on_master) and ("TITLE" in on_master or "BODY" in on_master):
+            chain.append(candidate)
+            break
+    return chain
+
+
+def title_anchor(slide, shape) -> str:
+    """Where this row's copy sits inside its box, resolved the way a renderer does."""
+    for candidate in inherited_placeholders(slide, shape):
+        body = candidate.text_frame._txBody.find(f"{{{_DRAWINGML}}}bodyPr")  # noqa: SLF001 -- no API for bodyPr
+        stated = body.get("anchor") if body is not None else None
+        if stated:
+            return _ANCHORS.get(stated, _DEFAULT_ANCHOR)
+    return _DEFAULT_ANCHOR
+
+
+def _align(slide, shape) -> str:
+    """How this row's copy is set across its box, resolved the same way.
+
+    The master's text styles are the last stop rather than the first: `titleStyle`
+    states the alignment every title inherits, and this template's says `l` while not
+    one placeholder in the chain above it says anything at all.
+    """
+    for candidate in inherited_placeholders(slide, shape):
+        for para in candidate.text_frame.paragraphs:
+            properties = para._pPr  # noqa: SLF001 -- python-pptx maps alignment but not inheritance
+            stated = properties.get("algn") if properties is not None else None
+            if stated:
+                return _ALIGNS.get(stated, _DEFAULT_ALIGN)
+        listed = candidate.text_frame._txBody.find(f"{{{_DRAWINGML}}}lstStyle/{{{_DRAWINGML}}}lvl1pPr")  # noqa: SLF001
+        stated = listed.get("algn") if listed is not None else None
+        if stated:
+            return _ALIGNS.get(stated, _DEFAULT_ALIGN)
+    return _styled_align(slide, shape)
+
+
+def _styled_align(slide, shape) -> str:
+    """The master's `titleStyle` / `bodyStyle` answer for this kind of row."""
+    layout = getattr(slide, "slide_layout", None)
+    master = getattr(layout, "slide_master", None) if layout is not None else None
+    if master is None:
+        return _DEFAULT_ALIGN
+    kind = str(getattr(getattr(shape, "placeholder_format", None), "type", "")) if shape.is_placeholder else ""
+    style = "p:titleStyle" if "TITLE" in kind else "p:bodyStyle"
+    node = master.element.find(f"p:txStyles/{style}/a:lvl1pPr", _NAMESPACE)
+    stated = node.get("algn") if node is not None else None
+    return _ALIGNS.get(stated, _DEFAULT_ALIGN) if stated else _DEFAULT_ALIGN
+
+
+def _row(shape, on_page: dict[tuple[int, int], float], slide=None) -> Row:
     frame = shape.text_frame
     run = next(
         (run for para in frame.paragraphs for run in para.runs if run.text.strip()),
@@ -302,7 +438,12 @@ def _row(shape, on_page: dict[tuple[int, int], float]) -> Row:
         bold=bool(run is not None and run.font.bold),
         colour=colour,
         face=(run.font.name if run is not None else None),
-        align=(str(para.alignment).split()[0].lower() if para is not None and para.alignment else None),
+        align=(
+            str(para.alignment).split()[0].lower()
+            if para is not None and para.alignment
+            else (_align(slide, shape) if slide is not None else None)
+        ),
+        anchor=title_anchor(slide, shape) if slide is not None else None,
         pages=1,
     )
 

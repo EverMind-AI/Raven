@@ -22,15 +22,34 @@ an author was handed exactly the inverse of the house style, painted white panel
 and black text onto a black master, and the deck came back unreadable. The map is
 the whole difference and `decompile` had been applying it for months.
 
-**Four of the nine fields are relationships, not colours, so they are mixed rather
-than read.** What a build script needs of `surface` is a plane that sits on the
-ground, of `muted` type that recedes from the main type, of `accent_soft` a quiet
-tile, of `grid` a findable hairline. OOXML states none of those. It states `bg2` and
-`tx2`, a "second pair" that guarantees nothing and that templates fill in casually:
-on the deck this was found on, `bg2` is a mid blue-grey that as a card on black is
-louder than the accent, and `tx2` is within a percent of white. Mixing towards the
-ground guarantees the relationship, and it is what the templates do themselves --
-their cards are `lt2` at 15% over black.
+**Four of the nine fields are relationships, not colours, so what the template
+states is checked before it is taken.** What a build script needs of `surface` is a
+plane that sits on the ground, of `muted` type that recedes from the main type, of
+`accent_soft` a quiet tile, of `grid` a findable hairline. OOXML names none of those
+relationships.
+
+For the last two it names nothing at all, so they stay mixed. A scheme has twelve
+slots and none of them is a hairline: `hlink` and `folHlink` are type colours with a
+legibility contract, which is the opposite of what a rule wants, and `folHlink`
+being grey on every bundled template is one vendor's habit rather than anything the
+format says. `accent2` is the next series colour and not a tint of the first --
+measured across the ten it is up to 176 degrees off `accent1`'s hue, it is the
+louder of the two against the ground on two of them, and it is `chart_series[1]` on
+all ten, so a tile painted in it would read as data.
+
+The first two the scheme does name, as `bg2` and `tx2`, a "second pair" that carries
+the category but not the amount: on the deck the mixing was written for, `bg2` is a
+mid blue-grey that as a card on black is louder than the accent, and `tx2` is within
+a percent of white. So the stated colour is preferred and the mix becomes what it
+falls back to, because the amount is measurable here and the authors were already
+reaching past us for the template's own: across five 20-page decks built inside
+`5407617`, the `#F0F0F0` its `bg2` states was the dominant plane on two of them, 45%
+and 78% of all fill area, and the `#778495` of its `tx2` appears 41 times in a
+third. What is honoured is the declaration and that reach rather than a measured
+house plane -- the twelve pages `5407617` itself ships paint almost none of its own
+`bg2` -- and what decides is a comparison against the palette rather than a
+threshold of ours: `_stated_muted` says which. On those ten
+`bg2` is taken and `tx2` is not.
 
 The one thing not derived is the accent. That is the template's own, always.
 """
@@ -56,8 +75,9 @@ _SERIES = ("accent1", "accent2", "accent3", "accent4", "accent5", "accent6")
 
 # How far each mixed colour travels from its source towards the other pole. Chosen
 # so the derived palette clears the same contrast targets the reviewed presets do,
-# on light grounds and dark ones alike -- see the measurement in the test.
-_SURFACE_MIX = 0.10  # the ground, lifted just enough to read as a plane on itself
+# on light grounds and dark ones alike -- see the measurement in the test. The first
+# two are also the reference the template's own `bg2` and `tx2` are measured against
+# before either is preferred over them; the last two are the only source there is.
 _MUTED_MIX = 0.38  # the ink, receded but still comfortably legible
 _SOFT_MIX = 0.82  # the accent, quietened to a tile
 _GRID_MIX = 0.62  # the ink, down to a hairline that is findable and not a border
@@ -73,11 +93,21 @@ _FALLBACK = {
 }
 
 
-def theme_of(inventory: TemplateInventory) -> dict[str, object]:
-    """The template as one theme entry, in the catalogue's own shape."""
+def theme_of(inventory: TemplateInventory, stated: dict[str, object] | None = None) -> dict[str, object]:
+    """The template as one theme entry, in the catalogue's own shape.
+
+    `stated` is what an author read off the template's own renders, in whole or in
+    part, and it wins over every reading taken from the file -- see `palette.py` for
+    why colour is the one reading where the file and the page part company. What it
+    leaves out is derived, and derived from what it stated rather than from the slots:
+    an author that names the accent and nothing else gets its tile, its ink and its
+    plane in that accent, because a palette half read off the page and half off a
+    declaration the page contradicts is neither.
+    """
+    said = dict(stated or {})
     palette = dict(inventory.theme_colours)
     mapping = dict(inventory.colour_map)
-    resolved = {name: palette.get(mapping.get(scheme, scheme)) for name, scheme in _ROLES}
+    resolved = {name: _slot(palette, mapping, scheme) for name, scheme in _ROLES}
     entry: dict[str, object] = {name: resolved.get(name) or _FALLBACK[name] for name, _ in _ROLES}
 
     # What the master actually paints wins over what the map says it would paint.
@@ -93,17 +123,46 @@ def theme_of(inventory: TemplateInventory) -> dict[str, object]:
         if str(entry["accent"]).upper() == painted.upper():
             entry["accent"] = _contrasting_accent(palette, painted) or entry["accent"]
 
+    # The three the author is surest of, and the three every other role is built on,
+    # so they are taken before anything is mixed from them.
+    for role in ("background", "foreground", "accent"):
+        if role in said:
+            entry[role] = said[role]
+
     ground, ink, accent = str(entry["background"]), str(entry["foreground"]), str(entry["accent"])
-    entry["surface"] = _mixed(ground, ink, _SURFACE_MIX)
-    entry["muted"] = _receded(ink, ground, str(entry["surface"]))
-    entry["accent_soft"] = _mixed(accent, ground, _SOFT_MIX)
-    entry["accent_ink"] = _readable(accent, str(entry["accent_soft"]), ink)
-    entry["grid"] = _mixed(ink, ground, _GRID_MIX)
+    entry["surface"] = said.get("surface") or _plane(accent, ground)
+    surface = str(entry["surface"])
+    receded = _receded(ink, ground, surface)
+    entry["muted"] = (
+        said.get("muted") or _stated_muted(_slot(palette, mapping, "tx2"), ground, surface, receded) or receded
+    )
+    entry["accent_soft"] = said.get("accent_soft") or _mixed(accent, ground, _SOFT_MIX)
+    entry["accent_ink"] = said.get("accent_ink") or _readable(accent, str(entry["accent_soft"]), ink)
+    entry["grid"] = said.get("grid") or _mixed(ink, ground, _GRID_MIX)
 
     series = [palette[slot] for slot in _SERIES if slot in palette]
-    entry["chart_series"] = series or [accent, str(entry["muted"]), str(entry["grid"])]
+    entry["chart_series"] = (
+        said.get("chart_series")
+        or series
+        or [
+            accent,
+            str(entry["muted"]),
+            str(entry["grid"]),
+        ]
+    )
     entry["font_family"], entry["cjk_font_family"] = _faces(inventory.fonts)
+    # And whatever else the author named. A role the derivation does not know is a
+    # colour this deck wants every page to be able to reach by name -- the pair a
+    # comparison is drawn in, a second accent -- and a page reaches it through the
+    # theme it is handed, so it has to be in the theme.
+    for role, colour in said.items():
+        entry.setdefault(role, colour)
     return entry
+
+
+def _slot(palette: dict, mapping: dict, scheme: str) -> str | None:
+    """What this scheme name paints with here, or None when the scheme omits it."""
+    return palette.get(mapping.get(scheme, scheme))
 
 
 def _faces(fonts: Sequence[str]) -> tuple[str, str]:
@@ -243,6 +302,57 @@ def theme_name(inventory: TemplateInventory) -> str:
 # What secondary copy has to clear. It is set small -- a caption, a sub-line, a
 # unit -- so it answers to the body target rather than the large-type one.
 _LEGIBLE = 4.5
+
+
+def _plane(accent: str, ground: str) -> str:
+    """The palette's own quiet plane: half the tile's tint of the accent.
+
+    Mixing the ink into the ground answers with a grey, and a grey is not in the
+    palette. Every one of the sixteen bundled templates declares its second
+    background as #F0F0F0 or #E7E6E6, and not one of the sixteen paints that colour
+    on any page it ships -- 0 of 16, over every solid shape fill in them. What they
+    paint is the accent: the largest non-ground fill in eight, at 79% of the painted
+    area in 5407011 and 57% in 5407013. So a deck derived from the declaration came
+    out grey inside a template that is not, and because every card, band and title
+    row defaults to this one role, grey was the whole page.
+
+    A stated `bg2` is not read at all now, and that same 0 of 16 is the whole of its
+    case: a declaration no page of its own template honours is not evidence about
+    that template. A file whose `bg2` really is its card colour loses it here and
+    gets a tint of its own accent -- a plane that belongs to the palette either way.
+
+    Half of `accent_soft`'s tint rather than a presence of its own, because two
+    planes measured on different scales trade places. Reaching for the contrast a
+    tint of the ink would have had put the plane above the tile that carries the
+    page's answer in eight of the sixteen and level with it in a ninth: a fixed mix
+    of a pale accent lands at 1.06 against the ground where the same mix of a navy
+    one lands at 1.39, so no single target can sit under both. Stated as a share of
+    the tile's own tint the order holds for every accent there is, and the plane is
+    quieter than the tile by construction rather than by measurement.
+    """
+    return _mixed(accent, ground, 1 - (1 - _SOFT_MIX) / 2)
+
+
+def _stated_muted(stated: str | None, ground: str, surface: str, receded: str) -> str | None:
+    """`tx2` when it is the receded ink, or None to keep the mix.
+
+    Two ways again, and what `_receded` came back with states both amounts. Quiet
+    enough: a `tx2` within a percent of its own ink recedes from nothing, so the
+    stated colour has to sit no further off the ground than the recession does. And
+    still legible, on the ground and on the surface both -- the bar `_receded` walks
+    its mix back to hold, and the one the `#778495` all ten bundled templates state
+    does not clear on their white page, at 3.81:1 where `_LEGIBLE` asks 4.5. Their
+    own pages agree with the mix and not with what they declare: sampled over the
+    twelve `5407617` ships, its secondary type is `#595959` at 7.01:1 and `#778495`
+    is not on any of them.
+    """
+    if stated is None or _rgb(stated) is None:
+        return None
+    if _contrast(stated, ground) > _contrast(receded, ground):
+        return None
+    if min(_contrast(stated, ground), _contrast(stated, surface)) < _LEGIBLE:
+        return None
+    return stated.upper()
 
 
 def _receded(ink: str, ground: str, surface: str) -> str:

@@ -7,9 +7,11 @@ the whole reason this module is separate from the themes it serves: the
 guarantee "body copy clears 7:1 on its ground" has to be a function, because a
 theme assembled from a topic word cannot be reviewed by a person.
 
-Paints are canonical uppercase ``#RRGGBB`` throughout. The export dialect
-treats every fill as opaque, so there is no alpha channel anywhere in this
-package and a tint is a pre-mixed solid colour, not a transparency.
+Paints are canonical uppercase ``#RRGGBB`` throughout, with no alpha anywhere in
+this package: a tint is a pre-mixed solid colour. That is a choice, not a limit --
+the export carries alpha and `ppt_charts` uses it. A token has to name the same
+colour on every page, and a translucent one is a different colour over every
+ground it lands on, which is not a token.
 """
 
 from __future__ import annotations

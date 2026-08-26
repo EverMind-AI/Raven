@@ -7,14 +7,21 @@ and then has nowhere to put the figure it found on it.
 
 Where a download lands is decided here rather than asked for, and that is the
 point: a document or an image goes into the materials directory, so the next
-`ppt_ingest` reads it like any other source and its figures enter the catalogue.
-A `.pptx` goes to the project's template slot instead, because a deck
+`ppt_ingest` reads it like any other source and its figures and numbers enter the
+fact index. A `.pptx` goes to the project's template slot instead, because a deck
 is not a source to quote -- it is a house style to work inside.
 
 The format is decided by looking at the bytes, not by trusting the server. A URL
 ending in `.png` that returns HTML, or a `Content-Type: image/png` on a 40MB video,
 are both ordinary on the open web; writing either into the materials directory
 would fail later somewhere that reads like a bug in the ingest.
+
+A picture's caption comes in with it. Nothing here can see the page a picture sits
+on -- the words beside it are in the HTML, not in the bytes -- so the caption is a
+parameter, and the author who just read that page with web_fetch is the only thing
+holding both. Without it every web figure reached the catalogue with `caption: null`
+while a paper's figure arrived with the line printed under it, and a deck given a
+marketing banner and no source words captioned it as an architecture diagram.
 """
 
 from __future__ import annotations
@@ -40,6 +47,20 @@ TIMEOUT_S = 60.0
 # What the bytes may turn out to be, and where each kind belongs.
 _DOCUMENT, _IMAGE, _TEMPLATE = "document", "image", "template"
 
+# Long enough for a paper's caption, short enough that a paragraph pasted in is
+# not one.
+CAPTION_MAX_CHARS = 500
+# EXIF 0x010E is `ImageDescription`; a PNG keeps the same thing in a `tEXt` or
+# `iTXt` chunk, which Pillow surfaces in `Image.info` under the chunk's keyword.
+_EXIF_IMAGE_DESCRIPTION = 0x010E
+_TEXT_CHUNK_KEYS = ("Description", "ImageDescription", "Title")
+# Said rather than dropped in silence: a caption belongs to one picture, and a
+# document holds many.
+_CAPTION_ON_A_DOCUMENT = (
+    "the caption was not recorded: it describes one picture, and this download is a document. Its own "
+    "figures reach the catalogue with the captions their pages print"
+)
+
 # Where material lands when this deck has no directory of its own yet.
 
 
@@ -48,9 +69,11 @@ class PptFetchTool(Tool):
     description = (
         "Download a source into this deck's materials: a PDF, an image, a text or HTML page, or a "
         '.pptx to use as the template. Search first with web_search (kind="images" for pictures), then '
-        "fetch what you will actually use. Documents and images land in the materials directory, so the "
-        "next ppt_ingest reads them like any other source; a .pptx lands in the project's template slot. "
-        "The format is decided by the bytes rather than by the URL or the server's content type."
+        "fetch what you will actually use. A document or an image is ingested on arrival, so its text and "
+        "figures are in the deck's evidence when this returns; a .pptx is bound as the deck's template. "
+        "The format is decided by the bytes rather than by the URL or the server's content type. When you "
+        "fetch a picture, pass the words the page printed about it as caption -- that is the only way they "
+        "reach the figure catalogue, since nothing here can see the page the picture came off."
     )
     timeout_seconds = 120.0
 
@@ -65,13 +88,24 @@ class PptFetchTool(Tool):
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "project": {"type": "string", "description": "the deck project, as given to ppt_ingest"},
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
                 "url": {"type": "string", "description": "http(s) URL of the source"},
                 "filename": {
                     "type": "string",
                     "description": (
                         "optional name to save it as; the extension comes from what the bytes actually are, "
                         "whatever you pass"
+                    ),
+                },
+                "caption": {
+                    "type": "string",
+                    "description": (
+                        "for a picture: the source's own words about it -- the caption printed beside it, "
+                        'its figure label, its alt text, whatever web_fetch(extractMode="images") listed '
+                        "for it. Copy those words across; do not write your own summary of what you think "
+                        "the picture shows. This lands in the figure catalogue as the caption a page may "
+                        "credit, so an invented one is a claim about evidence that nobody made. Leave it out "
+                        "when the page said nothing"
                     ),
                 },
             },
@@ -83,6 +117,7 @@ class PptFetchTool(Tool):
         project: str,
         url: str,
         filename: str | None = None,
+        caption: str | None = None,
         **kwargs: Any,
     ) -> str:
         from raven.security.network import validate_url_target
@@ -91,10 +126,13 @@ class PptFetchTool(Tool):
             deck = Project(workspace=self.workspace, slug=project)
         except ValueError as exc:
             return _return.failed(str(exc))
-        try:
-            validate_url_target(url)
-        except (ValueError, OSError) as exc:
-            return _return.failed(f"that URL cannot be fetched: {exc}")
+        # Reads the verdict rather than waiting for a throw: this returns
+        # `(ok, why)` and raises nothing, so catching an exception here let every
+        # refused address through -- loopback and the cloud metadata endpoint
+        # among them -- for as long as the call has been written this way.
+        allowed, refusal = validate_url_target(url)
+        if not allowed:
+            return _return.failed(f"that URL cannot be fetched: {refusal}")
 
         try:
             payload = await self._download(url)
@@ -115,12 +153,19 @@ class PptFetchTool(Tool):
             destination.write_bytes(payload)
             return self._bound(deck, destination, project, url, len(payload))
 
+        # The caller's words beat the file's own metadata: they are what the page
+        # printed next to this picture, while an `ImageDescription` field is whatever
+        # the file happened to be exported with. The metadata is the fallback for a
+        # fetch that arrives with nothing, which is how every web picture arrived
+        # before this parameter existed.
+        described = (_clean(caption) or _embedded_caption(payload)) if kind == _IMAGE else None
+
         # Into the deck's own source set, with the URL beside it. There is no
         # `materials_dir` to choose any more: a fetch that could land elsewhere
         # started a second pile, and the ingest that followed replaced the index
         # rather than adding to it -- twice in live runs the source the user supplied
         # left the deck's evidence while sitting on disk.
-        source = sources.receive(deck, name, payload, f"{sources.FETCH}{url}")
+        source = sources.receive(deck, name, payload, f"{sources.FETCH}{url}", caption=described)
         if source is None:
             return _return.failed(f"nothing here can read a {suffix} file")
         read = await self._read(deck)
@@ -130,8 +175,10 @@ class PptFetchTool(Tool):
             kind=kind,
             path=str(source.path),
             bytes=len(payload),
+            **({"caption": source.caption} if source.caption else {}),
+            **({"note": _CAPTION_ON_A_DOCUMENT} if caption and kind != _IMAGE else {}),
             **({"sources_read": read} if read else {}),
-            asks=([] if read else ["run ppt_ingest so this reaches the materials and the figure catalogue"]),
+            asks=([] if read else ["run ppt_ingest so this reaches the deck's materials and figure catalogue"]),
         )
 
     async def _read(self, deck: Project) -> int:
@@ -259,9 +306,9 @@ def _rasterised_svg(payload: bytes, text: str) -> bytes | None:
     try:
         import cairosvg
     except (ImportError, OSError):
-        # OSError, not just ImportError: cairosvg imports cairocffi, which raises
-        # OSError when libcairo itself is absent. An unhandled one here loses the
-        # SVG that the document branch below can still keep.
+        # cairocffi raises OSError, not ImportError, when the native cairo library
+        # is missing under an installed cairosvg. Catching only the one leaves the
+        # other to end the fetch, and an SVG kept as text is the whole point here.
         return None
     try:
         return cairosvg.svg2png(bytestring=payload, output_width=SVG_WIDTH_PX)
@@ -302,6 +349,45 @@ def _image_suffix(payload: bytes) -> str | None:
     except (ImportError, OSError, ValueError):
         return None
     return {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}.get(fmt)
+
+
+def _clean(text: str | None) -> str | None:
+    """One caption line, or None when there is nothing usable in ``text``.
+
+    Control bytes go first and separately: an EXIF string is NUL-padded, and a
+    whitespace collapse leaves those in place -- straight into the catalogue the
+    ingest writes and a slide's source note reads.
+    """
+    if not text:
+        return None
+    collapsed = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", text)).strip()
+    return collapsed[:CAPTION_MAX_CHARS] or None
+
+
+def _embedded_caption(payload: bytes) -> str | None:
+    """The description an image file carries about itself, if it carries one.
+
+    Only what the bytes hold. A page's `alt` text and its `<figcaption>` are not
+    here -- they live in the HTML around the picture, which this never sees -- and
+    that is why the caller is asked for them rather than this being the whole
+    answer. What a real file does sometimes carry is an EXIF `ImageDescription`, or
+    a PNG text chunk keyed `Description` or `Title`, both written by whatever
+    exported it.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(payload)) as image:
+            candidates = [image.getexif().get(_EXIF_IMAGE_DESCRIPTION)]
+            candidates.extend(image.info.get(key) for key in _TEXT_CHUNK_KEYS)
+    except Exception:  # noqa: BLE001 -- metadata this cannot read is metadata this does not have
+        return None
+    for candidate in candidates:
+        if isinstance(candidate, bytes):
+            candidate = candidate.decode("utf-8", "replace")
+        if isinstance(candidate, str) and (found := _clean(candidate)) is not None:
+            return found
+    return None
 
 
 def _safe_name(url: str, requested: str | None, suffix: str) -> str:

@@ -239,17 +239,75 @@ def shows_picture(shape: Any) -> bool:
     return picture_blob(shape) is not None
 
 
+# Where a fill stops being a cover. Rendered at 80dpi with 20pt text under a
+# mid-blue band: at 100% the words are gone, at 90% they are a ghost, at 80% they
+# are legible but poorly, and from 70% down they read plainly. Above this line a
+# fill hides what is under it; below it, the layer is the point.
+COVERING_OPACITY = 0.8
+
+
+def fill_opacity(shape: Any) -> float:
+    """How much of what is under this shape its fill keeps out, 0.0 to 1.0.
+
+    python-pptx has no alpha of its own, so this reads the `a:alpha` the drawing
+    writes; a solid fill states none and is opaque.
+
+    A gradient is read through its stops, and the reason is a false refusal: the
+    scrim that makes type legible over a photograph is a `gradFill` from opaque to
+    transparent, and `fore_color` raises on one -- so the old reading returned 1.0
+    and the occlusion check called four such pages a picture 100% hidden under its
+    own scrim. What a gradient keeps out is not one number; the least it keeps out
+    anywhere is, because a reader looking at the picture is looking through the
+    stop that hides least.
+    """
+    try:
+        fill = shape.fill.fore_color._xFill
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        fill = None
+    if fill is None:
+        fill = _gradient_fill(shape)
+    if fill is None:
+        return 1.0
+    alphas = [_alpha_value(alpha) for alpha in fill.iter() if alpha.tag.endswith("}alpha")]
+    alphas = [one for one in alphas if one is not None]
+    return min(alphas) if alphas else 1.0
+
+
+def _gradient_fill(shape: Any) -> Any | None:
+    """This shape's `a:gradFill` element, or None when it has no gradient."""
+    try:
+        properties = shape.fill._xPr
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        return None
+    if properties is None:
+        return None
+    return properties.find(f"{_DRAWING_NS}gradFill")
+
+
+def _alpha_value(alpha: Any) -> float | None:
+    try:
+        return max(0.0, min(1.0, int(alpha.get("val", "100000")) / 100000))
+    except (TypeError, ValueError):
+        return None
+
+
 def is_panel(shape: Any) -> bool:
     """A filled shape -- a card, a band, a rule -- rather than a bare frame.
 
     python-pptx raises several different ways when a shape has no fill to speak
     of (a picture, a connector, a graphic frame), and every one of them means
     the same thing here.
+
+    A fill you can see through is not one of these. The occlusion check asks what
+    is hidden, and a translucent band over a chart is a layer the author drew on
+    purpose -- refusing it would refuse the technique the charts reference now
+    teaches.
     """
     try:
-        return shape.fill.type is not None and shape.fill.type != _FILL_BACKGROUND
+        filled = shape.fill.type is not None and shape.fill.type != _FILL_BACKGROUND
     except (AttributeError, NotImplementedError, TypeError, ValueError):
         return False
+    return filled and fill_opacity(shape) >= COVERING_OPACITY
 
 
 def shape_rect_emu(shape: Any) -> Rect:

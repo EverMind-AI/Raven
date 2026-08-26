@@ -20,8 +20,9 @@ generated:
   a radius, never an edge bar.
 
 ``accent_soft`` and ``accent_soft_dark`` are pre-mixed low-contrast fills for
-oversized background numerals and shapes. They are solid colours rather than a
-transparent accent because the export dialect treats every paint as opaque.
+oversized background numerals and shapes. They are solid rather than a translucent
+accent so that the fill is the same colour wherever it is used; the export does
+carry alpha, and a drawing that wants a translucent layer asks `ppt_charts` for one.
 """
 
 from __future__ import annotations

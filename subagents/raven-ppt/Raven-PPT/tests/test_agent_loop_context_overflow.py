@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -122,3 +122,86 @@ async def test_overflow_shrinks_and_recovers(workspace):
     # the post-overflow (recovery) call saw elided placeholders, not 5 full results
     recovery_call = provider.seen_messages[-1]
     assert sum(1 for m in recovery_call if m.get("content") == _PLACEHOLDER) == 2  # 5 - keep 3
+
+
+# --------------------------------------------------------------------------- #
+# the same recovery, on the streaming branch                                   #
+# --------------------------------------------------------------------------- #
+
+
+class _StreamOverflowThenAnswerProvider(LLMProvider):
+    """The overflow arrives as a raised exception, which is how streaming fails.
+
+    `chat_stream` raises rather than yielding a terminal error delta, and the loop's
+    streaming helper caught only a stall -- so an overflow escaped it, and with it
+    every recovery keyed on `response.error_classification`, this one included. A
+    live run ended at 266400 tokens against a 262144 window with a deck 19 pages
+    built and its whole review walk done.
+    """
+
+    _CHAT_RETRY_DELAYS = (0, 0, 0)
+
+    def __init__(self, tool_rounds: int = 5):
+        super().__init__(api_key="test")
+        self._tool_rounds = tool_rounds
+        self._overflowed = False
+        self.seen_messages: list[list[dict]] = []
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        raise AssertionError("the streaming branch must not fall back to chat()")
+
+    async def chat_stream(self, messages, tools=None, model=None, **kwargs):
+        self.seen_messages.append([dict(m) for m in messages])
+        n_tool = sum(1 for m in messages if m.get("role") == "tool")
+        if n_tool < self._tool_rounds:
+            yield StreamDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [
+                        {"index": 0, "id": f"t{n_tool}", "function": {"name": "no_such_tool", "arguments": "{}"}}
+                    ]
+                },
+            )
+            yield StreamDelta(content=None, finish_reason="tool_calls")
+            return
+        if not self._overflowed:
+            self._overflowed = True
+            raise RuntimeError("This model's maximum context length (8192 tokens) was exceeded")
+        yield StreamDelta(content="answer after compaction")
+        yield StreamDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_overflow_shrinks_and_recovers(workspace):
+    provider = _StreamOverflowThenAnswerProvider(tool_rounds=5)
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=12,
+        restrict_to_workspace=True,
+    )
+    streamed: list[str] = []
+
+    async def on_token_delta(text: str) -> None:
+        streamed.append(text)
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="go",
+        ),
+        session_key="s1",
+        on_token_delta=on_token_delta,
+    )
+
+    assert out is not None
+    assert out[0] == "answer after compaction", "the overflow ended the turn instead of being compacted"
+    assert provider._overflowed is True
+    recovery_call = provider.seen_messages[-1]
+    assert sum(1 for m in recovery_call if m.get("content") == _PLACEHOLDER) == 2
+    assert streamed == ["answer after compaction"]

@@ -95,7 +95,9 @@ def test_the_real_assets_land_as_modules_the_author_can_import(project: Project,
     `from ppt_theme import THEMES, rgb` is what the author is told to write, so
     the filenames come from the service that owns the contents. This runs the
     generated modules in a subprocess because they read their data file relative
-    to their own location, which is the whole point of writing them to disk.
+    to their own location, which is the whole point of writing them to disk -- and
+    because `ppt_shapes` imports two of its neighbours, which only works if the
+    build directory really is one importable place.
     """
     import subprocess
     import sys
@@ -107,20 +109,44 @@ def test_the_real_assets_land_as_modules_the_author_can_import(project: Project,
         "ppt_theme.py",
         "ppt_icons.py",
         "ppt_layout.py",
+        "ppt_charts.py",
+        "ppt_shapes.py",
         "themes.json",
         "icons.json",
+        "icon_keywords.json",
+        "shapes.json",
+        # The skill's reference documents, which reach the author no other way:
+        # the pool reads SKILL.md and nothing beside it, and the fence then
+        # refuses the path its `references/...` links resolve to.
+        "references",
+    }
+    assert {p.name for p in (build / "references").iterdir()} == {
+        "charts.md",
+        "formulas.md",
+        "icons.md",
+        "layouts.md",
+        # The layout registry's passages, one file per family, so a page loads the
+        # worked code it needs and not the other nine hundred lines.
+        "layouts-data.md",
+        "layouts-figures.md",
+        "layouts-multiples.md",
+        "layouts-primitives.md",
+        "layouts-type.md",
+        "shapes.md",
+        "tables.md",
     }
     probe = build / "probe.py"
     probe.write_text(
         "from ppt_theme import THEMES, rgb\n"
         "from ppt_icons import ICON_NAMES, add_icon\n"
-        "print(len(THEMES), len(ICON_NAMES), rgb('#FFFFFF') is not None)\n",
+        "from ppt_shapes import PRESET_NAMES, chevron_row\n"
+        "print(len(THEMES), len(ICON_NAMES), len(PRESET_NAMES), rgb('#FFFFFF') is not None)\n",
         encoding="utf-8",
     )
     done = subprocess.run([sys.executable, "probe.py"], cwd=build, capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
-    themes, icons, colour = done.stdout.split()
-    assert int(themes) == 10 and int(icons) > 100 and colour == "True"
+    themes, icons, presets, colour = done.stdout.split()
+    assert int(themes) == 10 and int(icons) > 100 and int(presets) == 109 and colour == "True"
 
 
 @pytest.mark.asyncio

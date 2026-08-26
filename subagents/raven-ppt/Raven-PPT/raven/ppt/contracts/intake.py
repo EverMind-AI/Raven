@@ -56,6 +56,15 @@ class StatedBrief:
     audience: str | None = None
     pages_low: int | None = None
     pages_high: int | None = None
+    forbidden: tuple[str, ...] = field(default_factory=tuple)
+    """What the request ruled out: "不要用 icon", "别放对比表", "不许出现竞品名".
+
+    A list rather than three-valued, because here the two states collapse honestly:
+    "the request forbade nothing" and "the request said nothing about it" are the
+    same fact, where a budget nobody stated and a budget of zero are not. It stays
+    out of `missing` for the same reason -- there is no question to put to a user
+    about what they did not forbid.
+    """
 
     @classmethod
     def of(cls, mapping: object) -> StatedBrief:
@@ -70,6 +79,7 @@ class StatedBrief:
             audience=_maybe_str(raw.get("audience")),
             pages_low=_maybe_int(raw.get("pages_low")),
             pages_high=_maybe_int(raw.get("pages_high")),
+            forbidden=_strings(raw.get("forbidden")),
         )
 
     @property
@@ -89,6 +99,7 @@ class StatedBrief:
             "audience": self.audience,
             "pages_low": self.pages_low,
             "pages_high": self.pages_high,
+            "forbidden": list(self.forbidden),
         }
 
 
@@ -221,6 +232,26 @@ def _errand(entry: dict) -> Errand:
         why=str(entry.get("why") or ""),
         how=str(entry.get("how") or ""),
     )
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    """A list of non-empty lines, from whatever a reply or a file holds there.
+
+    Blanks are dropped here rather than downstream: an empty prohibition becomes an
+    empty bullet in the design brief, which reads as a rule nobody wrote down. One
+    string is read as one item rather than discarded, because the field it parses is
+    a prohibition -- a reply that answered "no icons" instead of ["no icons"] means
+    the user forbade icons, and dropping it is the one wrong reading available.
+
+    Anything in the list that is not a string is dropped for the same reason the
+    blanks are. `str()` on it does not recover the intent: a reply holding
+    `[{"what": "no icons"}]` came through as the literal text `{'what': 'no icons'}`
+    and went into the design brief as a rule written in Python.
+    """
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, (list, tuple)):
+        return ()
+    return tuple(text for text in (item.strip() for item in items if isinstance(item, str)) if text)
 
 
 def _maybe_str(value: object) -> str | None:

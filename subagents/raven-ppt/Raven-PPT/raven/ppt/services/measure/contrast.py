@@ -29,7 +29,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from raven.ppt.contracts.findings import Audience, Finding, Severity
+from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck, page_box
 
 # WCAG AA asks 4.5:1 for body copy and 3:1 for large text, and 3:1 applied to everything
@@ -40,7 +40,7 @@ from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_
 #
 # So the two answers are separated, and the numbers come from the two real cases:
 #
-#   #1A1A1A on #000000  ->  1.1:1   invisible; the case this check was built for
+#   #1A1A1A on #000000  ->  1.2:1   invisible; the case this check was built for
 #   #FFFFFF on #FF8400  ->  2.5:1   the template's own agenda numerals, shipped, legible
 #
 # Under 2:1 nothing is legible and the deck is refused. Between 2 and 3 it is thin, which
@@ -49,6 +49,19 @@ MIN_RATIO = 3.0
 UNREADABLE_RATIO = 2.0
 # Below this the crop cannot say what its ground is.
 _MIN_PIXELS = 24
+# A run that is one mark and nothing else. Measured over eight delivered decks, about
+# 160 pages: this check found three things, two of them right and the third a single
+# bullet at 1.8:1 -- which refused the whole deck. A dim bullet is worth saying and is
+# not worth refusing a deck over, and it is the same shape as the failure this file
+# was already rewritten once for, when quantile segmentation reported every comma.
+_A_MARK = frozenset("\u2022\u00b7\u25cf\u25aa\u2013\u2014-\u2192\u2713\u2715\u00d7|/\\.,;:!?")
+
+
+def _is_copy(text: str) -> bool:
+    """Whether the run that measured badly is copy rather than one mark."""
+    return bool(set(str(text).strip()) - _A_MARK)
+
+
 _HEAD = 30
 
 
@@ -100,13 +113,12 @@ def contrast_findings(
             continue
         ratio, text, ink, ground = worst
         others = f" and {count - 1} more block(s) on the page" if count > 1 else ""
-        invisible = ratio < UNREADABLE_RATIO
+        invisible = ratio < UNREADABLE_RATIO and _is_copy(text)
         findings.append(
             Finding(
                 kind="unreadable" if invisible else "thin_contrast",
                 severity=Severity.BLOCKING if invisible else Severity.WARNING,
                 page=number,
-                audience=Audience.AUTHOR,
                 message=(
                     f"'{text[:_HEAD]}' is set in #{ink} on a ground that renders "
                     f"#{'%02X%02X%02X' % ground}{others} -- {ratio:.1f}:1, "

@@ -3,6 +3,12 @@
 The predecessor's three-way `usability` grade is gone; these pin what replaced
 it -- sentences derived from measurements, and a fragment check that removes
 the pieces the grade used to hand over labelled "avoid".
+
+The sentences are about the file, never about how large to place it. The
+placement verdicts that used to live here fired on every figure of two real
+runs (17 of 17, 14 of 14), so several tests below exist to keep silence
+silent: a paper figure at its real dimensions, a wide diagram and a dense
+table each assert that nothing is said.
 """
 
 from __future__ import annotations
@@ -32,7 +38,6 @@ def _measured(
     *,
     coverage: float = 0.2,
     panels: int = 1,
-    ink: float = 1.0,
     interior: float = 1.0,
 ) -> Measurements:
     return Measurements(
@@ -40,7 +45,6 @@ def _measured(
         height_px=height,
         page_coverage=coverage,
         panel_count=panels,
-        ink_ratio=ink,
         interior_ink_ratio=interior,
     )
 
@@ -97,31 +101,35 @@ def test_a_blank_frame_reports_its_interior_not_its_size() -> None:
     assert any("interior is blank" in note for note in found)
 
 
-def test_a_wide_diagram_is_told_it_needs_a_page_not_that_it_is_unusable() -> None:
-    """Real slide material; it is the slot beside text that cannot hold it.
-    Observed on four paper decks whose 4-5:1 figures were placed anyway."""
-    found = concerns(_measured(2047, 443, coverage=0.1), AssetKind.FIGURE)
-    assert any("too wide for a slot beside text" in note and "page of its own" in note for note in found)
-    assert not any("no slide layout carries" in note for note in found)
+def test_a_wide_diagram_is_left_alone() -> None:
+    """Real slide material at 4.6:1. Placed across a page it is ordinary, and
+    the width it is given is the page's decision, not the extraction's."""
+    assert concerns(_measured(2047, 443, coverage=0.1), AssetKind.FIGURE) == ()
 
 
-def test_line_art_and_a_photograph_shrink_differently() -> None:
-    """A paper figure at 60% keeps its shape and loses its labels."""
-    line_art = concerns(_measured(850, 433, coverage=0.16, ink=0.21), AssetKind.FIGURE)
-    assert any("line art" in note and "under 10pt" in note for note in line_art)
-    photo = concerns(_measured(1648, 500, coverage=0.3, ink=0.98), AssetKind.FIGURE)
-    assert any("fine for a photograph" in note for note in photo)
-    # Big enough to hold up beside text, and a photograph has no labels to lose.
-    assert concerns(_measured(1000, 700, coverage=0.3, ink=0.98), AssetKind.FIGURE) == ()
+def test_a_strip_states_its_shape_without_ruling_on_a_layout() -> None:
+    """A banner placed full-width is ordinary; the shape is the fact, and
+    "no slide layout carries that shape" was not one."""
+    (note,) = concerns(_measured(1600, 200, coverage=0.1), AssetKind.FIGURE)
+    assert "aspect 8.0:1" in note
+    assert "no slide layout carries" not in note
+    # 5.3:1 is a wide figure, and a wide figure is placeable.
+    assert concerns(_measured(1600, 300, coverage=0.1), AssetKind.FIGURE) == ()
+
+
+def test_a_paper_figure_is_not_flagged_for_the_size_it_arrives_at() -> None:
+    """The four figures a person read off two real runs and judged usable at
+    full width; the retired scale verdict flagged all four."""
+    for width, height in ((2578, 1074), (2191, 650), (1378, 578), (2348, 1640)):
+        assert concerns(_measured(width, height, coverage=0.2), AssetKind.FIGURE) == ()
 
 
 def test_a_table_is_never_told_to_crop_or_counted_in_panels() -> None:
     """Half a table is a misquote, and a table's rows are not panels -- both
-    were wrong in the grade this replaced."""
-    found = concerns(_measured(1131, 508, coverage=0.21, panels=9, ink=0.2), AssetKind.TABLE)
-    assert not any("crop" in note for note in found)
-    assert not any("panel" in note for note in found)
-    assert any("a table at 1131x508px" in note for note in found)
+    were wrong in the grade this replaced. A dense one is still a table: the
+    only reader who can see how dense is the one looking at the render."""
+    assert concerns(_measured(1131, 508, coverage=0.21, panels=9), AssetKind.TABLE) == ()
+    assert concerns(_measured(1270, 524, coverage=0.242), AssetKind.TABLE) == ()
 
 
 def test_a_page_screenshot_is_recognised_by_its_coverage(tmp_path: Path) -> None:
@@ -214,7 +222,7 @@ def test_the_catalogue_round_trips(tmp_path: Path) -> None:
         height_px=508,
         page_coverage=0.211,
         panel_count=1,
-        concerns=("a table at 1131x508px renders at 45% in a figure area beside text",),
+        concerns=("covers only 0.4% of its source page — the footprint of an icon or a page decoration",),
         source_file="paper.pdf",
         source_page=1,
         source_label="Table 1",

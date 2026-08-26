@@ -16,6 +16,7 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
+    ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
@@ -818,6 +819,23 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
+
+        # litellm has no mapping for a provider's `finish_reason: "error"` (nor
+        # for zhipu's `network_error`) and answers "stop" for both, so a call
+        # that failed upstream arrives looking finished, holding nothing. Read as
+        # an answer that is the model choosing to say nothing, and a turn ends on
+        # it with no error anywhere. Nothing downstream can consume an empty
+        # completion, so it is reported as the failure it is and the retry ladder
+        # gets its turn. `length` and `content_filter` are left alone: those say
+        # why the content is missing, and the caller handles each.
+        if not content and not tool_calls and not reasoning_content and not thinking_blocks:
+            if (finish_reason or "stop") == "stop":
+                return LLMResponse(
+                    content="Error calling LLM (empty_completion): the provider returned an empty completion",
+                    finish_reason="error",
+                    usage=usage,
+                    error_classification=ErrorClassification("empty_completion", retryable=True, should_fallback=True),
+                )
 
         return LLMResponse(
             content=content,

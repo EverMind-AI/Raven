@@ -4,9 +4,8 @@ The predecessor returned six different shapes for this -- `fact_violations`,
 `colour_bars`, `content_load`, `page_defects`, `undersized_type`,
 `pages_not_in_build_py` -- each with its own keys, its own severity convention
 (some refused the deck, some only warned, and which was which lived in the
-caller), and its own idea of who should fix it. Every consumer had to know all
-six. One type with three explicit fields replaces that: how bad it is, who can
-act on it, and a sentence that says what to do.
+caller). Every consumer had to know all six. One type with two explicit fields
+replaces that: how bad it is, and a sentence that says what to do.
 """
 
 from __future__ import annotations
@@ -21,12 +20,13 @@ class Severity(Enum):
     """Whether a finding stops the deck.
 
     BLOCKING is fail-closed: the deck is not published while it stands. It is
-    reserved for claims about the source material -- a number that never
-    appeared in it, a figure cited as another figure -- and for a deck the
-    pipeline cannot reason about at all.
+    reserved for what a page credits -- a figure cited as another figure -- for
+    what the deck was agreed to be, and for a deck the pipeline cannot reason
+    about at all. A route may also declare a WARNING kind fatal for itself; see
+    `Profile.blocking_kinds`.
 
-    WARNING rides along with the deck and is fed back into the next design
-    round. Measurements of the *rendered page* are warnings by design: type
+    WARNING rides along with the deck and is reported to the author.
+    Measurements of the *rendered page* are warnings by design: type
     size, overflow and overlap are all satisfiable by shrinking the copy, so a
     gate that refused publication until they cleared could be answered by
     making the page worse, and the fix loop oscillates instead of converging.
@@ -36,29 +36,14 @@ class Severity(Enum):
     WARNING = "warning"
 
 
-class Audience(Enum):
-    """Who is allowed to fix this.
-
-    The design pass may rearrange a page but never change what it says, so a
-    finding about how much copy a page carries has to reach the author. Handing
-    it to the designer leaves it holding a problem it is forbidden to solve --
-    which is measurably what happened: the same overloaded page came back
-    arranged into compartments however often it was redesigned.
-    """
-
-    AUTHOR = "author"
-    DESIGNER = "designer"
-
-
 @dataclass(frozen=True)
 class Finding:
-    """One problem, on one page, addressed to whoever can fix it."""
+    """One problem, on one page, and what to do about it."""
 
     kind: str
     severity: Severity
     message: str
     page: int | None = None
-    audience: Audience = Audience.AUTHOR
     detail: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:

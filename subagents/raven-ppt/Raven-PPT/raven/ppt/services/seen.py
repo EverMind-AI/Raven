@@ -36,7 +36,7 @@ def blocks_of(script: str, sources) -> dict[int, str]:
     """page -> a fingerprint of the code that drew it.
 
     Taken from the line spans the build derived, so it is the same notion of "this
-    page's code" that the design pass edits and the renders are matched by.
+    page's code" that the author edits and the renders are matched by.
     """
     lines = script.splitlines(keepends=True)
     fingerprints: dict[int, str] = {}

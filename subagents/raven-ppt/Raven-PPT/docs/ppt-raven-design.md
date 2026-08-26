@@ -1,7 +1,7 @@
 # PPT-Raven 架构设计
 
 本文件是 PPT 能力的**设计权威**：分层、边界、决策与阶段规划。当前能力与验证证据写入
-`docs/ppt-raven-status.md`；长效开发规则写入 `CLAUDE.md`。三份文件不重复彼此的内容。
+`docs/ppt-raven-status.md`；长效开发规则写入 `raven/ppt/AGENTS.md`。三份文件不重复彼此的内容。
 
 本次重构的起点是 `upstream/main`（EverMind-AI/Raven `5a0c950`）。上游不含任何 PPT 代码，
 也不含 `raven/rendering/`，因此 PPT 能力以一个独立顶层包 `raven/ppt/` 的形式落地，
@@ -100,11 +100,10 @@ class Finding:
     page: int | None
     message: str         # 给模型读的一句话，自带修法
     detail: dict         # 结构化证据
-    audience: Audience   # AUTHOR | DESIGNER —— 谁有权解决它
 ```
 
-`audience` 是一条既有教训的固化：内容密度必须给作者，不能给精修环——精修被禁止改内容，
-把内容问题交给它等于交给它一个无权解决的问题，结果是同一页被反复重排。
+曾经还有一个 `audience: AUTHOR | DESIGNER` 字段，用来把内容问题挡在精修环之外。精修环已删
+（D18），只剩一个受众就不是受众，字段随之取消——每一条 finding 都是作者的。
 
 ### 3.2 后端 = 一页怎么落地
 
@@ -148,13 +147,14 @@ class Capabilities:
 | | A `script_author` | B `slot_author` | C `image_text` |
 | --- | --- | --- | --- |
 | 适用 | 强主模型 | 弱模型 / 低成本 | 设计驱动的版式 |
-| 阶段 | ingest → inspect → author → build → design_pass → publish | ingest → plan → fill → compile → review → publish | ingest → plan → background → place_text → build → publish |
+| 阶段 | prepare → (brief / template / gather / generate / ingest / inspect 皆可选) → plan → build → publish | brief → ingest → inspect → plan → fill → compile → review → publish | brief → ingest → plan → background → place_text → build → publish |
 | 后端 | `script` | `slots` | `imagetext` |
 | 能力 | `raw_script` | `normalized_regions` | `background_prompt` + `normalized_regions` |
 | 复用 | ingest / measure / gates / render / publish 完全共享 | 同左 | 同左 |
 
-路线 A 的作者工作区在 `ppt_prepare` 返回前就会预置 `ppt_layout.py`、`ppt_icons.py`、
-`ppt_theme.py` 及其数据文件；模板绑定后会刷新 `ppt_template.py` 和模板主题数据。
+路线 A 的作者工作区在 `ppt_prepare` 返回前就会预置 `ppt_layout.py`、`ppt_charts.py`、
+`ppt_icons.py`、`ppt_theme.py`、`ppt_shapes.py` 及其数据文件；模板绑定后会刷新
+`ppt_template.py` 和模板主题数据。
 `ppt_build` 仍会重复投影这些文件作为兜底，但作者第一次写 `build.py` 时就必须能导入
 这些模块，不能把它们延迟到第一次构建之后才出现。
 
@@ -176,18 +176,33 @@ sources 和 figure catalogue，但只作为概念示意，不替代产品截图�
 
 以下决策来自旧形态上的实测教训，重构后继续有效。
 
-**D1 保证在代码里，不在 prompt 里。** 页数、字符预算、无重叠由工具执行路径强制；
-prompt 只做引导。
+**D1 保证在代码里，不在 prompt 里。** 页数、语言、图注引用、页与代码的对应、渲染实测的
+文字重叠与遮挡由工具执行路径强制；prompt 只做引导。（当时这条还写着"字符预算"——**一页的
+字符上限从未在这套代码里落地**，`copy_density` / `MAX_CHARS_PER_PAGE` 全仓不存在，一页多不多
+只由测量渲染结果决定。见 D7 的后继。）
 
 **D2 测量结果回灌设计环，不硬拒——渲染重叠除外。** 字号下限、越界、冲卡、标签折行以 WARNING
 finding 进下一轮设计调用；硬拒会与文本适配形成"缩回—再缩回"振荡，终点是没有交付物。
+（**"设计环"这个收件人已经没有了**，D18：回灌的落点现在是 `ppt_build` 的返回——渲染图与页面
+测量一起交回写程序的作者，由它的下一次构建消化。机制与理由一字不变，只是环从两个阶段之间
+收进了一个阶段里面。）
 
 **渲染实测的文字重叠（word_collision）是这条的例外，改为 BLOCKING。** 三轮真实运行都交付了
 "字压在字上"的 deck，回灌没有收敛。它不是口味问题，也不能靠缩字号解决——字号下限同样被测量，
 缩下去只是把一条 finding 换成另一条；它真正要的动作是把文本框画宽，而画宽不花任何代价。
 
-**D3 fail-closed 发布。** 存在 BLOCKING finding 时拒绝发布。blocking 集合由 profile 声明，
-当前为：图注引用与实际图片不符、色带、页与代码块无法对应。
+**D3 fail-closed 发布。** 存在 BLOCKING finding 时拒绝发布。发布的拒绝判据是
+`severity is BLOCKING or kind in profile.blocking_kinds` 两条并集，所以严重级有两个声明处，
+由 `test_no_route_refuses_a_deck_over_something_the_gate_only_reports` 强制它们不许互相矛盾。
+路线 A 当前的拒绝集合是 13 个 kind：
+
+- **来自 profile**（`_PROVENANCE | _AGREED | {unmapped_page, house_style}`）：`citation`、
+  `page_budget`、`language`、`unplaced_figure`、`unmapped_page`、`house_style`。
+- **来自门禁自己的 severity**（`gates/registry.py` 的 `DISPATCH`）：另加 `word_collision`、
+  `covered_shape`、`literal_escape`、`unreadable`、`placeholder_copy`、`template_underlay`。
+- **构建阶段自己建的**：`unseen_page`（`stages/build.py`）。
+
+**色带（`band`）不在里面**：它已降为 WARNING，见 D17。
 
 **D3a 数字不做字面门禁。** 曾有一道 `fact` 门禁：页面上的每个数字必须逐字出现在素材正文里，
 否则 BLOCKING 拒绝发布。七次真实运行、932 条 finding，它一共报了 10 条，**全部是误报**——
@@ -198,10 +213,15 @@ finding 进下一轮设计调用；硬拒会与文本适配形成"缩回—再�
 用于"素材字数撑不起页数"的提醒）与之无关，保留在 `ingest/sections.py`。
 
 **D3b 两条 blocking 降为 warning，页脚不受字号下限约束。** 逐条核对七次运行的 932 条 finding
-后的结果。`page_mapping`（每页能否对应 build.py 的一个代码块）保护的是设计环定位页面的能力，
-不是读者看得见的东西；`prototype_kept`（页面是否建在大纲承诺的模板页上）比的是页面与计划，
-一次运行自己画的四卡布局比承诺的模板页更好看，硬拒等于要一个更差的页面，而且它给的出路
-"或者改大纲"改一行就能绕过。两者都改为报告。
+后的结果。`page_mapping`（每页能否对应 build.py 的**一个自己的**代码块）保护的是把渲染图
+对回画它那段代码的能力，不是读者看得见的东西；`prototype_kept`（页面是否建在大纲承诺的
+模板页上）比的是页面与计划，一次运行自己画的四卡布局比承诺的模板页更好看，硬拒等于要一个
+更差的页面，而且它给的出路"或者改大纲"改一行就能绕过。两者都改为报告。
+
+**降的只是 `page_mapping`，`unmapped_page` 仍然硬拒。** 两者同题材、不同 kind，可以同时
+出现：`unmapped_page`（`stages/build.py`，BLOCKING，且列在 profile 的 `blocking_kinds` 里）
+说的是 build.py 里**根本没有逐页的块**——一张渲染图对不回任何代码，流水线对这份 deck 无法
+推理，那不是审美判断。降为 warning 的只有"块在、但分不出哪块画哪页"这一档。
 
 字号下限对**页脚**另立 `FOOTER_FLOOR_PT = 8.0`：页脚是元信息，没人从座位上读它。原先 10.8pt
 的通用下限让每页的出处行都挨一条 finding——run44a 的 210 条 `type_floor` 去重后只有两行，
@@ -211,7 +231,9 @@ finding 进下一轮设计调用；硬拒会与文本适配形成"缩回—再�
 同一轮核对的结论是**其余门禁不动**：13 个 blocking 里 7 个从未在真实运行中触发，但它们是零成本的
 防御下限（deck 语言写错、页数不符、页面上打印出 `\n`、图注标 Fig.4 却显示 Fig.5），纯代码、
 不进上下文，阈值都有实测依据（`MAX_CHARS_PER_PAGE = 700` 来自"评审接受的最密页 467 字符"）。
-触发为 0 是阈值定得准，不是多余。
+触发为 0 是阈值定得准，不是多余。（这段原先举 `MAX_CHARS_PER_PAGE = 700` 当例子——
+**那个常量不存在**，字符上限没有落地过；留在代码里、真有实测出处的阈值是
+`gates/brief.py` 的 `CHARS_PER_PAGE = 80` 与 `COPY_PER_PAGE = 250`，两者都只报警告。）
 
 **D3c 模板底色以渲染为准，并把选择权交回模型。** 调色板原先只读文件的声明——主题的
 `clrScheme` 经 master 的 `clrMap` 解析。拿 119 个真实模板逐个渲染对拍，**声明的底色只有
@@ -239,8 +261,13 @@ finding 进下一轮设计调用；硬拒会与文本适配形成"缩回—再�
 （实测：一次运行连续三次提交 `" "` / `"\n"` / `"# use existing build.py"` 被拒后离开工具。）
 
 **D7 内容密度归作者，精修不动内容。** 密度只设上限不设下限。
+（**两头都反了，见 D19 与 D18。** 上限：`copy_density` / `MAX_CHARS_PER_PAGE` 全仓不存在，
+一页密不密只由测量渲染结果决定，`_thin_pages` 的注释自己写着 "the built page has no floor
+either"。下限：现在恰恰有三处下限类 warning——`thin_material`（素材字数撑不起谈定的页数，
+`CHARS_PER_PAGE = 80`）、`thin_page`（一条 `says`、无 figure、无 errand、无 prototype 的计划）、
+`excessive_whitespace`（渲染出来大片空白的内容页）。"精修不动内容"随精修阶段一起没了，D18。）
 
-**D8 草稿归作者迭代，精修只做定稿前的最后一眼；精修跳过必须留痕。**
+**D8 草稿归作者迭代，精修只做定稿前的最后一眼；精修跳过必须留痕。**（已被 D18 取代：精修环整个删除。）
 精修的运行条件曾两次挂在 finding 上，两次都错：先是"存在任何 BLOCKING 就跳过"，于是唯一负责版式的
 阶段恰好在版式出问题时不跑（两轮真实运行因一条本身判错的色带门禁被拒，整轮每一次构建精修都没跑）；
 改成"非 DESIGNER 的 BLOCKING 才跳过"是同一个错误退一步——一份 deck 有 29 条未替换占位符（作者的活）
@@ -255,7 +282,9 @@ finding 进下一轮设计调用；硬拒会与文本适配形成"缩回—再�
 asks 第一条明确"`for_the_design_pass` 这轮也是你的活"——实测有模型把这个桶名读成"别人会处理"，
 连续八次构建都没动那 25 对重叠。
 
-**D9 模板出「框架 + 风格」，内容页由模型自己构图。**
+**D9 模板出「框架 + 风格」，内容页由模型自己构图。**（**已被 D19 取代**：默认反过来了——
+现在每个内容页都要挑一张示例页当原型，自由构图是那条挑不出来的退路。下面这一段记的是当时
+为什么反过来的第一遍，它量到的东西仍然成立，只是结论换了。）
 把模板的内容页当原型来填，三轮真实运行给出了它失败的全部理由，且都是可测量的：
 模板槽位是按它自带的示例短语（"单击添加小标题"）画的，塞进一句真话就靠 `normAutofit`
 自己缩字——同一个 18pt 槽在一页里渲染成 11.7 / 13.7 / 13.5 / 10.8pt，封底一页把五行
@@ -328,7 +357,8 @@ deck 里重复出现的同一槽位（同样的声明字号、同样的尺寸）
 真跑一份含占位符与表格的程序，断言交付文件里两条都不存在。任何绕过 tidy 的改动（换构建路径、
 调整 runner 次序）都会在这里失败，而不是又一次静悄悄地交付出去。
 
-**D13 精修阶段默认关闭，配置项打开。** 四次真实运行的实测结论是它让 deck 更差。最后一次：
+**D13 精修阶段默认关闭，配置项打开。**（已被 D18 取代：默认关闭之后没有一次证明它值得打开，阶段整个删除。）
+四次真实运行的实测结论是它让 deck 更差。最后一次：
 3420 字里删掉 224 字（一整条要点、一张图的说明、一页的结论），另有三行被悄悄改写，全部是它
 自己 brief 第一段明令禁止的；同时给 8 页加上装饰色条，而那正是本 deck 门禁判为色带的东西。
 两条机械保证现在都有了（`copy_rejection` 与 band 门禁），但一个价值未被证实的阶段不该是默认，
@@ -353,6 +383,36 @@ layout 检查、继承装饰检查因此一并修好；`overlap`、`contrast`（
 `adapt(items=)` 语义、素材路径与分节），那些补在 skill 与返回值里而不是加原语 —— 两类的区别
 是：模型不知道 vs 模型知道但做不到。
 
+三条都补上了：`table()` 按内容定列宽、`stack()` 接续放置、`picture_fit()` 等比适配，都在
+`services/assets/layout.py` 里。
+
+**判据第二次应用，指向的不是"缺原语"而是"原语不肯说"。** 一个原语替模型把几何算完、却不说
+算出了什么，模型只能对着渲染图猜——那仍然是一次盲调，只是盲的东西从"没有这个能力"变成了
+"有能力但答案不外传"。每个 helper 原先只回 python-pptx 对象，作者接下来最需要的那个数
+（这东西到哪儿结束）只存在于渲染图里。所以两侧都开口：
+
+- **画之前问**，十一个函数：`layout.py` 的 `text_size` / `points_size` / `table_size` /
+  `picture_size` / `lines_needed` / `formula_type_size` / `fits` /
+  `the_largest_step_this_copy_takes`，`charts.py` 的 `what_a_chart_will_do` /
+  `whether_a_chart_fits` / `the_smallest_box_a_chart_needs`。
+  图表那三个是拿真图表对着一块"吞形状"的假 slide 跑一遍，所以答案就是图表自己的算术，
+  不是另写一份估算。
+- **只有一个函数往上问。** 前七个都是向下量——"我已经挑好的字号放得下吗"，于是没有任何东西
+  说得出"这块盒子最多能放多大"，十页实测里字号阶梯用了零次、页面自己造了 10 到 32pt 之间
+  十三个字号，而用到阶梯的地方一律取最小一档（1.25in 高的 chevron 里 `LABEL_PT` 的步骤名）。
+  `the_largest_step_this_copy_takes` 补的是这个方向，**答案只能是阶梯上的一档，不能是两档
+  之间的整数**：两种实现都建了四十个用例的真实渲染，用 `pdftotext -bbox` 量下来阶梯离盒子
+  最近一边中位留白 11.6pt、40 例中 2 例压到边外，逐整数搜索是 5.7pt 与 7 例——底下是
+  `_em_width` 的估算，`FACE_WIDTH` 记着它每种字面差 5 到 22 个百分点，把最后一磅余量花掉的
+  答案在本渲染器上放得下、在读者机器上放不下。阶梯的粗粒度就是这份余量，也是稳定性：盒子按
+  百分之一英寸从 0.60 长到 6.00in，答案每条序列只变 0 到 3 次且每次只跳一档，逐整数是 13 到
+  16 次。这条不构成硬拒（D2/D6 未变），回到下限只是"盒子该更大"的信号。
+- **画之后回读**：每个绘制 helper 返回 `Drawn(shape, box)`，`box` 是它真正占掉的矩形，
+  所以下一件东西的位置是 `written.box.y1 + GUTTER` 而不是一个试出来的数；`Stack` 另有
+  `.room`；图表的 `Drawn` 还带它让出了什么（没写下的点名、没放下的读数、掉到下限的气泡）
+  和值到英寸的换算。`table_size` 与 `table` 走同一个 `_table_geometry`，所以"问到的尺寸
+  不是画出来的尺寸"是不可能，而不只是不太可能。
+
 **D14 公式与卡片是原语，不是文档里的条目。** 两者都是几何，而几何归引擎：
 
 - 公式用 `write` 写就是正文，正文在框宽用尽处折行，而用尽处正好是符号中间。交付页实测：
@@ -364,6 +424,99 @@ layout 检查、继承装饰检查因此一并修好；`overlap`、`contrast`（
   画成了一列一模一样的粗体标题。skill 里"请多用 icon"已经写着了，没用。`card()` 一次调用画出
   底面、icon、标题与正文并拥有那部分几何，于是带 icon 的版本比手画四个矩形更省力——引导要落在
   省力的那条路上，而不是落在措辞上。
+
+**D17 band 门禁改为报告。** 它是 blocking 集合里唯一的审美判断，靠"散文证明拦不住"这一条留在
+那里。三次误判把 demonstrably 拿掉了，而每一次的补丁都是又一条豁免——豁免本身就是承认这个测量
+认不出自己在看什么：
+
+- 一页 8 个 bar（4 行，每行 track 2.55in + value 2.26/2.36/2.17/2.20）全判成装饰色条，而
+  "ranking → sorted horizontal bars"正是 skill 自己要求的画法。补丁：靠"共享 baseline + 共享
+  厚度 + 长度不同 + 每行 ≥2 个 slot"识别 bar series 并豁免。
+- 20 页学术 deck 的 5 个满宽 plane（承载公式、训练时间表、结论行）判成"色带上什么都没有"，而
+  每个上面坐着 1–6 个文本框；同页一个高 0.06in 的 plane 反而放行。补丁：去掉"必须在页顶"。
+- 8 个标题上的 kicker rule——模板自己的装置，1.05in 橙色、0.04in 高、渲染正确——全被拒，差了
+  八分之一毫米。补丁：把 hairline 上限从 0.035in 换成测量模块的 `RULE_MAX_HEIGHT_PT`。
+
+下游代价两笔：两轮真实运行因一条本身判错的色带门禁被拒，整轮每一次构建精修都没跑（见 D8）；
+而精修——这道门禁自己的 audience——给 8 页加了 accent 色条，正是它判为违规的东西（见 D13）。
+
+拒绝必须第一次就对；三条豁免之后不是。所以读数留下，拒绝取消。它要防的东西没有变：色条仍是
+生成式 deck 最响的 tell，finding 照样报出来，只是收件人现在只有作者一个。与 D3a 删掉事实门禁不同——那个
+是 10 条全误报、一次真阳性都没有；band 确实抓到过真的（"凡是只被要求别画的 deck，它每次都
+回来了"），所以走 D3b 的降级而不是删除。`data_mark_ids()` 的豁免保留：作为 warning，一条已知
+的误报仍然是噪音，而噪音会占掉作者本该用来看页面的注意力。
+
+降级之后又出现第四次误判，正落在这条上：`ppt_charts.stacked_bar` 的堆叠柱，三根柱各切三段，
+三个细顶段（2.46×0.09/0.13/0.08in）全判成 "an accent strip"。bar series 的判据看不见堆叠柱——
+分段不共享 baseline（每段坐在前一段头上），也不在值的方向上共享厚度（那里的厚度就是值），只有
+贴基线的底段偶然混进了同一组。补丁：先把分段沿长边接回被切开前的那根柱（同槽位、同厚度、边缘
+相接；与邻居重叠的一律另起一根，这正是"焊在卡片边上的色条"进不来的原因——记录在案的那种色条画
+在卡片之上），再对这些柱问 bar series 那套问题，只把"长度不同"换成"形状不全同"：100% 堆叠柱
+每根长度本来就一样，值在切口位置上。残余一类分不开：一排高度不同、各戴同一条细色条的卡片，与
+"第一个 series 恒定"的堆叠柱是同一张图（实测两者矩形集合结构一致），矩形几何无从区分，现按数据
+放行。
+
+**D18 精修阶段整个删除，迭代回到 build 的返回里。** 取代 D8 与 D13，并取消 `Finding.audience`。
+
+默认关闭（D13）之后没有一次运行证明它值得打开，而它留下的接线仍在收费：返回里一个
+`for_the_design_pass` 桶（实测被模型读成"别人会处理"，25 对文字重叠连续八次构建没人动）、
+一个 `polish` 参数（实测被连续八次正式构建传成 `false`）、两份只有它读的 brief，以及 `Finding`
+上一个只剩一种取值的 `audience` 字段。
+
+分工的判据不是"多一双眼睛好不好"，而是**这双眼睛能不能改它看见的东西**。精修看得见一页，
+却不许改这一页说什么——而一页出问题，一半出在它说了什么。让只能重排的一方做最后一眼，等于
+把"这页话太多"变成"这页话太多，但排得整齐"，实测就是同一页被反复切成小格子。
+
+作者拥有整个程序，没有这个限制。所以迭代整个搬到 build 的返回：每次 `ppt_build` 把这一批页的
+渲染图连同页面测量一起交回写程序的人，作者看图、改程序、再构建。三条机械保证撑着这条路：
+`unseen_page`（BLOCKING）保证没有一页能在作者没看过渲染图的情况下交付——精修没了以后它比以前
+更要紧；`unmapped_page`（BLOCKING）保证渲染图对得回画它的那段代码（同题材的 `page_mapping`
+只是 WARNING——见 D3b，两者是不同的 kind，硬保证在前者身上）；brief 的 `forbidden` 每次构建
+都随回复重述，而不是只在三十轮之前记过一次。
+
+技能侧对应改动：`ppt-script-authoring` §10 明说这是 deck 的最后一眼，后面没有别人。
+
+**D19 内容页默认挑原型，自由构图变成退路。** 取代 D9 的默认值。
+
+D9 把默认设在"内容页自己构图"，理由是填模板槽位失败得可测量：`normAutofit` 把一个 18pt 槽
+渲染成 11.7 / 13.7 / 13.5 / 10.8pt，六卡网格填四条留一个洞，竖版图框放不进横版架构图。那些
+测量没有被推翻。被推翻的是从它们得出的结论——**失败的不是"用示例页"，是"把示例页当不可改的
+模具"**。同一份模板，允许克隆之后再替词、再删掉多余的重复单元、再挪一挪改改尺寸，六卡网格
+填四条就是删掉两张卡，竖版图框就是换掉那个框；这些都是程序做得到的编辑，而 D9 一刀把整页
+重画，代价是每一页都得自己重新发明标题行、间距和分栏，读起来就不再是用户那套模板了。
+
+所以现在的默认与 D9 相反：
+
+- `ppt_template` 分批交出**每一张可见示例页**的渲染图与反编译源码（`BATCH_PAGES = 8`，96dpi），
+  而不是只交封面/目录/章节/封底四页。上限被否决过一次，理由记在 `tools/template.py`：
+  实测模板有十三页而上限是十二，第十三页就永远看不见，而"挑一页来改"挑不了看不见的那页。
+- `ppt_outline` 把**没有声明 `prototype` 的内容页列进 asks**，措辞是"这份 deck 有模板，
+  为每一页挑最近的可编辑示例页；只有当哪张示例页改完也装不下这个信息形状时才留空，
+  并把那个具体的不匹配写进 `needs`"。
+- 自由构图仍然在，仍然落在量出来的 house style 里（D9 那半没变），但它现在是退路而不是默认。
+
+`prototype_kept`（页面是否建在大纲承诺的原型上）仍然只是 WARNING，理由没变（D3b）：它比的是
+页面与计划，而一页自己画得更好时硬拒等于要一个更差的页面。`template_adherence` 也仍然只问
+开场/索引/分节/收尾四处——**这一条与新默认是有张力的**：计划要求每个内容页都挑原型，而这道
+检查刻意不数内容页。张力是有意留的（检查一旦数内容页，就会把"改得多"读成"没用模板"），但
+两处的措辞要一起读，不要各自当全部。
+
+**D20 量缺陷，不量构件。** 一道门禁应当测"读者看到的那个毛病"，而不是"页面上有没有这类
+构件"。测构件的检查有两种失败方式，而且总是同时出现：**它报出正确的做法，同时对错误的做法
+一无所知**。三次应用，每次都是把判据从名词换成症状：
+
+| 门禁 | 原判据（构件） | 现判据（缺陷） | 换判据时量到的 |
+| --- | --- | --- | --- |
+| `native_table` | `shape.has_table` 为真 | 表上还穿不穿 Office 自己给的那套外观（行/列 banding + python-pptx 那个 GUID 图库样式） | `ppt_layout.table()` 也走 `add_table`（.pptx 里没有别的路），所以 deck 自己的表格 helper 画的每一页都被报——一道对着最好答案开火的门禁，教出来的是别用最好答案 |
+| `wide_table` | 列数 > 8（`MAX_TABLE_COLUMNS`） | 每一列有没有它自己最宽那格所需要的宽度，按那格自己的字号量 | 十列短列的 `ppt_layout.table` 从"报"变成 0；2.4in 里塞四列短语的手绘表从 0 变成 1。第二行才是重点 |
+| `band` | 在页顶、且满宽的填充条 | 这条色带上面有没有承载文字（承载即分组，位置不限） | 20 页学术 deck 的 5 条满宽 plane 上各坐着 1–6 个文本框，全被判成"色带上什么都没有"；同页高 0.06in 的 plane 反而放行 |
+
+判据是可否证性：构件是名词，页面上有或没有，问它得到的答案永远是"有"；缺陷是谓词，可以为
+假。所以 `MAX_TABLE_COLUMNS` 删掉了——一个数不出缺陷的常量，调它只是换一批误报。
+
+同一条原则的反面也要守住：`native_table` 现在只判 banding 与那个 GUID，**刻意不判**一张表
+占了它那块地方的多少。文件里没有东西能区分"本来就该小"和"没填满"，那要读渲染图。宁可少说
+一句，不要把一个测不出来的问题写成一条 finding。
 
 ---
 
@@ -388,23 +541,38 @@ layout 检查、继承装饰检查因此一并修好；`overlap`、`contrast`（
 `chat_with_retry`/`chat_stream`。fork 的 `providers/media.py`、`_responses.py`、
 `openai_responses_provider.py` 被上游能力取代，不移植。
 
-上游缺、必须补的四处（每处都有实测理由）：
+上游缺、必须补的四处（每处都有实测理由）。**四条都已落地**，落点记在每条后面：
 
-1. **`_route_result_images` 会丢绑定文本**。上游 `agent/loop/main.py:982` 是
+1. **`_route_result_images` 会丢绑定文本**。上游原来是
    `attach = [b for b in blocks if b.get("type") == "image_url"]`，把每张图前面那条
-   "这是第几页" 的 text part 全部丢掉。PPT 一次返 8–12 张图，丢了绑定模型就对不上页号。
-   改为保留紧邻图片之前的 text part。
-2. **一轮只允许一个视觉结果**。上游没有这个闸。PPT 一次 review 回 8–12 张 1280×720 PNG，
-   不闸住一轮就能塞进几十 MB base64。
-3. **`get_definitions(only_names=...)`**。上游 registry 无此形参。PPT 工具全量暴露 schema 的
-   token 成本很高，需要按已走到的阶段只暴露该阶段的工具。
-4. **字符串内嵌 data URI 的脱敏**。上游只处理结构化 image part，抓不到 JSON payload 或错误
-   消息里内嵌的 data URI，session 文件会涨到几十 MB 并在 resume 时灌回上下文。
+   "这是第几页" 的 text part 全部丢掉；丢了绑定模型就对不上页号。
+   → `raven/utils/helpers.py` 的 `labelled_images()`：保留紧邻图片之前的 text part，
+   一条 label 只用一次，单张图裸走（没有要消歧的东西）。测试在
+   `tests/ppt/test_upstream_wiring.py`。
+2. **一轮只允许一个视觉结果**。不闸住一轮就能塞进几十 MB base64。
+   → **换了个位置解决**：闸不在上游而在 PPT 侧，因为"一轮几张"是路线的事而不是环路的事——
+   `tools/build.py` 的 `BATCH_VIEWS = 1`、`stages/build.py` 的 `BATCH_VIEWS = 3` 决定张数，
+   `stages/_views.py` 的 `MAX_IMAGE_BYTES = 900_000` 决定每张的字节上限（超了就折半重编码）。
+   上游那侧补的是撑爆窗口时的应急路径：`_elide_older_images` 只留最近一条带图消息。
+3. **`get_definitions(only_names=...)`**。PPT 工具全量暴露 schema 的 token 成本很高，
+   需要按已走到的阶段只暴露该阶段的工具。→ `raven/agent/tools/registry.py:43`，
+   点名一个没装的工具只是把列表变短而不是报错。
+4. **字符串内嵌 data URI 的脱敏**。session 文件会涨到几十 MB 并在 resume 时灌回上下文。
+   → `agent/loop/main.py` 的 `_strip_inline_images()` 在 `_save_turn` 里把结构化的 inline
+   base64 换成 `[image]`；`str` 内容走 `_TOOL_RESULT_MAX_CHARS = 16_000` 的截断。图片路径
+   经 `describe_image` 留在文本里，所以模型后面还能 `read_file` 取回。
 
 ### 轮内压缩
 
-PPT 每轮返图量大，多轮必然撑爆上下文窗口。轮内压缩（把旧的 inline base64 换成
-`[image elided: <path>]`，模型需要时用 `read_file` 取回）因此属于 PPT 必需，而不是可选优化。
+PPT 每轮返图量大，多轮必然撑爆上下文窗口。轮内压缩（把旧的 inline base64 换成占位文本，
+模型需要时用 `read_file` 取回）因此属于 PPT 必需，而不是可选优化。已落地为
+`_elide_older_images`（撑爆窗口时只留最近一条带图消息）与 `_strip_inline_images`（写入
+session 时一律换掉）；占位文本目前不带路径，路径由 `describe_image` 另行留在正文里。
+
+**返图的实际形状**：`render_dpi` 默认 144，16:9 一页正好 **1920×1080**（`services/render/pdf.py`
+的注释就是这么定的）；一次 `ppt_build` 回的张数由 `BATCH_VIEWS` 决定（工具侧 1、阶段侧 3），
+不是一次 8–12 张。`ppt_template` 挑示例页那批用 96dpi（`BATCH_PAGES = 8`），因为那批回答的是
+"哪页最像我要说的话"，不是"这号字在会议室里看得清吗"。
 
 ---
 
@@ -446,6 +614,8 @@ owner），是该仓库最大的耦合源；本仓库 `StageResult.data` 是不�
 
 阶段划分与实际结果记入 `docs/ppt-raven-status.md`。已完成 Wave 0（骨架与契约）、
 Wave 1（render / ingest / assets / measure+gates 四段并行）、Wave 2（脚本后端、工具层、
-设计环、装配与接线）与路线 A 端到端。Wave 3 的路线 B、路线 C 与带真实模型的端到端待做。
+设计环、装配与接线）、路线 A 端到端，以及**带真实模型的端到端**——三十余轮实跑，证据与
+每轮修掉的缺陷逐条记在状态文档 §2。Wave 2 里那个"设计环"此后整个删除（D18）。
+待做的是 Wave 3 的路线 B 与路线 C。
 
-并行只经 worktree 分支进行，合回 `refactor/ppt_on_upstream`；不得两个执行体写同一分支。
+并行只经 worktree 分支进行，合回 `feat/ppt`；不得两个执行体写同一分支。

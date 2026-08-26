@@ -33,7 +33,15 @@ class Project:
 
     @property
     def root(self) -> Path:
-        return self.workspace / "ppt_projects" / self.slug
+        """One deck per workspace, so the slug names it rather than nesting it.
+
+        A workspace is one task: the launcher makes a directory per spawn and the
+        agent is fenced inside it. Addressing decks by slug under it let a run
+        start a second one by naming it differently, which two of six measured
+        runs did -- and then nothing said which of the two was the deck, least of
+        all the export path that repeats the same slug.
+        """
+        return self.workspace / "deck"
 
     @property
     def sources_dir(self) -> Path:
@@ -66,7 +74,12 @@ class Project:
 
     @property
     def exports_dir(self) -> Path:
-        return self.workspace / "exports" / self.slug
+        """Where the finished deck is published, under its own name.
+
+        Not `exports/`: raven writes a session transcript to `<workspace>/exports`
+        of its own, so that directory already answers to something else.
+        """
+        return self.workspace / "out"
 
     def contains(self, path: Path) -> bool:
         """Whether a path is inside this project, resolving symlinks first.

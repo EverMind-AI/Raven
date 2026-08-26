@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.ppt.contracts.findings import Audience, Severity
+from raven.ppt.contracts.findings import Severity
 from raven.ppt.services.measure.geometry import Rect
 from raven.ppt.services.measure.rendered import (
     CARD_MIN_HEIGHT_PT,
@@ -102,7 +102,6 @@ def test_words_sharing_a_place_collide_and_neighbours_do_not() -> None:
     assert findings[0].page == 1
     assert findings[0].kind == "word_collision"
     assert findings[0].severity is Severity.BLOCKING  # the deliberate exception to D2
-    assert findings[0].audience is Audience.DESIGNER
     assert "'OVIS'" in findings[0].message
 
 
@@ -180,7 +179,6 @@ def test_a_rule_is_reported_once_however_many_words_it_crosses() -> None:
 
     assert len(findings) == 1
     assert findings[0].kind == "rule_strike"
-    assert findings[0].audience is Audience.DESIGNER
 
 
 def test_rules_are_reported_a_few_per_page() -> None:
@@ -234,7 +232,6 @@ def test_a_word_running_past_its_card_is_reported() -> None:
     assert len(findings) == 1
     assert findings[0].detail["words"] == ["identical"]
     assert findings[0].kind == "card_overflow"
-    assert findings[0].audience is Audience.DESIGNER
     # The number to act on, not just the fact that something spilled: the copy
     # reaches 10pt past the card's bottom edge, so that is what it has to grow by.
     assert findings[0].detail["needs_height_in"] == pytest.approx((_CARD.height + 10 + CARD_SLOP_PT) / 72, abs=0.01)

@@ -1,9 +1,9 @@
 """Asking a model one question, on an empty context.
 
-The design pass is a separate call on the same model unless another is
-configured, because the isolation that matters is the empty context rather than a
-different set of weights: the author cannot see its own pages as a reader does,
-having decided what they mean.
+A per-page call runs on the same model unless another is configured, because the
+isolation that matters is the empty context rather than a different set of
+weights: a page's copy is written better against that page's claim than as one
+twentieth of a reply.
 
 Streaming rather than a single request, and that is not a preference. A page block
 runs to hundreds of tokens and a whole prelude to thousands, so a reply takes
@@ -91,7 +91,7 @@ class ProviderComposer:
         """Tokens spent by this pass, as a delta rather than a lifetime total.
 
         The predecessor read the provider's running totals, so the number it
-        reported for one design pass was everything the process had ever spent.
+        reported for one call was everything the process had ever spent.
         """
         for key, names in (
             ("input", ("prompt_tokens", "input_tokens")),

@@ -9,7 +9,8 @@ end users.
 ```
 scripts/
 ├── README.md                     This file.
-└── boxlite_cli.py                Direct CLI for the boxlite microVM library.
+├── boxlite_cli.py                Direct CLI for the boxlite microVM library.
+└── build_tabler_icons.py         Regenerate the packaged PPT icon data.
 ```
 
 ## When to use
@@ -17,6 +18,7 @@ scripts/
 | Script | Purpose | See |
 |---|---|---|
 | `boxlite_cli.py` | Manage boxlite OCI images + VMs (pull / ls / create / start / stop / rm / shell). Independent of Raven — works even when no agent is running, can inspect VMs owned by another boxlite home. | [`docs/sandbox/boxlite_cli.md`](../docs/sandbox/boxlite_cli.md) |
+| `build_tabler_icons.py` | Rebuild `raven/ppt/services/assets/data/tabler_outline.json` from a tabler-icons checkout: chooses which of the upstream ~5100 outline SVGs ship, converts their paths to the absolute M/L/C/Z grammar the data file uses, and attaches each icon's upstream tags and category. Run by hand when the icon set changes; not part of CI, and never rewrites or drops an icon already in the file. | the module docstring |
 
 `scripts/boxlite_cli.py` is **complementary** to the `raven sandbox`
 sub-command group (in `raven/cli/sandbox_commands.py`):

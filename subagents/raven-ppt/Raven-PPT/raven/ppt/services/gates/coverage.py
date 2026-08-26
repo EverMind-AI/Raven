@@ -17,7 +17,7 @@ published file -- is able to claim.
 
 from __future__ import annotations
 
-from raven.ppt.contracts import Audience, Finding, Severity
+from raven.ppt.contracts import Finding, Severity
 
 # What the render is the only way to measure. Named in the finding, because "the
 # deck could not be rendered" is a fact about the machine and "nothing checked
@@ -66,4 +66,4 @@ def unrendered(deck) -> list[Finding]:
 
 
 def _gap(kind: str, problem: str, remedy: str) -> Finding:
-    return Finding(kind=kind, severity=Severity.WARNING, audience=Audience.AUTHOR, message=f"{problem}. {remedy}")
+    return Finding(kind=kind, severity=Severity.WARNING, message=f"{problem}. {remedy}")

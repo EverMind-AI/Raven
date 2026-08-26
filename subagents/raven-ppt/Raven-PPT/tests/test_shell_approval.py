@@ -179,9 +179,14 @@ async def test_direct_delete_without_responder_is_denied(tmp_path) -> None:
 
     assert isinstance(result, ToolResult)
     assert result.retryable is False
-    assert result.abort_action is True
-    assert "requires user approval" in result.model_text
-    assert "Do not retry" in result.model_text
+    # Not an abort. A denial is something to respect rather than route around, and
+    # `abort_action` ends the turn so the next plan cannot restate a rejected
+    # operation as a script. An absent approval channel is not a denial: nobody
+    # refused anything, every command needing approval meets the same wall, and
+    # ending the turn there cost two headless runs eighteen of their twenty pages.
+    assert result.abort_action is False
+    assert "nobody to ask" in result.model_text
+    assert "Carry on with the rest of the task" in result.model_text
     assert executor.commands == []
 
 
@@ -265,3 +270,22 @@ async def test_sandboxed_delete_skips_approval_and_deny_policy(tmp_path) -> None
     assert "Exit code: 0" in result
     assert responder.requests == []
     assert executor.commands == ["rm -rf tmp"]
+
+
+def test_a_refusal_names_the_path_that_was_outside(tmp_path) -> None:
+    """One refusal covers a whole command, so it has to say which part earned it.
+
+    A live run wrote `ls <workspace>/figures/ && ls /tmp/`: the first half was
+    inside the fence and the second was not, the whole call came back as "a path
+    outside working dir", and with nothing naming which path the run could not
+    repair it. It ended by asking a user who was not there whether to continue,
+    and published no deck.
+    """
+    tool = ExecTool(working_dir=str(tmp_path), restrict_to_workspace=True)
+
+    refusal = tool._guard_command(f"ls {tmp_path}/figures/ && ls /etc/", str(tmp_path))
+
+    assert refusal is not None
+    assert "/etc" in refusal
+    assert str(tmp_path) in refusal
+    assert tool._guard_command(f"ls {tmp_path}/figures/", str(tmp_path)) is None

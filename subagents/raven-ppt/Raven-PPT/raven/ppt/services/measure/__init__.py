@@ -16,11 +16,13 @@ gates that do refuse a deck are provenance and design gates, and they live in
 """
 
 from raven.ppt.services.measure.content import (
+    COLUMN_SQUEEZE,
     DIAGRAM_SHAPES,
     EVIDENCE_SHARE,
-    MAX_TABLE_COLUMNS,
+    SAFE_MARGIN_IN,
     evidence_coverage,
     native_tables,
+    planned_tables,
     wide_tables,
 )
 from raven.ppt.services.measure.geometry import (
@@ -59,6 +61,7 @@ from raven.ppt.services.measure.type_size import (
     MIN_FLOOR_PT,
     TypeCensus,
     census,
+    scale_findings,
     type_findings,
     type_floors,
 )
@@ -78,9 +81,10 @@ __all__ = [
     "EVIDENCE_SHARE",
     "EstimatedWidth",
     "LABEL_SLACK",
-    "MAX_TABLE_COLUMNS",
+    "COLUMN_SQUEEZE",
     "MIN_FLOOR_PT",
     "Rect",
+    "SAFE_MARGIN_IN",
     "TypeCensus",
     "WORD_IN_CARD_SHARE",
     "WidthMeasurer",
@@ -102,7 +106,9 @@ __all__ = [
     "page_paragraphs",
     "pages",
     "parse_bbox_xml",
+    "planned_tables",
     "rule_strikes",
+    "scale_findings",
     "text_boxes_emu",
     "type_findings",
     "type_floors",

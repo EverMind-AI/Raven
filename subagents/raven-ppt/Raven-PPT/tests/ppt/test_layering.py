@@ -41,15 +41,64 @@ def _modules() -> list[tuple[Path, str]]:
     return found
 
 
+def _package(path: Path) -> str:
+    """The dotted package a file's relative imports resolve against."""
+    return ".".join(("raven", "ppt", *path.relative_to(PPT_ROOT).parts[:-1]))
+
+
+def _absolute(module: str | None, level: int, package: str) -> str | None:
+    """`from ..stages import x`, written the way the rules below are written.
+
+    A relative import reaches exactly as far as an absolute one and is invisible to a
+    check that only reads `node.module`: `from ..stages import compose` inside a
+    service is the same layer violation as `import raven.ppt.stages.compose`, and it
+    used to pass. `raven/ppt/` happens to have none today, which is the argument for
+    resolving them rather than against it -- the first one somebody writes is the one
+    that would not have been caught.
+    """
+    if not level:
+        return module
+    parts = package.split(".")
+    if level > 1:
+        parts = parts[: -(level - 1)]
+    if not parts:
+        return None  # reaches above raven/, which nothing here does
+    return ".".join([*parts, module]) if module else ".".join(parts)
+
+
 def _imports(path: Path) -> list[tuple[str, int]]:
+    """Every module this file imports, relative ones resolved to their absolute name."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = _package(path)
     out: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             out.extend((alias.name, node.lineno) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            out.append((node.module, node.lineno))
+        elif isinstance(node, ast.ImportFrom):
+            resolved = _absolute(node.module, node.level, package)
+            if resolved:
+                out.append((resolved, node.lineno))
     return out
+
+
+def test_a_relative_import_is_read_as_the_module_it_reaches() -> None:
+    """The resolution itself, because every rule below is only as good as it.
+
+    `raven/ppt/` is all absolute imports today, so nothing in the repository would
+    fail if this quietly returned nothing at all -- which is exactly the state the
+    check was in before.
+    """
+    package = "raven.ppt.services.assets"
+    assert _absolute("shapes", 1, package) == "raven.ppt.services.assets.shapes"
+    assert _absolute("stages", 2, package) == "raven.ppt.services.stages"
+    assert _absolute("tools.outline", 3, package) == "raven.ppt.tools.outline"
+    assert _absolute(None, 1, package) == package
+    assert _absolute("json", 0, package) == "json"
+
+
+def test_the_package_a_file_resolves_against_is_its_own_directory() -> None:
+    assert _package(PPT_ROOT / "services" / "assets" / "icons.py") == "raven.ppt.services.assets"
+    assert _package(PPT_ROOT / "services" / "__init__.py") == "raven.ppt.services"
 
 
 def test_ppt_package_is_present() -> None:

@@ -43,8 +43,7 @@ SCRIPT_AUTHOR = Profile(
         # been read every step it implies is mechanical: where the materials are,
         # whether there is a template, which of the brief the request already
         # states. Splitting it into four asks left the sequencing to whoever was
-        # reading four tool descriptions, which is the arrangement the design pass
-        # below already argued against.
+        # reading four tool descriptions.
         StageSpec(name="prepare", tool="ppt_prepare"),
         # The primitives `prepare` drives, still registered on their own: it is
         # worth being able to ingest one more paper, bind a template or fetch a URL
@@ -65,12 +64,6 @@ SCRIPT_AUTHOR = Profile(
         # the first moment anything knows which picture is missing.
         StageSpec(name="plan", tool="ppt_outline"),
         StageSpec(name="build", tool="ppt_build"),
-        # No tool: asked for in prose it did not happen. By the time an
-        # instruction says "now review the layout", the author has been looking
-        # at these pages while getting them to build, so the review it would run
-        # is the one it just ran, with the intent it already holds. It runs from
-        # code, on an empty context.
-        StageSpec(name="design_pass", tool=None),
         StageSpec(name="publish", tool=None),
     ),
     # The one route that hands the model a whole program. It has no ceiling and
@@ -79,7 +72,7 @@ SCRIPT_AUTHOR = Profile(
     # say and filled in the rest itself, so seventeen different compositions
     # still read as one template.
     capabilities=Capabilities(raw_script=True),
-    blocking_kinds=_PROVENANCE | _AGREED | {"band", "unmapped_page", "house_style"},
+    blocking_kinds=_PROVENANCE | _AGREED | {"unmapped_page", "house_style"},
     skill="ppt-script-authoring",
 )
 
@@ -100,7 +93,7 @@ SLOT_AUTHOR = Profile(
     # than finished geometry: the engine still owns the physical mapping, the
     # safe-area inset, the type scale, text fitting and the overlap check.
     capabilities=Capabilities(normalized_regions=True),
-    blocking_kinds=_PROVENANCE | _AGREED | {"band", "overlap", "outside_safe_area"},
+    blocking_kinds=_PROVENANCE | _AGREED | {"overlap", "outside_safe_area"},
     skill="ppt-slot-authoring",
 )
 
@@ -121,7 +114,6 @@ IMAGE_TEXT = Profile(
         StageSpec(name="background", tool="ppt_background"),
         StageSpec(name="place_text", tool="ppt_place_text"),
         StageSpec(name="build", tool=None),
-        StageSpec(name="design_pass", tool=None),
         StageSpec(name="publish", tool=None),
     ),
     capabilities=Capabilities(background_prompt=True, normalized_regions=True),

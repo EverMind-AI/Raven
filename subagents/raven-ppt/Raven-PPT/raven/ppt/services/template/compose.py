@@ -35,7 +35,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
 # How far a picture's proportions may differ from its frame's before fitting it stops
 # being a fit. A template's portrait photo slot is around 0.6 wide-to-tall and a paper's
@@ -44,6 +44,20 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 # what a live page did to Figure 2. Past this ratio the page needs rearranging, and only
 # the author can decide how.
 FIT_RATIO_LIMIT = 2.0
+
+# The three ways a layout can say "this box is the page's title".
+_TITLE_SLOTS = (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.VERTICAL_TITLE)
+
+# How close under the title a line has to start, and how nearly aligned with it, to be
+# the second half of one heading block: 8% of the page's height and 1% of its width.
+# Both numbers come off one measurement of the bundled templates, and both are
+# load-bearing. A section divider's line sits between 0% and 4.5% under its title and at
+# exactly the title's left edge. A closing page carries the same kind of placeholder
+# holding "Presenter name", and the nearest of those is either 13.7% of the page below
+# the title or 4.8% of its width off the left edge -- so loosening either number writes
+# the author's subtitle onto the presenter's name.
+_BLOCK_GAP = 0.08
+_BLOCK_LEFT = 0.01
 
 # Attributes that name a relationship inside copied shape XML.
 _REL_ATTRS = (
@@ -473,9 +487,15 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     shapes, match them up and replace is more work than drawing a rectangle, so the
     rectangle won and the template's design was lost.
 
-    `texts` maps a shape's current text -- or its 1-based index among the shapes that
-    have text -- to what should replace it. `pictures` maps the same keys to image
-    paths. `drop` names shapes to remove, by the same keys.
+    `texts` maps a shape's current text -- or its 1-based index over every shape on the
+    page, groups opened and counted whether or not it holds text, which is the number
+    `ppt_template` prints above each shape as `# [n]` -- to what should replace it. One
+    numbering serves `texts`, `pictures`, `drop` and `keep`; counting only the shapes
+    that hold text gave three numberings for one page and an author read the wrong one.
+    `pictures` maps the same keys to image paths, or to `(image, box)` to reshape the
+    frame first, where the box is `(left, top, width, height)` in inches -- a size, as
+    `place` takes, and not the two corners a `ppt_layout.Box` holds, though a Box may be
+    passed and is converted. `drop` names shapes to remove, by the same keys.
 
     **Text this call does not name is emptied, and shapes are otherwise left alone.**
     A shape is the design; the words in it are the template's example copy. The
@@ -506,8 +526,10 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     `items` alone -- which emptied the header, because text this call does not name is
     emptied -- then wrote "目录" and "Agenda" back as two new boxes over the clone, which
     is the one construction `template_underlay` refuses. The parameter it looked for now
-    exists: the title is the page's own title placeholder, or the topmost line in the top
-    third of it, which is what a reader would point at.
+    exists: the title is the page's own title placeholder wherever the template put it --
+    a cover's is centred in the page, not at the top of it -- and on a page the template
+    left unlabelled, the topmost line in the top third, which is what a reader would
+    point at. A page with no row to take the value says so rather than guessing.
 
     `keep` names text to leave exactly as the template wrote it, by the same keys --
     for the step number in a circle, or a label the template owns.
@@ -636,34 +658,105 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     return slide
 
 
+def _slot(shape):
+    """The role the layout gave this shape, or None for a box the author drew.
+
+    Read as an enum member rather than by matching its name, because the names overlap
+    where it matters: `"TITLE" in str(type)` is true of a SUBTITLE placeholder, and a
+    cover whose subtitle sits above its title would then answer `title=` with it.
+    """
+    if not getattr(shape, "is_placeholder", False):
+        return None
+    return getattr(getattr(shape, "placeholder_format", None), "type", None)
+
+
 def _heading_rows(slide, presentation):
     """The page's title and subtitle shapes, as a reader would point at them.
 
-    The title placeholder when the page has one, and otherwise the topmost line in the
-    top third -- which is the title on every template page measured. The subtitle is the
-    next line below it in that same band.
+    What the template named, wherever it put it, before anything is inferred from
+    where it sits. Inferring first is what the top-third rule did, and it fails on
+    exactly the pages a deck opens and divides with. Measured on the sixteen templates
+    that shipped when this was written, a cover's title is centred in the page between
+    1.24in and 4.76in on a 7.5in canvas, so the top third holds the presenter and date
+    lines instead: `title=` came back holding "Presenter name" on two covers and nothing
+    at all on a third, and `subtitle=` raised KeyError on ten of the sixteen covers and on
+    every one of the sixteen section dividers, whose one line under the title sits at
+    3.09in. Re-measured on the twelve that ship now, `title` resolves on all 197 example
+    pages and `subtitle` on 180, the seventeen it does not being closing pages carrying a
+    presenter row and six pages between.
+
+    Geometry still decides the rest, and there it is unchanged: a page that names a title
+    placeholder and nothing else takes its subtitle from the topmost line in the top
+    third, as before. Two fallbacks sit under that band,
+    for the pages whose heading is not at the top of the page at all: the line that
+    forms one block with the title, and then `_largest_row`.
     """
-    band = (presentation.slide_height or 0) * 0.35
-    found = {}
-    for shape in _all_shapes(slide.shapes):
-        if not getattr(shape, "has_text_frame", False) or shape.top is None:
-            continue
-        if shape.top > band or not shape.text_frame.text.strip():
-            continue
-        if getattr(shape, "is_placeholder", False) and "TITLE" in str(
-            getattr(getattr(shape, "placeholder_format", None), "type", "")
-        ):
-            found.setdefault("title", shape)
-            continue
-        found.setdefault("_rows", []).append(shape)
-    rows = sorted(found.pop("_rows", []), key=lambda shape: (shape.top, -(shape.width or 0)))
-    if "title" not in found and rows:
-        found["title"] = rows.pop(0)
-    elif rows and found.get("title") is not None:
-        rows = [shape for shape in rows if shape._element is not found["title"]._element]
-    if rows:
-        found["subtitle"] = rows[0]
+    height = presentation.slide_height or 0
+    width = presentation.slide_width or 0
+    band = height * 0.35
+    rows = sorted(
+        (
+            shape
+            for shape in _all_shapes(slide.shapes)
+            if getattr(shape, "has_text_frame", False) and shape.top is not None and shape.text_frame.text.strip()
+        ),
+        key=lambda shape: (shape.top, -(shape.width or 0)),
+    )
+    title = next((shape for shape in rows if _slot(shape) in _TITLE_SLOTS), None)
+    if title is None:
+        title = next((shape for shape in rows if shape.top <= band), None)
+    if title is None:
+        return {}
+
+    under = [shape for shape in rows if shape._element is not title._element and shape.top > title.top]
+    column = [shape for shape in under if abs((shape.left or 0) - (title.left or 0)) <= width * _BLOCK_LEFT]
+    # Anywhere on the page rather than under the title: a kicker set above the title is
+    # still the row the template called its subtitle. The element guard is what keeps
+    # that from answering both roles with one shape on a page whose title was inferred.
+    subtitle = next(
+        (shape for shape in rows if shape._element is not title._element and _slot(shape) == PP_PLACEHOLDER.SUBTITLE),
+        None,
+    )
+    if subtitle is None:
+        subtitle = next((shape for shape in under if shape.top <= band), None)
+    if subtitle is None:
+        floor = title.top + (title.height or 0)
+        subtitle = next((shape for shape in column if shape.top - floor <= height * _BLOCK_GAP), None)
+    if subtitle is None:
+        subtitle = _largest_row(column)
+    found = {"title": title}
+    if subtitle is not None:
+        found["subtitle"] = subtitle
     return found
+
+
+def _largest_row(rows):
+    """The one line set larger than every other line in the title's column.
+
+    The last thing tried, and narrow on purpose. A page whose subtitle sits halfway
+    down -- under a photograph, over a row of cards -- is out of reach of both the band
+    and the heading block, and the only thing left that says "heading" is the type size.
+    Most template copy declares no size at all, inheriting one from the layout, so this
+    answers on the few pages that do state it, and a tie is a refusal: an agenda page's
+    eight numbered slots are all set at one size, and any of them would put the author's
+    subtitle inside slot 01.
+    """
+    sized = []
+    for shape in rows:
+        largest = None
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                size = run.font.size or paragraph.font.size
+                if size is not None and (largest is None or size > largest):
+                    largest = size
+        if largest is not None:
+            sized.append((largest, shape))
+    if not sized:
+        return None
+    biggest = max(size for size, _ in sized)
+    if sum(1 for size, _ in sized if size == biggest) > 1:
+        return None
+    return next(shape for size, shape in sized if size == biggest)
 
 
 def units(container):
@@ -729,7 +822,11 @@ def arrangement(run):
 
 
 def boxes(run):
-    """Each unit's (left, top, width, height) in inches, in page order."""
+    """Each unit's (left, top, width, height) in inches, in page order.
+
+    A size, not a `ppt_layout.Box`: the same word names both rectangles, and what comes
+    back here is what `place` takes, so `boxes(run)[0][2]` is a width and not a far edge.
+    """
     found = []
     for unit in run:
         try:
@@ -737,6 +834,44 @@ def boxes(run):
         except TypeError:  # a unit with no geometry of its own
             return []
     return found
+
+
+def _as_size(box, taken_by: str) -> tuple[float, float, float, float]:
+    """`box` as (left, top, width, height) in inches, whichever rectangle was handed over.
+
+    One word, two rectangles: a box here is a size, because that is what every
+    python-pptx call takes, and a `ppt_layout.Box` is two corners. A Box says which of
+    the two it is, so it is converted; four bare numbers cannot, so they stay a size.
+
+    Recognised by its corners rather than by its type. This module is copied whole into
+    the author's build directory as `ppt_template.py`, where `raven` is not importable
+    and `ppt_layout` is a separate module object anyway, so an `isinstance` against the
+    class here would be False for the very Box the author passed.
+
+    EMU are refused rather than converted, because there is no rectangle they could be a
+    size of: `box.pptx()` and a shape's own `.left` / `.width` are python-pptx lengths,
+    and 12.6in reaches this as 11521440.
+    """
+    if all(hasattr(box, corner) for corner in ("x0", "y0", "x1", "y1")):
+        return (float(box.x0), float(box.y0), float(box.x1 - box.x0), float(box.y1 - box.y0))
+    wanted = f"{taken_by} is (left, top, width, height) in inches or a ppt_layout Box, not {box!r}"
+    try:
+        numbers = tuple(box)
+    except TypeError:
+        numbers = ()
+    if len(numbers) != 4:
+        raise ValueError(wanted)
+    if any(hasattr(number, "emu") for number in numbers):
+        inches = ", ".join(f"{float(number) / 914400:g}" for number in numbers)
+        raise ValueError(
+            f"{taken_by} is in inches and these are EMU -- as inches they read ({inches}). "
+            "`box.pptx()` hands back python-pptx lengths, and so do a shape's own .left and .width: "
+            "pass the ppt_layout Box itself, or divide each number by 914400"
+        )
+    try:
+        return tuple(float(number) for number in numbers)
+    except (TypeError, ValueError):
+        raise ValueError(wanted) from None
 
 
 def place(unit, box):
@@ -754,10 +889,15 @@ def place(unit, box):
     Works on any shape, not only a unit: a picture frame moved to make room for a
     caption, a title nudged off the artwork behind it. A group is the interesting case
     only because moving one moves everything inside it.
+
+    A `ppt_layout.Box` is accepted and converted, because unpacked as a size it was a
+    wrong answer nothing reported: `place(unit, Box.corners(0.72, 1.24, 12.6, 6.7))` drew
+    a 12.6x6.7in frame running off a 13.33x7.5in page, where those corners name an
+    11.88x5.46in one. Same call, same four numbers, no error either time.
     """
     from pptx.util import Inches
 
-    left, top, width, height = box
+    left, top, width, height = _as_size(box, "a box for place")
     unit.left, unit.top = Inches(left), Inches(top)
     unit.width, unit.height = Inches(width), Inches(height)
     return unit
@@ -876,6 +1016,10 @@ def _picture_spec(value):
     escape the message named -- `place(shape, box)` -- needed a shape `adapt` had not
     handed back yet, so from inside one call there was no way out.
 
+    The box is `(left, top, width, height)` in inches, in that order -- the same size
+    `place` takes, not the two corners a `ppt_layout.Box` holds. A Box may be passed and
+    is converted; four numbers are read as a size.
+
     A third element is the fit ("contain", "cover", "stretch") for the rare frame that
     wants cropping rather than shrinking.
     """
@@ -885,9 +1029,7 @@ def _picture_spec(value):
                 f"a picture is an image, (image, box) or (image, box, fit), not {len(value)} values. "
                 "A box is (left, top, width, height) in inches"
             )
-        box = tuple(float(number) for number in value[1])
-        if len(box) != 4:
-            raise ValueError(f"a box is (left, top, width, height) in inches, not {value[1]!r}")
+        box = _as_size(value[1], "a picture's box")
         return Path(value[0]), box, str(value[2]) if len(value) == 3 else "contain"
     return Path(value), None, "contain"
 

@@ -28,9 +28,9 @@ class PptIngestTool(Tool):
     description = (
         "Read every document in the project's materials directory once: the text, the figures, the tables "
         "and the numbers. It writes materials.md and a figure catalogue into the project, and returns the "
-        "figure ids with the caption each one carries in its source. Every later step reads what this "
-        "produced -- a figure reference is checked against these labels, and the material is what any number "
-        "on a slide has to come from -- so run it before writing anything."
+        "figure ids with the caption each one carries in its source -- the labels a page's figure reference "
+        "is checked against later. ppt_prepare and ppt_fetch run it for you, so call it to bring in another "
+        "directory of documents, or to re-read the deck's sources after editing one by hand."
     )
     timeout_seconds = 600.0
 

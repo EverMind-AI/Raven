@@ -17,8 +17,8 @@ from pathlib import Path
 class PageSource:
     """Which part of the author's input produced one page.
 
-    The design pass works one page at a time, so it needs the code or the spec
-    that drew that page and nothing else. Reading it from an author-written
+    Review works one page at a time, so a render has to be matched to the code or
+    the spec that drew that page and nothing else. Reading it from an author-written
     marker made annotation the model's job and let a stale number pair one
     page's render with another page's code; the script backend derives it from
     execution instead, and records the script digest so a mapping can never be

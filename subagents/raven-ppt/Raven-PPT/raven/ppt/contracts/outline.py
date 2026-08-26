@@ -8,15 +8,13 @@ the audience has to believe by the end.
 
 Deciding that is the deck's one genuinely creative act, so it belongs to the author
 rather than to a pass that runs from code. What belongs here is the part that can be
-checked, and three things can:
+checked, and two things can:
 
 A figure the plan means to place has to exist in the catalogue. And the page count
 meets the brief's budget now, rather than after eighteen pages of program have been
-written against a budget of ten.
-
-Numbers are not among them. Whether a figure traces to the materials has no
-code-level check any more -- see the accepted gap recorded in `raven/ppt/AGENTS.md` --
-so grounding a number is guided by the prompt and nothing verifies it here.
+written against a budget of ten. What a page *says* is not checked against anything:
+the gate that held a number in the outline against an index of the materials was
+deleted with that index (design doc D3a).
 
 The fourth thing it does is not a check: a page that names what it still needs turns
 into a search. This is the moment when what the deck is missing is actually known --
@@ -40,6 +38,89 @@ def outline_path(project: Project) -> Path:
 
 
 @dataclass(frozen=True)
+class PlannedTable:
+    """A page's table plan read as the grid it describes, rather than as a dict.
+
+    The stored form stays a dict, because a model writes it and JSON persists it --
+    and it comes back off disk with its tuples turned into lists. Every reader goes
+    through here so that all of them see one shape: rows of cells, one cell a column,
+    however the plan reached the file.
+
+    `rows` used to hold two shapes at once. The field began as row *labels*, one
+    string a row, and grew into complete cell rows without the string form being
+    taken back out, so a single plan could carry `["cost", "4.2"]` beside `"cost"`.
+    A bare string is not a row of a grid: it has a cell under the first column and a
+    hole under every other one, and nothing downstream could tell a plan that meant
+    one label from a plan that lost its cells. So a string read here becomes a
+    one-cell row and the schema asks for cells -- the shape is single, and a row that
+    is short of the header still shows as short when the plan is read back.
+    """
+
+    columns: tuple[str, ...] = ()
+    rows: tuple[tuple[str, ...], ...] = ()
+    reading: str = ""
+
+    @classmethod
+    def of(cls, table_plan: object) -> PlannedTable:
+        """One of these out of whatever a plan holds, and empty out of anything else."""
+        if not isinstance(table_plan, dict):
+            return cls()
+        columns = tuple(str(item).strip() for item in table_plan.get("columns") or () if str(item).strip())
+        rows: list[tuple[str, ...]] = []
+        for item in table_plan.get("rows") or ():
+            if isinstance(item, (list, tuple)):
+                cells = tuple(str(cell).strip() for cell in item)
+                if any(cells):
+                    rows.append(cells)
+            elif str(item).strip():
+                rows.append((str(item).strip(),))
+        return cls(columns=columns, rows=tuple(rows), reading=str(table_plan.get("reading") or "").strip())
+
+    @property
+    def width(self) -> int:
+        """How many columns the grid has: the header's, or the longest row's without one."""
+        return max(len(self.columns), max((len(row) for row in self.rows), default=0))
+
+    def as_dict(self) -> dict[str, object]:
+        """The stored form, with the keys the plan does not fill left out."""
+        result: dict[str, object] = {}
+        if self.columns:
+            result["columns"] = self.columns
+        if self.rows:
+            result["rows"] = self.rows
+        if self.reading:
+            result["reading"] = self.reading
+        return result
+
+    def lines(self) -> list[str]:
+        """The plan as the author should read it: a header, its rows, the cue.
+
+        It used to be handed over as `{'columns': ('指标', '自研'), 'rows': ((...),)}`
+        -- a Python dict repr, tuples and quotes and all -- two lines above the
+        planned points, which were rendered as a list. A table is the one thing in a
+        plan that has a shape, and the repr is the one form that hides it.
+
+        Indented to sit under its own heading, the way the planned points are, and
+        deliberately terse: this goes into a prompt, not onto a page. Short rows are
+        padded out so a row missing a cell reads as a gap in the grid rather than as
+        a shorter row.
+        """
+        width = self.width
+        out = []
+        if self.columns:
+            out.append("  " + " | ".join(self.columns))
+            if self.rows:
+                out.append("  " + " | ".join("---" for _ in range(width)))
+        for row in self.rows:
+            # Right-stripped only: the empty cells are what show the gap, and the pipe
+            # after the last of them survives the strip while its trailing space does not.
+            out.append(("  " + " | ".join((*row, *("" for _ in range(width - len(row)))))).rstrip())
+        if self.reading:
+            out.append(f"  Read it for: {self.reading}")
+        return out
+
+
+@dataclass(frozen=True)
 class PagePlan:
     """One page, as an argument rather than as a layout."""
 
@@ -50,10 +131,25 @@ class PagePlan:
     carries: str = ""
     """What carries it: a figure id, a table, a chart, a number, a diagram."""
     table_plan: dict[str, object] | None = None
-    """Optional table information shape: columns, row labels and a reading cue."""
+    """Optional table information shape: columns, complete cell rows, a reading cue.
+
+    Stored as the dict the tool schema takes and read through `PlannedTable`, which
+    is where the one shape those rows come in is decided."""
+    layout: str = ""
+    """Which page structure and modifier layers this page is composed of, by id.
+
+    `"P14 + M4 + M11"`, from `references/layouts.md`. Structured for the same reason
+    `table_plan` is: a page's shape was decided while its geometry was being typed, and
+    what came of that is measurable -- one delivered deck drew its own layout on eleven
+    pages, four of which are the same eight lines (a table, one rounded plane, three
+    points). Declared here, the choice is reviewable before anything is drawn, and the
+    deck's spread of structures is legible by reading down the column."""
     figures: tuple[str, ...] = field(default_factory=tuple)
     says: tuple[str, ...] = field(default_factory=tuple)
-    """The supporting points, in the deck's language."""
+    """The supporting points, in the deck's language.
+
+    Read by the replanner and measured for thinness, and checked against nothing else:
+    a number written here reaches the page on the author's word alone."""
     section: str = ""
     """Which movement of the deck this page belongs to, named for this material.
 
@@ -90,6 +186,7 @@ class PagePlan:
             "claim": self.claim,
             "carries": self.carries,
             "table_plan": self.table_plan,
+            "layout": self.layout,
             "figures": list(self.figures),
             "says": list(self.says),
             "section": self.section,
@@ -152,11 +249,17 @@ def load_outline(path: Path) -> Outline | None:
                     page=int(entry.get("page", 0)),
                     claim=str(entry.get("claim", "")),
                     carries=str(entry.get("carries") or ""),
-                    table_plan=entry.get("table_plan") if isinstance(entry.get("table_plan"), dict) else None,
+                    table_plan=PlannedTable.of(entry.get("table_plan")).as_dict() or None,
+                    layout=str(entry.get("layout") or ""),
                     figures=tuple(str(f) for f in entry.get("figures") or ()),
                     says=tuple(str(s) for s in entry.get("says") or ()),
-                    section=str(entry.get("section") or ""),
                     needs=str(entry.get("needs") or ""),
+                    # Written by `as_dict` since it was added and never read back: a plan
+                    # recorded its section on every call and the build stage saw "" on
+                    # every one, so the one field that says which movement a page belongs
+                    # to reached nothing. Any field added above without a line here goes
+                    # the same way silently.
+                    section=str(entry.get("section") or ""),
                     prototype=int(entry["prototype"]) if entry.get("prototype") is not None else None,
                 )
             )
