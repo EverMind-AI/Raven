@@ -43,6 +43,15 @@ METHOD_NOT_FOUND = -32601
 """JSON-RPC's own code, used to answer an agent-initiated request raven does not
 implement. An explicit error keeps the agent moving; silence would hang it."""
 
+CANCEL_REQUEST_METHOD = "$/cancel_request"
+"""An agent taking back a request whose answer it will no longer read.
+
+Protocol-level and explicitly optional -- a receiver MAY act on it -- so it
+carries no id of its own and nothing answers it. Worth acting on all the same:
+the requests it retracts here are the ones raven puts in front of a person, and
+the retraction is the only signal that the run behind the question has stopped
+listening."""
+
 
 class AcpError(Exception):
     """Base for every ACP transport failure."""
@@ -127,6 +136,7 @@ def initialize_params() -> dict[str, Any]:
 
 
 __all__ = [
+    "CANCEL_REQUEST_METHOD",
     "CLIENT_CAPABILITIES",
     "METHOD_NOT_FOUND",
     "PROTOCOL_VERSION",

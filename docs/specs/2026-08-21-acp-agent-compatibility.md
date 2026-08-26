@@ -91,7 +91,7 @@ build is validated against it.
 |---|---|---|
 | `session/cancel` | **Supported** | Cancels the work first, then answers the pending prompt with `cancelled` -- last, so a late event cannot settle it with a different reason after the client has been told. Answered unconditionally, including when there was nothing to cancel: a cancel arriving before the scheduler accepted the turn still has a prompt to answer. |
 | Tool-level cancellation | **Supported** | A cancelled turn kills the shell's whole process group, not just the shell. Measured: with the group kill, a child process stops writing the instant the turn is cancelled; without it, the child keeps writing to the workspace for the life of the agent. |
-| `$/cancel_request` | **Ignored, safely** | Protocol-level and explicitly optional; the spec says a receiver MAY act on it. |
+| `$/cancel_request` | **Sent; ignored inbound** | Protocol-level and explicitly optional; the spec says a receiver MAY act on it. Raven sends one for a request it stops waiting for, so a client is not left holding a prompt whose answer nothing will read -- an `ask_user` question that timed out, or whose turn was cancelled. Inbound it is still ignored: a request raven would have cancelled is answered `-32800` by whoever owns it. |
 | Client leaves mid-turn | **Answered, then unwound** | On EOF the pending prompts are settled as `cancelled` and the handlers return through their own code, releasing their turn slots before the engine is torn down. |
 
 ## Permissions

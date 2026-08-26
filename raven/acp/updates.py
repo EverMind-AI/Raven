@@ -80,6 +80,7 @@ SIDE_CHANNEL_METHODS = frozenset(
         "approval.request",
         "approval.closed",
         "clarify.request",
+        "clarify.closed",
         "confirm.request",
         "system.update_available",
         "mcp.status",

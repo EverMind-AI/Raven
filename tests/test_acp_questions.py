@@ -20,7 +20,8 @@ import pytest
 
 from raven.acp.capabilities import ClientCapabilities
 from raven.acp.outbound import OutboundRequests
-from raven.acp.questions import ANSWER_FIELD, CLARIFY_METHOD, MAX_CHOICES, AcpQuestions
+from raven.acp.protocol import CANCEL_REQUEST_METHOD
+from raven.acp.questions import ANSWER_FIELD, CLARIFY_CLOSED_METHOD, CLARIFY_METHOD, MAX_CHOICES, AcpQuestions
 from raven.acp.updates import AcpSession, UpdateTranslator
 from tests.acp_schema import validate_def, validate_outbound
 
@@ -391,6 +392,76 @@ class TestFailurePaths:
         await _settle(questions)
 
         assert broker.answers == [("q1", "postgres")]
+
+
+class TestRetractingAQuestion:
+    """What the client is told once a question stops being answerable.
+
+    A question this side has given up on is still a form on somebody's screen:
+    the client is holding an ``elicitation/create`` whose answer will now go
+    nowhere. ``clarify.closed`` is the runtime saying the question died;
+    ``$/cancel_request`` is what the protocol has for saying it onwards, and is
+    what the reference SDK sends in the same situation.
+    """
+
+    async def test_a_closed_question_retracts_the_request_the_client_is_holding(self):
+        client, _, questions = _rig(silent=True, capabilities=FORM)
+
+        assert questions.handle(CLARIFY_METHOD, _clarify()) is True
+        await asyncio.sleep(0)
+        asked = client.asked("elicitation/create")
+
+        assert questions.handle(CLARIFY_CLOSED_METHOD, _clarify()) is True
+        await _settle(questions)
+
+        assert client.asked(CANCEL_REQUEST_METHOD)["params"] == {"requestId": asked["id"]}
+
+    async def test_a_question_that_ran_out_of_time_retracts_itself(self):
+        """The timeout is this side deciding to stop waiting. Nothing else fires."""
+        client, _, questions = _rig(silent=True, capabilities=FORM, timeout_s=0.05)
+
+        questions.handle(CLARIFY_METHOD, _clarify())
+        await asyncio.sleep(0.2)
+        await questions.drain()
+
+        asked = client.asked("elicitation/create")
+        assert client.asked(CANCEL_REQUEST_METHOD)["params"] == {"requestId": asked["id"]}
+
+    async def test_an_answered_question_is_not_retracted(self):
+        """Retracting one the client already answered would take back nothing and
+        tell it to drop a form it has already closed."""
+        client, broker, questions = _rig(
+            lambda f: {"result": {"action": "accept", "content": {ANSWER_FIELD: "postgres"}}}, capabilities=FORM
+        )
+
+        questions.handle(CLARIFY_METHOD, _clarify())
+        await _settle(questions)
+
+        # Paired with the round trip itself: "nothing was retracted" is equally
+        # true of a question that was never asked, which is not what this checks.
+        assert client.asked("elicitation/create")
+        assert broker.answers == [("q1", "postgres")]
+        assert [f for f in client.frames if f.get("method") == CANCEL_REQUEST_METHOD] == []
+
+    async def test_a_permission_route_question_is_retracted_the_same_way(self):
+        """The route is the client's declaration, not a difference in lifetime."""
+        client, _, questions = _rig(silent=True)
+
+        assert questions.handle(CLARIFY_METHOD, _clarify()) is True
+        await asyncio.sleep(0)
+        asked = client.asked("session/request_permission")
+
+        assert questions.handle(CLARIFY_CLOSED_METHOD, _clarify()) is True
+        await _settle(questions)
+
+        assert client.asked(CANCEL_REQUEST_METHOD)["params"] == {"requestId": asked["id"]}
+
+    def test_a_close_for_a_question_nobody_is_asking_is_not_taken(self):
+        """Returning ``False`` puts it back on the dropped tally, which is where a
+        notification this surface does not serve belongs."""
+        _, _, questions = _rig()
+
+        assert questions.handle(CLARIFY_CLOSED_METHOD, _clarify()) is False
 
 
 class TestWhatIsNotTaken:

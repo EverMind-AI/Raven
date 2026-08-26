@@ -226,7 +226,9 @@ class TestNotifications:
 
     async def test_a_protocol_level_cancel_is_ignored_safely(self, home):
         """``$/cancel_request`` is explicitly optional: a receiver MAY act on it,
-        and ignoring it is conformant."""
+        and ignoring it is conformant. Scoped to raven-as-agent, which is what this
+        stub is: raven-as-client acts on the same notification, in the other
+        package and the other direction."""
         async with stub_client(env=home) as client:
             await client.notify("$/cancel_request", {"id": "stub-1"})
 

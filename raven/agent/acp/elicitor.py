@@ -53,6 +53,19 @@ def _lock_for(conversation_id: str) -> asyncio.Lock:
     return lock
 
 
+def _retracted() -> bool:
+    """Whether this task carries a cancellation something has already swallowed.
+
+    `QuestionBroker.await_question` answers a cancellation with the question's
+    default rather than propagating one, so a retracted call arrives in `_one` as
+    an empty answer -- indistinguishable from a user's skip. Nothing calls
+    `uncancel`, so the request count outlives that catch and is the only trace
+    left that the call was cancelled at all.
+    """
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
 def _off_enum(value: Any, options: list[str]) -> bool:
     """Whether `value` was not among `options`, by item if `value` is a list.
 
@@ -159,11 +172,14 @@ class Elicitor:
             content: dict[str, Any] = {}
             for field in fields:
                 status, value = await self._one(asker, conversation_id, ask, field)
-                if self._cancelled:
+                if self._cancelled or _retracted():
                     # Checked after each answer rather than only before the
                     # first: the run can end mid-form, and both the next
                     # question and content assembled for a run that is gone are
-                    # things to stop rather than deliver.
+                    # things to stop rather than deliver. Two conditions because
+                    # there are two ways to lose the reader -- the run ending,
+                    # which `cancel` marks, and the agent retracting this one
+                    # request, which reaches here only as a cancelled task.
                     return elicitation.cancel()
                 if status in ("unavailable", "invalid"):
                     # `unavailable`: no round trip happened, so nothing was put

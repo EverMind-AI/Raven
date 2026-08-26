@@ -79,7 +79,7 @@ conversation; each is announced once per session as
 # is protocol-level and explicitly optional: the spec says a receiver MAY act on
 # it, and a request it would have cancelled is answered -32800 by whoever owns
 # that request rather than here.
-IGNORED_NOTIFICATIONS = frozenset({"$/cancel_request"})
+IGNORED_NOTIFICATIONS = frozenset({protocol.CANCEL_REQUEST_METHOD})
 
 
 # Keys the internal dispatcher attaches that must not leave the process. The

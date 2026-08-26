@@ -87,7 +87,7 @@ class TestWireVocabulary:
         """These are the frames that share ``send_frame`` with the subscription
         stream. Each is dropped today; the list exists so "dropped" is a decision
         with a name rather than an accident."""
-        assert {"approval.request", "clarify.request", "confirm.request"} <= SIDE_CHANNEL_METHODS
+        assert {"approval.request", "clarify.request", "clarify.closed", "confirm.request"} <= SIDE_CHANNEL_METHODS
         assert {"mcp.status", "memory.health", "oauth.pending", "oauth.done"} <= SIDE_CHANNEL_METHODS
 
 

@@ -208,3 +208,16 @@ class TestManifestAgreement:
         served = {"initialize", "authenticate", "session/new", "session/prompt", "session/cancel"}
         for method in served | UNIMPLEMENTED_METHODS:
             assert method in agent_method_names(), f"{method} is not in the stable manifest"
+
+
+class TestTheTwoSidesAgree:
+    def test_the_retraction_raven_sends_is_the_one_raven_listens_for(self):
+        """The two ACP packages are deliberately separate -- agent-side and
+        client-side -- and each spells this method itself. A raven sub-agent
+        retracting a question only reaches a raven host if the two strings are
+        the same one, and nothing else in either package would notice if they
+        drifted apart."""
+        from raven.acp.protocol import CANCEL_REQUEST_METHOD as SENT
+        from raven.agent.acp.protocol import CANCEL_REQUEST_METHOD as HEARD
+
+        assert SENT == HEARD == "$/cancel_request"

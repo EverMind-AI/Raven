@@ -358,10 +358,15 @@ the answer.
   records it like any other -- so a credential asked for that way would be
   visible in the transcript. `autoResolutionMs` is the asking side's own deadline
   for giving up, which nothing here honours.
-- `clarify.closed` is not in the ACP server's `SIDE_CHANNEL_METHODS`, so a close
-  arriving at that sink lands on its `dropped` tally. The useful behaviour is
-  cancelling the outstanding `elicitation/create` with `elicitation/complete`,
-  which is a protocol addition rather than a listing.
+- ~~`clarify.closed` is not in the ACP server's `SIDE_CHANNEL_METHODS`~~ Done.
+  It is listed and served: a close now cancels the outstanding
+  `elicitation/create`, which sends `$/cancel_request` for it. Not
+  `elicitation/complete` as sketched here -- that one exists in the schema but
+  is scoped to url-mode elicitations and is keyed on an `elicitationId`, which
+  raven never mints because it advertises form mode and never url.
+  `$/cancel_request` is keyed on the `requestId` this side already holds, needs
+  no protocol addition, and is what the reference client SDK sends in the same
+  situation.
 
 ## Risks
 
