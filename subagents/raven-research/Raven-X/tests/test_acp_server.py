@@ -209,3 +209,115 @@ async def test_load_replays_then_prompt_continues_the_stored_session(tmp_path):
         assert missing["error"]["code"] == protocol.RESOURCE_NOT_FOUND
     finally:
         await client.close()
+
+
+# -- ask_user round trip --------------------------------------------------------
+
+
+class _AskUserStubTool:
+    def __init__(self):
+        self.broker = None
+
+    def set_broker(self, broker):
+        self.broker = broker
+
+
+class _AskingLoop:
+    """A loop whose turn asks the user once, through whatever broker was armed."""
+
+    workspace = None
+
+    def __init__(self):
+        self.tool = _AskUserStubTool()
+        self.tools = {"ask_user": self.tool}
+
+    async def run_turn(self, req, emit, drain, stream=False, usage_sink=None, **_kw):
+        broker = self.tool.broker
+        if broker is None:
+            await emit(Text(content="no broker armed"))
+        else:
+            answer = await broker.await_question(
+                f"acp:{req.source.chat_id}", prompt="which year?", choices=["2023", "2024"]
+            )
+            await emit(Text(content=f"answered: {answer}"))
+        return TurnOutcome(usage=Usage(1, 2, 3), explicit_reply=True)
+
+
+async def _update_of_kind(client, session_id, kind, timeout=5.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        for update in client.updates(session_id):
+            if update.get("sessionUpdate") == kind:
+                return update
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"no {kind} update; wire: {client.out.frames()}")
+        await asyncio.sleep(0.01)
+
+
+async def test_ask_user_round_trips_over_the_wire():
+    """The repo-local proof of ``askUser.delivery="tool"`` on ACP: the client
+    declares the capability, the question leaves as an ``ask_user_request``
+    update mid-turn, ``_raven/clarify_respond`` answers it, and the SAME
+    prompt's reply carries the answer."""
+    loop = _AskingLoop()
+    client = _Client(lambda: loop)
+    rid = client.send(
+        "initialize",
+        {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},
+    )
+    await client.response(rid)
+    assert loop.tool.broker is not None, "initialize did not arm the broker"
+
+    rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+    sid = (await client.response(rid))["result"]["sessionId"]
+    prompt_id = client.send(
+        "session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "research X"}]}
+    )
+    question = await _update_of_kind(client, sid, "ask_user_request")
+    assert question["question"] == "which year?"
+    assert question["choices"] == ["2023", "2024"]
+
+    rid = client.send("_raven/clarify_respond", {"requestId": question["requestId"], "answer": "2024"})
+    assert (await client.response(rid))["result"] == {"delivered": True}
+
+    response = await client.response(prompt_id)
+    assert response["result"]["stopReason"] == "end_turn"
+    chunks = [u for u in client.updates(sid) if u["sessionUpdate"] == "agent_message_chunk"]
+    assert chunks and "answered: 2024" in chunks[-1]["content"]["text"]
+    await client.close()
+
+
+async def test_an_undeclared_client_never_sees_a_question():
+    """No capability, no broker: the tool stays unarmed and the turn takes its
+    no-broker path — on the real loop that is the gate's handoff fallback."""
+    loop = _AskingLoop()
+    client = _Client(lambda: loop)
+    rid = client.send("initialize", {"protocolVersion": 1})
+    await client.response(rid)
+    assert loop.tool.broker is None
+    rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+    sid = (await client.response(rid))["result"]["sessionId"]
+    prompt_id = client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "q"}]})
+    assert (await client.response(prompt_id))["result"]["stopReason"] == "end_turn"
+    kinds = [u["sessionUpdate"] for u in client.updates(sid)]
+    assert "ask_user_request" not in kinds
+    await client.close()
+
+
+async def test_eof_fail_safes_a_turn_blocked_on_a_question():
+    """The shutdown ordering in serve(): cancel_all runs before the drain, so a
+    turn holding its prompt on an unanswered question unwinds through the
+    broker's default instead of spending the drain's grace."""
+    loop = _AskingLoop()
+    client = _Client(lambda: loop)
+    rid = client.send(
+        "initialize",
+        {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},
+    )
+    await client.response(rid)
+    rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+    sid = (await client.response(rid))["result"]["sessionId"]
+    client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "q"}]})
+    await _update_of_kind(client, sid, "ask_user_request")
+    # close() awaits the serve task with a timeout: completing at all IS the assertion.
+    await client.close()

@@ -760,3 +760,38 @@ def test_the_answer_tag_is_revealed_before_markdown_eats_it():
     multi = _reveal_answer_tag("x <ANSWER>line one\nline two</answer> y")
     assert "line one\nline two" in multi, "case and newlines must survive"
     assert _reveal_answer_tag("no tags here") == "no tags here"
+
+
+def test_repl_wires_the_terminal_ask_user_broker() -> None:
+    """The interactive path late-binds a TerminalQuestionBroker through the same
+    ``set_broker`` seam the TUI and gateway use; a registry without ask_user, or
+    a tool without the seam, is left alone. The -m one-shot never calls this."""
+    from raven.cli._terminal_questions import TerminalQuestionBroker
+    from raven.cli.agent_commands import _wire_repl_ask_user
+
+    class _Tool:
+        broker = None
+
+        def set_broker(self, broker):
+            self.broker = broker
+
+    class _Loop:
+        def __init__(self, tool):
+            self.tools = {"ask_user": tool} if tool is not None else {}
+
+    class _Progress:
+        def suspended(self):
+            raise AssertionError("wiring must not open the suspend context")
+
+    tool = _Tool()
+    _wire_repl_ask_user(_Loop(tool), console=None, progress=_Progress())
+    assert isinstance(tool.broker, TerminalQuestionBroker)
+
+    # No ask_user registered: nothing to wire, nothing raises.
+    _wire_repl_ask_user(_Loop(None), console=None, progress=_Progress())
+
+    # A tool without the seam (no set_broker) is left alone.
+    class _Sealed:
+        pass
+
+    _wire_repl_ask_user(_Loop(_Sealed()), console=None, progress=_Progress())

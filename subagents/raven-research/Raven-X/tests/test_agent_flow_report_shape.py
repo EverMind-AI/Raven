@@ -183,6 +183,50 @@ def test_prose_that_merely_mentions_a_section_word_is_not_a_heading():
     )
 
 
+def test_a_heading_glued_mid_line_is_not_a_heading():
+    """The failure the rewrite prompt's closing sentence guards against: one
+    observed rewrite ran its preamble straight into ``## Answer`` on the same
+    line, so the section shipped unsatisfied - mid-line ``##`` is not a markdown
+    heading, for this parser or for the reader's renderer."""
+    shape = ReportShape(
+        "Let me rewrite with all three sections present## Answer\nyes\n\n"
+        "## Findings\nbody\n\n## Limitations\nnone material"
+    )
+    assert shape.missing == ("Answer",)
+
+
+def test_the_rewrite_prompt_forbids_preamble_and_pins_heading_position():
+    """Both halves of the observed malformed rewrite: the acknowledgement
+    preamble and the glued heading. Pinned so a rewording keeps the guards."""
+    from raven.agent.flow.report_shape import _REWRITE_PROMPT
+
+    assert "begin it at `## Answer`" in _REWRITE_PROMPT
+    assert "start of its own line" in _REWRITE_PROMPT
+    assert "do not acknowledge" in _REWRITE_PROMPT
+
+
+def test_a_stem_subheading_inside_findings_masks_a_missing_section():
+    """Known behaviour, pinned rather than fixed: a ``###`` subheading whose label
+    carries a section stem satisfies that section, so a reply that discusses its
+    limits under ``### 局限性讨论`` inside Findings and never writes
+    ``## Limitations`` still reads well-formed - no bounce, malformed ships.
+
+    This is the tolerance the module was built around (any level, any
+    decoration), one step further out; tightening it would re-price ``off_level``
+    for every reply already tolerated. The deep report template
+    (``finalShape.reportDepth``) invites ``###`` subheadings inside Findings, so
+    this false-present gets MORE likely there - which is why an A/B over that
+    knob must read ``off_level_headings`` alongside ``well_formed`` instead of
+    taking the counter at face value.
+    """
+    shape = ReportShape(
+        "## Answer\nyes\n\n## Findings\nbody\n\n### 局限性讨论\nthe caveats live here"
+    )
+    assert shape.well_formed
+    assert shape.missing == ()
+    assert "Limitations" in shape.off_level
+
+
 # --------------------------------------------------------------------------- #
 # The reminder's delimiters                                                    #
 # --------------------------------------------------------------------------- #

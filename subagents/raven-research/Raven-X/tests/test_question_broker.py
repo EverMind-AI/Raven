@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from raven.tui_rpc.methods.question import question_respond, register_question_methods
 from raven.tui_rpc.question_broker import QuestionBroker
 
@@ -132,6 +134,36 @@ async def test_cancel_all_failsafe() -> None:
 
     broker.cancel_all()
     assert await task == "bye"
+
+
+async def test_cancel_failsafes_one_conversation() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    assert broker.cancel(CID) is False  # nothing pending: idempotent
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="bye"))
+    await _wait_for_frame(frames)
+
+    assert broker.cancel(CID) is True
+    assert await task == "bye"
+    assert broker.cancel(CID) is False
+
+
+async def test_a_cancelled_task_propagates_instead_of_answering_default() -> None:
+    """A cancelled task is a cancelled turn. Absorbing it into the default
+    answer kept the "cancelled" turn researching to completion while its
+    canceller awaited the unwind; a turn cancel that must not kill the
+    question resolves it first via :meth:`cancel`."""
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="bye"))
+    await _wait_for_frame(frames)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert broker.pending_req(CID) is None  # the finally still retracted it
 
 
 async def test_overlapping_question_replaces_stale() -> None:

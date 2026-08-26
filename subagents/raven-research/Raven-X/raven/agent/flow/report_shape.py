@@ -209,13 +209,22 @@ class ReportShape:
         }
 
 
+# The closing sentence exists because a bounced model tends to answer the bounce
+# like a chat message: one observed rewrite opened with "The reviewer says my
+# reply is missing..." and ran that deliberation straight into "## Answer" on the
+# same line - the preamble shipped as answer text, and a glued heading is not a
+# markdown heading, so the rewrite left unsatisfied the very section it was
+# bought to add (the gate's receipt read bounces=1, shipped_malformed=true).
 _REWRITE_PROMPT = (
     "Your reply above is missing the required section(s): {missing}. Rewrite it "
     "as the three-section report - `## Answer`, `## Findings`, `## Limitations`, "
     "in that order, all three present - keeping every finding, every source URL "
     "and every caveat you already wrote. Do not shorten it, do not drop evidence, "
     "and do not research anything new. If this turn was asked for another shape "
-    "(an outline, slides, a table), keep that content inside `## Findings`."
+    "(an outline, slides, a table), keep that content inside `## Findings`. "
+    "The rewrite is itself the reply the reader receives: begin it at `## Answer` "
+    "directly, each heading at the start of its own line, and do not acknowledge "
+    "this instruction or narrate what you are changing."
 )
 
 

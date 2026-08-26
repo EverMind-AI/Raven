@@ -28,6 +28,7 @@ from loguru import logger
 
 from raven.acp import protocol
 from raven.acp.capabilities import ClientCapabilities, initialize_result
+from raven.acp.questions import CLARIFY_RESPOND_METHOD
 from raven.acp.redact import redact, redact_value
 from raven.acp.replay import replay
 from raven.acp.spine import AcpSession, AcpSessions, TurnAlreadyRunningError
@@ -98,12 +99,21 @@ class AcpMethods:
         emit: Callable[[dict[str, Any]], None],
         session_manager: Any = None,
         channel: str = "acp",
+        question_broker: Any = None,
+        arm_ask_user: Callable[[bool], None] | None = None,
     ) -> None:
         self._submit = submit
         self._sessions = sessions
         self._emit = emit
         self._session_manager = session_manager
         self._channel = channel
+        # The ask_user round trip (raven/acp/questions.py). The broker resolves
+        # ``_raven/clarify_respond``; ``arm_ask_user`` is the server's seam that
+        # binds or unbinds it on the engine's tool, called from initialize with
+        # the client's declaration -- the methods layer knows the capability,
+        # the server knows the tool, and neither should know the other's half.
+        self._question_broker = question_broker
+        self._arm_ask_user = arm_ask_user
         self.initialized = False
         self.client = ClientCapabilities()
 
@@ -194,6 +204,8 @@ class AcpMethods:
             return await self._session_prompt(params)
         if method == "session/cancel":
             return await self._session_cancel(params)
+        if method == CLARIFY_RESPOND_METHOD:
+            return self._clarify_respond(params)
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
@@ -206,6 +218,11 @@ class AcpMethods:
         # attempt raced its own setup.
         self.client = ClientCapabilities.from_params(params)
         self.initialized = True
+        if self._arm_ask_user is not None:
+            # Follows the record in BOTH directions on a re-initialize: a
+            # declaration that disappeared must disarm, or the tool would keep
+            # asking a client that no longer renders the question.
+            self._arm_ask_user(self.client.ask_user)
         return initialize_result(params)
 
     async def _session_new(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -369,6 +386,13 @@ class AcpMethods:
         handle = session.handle
         try:
             if handle is not None:
+                # A turn blocked on an ask_user round trip must have its
+                # question resolved FIRST: the broker fail-safes it to the
+                # default, so the wait releases whatever shape the handle's
+                # cancel takes, and the cancel itself then lands at an await
+                # point that propagates it instead of one that absorbs it.
+                if self._question_broker is not None:
+                    self._question_broker.cancel(session_id)
                 handle.cancel()
                 await handle.result()
         finally:
@@ -376,6 +400,24 @@ class AcpMethods:
             # idempotent against the sink's settle either way.
             self._sessions.settle_future(future, "cancelled")
         return None
+
+    def _clarify_respond(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Resolve a pending ask_user question by requestId or sessionId.
+
+        Tolerant on purpose: a stale or unknown handle answers
+        ``{"delivered": false}`` rather than an error -- the question may have
+        just timed out, or its turn been cancelled, and the client can do
+        nothing useful with a failure it did not cause. ``QuestionBroker.reply``
+        is idempotent, so a double answer is the same false.
+        """
+        if self._question_broker is None:
+            return {"delivered": False}
+        key = str(params.get("requestId") or params.get("sessionId") or "")
+        if not key:
+            return {"delivered": False}
+        answer = params.get("answer")
+        delivered = self._question_broker.reply(key, str(answer if answer is not None else ""))
+        return {"delivered": bool(delivered)}
 
     # -- prompt content ---------------------------------------------------
 

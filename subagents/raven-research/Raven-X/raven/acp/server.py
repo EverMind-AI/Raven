@@ -28,6 +28,7 @@ from typing import Any, BinaryIO
 from loguru import logger
 
 from raven.acp.methods import AcpMethods
+from raven.acp.questions import build_question_broker
 from raven.acp.spine import build_acp
 from raven.acp.stdio import read_frames, write_frame
 
@@ -69,6 +70,24 @@ async def serve(
         channel=channel,
         workspace=str(workspace) if workspace else None,
     )
+    # The ask_user round trip (questions.py). Built unconditionally -- it is
+    # inert until armed -- and armed only from initialize, when the client
+    # declared it renders the question UI. The tool lookup is duck-typed the
+    # same way the TUI's late-bind is: a stub loop without a registry, or a
+    # registry without ask_user, arms nothing and the handoff stays the
+    # transport.
+    question_broker = build_question_broker(emit)
+    registry = getattr(agent_loop, "tools", None)
+    ask_tool = registry.get("ask_user") if registry is not None and hasattr(registry, "get") else None
+
+    def arm_ask_user(enabled: bool) -> None:
+        if ask_tool is None or not hasattr(ask_tool, "set_broker"):
+            if enabled:
+                logger.info("acp: client declared askUser but no ask_user tool is registered")
+            return
+        ask_tool.set_broker(question_broker if enabled else None)
+        logger.info("acp: ask_user round trip {}", "armed" if enabled else "disarmed")
+
     methods = AcpMethods(
         submit=scheduler.submit,
         sessions=sessions,
@@ -77,6 +96,8 @@ async def serve(
         # that follows must see the same cache (see AcpMethods docstring).
         session_manager=getattr(agent_loop, "sessions", None),
         channel=channel,
+        question_broker=question_broker,
+        arm_ask_user=arm_ask_user,
     )
     logger.info("acp: engine ready on channel {}", channel)
 
@@ -88,6 +109,10 @@ async def serve(
             task.add_done_callback(tasks.discard)
         logger.info("acp: client closed stdin")
     finally:
+        # Before the drain: a turn blocked on a question holds its prompt
+        # handler, and the drain's grace would otherwise spend itself waiting
+        # on an answer that can no longer arrive.
+        question_broker.cancel_all()
         await _drain(sessions, tasks)
         try:
             await teardown()

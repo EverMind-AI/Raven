@@ -205,6 +205,11 @@ class ProgressRenderer:
         self._spinner = spinner
         self.progress = TurnProgress(max_iterations=max_iterations)
         self._status: Any = None
+        # The active spinner regardless of mode, tracked for suspended() only.
+        # Kept apart from ``_status``: on_tool branches on ``_status is None``
+        # to decide between updating the live line and printing plain lines,
+        # and the plain-lines mode must keep printing.
+        self._active: Any = None
 
     def thinking_ctx(self, question: str = ""):
         """Per-turn context manager. Entering is the turn-boundary signal that
@@ -215,17 +220,53 @@ class ProgressRenderer:
             return nullcontext()
         if self.mode == "live":
             return self._live_status()
-        return self._console.status(Text(self.progress.status_line(), style="dim"), spinner="dots")
+        return self._plain_status()
 
     @contextmanager
     def _live_status(self):
         status = self._console.status(Text(self.progress.status_line(), style="dim"), spinner="dots")
         with status:
             self._status = status
+            self._active = status
             try:
                 yield
             finally:
                 self._status = None
+                self._active = None
+
+    @contextmanager
+    def _plain_status(self):
+        status = self._console.status(Text(self.progress.status_line(), style="dim"), spinner="dots")
+        with status:
+            self._active = status
+            try:
+                yield
+            finally:
+                self._active = None
+
+    @contextmanager
+    def suspended(self):
+        """Stop the spinner while something else owns the terminal.
+
+        Exists for the ask_user prompt: a rich status animates on the same fd
+        prompt_toolkit is about to draw on, and the two interleave into a
+        garbled line. Exception-swallowing like every other entry point here --
+        a broken spinner must not take the question down with it.
+        """
+        status = self._active
+        if status is not None:
+            try:
+                status.stop()
+            except Exception:
+                status = None
+        try:
+            yield
+        finally:
+            if status is not None:
+                try:
+                    status.start()
+                except Exception:
+                    pass
 
     def on_notice(self, text: str) -> None:
         """Model narration / tool hints. DR models write paragraphs between

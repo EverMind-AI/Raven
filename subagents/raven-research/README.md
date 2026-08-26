@@ -15,10 +15,10 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `6b5ec31` |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `4447f4d4` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
 | Local patches | **none** - the tree is that commit byte for byte, and the command that proves it is below |
-| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-26 from upstream `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-26 from upstream `4447f4d4`, which added the `ask_user` broker round trip and the deep report template - see the section below; the same day's earlier step took `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -205,6 +205,30 @@ there.** The repo clones now, so the tree rolls back with
 previous value is in our own history. Both halves of the pair are gitignored and
 neither was made for the `dr@3.7` swap; keep the old ones as long as the zips
 they came from are the only copy of those builds.
+
+### What the `ask_user` round trip and the deep report changed for us
+
+The 2026-08-26 swap (`6b5ec31` -> `4447f4d4`) is 6 upstream commits over 31
+files, with **no dependency delta** - `pyproject.toml` and `uv.lock` are
+byte-identical across it, so the venv carried over untouched and `uv sync` was
+not needed. The flow label does not move: `dr@3.5` is still the base this build
+accepts, so `dr@3.5-filetools-askuser` stays as it is. Two new knobs are what
+the swap exists for, and this folder turns both on.
+
+| Change | Effect here |
+|---|---|
+| **`drFlow.askUser.delivery: "tool"`** | Asking now happens INSIDE the turn: the questions leave over the question broker, the answers come back as the tool's return value, and the same turn researches on them. The old `handoff` - questions as the turn's reply, answers as the next prompt - stays the fallback. The prompt clause, the tool description and the schema all switch with the knob, and the outline goes with them: the broker round trip carries questions and answers only, so `outline: true` is effective-off under this delivery |
+| **Both sides must opt in, and our host does not yet** | Upstream arms the broker only when the ACP client declares `clientCapabilities._meta.raven.askUser` at `initialize`, and answers over the `_raven/clarify_respond` extension method. Raven's own ACP client (`raven/agent/acp/protocol.py`) declares `fs` and `elicitation.form` and nothing else, so today the tool reads `round_trip_ready` False and the handoff short circuit is still the transport that runs. That degradation is by design - a question frame must never go to a client with no UI to answer it, because the broker's 600s fail-safe would answer every mandated clarify with its default - and what it costs meanwhile is one paragraph of prompt: the model is told to ask by calling and never to repeat the questions into its reply, while the reply it gets handed back IS the rendered questions. `render_handoff` writes that text, not the model, so the caller sees exactly what it saw before |
+| **`drFlow.finalShape.reportDepth: true`** | Selects the deep report clause in place of the `dr@3.4` template. Same three sections, `## Findings` upgraded from a findings list to an argued report: causal narrative, per-datum source and as-of date, disagreements adjudicated in the open, established facts separated from forward-looking judgments, tracking signals inside `## Limitations`. Upstream ships it off and unmeasured - a bundle of prompt commitments priced together - and says product profiles that want it should set it explicitly rather than inherit a default, which is what this file now does |
+| **The rest of `finalShape` is pinned explicitly** | `reportStructure`, `reportFormatOverride`, `reportReminder` and `processAppendix` all matched their defaults and were being inherited silently; `reportBounce` is turned **on** against its default. It re-samples a terminal draft that is missing a template section, once, deterministically - upstream leaves it off until someone prices it, and `record: true` here is what makes that possible (`report_shape_gate.bounces` against `report_shape_gate.shipped_malformed`). Pinning the other four costs nothing and stops a future default flip from moving this profile without a commit saying so |
+| **`identityOverride`'s reply rule went back to answer-first** | Upstream applies four of its five no-user rewrites under `delivery: "tool"` and deliberately skips the fifth, because under the round trip the reply shape never changes. Our override owns the identity, so nothing applies those rewrites for us - the reconciliation is by hand, and the sentence "If you are asking the user, the questions are the whole reply" now contradicts the clause it sits next to. Reverted to "One message, plain text. First line: the answer itself and nothing else." |
+
+Verified on this build 2026-08-26: the vendored tree is byte-identical to
+`4447f4d4`, `config.json` loads as `dr@3.5-filetools-askuser` with the eight
+`finalShape` knobs and `delivery: "tool"` as written, the assembled contract
+renders the tool-delivery clause and the deep report template with no
+`identityOverride` warning, and the checkout's own suite is **5636 passed, 78
+skipped** in 150s in its own venv.
 
 ### What `dr@3.5` and the ACP transport changed for us
 
@@ -397,10 +421,17 @@ paid for a research turn.
 ## Asking first
 
 `drFlow.askUser` is on here with `mode: "first_turn"`, which means **turn one always
-asks**: the agent answers with clarifying questions rather than starting research, and
-the research it then does is aimed at the question it was told rather than the one it
-guessed. `when_needed` reverts to asking only when the model judges it necessary, and
-is byte-identical to the pre-mode clause.
+asks**: the agent puts its clarifying questions before any search, and the research it
+then does is aimed at the question it was told rather than the one it guessed.
+`when_needed` reverts to asking only when the model judges it necessary, and is
+byte-identical to the pre-mode clause.
+
+`delivery: "tool"` is set, which asks for the broker round trip - questions out and
+answers back inside one turn - rather than the `handoff` that ends the turn on the
+questions. It is what the profile wants, not what currently runs: the round trip needs
+the ACP client to declare `_meta.raven.askUser`, our host does not, and the tool falls
+back to the handoff on its own. See the `4447f4d4` section above for what that costs
+until the host side lands.
 
 The knob needs no allowlist entry - the flow appends `ask_user` to
 `drFlow.toolsAllowlist` itself when the switch is on, so the two cannot disagree - but
@@ -422,7 +453,10 @@ thing left refusing. Leave it on.
 ### What the caller sees
 
 A clarify handoff arrives as an ordinary reply: the turn's closing text is the
-questions, relayed over ACP like any other answer. The classification that
+questions, relayed over ACP like any other answer. That is still the shape today,
+`delivery: "tool"` notwithstanding - under the round trip there would be no
+handoff for a caller to see at all, because the questions and their answers
+would both be spent inside the turn that then delivers the report. The classification that
 `run.py` used to re-derive from `turn_end.awaiting_user` lives upstream now -
 the loop commits the questions as the turn's reply on both routes (the
 `ask_user` tool and plain prose), so there is no separate shape for a caller

@@ -2243,13 +2243,17 @@ def test_the_example_keeps_the_closing_tag_bar_off_like_its_model_needs() -> Non
     # newcomer touches and must inherit the label across every future bump.
     assert "version" not in flow
     assert set(flow["askUser"]) == {
-        "enabled", "mode", "outline", "maxRounds", "firstIterationOnly",
+        "enabled", "mode", "delivery", "outline", "maxRounds", "firstIterationOnly",
         "briefRequiresAnswerCheck", "replyOverlapThreshold",
         "maxQuestions", "maxOutlineItems", "promptClause", "brief",
     }
     # The product default, pinned rather than inherited: it is the whole point of
     # this profile, and "the rest are defaults" is a fact about today's defaults.
     assert flow["askUser"]["mode"] == "first_turn"
+    # The broker round trip, NOT the config default: the profile ships the two
+    # transports that have a broker to answer it (TUI / gateway), while the
+    # config default stays the measured handoff bytes.
+    assert flow["askUser"]["delivery"] == "tool"
     # Guardrail 2: the known-bad combination must not ship in the example.
     assert flow["finalShape"]["reportReminder"] is True
     assert flow["finalShape"]["reportStructure"] is True
@@ -2269,7 +2273,7 @@ def test_the_example_differs_from_the_multi_turn_one_in_exactly_two_places() -> 
     a, b = flat(_example("dr_multi_turn.json")), flat(_example("dr_ask_user.json"))
     changed = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
     askuser_keys = {k for k in changed if k.startswith("drFlow.askUser.")}
-    assert len(askuser_keys) == 11                      # the new block, in full
+    assert len(askuser_keys) == 12                      # the new block, in full
     assert changed - askuser_keys == {
         "drFlow.toolsAllowlist",
         "tools.disabledTools",
@@ -2616,3 +2620,329 @@ def test_an_unrelated_follow_up_still_goes_to_the_gate(workspace) -> None:
     mode = _scenario(run)
     assert seen, "an unrelated follow-up must still be classified"
     assert mode.source == "gate"
+
+
+# ---------------------------------------------------------------------------
+# askUser.delivery — the broker round trip
+# ---------------------------------------------------------------------------
+
+
+class _FakeBroker:
+    """Records what the round trip sent and answers every question the same."""
+
+    def __init__(self, answer="the 2024 fiscal year"):
+        self.calls = []
+        self._answer = answer
+
+    async def await_question(self, cid, *, prompt, choices):
+        self.calls.append((cid, prompt, tuple(choices)))
+        return self._answer
+
+
+def _tool_delivery_tool(broker=None) -> DRAskUserTool:
+    tool = DRAskUserTool(delivery="tool")
+    if broker is not None:
+        tool.set_broker(broker)
+        tool.set_context("cli:t")
+    return tool
+
+
+def test_the_default_delivery_is_the_measured_handoff() -> None:
+    """The knob's off state IS the default: every pinned sha above renders with
+    ``delivery`` unset, so this equality is what lets them stand for the default."""
+    from raven.config.raven import DRFlowAskUserConfig
+
+    assert DRFlowAskUserConfig().delivery == "handoff"
+    for mode in ("when_needed", "first_turn"):
+        assert _seg(ask_user=True, ask_user_mode=mode) == _seg(
+            ask_user=True, ask_user_mode=mode, ask_user_delivery="handoff"
+        )
+
+
+def test_the_tool_delivery_swaps_the_return_semantics_block() -> None:
+    """The only delta against the handoff clause: the questions are no longer the
+    reply, the answers come back as the call's result, and the same turn
+    researches on them. The call-not-prose sentence survives - the transport
+    changed, not the channel discipline."""
+    sentence = "Ask by making that call, not by writing the questions into your reply."
+    for mode in ("when_needed", "first_turn"):
+        text = _flat(_seg(ask_user=True, ask_user_mode=mode, ask_user_delivery="tool"))
+        assert "The call returns their answers" in text
+        assert "research on those answers in the same turn" in text
+        assert "the questions are the whole reply" not in text
+        assert sentence in text
+
+
+def test_the_tool_delivery_keeps_the_answer_first_reply_rule() -> None:
+    """Asking happens INSIDE the turn, so the identity's reply rule stays intact;
+    rewriting it would contradict the clause's "never repeat the questions into
+    your reply". The other substitutions still apply."""
+    text = _seg(ask_user=True, ask_user_delivery="tool")
+    assert "First line: the answer itself and nothing else." in text
+    assert "If you are asking the user, the questions are the" not in text
+    assert "You may ask the user once" in text
+    assert "no shell, no files,\nno stored memory" in text
+
+
+def test_the_tool_delivery_lines_stay_inside_the_wrap() -> None:
+    off_lines = set(_seg(ask_user=False).splitlines())
+    for mode in ("when_needed", "first_turn"):
+        new = [
+            line
+            for line in _seg(
+                ask_user=True, ask_user_mode=mode, ask_user_delivery="tool"
+            ).splitlines()
+            if line not in off_lines
+        ]
+        assert new, "the on state added no lines at all"
+        assert max(len(line) for line in new) <= 80
+
+
+def test_the_dr_tool_blocks_only_under_tool_delivery() -> None:
+    """The registry skips its timeout on ``blocking_interaction``: a granted round
+    trip waits on a human and must not be timer-killed, while the handoff default
+    keeps the ordinary-tool treatment the measured arms were run with."""
+    assert DRAskUserTool().blocking_interaction is False
+    assert DRAskUserTool(delivery="tool").blocking_interaction is True
+
+
+def test_round_trip_readiness_needs_the_knob_the_broker_and_the_context() -> None:
+    tool = DRAskUserTool(delivery="tool")
+    assert tool.round_trip_ready is False
+    tool.set_broker(_FakeBroker())
+    assert tool.round_trip_ready is False
+    tool.set_context("cli:t")
+    assert tool.round_trip_ready is True
+
+    handoff = DRAskUserTool()
+    handoff.set_broker(_FakeBroker())
+    handoff.set_context("cli:t")
+    assert handoff.round_trip_ready is False
+
+
+def test_an_ungranted_call_never_reaches_the_broker() -> None:
+    """The grant is the gate's authority, not the broker's availability: a call on
+    a withheld iteration executes (the gate leaves it to read the fallback), and
+    it must not spend a round trip however ready the broker is."""
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+    result = asyncio.run(tool.execute(questions=[_q("which year?")]))
+    assert result == _FALLBACK_NOT_DELIVERED
+    assert broker.calls == []
+
+
+def test_a_granted_call_runs_the_round_trip_and_the_grant_is_read_once() -> None:
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+
+    async def run():
+        tool.grant_round_trip()
+        first = await tool.execute(
+            questions=[_q("which year?", options=("2023", "2024"))]
+        )
+        second = await tool.execute(questions=[_q("which market?")])
+        return first, second
+
+    first, second = _scenario(run)
+    assert broker.calls == [("cli:t", "which year?", ("2023", "2024"))]
+    assert "which year?" in first and "the 2024 fiscal year" in first
+    assert second == _FALLBACK_NOT_DELIVERED
+
+
+def test_the_gate_grants_the_round_trip_instead_of_short_circuiting() -> None:
+    """The turn continues: no handoff reply, no pending, no ``clarify_requested``
+    marker - the tool result carries the answers and the same turn researches."""
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+    ctx = _ctx(response=_ask(questions=[_q("which entity?")]))
+    gate = _gate(delivery="tool", tool=tool)
+
+    async def run():
+        await gate.before_iteration(ctx)
+        decision = await gate.before_execute_tools(ctx)
+        result = await tool.execute(questions=[_q("which entity?")])
+        return decision, result, take_pending_clarify()
+
+    decision, result, pending = _scenario(run)
+    assert decision.short_circuit_result is None
+    assert "the 2024 fiscal year" in result
+    assert pending is None
+    assert "clarify_requested" not in ctx.metadata
+    state = ctx.metadata["ask_user"]
+    assert state["asked"] is True
+    assert state["delivery"] == "tool"
+    assert state["n_questions"] == 1
+
+
+def test_the_gate_falls_back_to_the_handoff_without_a_broker() -> None:
+    """ACP and ``raven agent -m`` wire no broker, so ``delivery="tool"`` there
+    must not turn the mandated round into a fallback string: the measured
+    handoff stays the transport, recorded as what actually happened."""
+    tool = DRAskUserTool(delivery="tool")     # no broker, no conversation_id
+    ctx = _ctx(response=_ask(questions=[_q("which entity?")]))
+    gate = _gate(delivery="tool", tool=tool)
+
+    async def run():
+        await gate.before_iteration(ctx)
+        decision = await gate.before_execute_tools(ctx)
+        return decision, take_pending_clarify()
+
+    decision, pending = _scenario(run)
+    assert decision.short_circuit_result is not None
+    assert "which entity?" in decision.short_circuit_result
+    assert pending is not None
+    assert ctx.metadata["clarify_requested"] is True
+    assert ctx.metadata["ask_user"]["delivery"] == "handoff"
+
+
+def test_the_tool_delivery_accepts_the_shapes_the_gate_grants() -> None:
+    """The registry's strict schema check runs BETWEEN the gate's grant and the
+    tool's own cleaning, and the gate keeps a bare-string question
+    (``clean_questions``). Bounced at the registry, the broker is never called
+    while the state already says ``asked`` - so the DR tool accepts there and
+    cleans in ``execute``, and the granted question reaches the user."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    async def run():
+        tool.grant_round_trip()
+        return await registry.execute("ask_user", {"questions": ["which year?"]})
+
+    result = _scenario(run)
+    assert not result.startswith("Error")
+    assert "the 2024 fiscal year" in result
+    assert broker.calls == [("cli:t", "which year?", ())]
+
+
+def test_the_handoff_default_keeps_the_registry_check() -> None:
+    """The wider acceptance is scoped to the round trip. Under the measured
+    handoff a granted call short-circuits before the registry, so the parent's
+    strict check is all the remaining (withheld) calls meet - and the measured
+    arms keep their behaviour byte-for-byte."""
+    bare = {"questions": ["which year?"]}
+    assert DRAskUserTool().validate_params(bare)
+    assert DRAskUserTool(delivery="tool").validate_params(bare) == []
+    assert DRAskUserTool(delivery="tool").validate_params("not a dict")
+
+
+def test_every_payload_the_gate_grants_is_deliverable() -> None:
+    """With ``validate_params`` open under the round trip, the registry no
+    longer stands between the gate and the tool - so the gate's acceptance
+    (``parse_ask_user_args``) and the tool's (``clean_questions`` in
+    ``execute``) must stay ONE set. A payload granted but undeliverable would
+    spend the round, write ``asked=True`` and ask nobody. Both sides share
+    ``clean_questions`` today; this pins the invariant against a future
+    divergence of either wrapper."""
+    shapes = [
+        {"questions": ["which year?"]},
+        {"questions": [{"question": "q", "options": "not a list"}]},
+        {"questions": [{"question": "q"}, "  ", {"question": ""}]},
+        {"questions": "not a list"},
+        {"questions": [None, 7]},
+        {"outline": [{"goal": "g", "evidence": "e"}]},
+    ]
+    for raw in shapes:
+        granted_by_gate = bool(parse_ask_user_args(raw).questions)
+        broker = _FakeBroker()
+        tool = _tool_delivery_tool(broker)
+
+        async def run(raw=raw):
+            tool.grant_round_trip()
+            return await tool.execute(**raw)
+
+        result = _scenario(run)
+        if granted_by_gate:
+            assert broker.calls, f"granted but undelivered: {raw!r}"
+        else:
+            assert result == _FALLBACK_NO_QUESTIONS
+            assert broker.calls == []
+
+
+def test_the_tool_delivery_never_asks_for_an_outline() -> None:
+    """The outline is the handoff's affordance: rendered in the reply for the
+    user to veto. The broker prompt carries questions only and the result
+    returns answers only, so under ``delivery="tool"`` every prompt surface -
+    clause, description, schema - drops the ask together, and the gate's state
+    records the effective value rather than the configured one."""
+    for mode in ("when_needed", "first_turn"):
+        text = _flat(_seg(ask_user=True, ask_user_mode=mode,
+                          ask_user_delivery="tool", ask_user_outline=True))
+        assert "with `outline`" not in text
+        # The handoff clause keeps it, same knob.
+        assert "with `outline`" in _flat(_seg(ask_user=True, ask_user_mode=mode,
+                                              ask_user_outline=True))
+
+    tool = DRAskUserTool(outline=True, delivery="tool")
+    assert "outline" not in tool.parameters["properties"]
+    assert "outline" not in tool.description.lower()
+
+    ctx = _ctx()
+    asyncio.run(_gate(delivery="tool", outline=True).before_iteration(ctx))
+    assert ctx.metadata["ask_user"]["outline"] is False
+
+
+def test_a_stale_grant_is_revoked_at_the_iteration_boundary() -> None:
+    """A granted call can die between grant and execute (a cast or transport
+    failure). The ticket must not survive for a later, ungranted call in the
+    same turn to spend on the broker."""
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+    gate = _gate(delivery="tool", tool=tool)
+
+    async def run():
+        ctx = _ctx(response=_ask(questions=[_q("which entity?")]))
+        await gate.before_iteration(ctx)
+        await gate.before_execute_tools(ctx)  # grants; the call never executes
+        ctx.iteration = 2
+        await gate.before_iteration(ctx)
+        return await tool.execute(questions=[_q("sneaky?")])
+
+    result = _scenario(run)
+    assert result == _FALLBACK_NOT_DELIVERED
+    assert broker.calls == []
+
+
+def test_the_withdrawal_after_a_round_trip_is_not_counted_as_withheld() -> None:
+    """After a broker round trip the turn keeps going and the tool leaves the
+    schema - the round's designed lifecycle, not a refusal. Counting it would
+    make ``withheld`` (always 0 on an asking handoff turn, which short-circuits)
+    read as a per-iteration refusal tally under the other delivery."""
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+    gate = _gate(delivery="tool", tool=tool)
+
+    async def run():
+        ctx = _ctx(response=_ask(questions=[_q("which entity?")]))
+        await gate.before_iteration(ctx)
+        await gate.before_execute_tools(ctx)
+        await tool.execute(questions=[_q("which entity?")])
+        ctx.iteration = 2
+        decision = await gate.before_iteration(ctx)
+        ctx.iteration = 3
+        await gate.before_iteration(ctx)
+        return ctx, decision
+
+    ctx, decision = _scenario(run)
+    assert _withheld(decision, ctx)
+    state = ctx.metadata["ask_user"]
+    assert state["withdrawn_after_ask"] is True
+    assert state["withheld"] == 0
+    assert "withheld_reason" not in state
+
+
+def test_build_dr_flow_wires_one_instance_through_tool_gate_and_segment() -> None:
+    """The gate's readiness check reads the REGISTERED tool: a gate holding its
+    own copy would grant a round trip on an instance no broker was ever bound
+    to, and the model's call would fall through to the undelivered string."""
+    asm = _flow(enabled=True, delivery="tool")
+    assert asm.ask_user_tool.blocking_interaction is True
+    gates = [o for o in asm.observers if isinstance(o, AskUserGate)]
+    assert len(gates) == 1
+    assert gates[0]._tool is asm.ask_user_tool
+    assert "The call returns their answers" in _flat(
+        asyncio.run(asm.segment_builder.build(None)).text
+    )

@@ -8,14 +8,13 @@ per-conversation lock -- and is the only part that needs a running loop.
 from __future__ import annotations
 
 import asyncio
-import weakref
 from dataclasses import replace
 from typing import Any
 
 from loguru import logger
 
 from raven.agent.acp import elicitation
-from raven.agent.acp.asker import current_ask
+from raven.agent.acp.asker import attribute, current_ask, question_lock
 
 LOCK_WAIT_SECONDS = 600.0
 """How long a queued form waits for its conversation before declining.
@@ -27,30 +26,6 @@ conversation for a multiple of that. Set to one question's worth of patience
 rather than less, so a form queued behind one a user is still answering is not
 cut off while that answer is on its way.
 """
-
-_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = weakref.WeakKeyDictionary()
-
-
-def _lock_for(conversation_id: str) -> asyncio.Lock:
-    """One lock per conversation and loop, held for a whole form.
-
-    Per conversation because that is the broker's key: it allows one pending
-    question per conversation and fail-safes an overlapping one to its default,
-    which here would read as "the user skipped" and silently lose a question
-    nobody ever saw. Held for the whole form so one agent's multi-field form is
-    never interleaved with another's.
-
-    Per loop because an `asyncio.Lock` binds itself to the first loop that
-    contends it and never unbinds: keyed by conversation alone, a lock outliving
-    its loop makes every later acquire raise, which `elicit` can only answer with
-    a decline. Weak keys so an entry goes away with its loop.
-    """
-    locks = _LOCKS.setdefault(asyncio.get_running_loop(), {})
-    lock = locks.get(conversation_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        locks[conversation_id] = lock
-    return lock
 
 
 def _retracted() -> bool:
@@ -113,11 +88,7 @@ class Elicitor:
             task.cancel()
 
     def _prefix(self, message: str) -> str:
-        # A bare separator, not a phrase: there is no backend i18n for
-        # user-facing strings and both frontends are bilingual, so any wording
-        # here would hardcode one language into them.
-        who = f"{self._agent}({self._instance})" if self._instance else self._agent
-        return f"{who}: {message}"
+        return attribute(self._agent, self._instance, message)
 
     async def elicit(self, params: dict[str, Any]) -> dict[str, Any]:
         task = asyncio.current_task()
@@ -156,7 +127,9 @@ class Elicitor:
             # Cancelled before the first question was put -- a late
             # `elicitation/create`, or a run that ended while this form queued.
             return elicitation.cancel()
-        lock = _lock_for(conversation_id)
+        # Held for the whole form, so one agent's multi-field form is never
+        # interleaved with another's.
+        lock = question_lock(conversation_id)
         try:
             async with asyncio.timeout(LOCK_WAIT_SECONDS):
                 await lock.acquire()

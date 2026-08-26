@@ -310,3 +310,36 @@ def test_live_mode_outside_turn_falls_back_to_lines():
     buf, r = _renderer("live", spinner=True, force_terminal=True)
     r.on_tool(_start("web_search", "t1", {"query": "q"}))
     assert "Searching" in buf.getvalue()
+
+
+def test_suspended_stops_and_restarts_the_active_spinner() -> None:
+    """The ask_user prompt owns the terminal while it reads; a status animating
+    on the same fd garbles the line. Works in both spinner modes, because
+    ``_active`` is tracked apart from the live-mode-only ``_status``."""
+    for mode in ("lines", "live"):
+        renderer = ProgressRenderer(
+            Console(file=io.StringIO(), force_terminal=True, width=80),
+            mode=mode,
+            spinner=True,
+        )
+        with renderer.thinking_ctx("q"):
+            status = renderer._active
+            assert status is not None
+            with renderer.suspended():
+                assert renderer._active is status  # tracked, merely stopped
+            # Restarted: rich raises on a second start of a running Live, so
+            # entering again proves suspended() really restarted it.
+            with renderer.suspended():
+                pass
+        assert renderer._active is None
+
+
+def test_suspended_is_a_noop_without_a_spinner() -> None:
+    renderer = ProgressRenderer(
+        Console(file=io.StringIO(), force_terminal=False, width=80),
+        mode="off",
+        spinner=False,
+    )
+    with renderer.thinking_ctx("q"):
+        with renderer.suspended():
+            pass  # nothing active, nothing to stop — and nothing raises

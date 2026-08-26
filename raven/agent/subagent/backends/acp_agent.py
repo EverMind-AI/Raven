@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.acp.ask_user import AskUserResponder, clarify_responder
 from raven.agent.acp.capabilities import CapabilitySnapshot, steer_offered
 from raven.agent.acp.elicitor import Elicitor
 from raven.agent.acp.permissions import PERMISSION_METHOD
@@ -590,12 +591,17 @@ class AcpAgentBackend:
             # documents: the read loop's ContextVars predate this run, and the
             # asker is bound per turn.
             elicitor = Elicitor(self.name, handle, dialect_for(connection.initialize))
+            # Built here for the same reason and bound to this connection's
+            # client, because the answer goes back as a request rather than as
+            # this frame's return value.
+            responder = AskUserResponder(self.name, handle, clarify_responder(client))
             # Held across the whole turn, not just the send: see
             # `_Connection.session_lock` for why two prompts cannot share one
             # session id.
             async with connection.session_lock(session_id):
                 connection.router.attach(session_id, collector)
                 connection.elicitors.attach(session_id, elicitor)
+                connection.responders.attach(session_id, responder)
                 if self.can_steer or steer_offered(connection.initialize):
                     activity.offer_steer(collector._run, self._steerer(client, session_id))
                 try:
@@ -629,6 +635,7 @@ class AcpAgentBackend:
                     activity.offer_steer(collector._run, None)
                     connection.router.detach(session_id, collector)
                     connection.elicitors.detach(session_id, elicitor)
+                    connection.responders.detach(session_id, responder)
                     # Detaching stops only the *next* request from routing here.
                     # One already put to the user waits on a task of the
                     # connection's, which no part of this teardown reaches --
@@ -637,6 +644,10 @@ class AcpAgentBackend:
                     # conversation's form lock and keeps a sheet up that answers
                     # into a run that is gone.
                     elicitor.cancel()
+                    # Same reason, and the same window: a question already put to
+                    # the user answers into a run that is gone, and holds this
+                    # conversation's lock against the next one while it waits.
+                    responder.cancel()
 
             stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
             text = collector.text

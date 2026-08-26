@@ -48,6 +48,7 @@
       "requireMarker": true,
       "reportStructure": true,
       "reportFormatOverride": true,
+      "reportDepth": true,
       "reportReminder": true,
       "reportBounce": false,
       "processAppendix": true

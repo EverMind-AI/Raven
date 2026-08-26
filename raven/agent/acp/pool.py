@@ -24,6 +24,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.acp import protocol
+from raven.agent.acp.ask_user import notification_dispatcher
 from raven.agent.acp.capabilities import handshake_of
 from raven.agent.acp.client import AcpClient, end_drain
 from raven.agent.acp.journal import open_journal
@@ -142,6 +143,46 @@ class _SessionElicitors:
         return await elicitor.elicit(params)
 
 
+class _SessionResponders:
+    """Which run answers an `ask_user_request` for a given session.
+
+    A third registry rather than a second job for `_SessionElicitors`, because
+    an elicitation is a request answered by its return value while this is a
+    notification answered by a request of raven's own -- so this one hands the
+    frame on and returns, and nothing awaits it. Same attach/detach discipline,
+    including the identity check, for the same reason.
+    """
+
+    def __init__(self, agent: str) -> None:
+        self._agent = agent
+        self._responders: dict[str, Any] = {}
+
+    def attach(self, session_id: str, responder: Any) -> None:
+        self._responders[session_id] = responder
+
+    def detach(self, session_id: str, responder: Any) -> None:
+        if self._responders.get(session_id) is responder:
+            del self._responders[session_id]
+
+    def current(self, session_id: str) -> Any:
+        return self._responders.get(session_id)
+
+    def dispatch(self, params: dict[str, Any]) -> bool:
+        """Hand one question to the run that owns its session.
+
+        `False` means nobody did, and the caller cannot answer for them: the
+        agent falls back to its own timeout. Not an error -- a question can
+        arrive for a session whose run has just finished.
+        """
+        session_id = params.get("sessionId")
+        responder = self._responders.get(session_id) if isinstance(session_id, str) else None
+        if responder is None:
+            logger.debug("acp agent {!r}: no responder for session {!r}", self._agent, session_id)
+            return False
+        responder.dispatch(params)
+        return True
+
+
 class _Connection:
     """A client, the router whose lifetime is tied to it, and one lock per session."""
 
@@ -150,6 +191,7 @@ class _Connection:
         client: AcpClient,
         router: _SessionRouter,
         elicitors: _SessionElicitors,
+        responders: _SessionResponders | None = None,
         launch: str = "",
         initialize: Any = None,
         handshake_bytes: int = 0,
@@ -157,6 +199,7 @@ class _Connection:
         self.client = client
         self.router = router
         self.elicitors = elicitors
+        self.responders = responders if responders is not None else _SessionResponders(client.name)
         self.handshake_bytes = handshake_bytes
         """Where the ``initialize`` exchange ends in the journal.
 
@@ -252,6 +295,7 @@ class AcpConnectionPool:
 
             router = _SessionRouter(name)
             elicitors = _SessionElicitors(name)
+            responders = _SessionResponders(name)
             # Opened before launch so the handshake is the head of the file: the
             # `initialize` exchange belongs to the connection, not to whichever
             # call happened to be the one that started it.
@@ -269,7 +313,11 @@ class AcpConnectionPool:
                 on_request=on_request
                 if on_request is not None
                 else request_dispatcher(name, router.dispatch, elicitors=elicitors),
-                on_notification=router.dispatch,
+                # Wrapped rather than routed straight through: an
+                # `ask_user_request` is a question raven has to answer with a
+                # request of its own, and a sink returns nothing. See
+                # `ask_user.notification_dispatcher` -- everything still routes.
+                on_notification=notification_dispatcher(name, router.dispatch, responders=responders),
                 journal=journal,
             )
             # The handshake belongs to establishing the connection, not to the
@@ -300,6 +348,7 @@ class AcpConnectionPool:
                 client,
                 router,
                 elicitors,
+                responders,
                 key,
                 initialize,
                 handshake_bytes=journal.offset if journal is not None else 0,

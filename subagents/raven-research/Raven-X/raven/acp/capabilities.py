@@ -66,6 +66,12 @@ def agent_capabilities() -> dict[str, Any]:
         "mcpCapabilities": {"http": False, "sse": False},
         # No auth: nothing to log out of either.
         "auth": {},
+        # Extension surface, mirrored by ``ClientCapabilities.ask_user``: the
+        # agent can route ask_user through an ``ask_user_request`` update and
+        # accept ``_raven/clarify_respond`` -- honoured by AcpMethods once the
+        # CLIENT also declares it (both sides must opt in; this key is how the
+        # consuming raven knows offering its UI is worthwhile).
+        "_meta": {"raven": {"askUser": True}},
     }
 
 
@@ -93,10 +99,10 @@ def initialize_result(params: dict[str, Any] | None) -> dict[str, Any]:
 class ClientCapabilities:
     """What the client declared it can do.
 
-    Stored as the raw object: nothing branches on it yet (no protocol-level
-    questions, no fs round-trips -- plan §3), but the declaration arrives once
-    at the handshake and cannot be recovered later, so it is kept rather than
-    read and dropped.
+    Stored as the raw object: the declaration arrives once at the handshake
+    and cannot be recovered later, so it is kept rather than read and dropped.
+    One thing branches on it today -- ``ask_user`` below arms the question
+    broker; fs round-trips still do not (plan §3).
     """
 
     raw: dict[str, Any] = field(default_factory=dict)
@@ -105,6 +111,20 @@ class ClientCapabilities:
     def from_params(cls, params: dict[str, Any] | None) -> "ClientCapabilities":
         declared = (params or {}).get("clientCapabilities")
         return cls(raw=declared if isinstance(declared, dict) else {})
+
+    @property
+    def ask_user(self) -> bool:
+        """Whether the client renders ``ask_user_request`` updates and answers
+        them via ``_raven/clarify_respond``.
+
+        Declared under ``_meta.raven`` -- the extensibility slot -- so a
+        spec-only client's declaration can never collide with it. Absent or
+        malformed reads False: the failure mode of a wrong True is a question
+        no UI shows, silently answered by the broker's 600s fail-safe.
+        """
+        meta = self.raw.get("_meta")
+        raven = meta.get("raven") if isinstance(meta, dict) else None
+        return bool(raven.get("askUser")) if isinstance(raven, dict) else False
 
 
 __all__ = ["AGENT_NAME", "ClientCapabilities", "agent_capabilities", "initialize_result"]

@@ -9,9 +9,11 @@ the notification so a frontend that prefers to answer by request_id can.
 
 Like ConfirmBroker it is transport-agnostic: constructed with a notification
 emit callable (bound to ``RpcServer.send_frame`` in production), and every
-fail-safe path (timeout, cancel, internal error, connection EOF via
-:meth:`cancel_all`) resolves to the prompt's ``default`` rather than raising —
-the agent loop must always get a string back.
+fail-safe path (timeout, internal error, connection EOF via :meth:`cancel_all`,
+one turn's teardown via :meth:`cancel`) resolves to the prompt's ``default``
+rather than raising — the agent loop must always get a string back. The one
+exception is the TASK being cancelled: that is a turn cancel, and swallowing it
+would keep the cancelled turn running on the default answer, so it propagates.
 """
 
 from __future__ import annotations
@@ -60,8 +62,10 @@ class QuestionBroker:
     ) -> str:
         """Emit a ``clarify.request`` and await the matching answer.
 
-        Returns ``default`` on timeout, cancellation, EOF
-        (:meth:`cancel_all`), or any internal error — never raises.
+        Returns ``default`` on timeout, EOF (:meth:`cancel_all`), a turn
+        cancel (:meth:`cancel`), or any internal error. Cancellation of the
+        awaiting task itself is the one thing that propagates: it means the
+        turn is being torn down, and a default answer would keep it running.
 
         A turn is serial, so a second pending question for the same
         conversation is a programming error: we drop the stale one (fail-safe
@@ -100,8 +104,14 @@ class QuestionBroker:
                 }
             )
             return await asyncio.wait_for(future, timeout_s)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
             return default
+        except asyncio.CancelledError:
+            # The awaiting TASK was cancelled - a turn cancel. Absorbing it
+            # here (the original shape) kept the "cancelled" turn researching
+            # to completion on the default answer while the canceller awaited
+            # the unwind. If an answer raced in, it is lost with the turn.
+            raise
         except Exception:  # noqa: BLE001 — fail-safe: the loop needs a string back
             logger.exception("question_broker: await_question failed for {}", conversation_id)
             return default
@@ -130,6 +140,21 @@ class QuestionBroker:
         if pending is None or pending.future.done():
             return False
         pending.future.set_result(answer)
+        return True
+
+    def cancel(self, conversation_id: str) -> bool:
+        """Fail-safe ONE conversation's pending question to its default.
+
+        For turn cancellation: called before the turn handle's cancel so the
+        question resolves whatever shape that cancel takes - a cooperative
+        cancel would otherwise sit behind the wait until timeout, and a task
+        cancel would land inside :meth:`await_question` where it now
+        propagates. Idempotent: no pending question -> ``False``.
+        """
+        pending = self._pending.get(conversation_id)
+        if pending is None or pending.future.done():
+            return False
+        pending.future.set_result(pending.default)
         return True
 
     def cancel_all(self) -> None:
