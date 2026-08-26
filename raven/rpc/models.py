@@ -853,6 +853,43 @@ class SessionTitledEvent(_Strict):
     payload: SessionTitledPayload
 
 
+class SessionNamingEndedPayload(_Strict):
+    session_id: str = Field(..., description="Full session_key whose naming call has finished.")
+    reason: Literal["timeout", "error", "no_title", "renamed"] = Field(
+        ...,
+        description=(
+            "Why no title was published. 'timeout' the call outran its budget; 'no_title' it came "
+            "back with nothing usable -- the "
+            "model answered without calling the naming tool, or the provider failed and "
+            "`generate_title` swallowed it (that one logs its cause at debug); 'error' the naming "
+            "code itself raised, which is a bug in this seam rather than a model that had nothing "
+            "to say; 'renamed' a person named the session while the call was running."
+        ),
+    )
+
+
+class SessionNamingEndedEvent(_Strict):
+    """The naming call for a session finished without publishing a title.
+
+    The other half of ``session.titled``, and the reason it exists is latency
+    rather than information: a client parks a placeholder where the title goes
+    when ``turn.send`` answers ``naming: true``, and until this event there was
+    no signal for any of the ways that call can end quietly. The only way to
+    find out was to wait out a grace period, so a model that answered without
+    calling the tool -- which happens, and takes about a second -- cost the
+    reader the full wait before the row showed anything.
+
+    Exactly one of ``session.titled`` and this event follows a turn whose
+    ``turn.send`` reported ``naming: true``, so a client can stop waiting on
+    either. ``reason`` is for the log and the bug report: a reader cannot act on
+    the difference, but the person diagnosing "why is there no title" can, and
+    the debug lines that used to be the only record are off by default.
+    """
+
+    type: Literal["session.naming_ended"]
+    payload: SessionNamingEndedPayload
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -874,6 +911,7 @@ TurnEvent = Annotated[
         CronMissedEvent,
         MediaEvent,
         SessionTitledEvent,
+        SessionNamingEndedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -3439,6 +3477,8 @@ __all__ = [
     "SessionExportParams",
     "SessionExportResult",
     "MessageStartEvent",
+    "SessionNamingEndedEvent",
+    "SessionNamingEndedPayload",
     "SessionTitledEvent",
     "SessionTitledPayload",
     "EpisodeStartEvent",

@@ -7376,6 +7376,24 @@
           }
         }
       },
+      "SessionNamingEndedEvent": {
+        "description": "The naming call for this session finished without publishing a title. The other half of `session.titled`: exactly one of the two follows a turn whose `turn.send` reported `naming: true`, so a client parking a placeholder where the title goes can stop waiting on either instead of waiting out a grace period. `reason` is for the log and the bug report rather than for the reader -- 'timeout' the call outran its budget, 'no_title' it came back with nothing usable (the model answered without calling the naming tool, or the provider failed and generate_title swallowed it, logging the cause at debug), 'error' the naming code itself raised, 'renamed' a person named the session while the call ran.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "session.naming_ended" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["session_id", "reason"],
+            "properties": {
+              "session_id": { "type": "string" },
+              "reason": { "type": "string", "enum": ["timeout", "error", "no_title", "renamed"] }
+            }
+          }
+        }
+      },
       "SubagentDeliveredEvent": {
         "description": "A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.",
         "type": "object",
@@ -7701,7 +7719,8 @@
           { "$ref": "#/components/schemas/DagRunCompletedEvent" },
           { "$ref": "#/components/schemas/CronMissedEvent" },
           { "$ref": "#/components/schemas/MediaEvent" },
-          { "$ref": "#/components/schemas/SessionTitledEvent" }
+          { "$ref": "#/components/schemas/SessionTitledEvent" },
+          { "$ref": "#/components/schemas/SessionNamingEndedEvent" }
         ],
         "discriminator": {
           "propertyName": "type",
@@ -7724,7 +7743,8 @@
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",
             "cron.missed": "#/components/schemas/CronMissedEvent",
             "media": "#/components/schemas/MediaEvent",
-            "session.titled": "#/components/schemas/SessionTitledEvent"
+            "session.titled": "#/components/schemas/SessionTitledEvent",
+            "session.naming_ended": "#/components/schemas/SessionNamingEndedEvent"
           }
         }
       },

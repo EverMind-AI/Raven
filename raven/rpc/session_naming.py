@@ -68,6 +68,22 @@ async def _name_session(
     budget: int,
     timeout_seconds: float,
 ) -> None:
+    async def _ended(reason: str) -> None:
+        """Say that no title is coming, so nobody waits out a grace period for it.
+
+        Every quiet exit below routes through here. They used to just return: the
+        turn was unharmed and the mechanical title stood, which is correct as far
+        as the session goes, but a client holding a placeholder had no way to
+        learn any of it and could only wait. The model answering without calling
+        the naming tool is the common one and takes about a second.
+        """
+        if emitter is None:
+            return
+        await emitter.emit(
+            session_key,
+            {"type": "session.naming_ended", "payload": {"session_id": session_key, "reason": reason}},
+        )
+
     try:
         title = await asyncio.wait_for(
             generate_title(provider, text, model=model, budget=budget),
@@ -75,11 +91,14 @@ async def _name_session(
         )
     except TimeoutError:
         logger.debug("session naming: {} timed out after {}s; keeping fallback", session_key, timeout_seconds)
+        await _ended("timeout")
         return
     except Exception as exc:
         logger.debug("session naming: {} failed ({}); keeping fallback", session_key, exc)
+        await _ended("error")
         return
     if not title:
+        await _ended("no_title")
         return
 
     # Re-read rather than reuse anything captured before the call: the turn has
@@ -88,7 +107,23 @@ async def _name_session(
     # ``set_generated_title`` is what refuses that second case.
     session = mgr.get_or_create(session_key)
     if not session.set_generated_title(title):
-        logger.debug("session naming: {} was named by hand while the call ran; dropping {!r}", session_key, title)
+        # It refuses for two unrelated reasons, and the client acts on the
+        # difference: 'renamed' tells it the row already carries a better name
+        # and must not be settled onto the opening line. The other refusal is
+        # the title being empty after collapsing or longer than storage allows,
+        # which nobody typed -- unreachable while `budget` stays under
+        # TITLE_STORAGE_MAX, since clean_model_title clamps to it, but a config
+        # raising `budget` past 200 would otherwise report every generated title
+        # as a rename that never happened.
+        metadata = session.metadata or {}
+        by_hand = bool(metadata.get("title")) and not metadata.get("title_auto")
+        logger.debug(
+            "session naming: {} dropped {!r} ({})",
+            session_key,
+            title,
+            "named by hand while the call ran" if by_hand else "title not storable",
+        )
+        await _ended("renamed" if by_hand else "no_title")
         return
     stored = session.metadata.get("title", title)
     if mgr.exists(session_key):
