@@ -144,18 +144,23 @@ class _FakeGenerator:
         return GeneratedPlaybook(spec=spec, notes=["Assumption: weekly cadence", "Missing capability: mcp[fs]"])
 
 
-def test_create_lands_in_the_user_layer_disabled(library, monkeypatch):
+def test_create_lands_in_the_user_layer_usable(library, monkeypatch):
+    """Both creation entries land the same way. Switching the name off here would
+    make a playbook the user just created immediately invisible to a running
+    agent, since the deny list is read live -- and the undo for that is the
+    command this one would be telling them to run."""
     monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: object())
     monkeypatch.setattr("raven.playbook.PlaybookGenerator", _FakeGenerator)
 
     r = runner.invoke(app, ["playbook", "create", "weekly-scan", "--input", "scan competitors weekly"])
     assert r.exit_code == 0, r.stdout
     assert (library["user"] / "weekly-scan" / "playbook.md").exists()
-    assert _disabled_in(library["config"]) == ["weekly-scan"]
+    assert _disabled_in(library["config"]) == []
     text = (library["user"] / "weekly-scan" / "playbook.md").read_text(encoding="utf-8")
     assert "name: weekly-scan" in text
     assert "Assumption: weekly cadence" in text
-    assert "enable weekly-scan" in r.stdout
+    assert "Usable now" in r.stdout
+    assert "disable weekly-scan" in r.stdout
     # The bracketed capability name is the diagnostic: Rich must not eat it.
     assert "mcp[fs]" in r.output
 

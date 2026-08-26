@@ -1466,11 +1466,11 @@ class AgentLoop:
         return PlaybookRuntime(
             store=store,
             executor=executor,
-            # Both: the config snapshot this loop was built with, and the file as
-            # it stands now. A run with no config file on disk (an eval harness,
-            # a test) would otherwise lose its deny list entirely, and a switch
-            # flipped after start would otherwise need a restart to be seen.
-            disabled=cfg.disabled,
+            # The file as it stands, and deliberately not ``cfg.disabled``
+            # beside it: that is a snapshot of the same key, and a runtime
+            # holding both can only ever add to the deny list -- ``disable``
+            # would apply on the next call while ``enable`` waited for the next
+            # process. ``_withheld_tool_names`` above avoids this the same way.
             disabled_source=self._disabled_playbook_names,
             router=RouterSizes(top_k=cfg.router.top_k, over_fetch_factor=cfg.router.over_fetch_factor),
         )

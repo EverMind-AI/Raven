@@ -180,7 +180,16 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
     assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
     assert loop.tools.has("create_playbook")
     assert loop.tools.has("load_playbook")
-    assert "No playbooks are installed" in loop.tools.get("load_playbook").description
+    loader = loop.tools.get("load_playbook")
+    assert "No playbooks are installed" in loader.description
+    # The schema an empty library produces has to be one a provider will take and
+    # a call will survive. `"enum": None` is neither: it is not a JSON Schema, and
+    # `Tool._validate` tests `val not in schema["enum"]` on the key being present,
+    # so every call raised `argument of type 'NoneType' is not iterable` before it
+    # ran. Unreachable while the loader was withheld over an empty library; the
+    # fresh-install state once it is not.
+    name_schema = loader.to_schema()["function"]["parameters"]["properties"]["name"]
+    assert "enum" not in name_schema, name_schema
 
 
 def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
