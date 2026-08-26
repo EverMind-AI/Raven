@@ -1204,6 +1204,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.set.mem.learn': 'Learn from how you work',
     'gui.set.mem.manage': 'Stored memories',
     'gui.set.mem.model_ph': 'provider/model',
+    'gui.set.mem.own_key': 'Its own key and address',
+    'gui.set.mem.borrow_from': 'Use the key from {name}',
+    'gui.set.mem.borrow_note':
+      'The key and address are copied from that account when you save. Change them there later and this stays on the copy.',
     'gui.set.mem.models': 'EverOS models',
     'gui.set.mem.models_w':
       'Long-term memory runs on EverOS. It uses one model per role to extract, embed and rerank memories - configure them here.',
@@ -2463,6 +2467,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.set.mem.learn': '从你的用法中学习',
     'gui.set.mem.manage': '记忆管理',
     'gui.set.mem.model_ph': 'provider/model',
+    'gui.set.mem.own_key': '单独填写密钥和地址',
+    'gui.set.mem.borrow_from': '用 {name} 的密钥',
+    'gui.set.mem.borrow_note': '保存时会把那个账号的密钥和地址复制过来。之后在那边改动,这里不会跟着变。',
     'gui.set.mem.models': 'EverOS 模型',
     'gui.set.mem.models_w': '长期记忆由 EverOS 承载。它抽取、嵌入、重排记忆各用一个模型，在这里配置。',
     'gui.set.mem.open': '打开',

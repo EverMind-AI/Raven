@@ -147,9 +147,13 @@ export async function write(key: string, value: unknown): Promise<WriteOutcome> 
   }
 }
 
-export async function everosSave(section: string, fields: Record<string, string> | null): Promise<WriteOutcome> {
+export async function everosSave(
+  section: string,
+  fields: Record<string, string> | null,
+  borrowFrom?: string,
+): Promise<WriteOutcome> {
   try {
-    const snap = await source().everosSet(section, fields)
+    const snap = await source().everosSet(section, fields, borrowFrom)
     set({ snap, memEdit: null, epoch: state.epoch + 1 })
     return 'ok'
   } catch (e) {

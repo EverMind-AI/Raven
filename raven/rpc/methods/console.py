@@ -781,6 +781,25 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
             raise ConfigValidationError(f"{k} too long (max 500)")
         if v:
             clean[k] = v
+    borrow = params.get("borrow_from")
+    if borrow is not None:
+        if not isinstance(borrow, str) or not borrow.strip():
+            raise ConfigValidationError("borrow_from must be a provider name")
+        from raven.config.update_everos import borrow_provider_credentials
+
+        try:
+            lent = borrow_provider_credentials(borrow.strip())
+        except KeyError as exc:
+            raise ConfigValidationError(f"no such provider: {borrow}") from exc
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        # The borrowed values win over anything the client sent for the same
+        # keys: the page cannot read a stored key -- `model.endpoints` redacts
+        # it -- so a client-sent api_key alongside a borrow is the redaction
+        # itself being echoed back, which would overwrite a real key with the
+        # word for one.
+        clean.update(lent)
+
     if not clean:
         raise ConfigValidationError("fields must carry at least one non-empty value")
     set_everos_section(section, clean)

@@ -3278,6 +3278,14 @@
             "type": "boolean",
             "description": "Drop the section; refused for llm and embedding."
           }
+        },
+        {
+          "name": "borrow_from",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+          }
         }
       ],
       "result": {

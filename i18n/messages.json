@@ -4031,6 +4031,18 @@
       "en": "provider/model",
       "zh": "provider/model"
     },
+    "gui.set.mem.own_key": {
+      "en": "Its own key and address",
+      "zh": "单独填写密钥和地址"
+    },
+    "gui.set.mem.borrow_from": {
+      "en": "Use the key from {name}",
+      "zh": "用 {name} 的密钥"
+    },
+    "gui.set.mem.borrow_note": {
+      "en": "The key and address are copied from that account when you save. Change them there later and this stays on the copy.",
+      "zh": "保存时会把那个账号的密钥和地址复制过来。之后在那边改动,这里不会跟着变。"
+    },
     "gui.set.mem.models": {
       "en": "EverOS models",
       "zh": "EverOS 模型"

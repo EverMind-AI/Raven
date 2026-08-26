@@ -35,6 +35,10 @@ function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     providers: [
       { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: true, kind: 'api_key' },
       { id: 'openai', name: 'OpenAI', models: [], on: false, kind: 'api_key' },
+      /* Connected with nothing to lend: `on` means "usable", and these two are
+         usable by a token file and by an address, with no key behind either. */
+      { id: 'openai_codex', name: 'Codex', models: [], on: true, kind: 'oauth' },
+      { id: 'ollama', name: 'Ollama', models: [], on: true, kind: 'local' },
     ],
     curProvider: 'anthropic',
     model: 'claude-opus-4-5',
@@ -64,8 +68,10 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
       calls.push(['set', { key, value }])
       return data
     },
-    everosSet: async (section, fields) => {
-      calls.push(['everosSet', { section, fields }])
+    everosSet: async (section, fields, borrowFrom) => {
+      calls.push(['everosSet', borrowFrom === undefined
+        ? { section, fields }
+        : { section, fields, borrowFrom }])
       return data
     },
     usage: async () => null,
@@ -409,6 +415,63 @@ describe('settings island', () => {
     })
     expect(calls).toContainEqual(['everosSet', { section: 'llm', fields: { model: 'gpt-5-mini' } }])
     expect(document.querySelector('.mrole .ff')).toBeNull()
+  })
+
+    it('borrows a connected account instead of asking for the key again', async () => {
+      const { calls } = install()
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.memory').click()
+      })
+      await act(async () => {
+      screen.getAllByText('gui.set.mem.setup')[0]!.click()
+    })
+    const form = document.querySelector('.mrole .ff')!
+    /* Only the connected one is offered: an unconnected provider would be a
+       choice that fails on save for a reason the row cannot show. */
+    const pick = form.querySelector<HTMLSelectElement>('select.mlend')!
+    expect(Array.from(pick.options).map((o) => o.value)).toEqual(['', 'anthropic'])
+
+    form.querySelector<HTMLInputElement>('input[type="text"]')!.value = 'text-embedding-3-large'
+    await act(async () => {
+      pick.value = 'anthropic'
+      pick.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    /* The address and key fields are gone: the server fills both, and a field
+       the reader can type into that is overwritten on save is a lie. */
+    expect(document.querySelector('.mrole .ff input[type="password"]')).toBeNull()
+    expect(document.querySelector('.mrole .ff .mnote')).toBeTruthy()
+
+    await act(async () => {
+      screen.getByText('gui.set.mem.save').click()
+    })
+    /* The name travels; the key does not, because this page never had it. */
+    expect(calls).toContainEqual(['everosSet', {
+      section: 'llm',
+      fields: { model: 'text-embedding-3-large' },
+      borrowFrom: 'anthropic',
+    }])
+  })
+
+    it('still takes a key typed by hand when no account is borrowed', async () => {
+      const { calls } = install()
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.memory').click()
+      })
+      await act(async () => {
+      screen.getAllByText('gui.set.mem.setup')[0]!.click()
+    })
+    const form = document.querySelector('.mrole .ff')!
+    form.querySelector<HTMLInputElement>('input[type="text"]')!.value = 'm'
+    form.querySelector<HTMLInputElement>('input[type="password"]')!.value = 'sk-typed'
+    await act(async () => {
+      screen.getByText('gui.set.mem.save').click()
+    })
+    expect(calls).toContainEqual(['everosSet', {
+      section: 'llm',
+      fields: { model: 'm', api_key: 'sk-typed' },
+    }])
   })
 
   it('connects a provider from its card and refuses an empty key in the form', async () => {

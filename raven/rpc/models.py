@@ -2622,6 +2622,14 @@ class SettingsEverosSetParams(_Strict):
     section: str
     fields: dict[str, str] | None = Field(default=None, description="Merged into the section; ignored when clearing.")
     clear: bool | None = Field(default=None, description="Drop the section; refused for llm and embedding.")
+    borrow_from: str | None = Field(
+        default=None,
+        description=(
+            "Take api_key and base_url from this connected provider, copied not "
+            "referenced. Wins over the same keys in `fields`, which cannot carry a "
+            "real key: the page only ever sees a redacted one."
+        ),
+    )
 
 
 class SettingsEverosSetResult(_Strict):

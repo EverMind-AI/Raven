@@ -921,6 +921,7 @@ function MemRole({
   cur,
   open,
   say,
+  lenders,
 }: {
   sec: string
   labelKey: string
@@ -928,21 +929,30 @@ function MemRole({
   cur: EverosSection
   open: boolean
   say: () => void
+  lenders: ProviderRow[]
 }): JSX.Element {
   const model = useRef<HTMLInputElement>(null)
   const base = useRef<HTMLInputElement>(null)
   const key = useRef<HTMLInputElement>(null)
+  /* Empty means "I will type the address and key myself", which is what this
+     row always was. Picking a lender hides both, because the server fills them
+     from that provider and a field the reader can edit but that is overwritten
+     on save is a lie about who decides. */
+  const [borrow, setBorrow] = useState('')
   const on = !!(cur.model && cur.api_key_set)
   const save = (): void => {
     const fields: Record<string, string> = {}
     if (model.current?.value.trim()) fields.model = model.current.value.trim()
+    /* No `borrow` guard on these two: picking a lender unmounts both inputs,
+       so their refs are null and there is nothing to read. One mechanism,
+       and it is the one the reader can see. */
     if (base.current?.value.trim()) fields.base_url = base.current.value.trim()
     if (key.current?.value.trim()) fields.api_key = key.current.value.trim()
-    if (!Object.keys(fields).length) {
+    if (!Object.keys(fields).length && !borrow) {
       model.current?.focus()
       return
     }
-    void store.everosSave(sec, fields).then((r) => {
+    void store.everosSave(sec, fields, borrow || undefined).then((r) => {
       if (r === 'notlive') say()
     })
   }
@@ -961,8 +971,22 @@ function MemRole({
       {open && (
         <div className="ff">
           <input ref={model} type="text" defaultValue={cur.model || ''} placeholder={t('gui.set.mem.model_ph')} />
-          <input ref={base} type="text" defaultValue={cur.base_url || ''} placeholder="https://api.example.com/v1" />
-          <input ref={key} type="password" autoComplete="off" placeholder={cur.api_key_set ? t('gui.set.tls.key_set') : 'API Key'} />
+          {lenders.length > 0 && (
+            <select className="mlend" value={borrow} onChange={(e) => setBorrow(e.currentTarget.value)}>
+              <option value="">{t('gui.set.mem.own_key')}</option>
+              {lenders.map((pv) => (
+                <option key={pv.id} value={pv.id}>{t('gui.set.mem.borrow_from', { name: pv.name })}</option>
+              ))}
+            </select>
+          )}
+          {borrow ? (
+            <div className="mnote">{t('gui.set.mem.borrow_note')}</div>
+          ) : (
+            <>
+              <input ref={base} type="text" defaultValue={cur.base_url || ''} placeholder="https://api.example.com/v1" />
+              <input ref={key} type="password" autoComplete="off" placeholder={cur.api_key_set ? t('gui.set.tls.key_set') : 'API Key'} />
+            </>
+          )}
           <div className="mfacts">
             <button className="mini" onClick={save}>
               {t('gui.set.mem.save')}
@@ -990,6 +1014,14 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
   const raw = s.snap.raw
   const [nl, say] = useNl()
   const secs = (s.snap.everos && s.snap.everos.sections) || {}
+  /* Only the ones with a key to lend, which is narrower than `on`. That flag
+     is `credential_status(...).ok` -- "this provider is usable" -- and two
+     kinds satisfy it with no key at all: oauth is authenticated by a token
+     file, and a local deployment by an address. Offering either is a choice
+     that fails on save for a reason the row cannot show. */
+  const lenders = (s.snap.providers || []).filter(
+    (pv) => pv.on && pv.kind !== 'oauth' && pv.kind !== 'local',
+  )
   return (
     <>
       <Scard title={t('gui.set.memory')}>
@@ -1008,7 +1040,16 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
         </div>
         <div className="fset">
           {MEM_ROLES.map(([sec, key, required]) => (
-            <MemRole key={sec} sec={sec} labelKey={key} required={required} cur={secs[sec] || {}} open={s.memEdit === sec} say={say} />
+            <MemRole
+              key={sec}
+              sec={sec}
+              labelKey={key}
+              required={required}
+              cur={secs[sec] || {}}
+              open={s.memEdit === sec}
+              say={say}
+              lenders={lenders}
+            />
           ))}
         </div>
         {nl && <div className="nlmsg">{nl}</div>}
