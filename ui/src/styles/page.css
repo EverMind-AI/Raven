@@ -4225,17 +4225,25 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    where there IS one. A finished node's record has nothing to type into, and
    reserving the composer's 150px there left a blank band under its last line
    that read as the answer having been cut off. */
-.instance-conversation[data-composer="true"] .satx { padding-bottom: 190px; }
+.instance-conversation[data-composer="true"] .satx { padding-bottom: 176px; }
 .instance-conversation[data-composer="true"]::after { content: ''; position: absolute; z-index: 4;
-  left: 0; right: 0; bottom: 0; height: 154px; pointer-events: none; background: var(--ink); }
+  left: 0; right: 0; bottom: 0; height: 140px; pointer-events: none; background: var(--ink); }
 .instance-dock { bottom: calc(18px - var(--desk-pad)); }
 .instance-dock.sasend { display: block; padding: 0 22px; border-top: 0; }
-.instance-dock .dock-in { max-width: var(--col); min-height: 116px;
+/* The page's own composer, one size down and one step quieter -- and nothing
+   else. Everything that gives the card its material (the glass, the blur, the
+   rim light, the border) is the shared `.dock-in`, so the two cannot drift
+   apart; what a sub-agent's changes is that it sits inside a pane rather than
+   under the window, where the full five-layer shadow reads as a second window
+   and the full resting height crowds the transcript above it.
+
+   The three numbers below and the two reserves above move together: the strip
+   is what the transcript scrolls under, and a reserve left at the old height
+   is a blank band that reads as the answer having been cut off. */
+.instance-dock .dock-in { max-width: var(--col); padding: 10px 12px; border-radius: 16px;
   box-shadow: var(--rim), 0 1px 3px rgba(0, 0, 0, .06); }
-.instance-dock .field textarea { min-height: 48px; }
+.instance-dock .field textarea { min-height: 40px; }
 .instance-dock .under { justify-content: space-between; }
-.instance-dock .go:disabled { opacity: .28; cursor: default; }
-.instance-dock .go svg { width: 20px; height: 20px; stroke-linecap: round; stroke-linejoin: round; }
 .legacy-instance-send { display: none; }
 .instance-dock .why { color: var(--clay); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .instance-queue { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; max-height: 86px; overflow-y: auto; }
@@ -4249,7 +4257,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   .instance-conversation[data-composer="true"]::after { height: 118px; }
   .instance-dock { bottom: 8px; }
   .instance-dock.sasend { padding: 0 12px; }
-  .instance-dock .dock-in { min-height: 88px; padding: 8px 10px; border-radius: 15px; }
+  .instance-dock .dock-in { padding: 8px 10px; border-radius: 14px; }
   .instance-dock .field { padding: 2px 6px 0; }
   .instance-dock .field textarea { min-height: 32px; max-height: 96px; }
   .instance-dock .under { margin-top: 6px; }
@@ -4261,7 +4269,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   .instance-conversation[data-composer="true"]::after { height: 94px; }
   .instance-dock { bottom: 6px; }
   .instance-dock.sasend { padding: 0 8px; }
-  .instance-dock .dock-in { min-height: 72px; padding: 6px 8px; border-radius: 13px; }
+  .instance-dock .dock-in { padding: 6px 8px; border-radius: 12px; }
   .instance-dock .field textarea { min-height: 24px; max-height: 64px; }
   .instance-dock .under { margin-top: 3px; }
 }

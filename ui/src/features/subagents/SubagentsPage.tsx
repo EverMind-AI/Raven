@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
+import { SendGlyph } from '../../shell/ico'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
@@ -354,9 +355,7 @@ export function InstanceComposer(
         <div className="under">
           {fail ? <span className="why">{fail}</span> : <span />}
           <button className="go" disabled={!text.trim()} onClick={send} aria-label={t('gui.ws.instance_say')}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-              <path d="M5 12h13M12 5l7 7-7 7" />
-            </svg>
+            <SendGlyph />
           </button>
           <button className="mini legacy-instance-send" tabIndex={-1} aria-hidden="true" onClick={send} />
         </div>
