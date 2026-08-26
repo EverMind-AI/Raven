@@ -25,6 +25,11 @@ const listeners = new Set<() => void>()
 
 export const getVersion = (): number => version
 
+/* A row from the registry has no turn, and sorts as older than any turn the
+   reader watched happen -- which is what it is: something this conversation
+   delivered, recovered rather than witnessed. */
+const rank = (row: DeliveryRow): number => (row.turn == null ? -1 : row.turn)
+
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -42,10 +47,10 @@ export function list(): DeliveryRow[] {
   const newest = new Map<string, { row: DeliveryRow; index: number }>()
   rows.forEach((row, index) => {
     const seen = newest.get(row.path)
-    if (!seen || row.turn > seen.row.turn) newest.set(row.path, { row, index })
+    if (!seen || rank(row) > rank(seen.row)) newest.set(row.path, { row, index })
   })
   return [...newest.values()]
-    .sort((a, b) => b.row.turn - a.row.turn || a.index - b.index)
+    .sort((a, b) => rank(b.row) - rank(a.row) || a.index - b.index)
     .map(({ row }) => row)
 }
 
@@ -56,7 +61,7 @@ export const ofTurn = (turn: number): DeliveryRow[] => rows.filter((row) => row.
 /* The newest row for a path: what the pane says about the file that is open. */
 export const byPath = (path: string): DeliveryRow | null =>
   rows.reduce<DeliveryRow | null>(
-    (best, row) => (row.path === path && (!best || row.turn > best.turn) ? row : best),
+    (best, row) => (row.path === path && (!best || rank(row) > rank(best)) ? row : best),
     null,
   )
 
@@ -65,6 +70,40 @@ export const count = (): number => new Set(rows.map((row) => row.path)).size
 
 /* Parse one delivery manifest. The shape is the tool event's metadata, so a
    caller can hand over whatever it received without checking it first. */
+/* One delivered file, from either door: the wire shape is the same in a turn
+   event's manifest and in the gateway's registry, because both are written from
+   the same record. */
+function rowOf(entry: unknown, turn: number | null): DeliveryRow | null {
+  if (!entry || typeof entry !== 'object') return null
+  const item = entry as Record<string, unknown>
+  const path = String(item.path || '')
+  if (!path) return null
+  const name = String(item.name || path.split('/').pop() || path)
+  const dot = name.lastIndexOf('.')
+  return {
+    path,
+    name,
+    title: String(item.title || name),
+    description: String(item.description || ''),
+    ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
+    size: Number(item.size) || 0,
+    mediaType: String(item.media_type || ''),
+    downloadPath: String(item.download_path || ''),
+    missing: item.missing === true,
+    turn,
+  }
+}
+
+function put(next: DeliveryRow): boolean {
+  const at = rows.findIndex((row) => row.turn === next.turn && row.path === next.path)
+  if (at >= 0) {
+    rows[at] = next
+    return true
+  }
+  rows.push(next)
+  return true
+}
+
 export function record(turn: number, metadata: unknown): void {
   const root = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null
   const raw = root && root.raven_delivery && typeof root.raven_delivery === 'object'
@@ -73,29 +112,29 @@ export function record(turn: number, metadata: unknown): void {
   if (!files.length) return
   let changed = false
   files.forEach((entry) => {
-    if (!entry || typeof entry !== 'object') return
-    const item = entry as Record<string, unknown>
-    const path = String(item.path || '')
-    if (!path) return
-    const name = String(item.name || path.split('/').pop() || path)
-    const dot = name.lastIndexOf('.')
-    const next: DeliveryRow = {
-      path,
-      name,
-      title: String(item.title || name),
-      description: String(item.description || ''),
-      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
-      size: Number(item.size) || 0,
-      mediaType: String(item.media_type || ''),
-      downloadPath: String(item.download_path || ''),
-      missing: item.missing === true,
-      turn,
-    }
-    const at = rows.findIndex((row) => row.turn === turn && row.path === path)
-    if (at >= 0) rows[at] = next
-    else rows.push(next)
-    changed = true
+    const next = rowOf(entry, turn)
+    if (next) changed = put(next) || changed
   })
+  if (changed) bump()
+}
+
+/* The gateway's registry for this conversation, oldest first. Merged rather
+   than replacing: a manifest row knows which turn it belongs to and the
+   registry does not, so a path the reader already watched arrive keeps its
+   turn -- the registry only fills in what this client never saw.
+
+   Its rows are added newest-first so that, among themselves, they read in the
+   same direction as the turns above them. */
+export function seed(files: unknown): void {
+  if (!Array.isArray(files)) return
+  let changed = false
+  for (let i = files.length - 1; i >= 0; i -= 1) {
+    const next = rowOf(files[i], null)
+    if (!next) continue
+    /* Nothing to recover for a path a turn already accounted for. */
+    if (rows.some((row) => row.path === next.path && row.turn != null)) continue
+    changed = put(next) || changed
+  }
   if (changed) bump()
 }
 

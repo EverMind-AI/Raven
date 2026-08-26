@@ -22,20 +22,36 @@ import type { DeskGeometry, DeskTab } from './deskTypes'
 import type { DeliveryRow } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
+/* The three tabs, each carrying what is new in it. The bubble is the same thing
+   on all three -- changes written, files delivered, background work started --
+   because a reader who is on one tab has exactly one question about the other
+   two, and it is the same question.
+
+   The label is marked with a class rather than left to `span:last-child`: the
+   bubble is a sibling, and the moment one existed the positional selector
+   stopped matching the label, which put the full label on every collapsed
+   34px tab. */
+/* Slow on purpose: this feeds a number on a tab, not a spinner. */
+const AGENTS_POLL_MS = 8000
+
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
-  const delivered = deliveries.count()
   return (
     <div className="desk-tabs" role="tablist">
       {(['diff', 'deliverables', 'agents'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.agents')
+        const fresh = desk.unseen(tab)
+        /* The count goes in the button's OWN name. An explicit `aria-label`
+           replaces the whole subtree as the accessible name, so a label on the
+           bubble inside it is never announced -- and `<i>` maps to a generic
+           role, where `aria-label` does not apply at all. Hidden from the tree
+           afterwards so the number is not read twice. */
+        const name = fresh ? `${label}, ${t('gui.ws.unseen_tab', { n: String(fresh) })}` : label
         return (
-          <button key={tab} role="tab" aria-label={label} aria-selected={value === tab} onClick={() => onChange(tab)}>
+          <button key={tab} role="tab" aria-label={name} aria-selected={value === tab} onClick={() => onChange(tab)}>
             <DeskIcon kind={tab} />
-            <span>{label}</span>
-            {/* The one count worth carrying on a collapsed tab: a shelf with
-                something on it is the reason to go and look. */}
-            {tab === 'deliverables' && delivered ? <i className="desk-count">{delivered}</i> : null}
+            <span className="lb">{label}</span>
+            {fresh ? <i className="desk-count" aria-hidden="true">{fresh}</i> : null}
           </button>
         )
       })}
@@ -64,8 +80,11 @@ function DiffNav(): JSX.Element {
 
 function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX.Element {
   const size = deliveries.humanSize(row.size)
-  const meta = [row.name, size, here ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })]
-    .filter(Boolean).join(' \u00b7 ')
+  /* A row recovered from the gateway's registry has no turn to name -- it says
+     what the file is and leaves the reading position out rather than inventing
+     one. */
+  const when = here || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
+  const meta = [row.name, size, when].filter(Boolean).join(' \u00b7 ')
   return (
     <button
       className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
@@ -141,11 +160,37 @@ function storedGeometry(): DeskGeometry {
 
 export function DeskPalette(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
-  /* On the root, not on the shelf: the tab strip reads the registry for its
-     count and is drawn whichever tab is showing, so subscribing only where the
-     shelf mounts left the badge out of the one case it exists for -- a delivery
-     landing while the reader is on another tab. */
+  /* On the root, not on the tab bodies: the tab strip reads all three sources
+     for its bubbles and is drawn whichever tab is showing, so subscribing only
+     where each body mounts left every badge out of the one case it exists for
+     -- something landing while the reader is on another tab. (The workspace's
+     own changes arrive through `DeskApp`, which subscribes to that store.) */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
+  useSyncExternalStore(agents.subscribe, agents.getState)
+  /* Looking at a tab is what makes its contents no longer new -- including what
+     lands while the reader is sitting on it, which is why this runs on every
+     render rather than only on a switch. */
+  useEffect(() => {
+    if (state.paletteOpen) desk.seeTab(state.tab)
+  })
+  /* The other two tabs are told what happened: a write reaches the workspace
+     record and a delivery reaches the registry, both on the turn's own events.
+     Background work is not -- the instance list is asked for, by the panel when
+     it draws and by a resume, and nothing asks while a turn quietly spawns a
+     sub-agent. So the tab that is NOT showing would have counted zero for the
+     whole run and badged nothing.
+     Asked here rather than wired into the turn stream because the list is
+     already a polled thing with its own floor (2.5s in the agents store, which
+     rate-limits this), and the alternative is a second definition of "something
+     started" living in the event handler. Only while the palette is open, and
+     only for the tab the reader is not on -- the panel refreshes its own. */
+  useEffect(() => {
+    if (!state.paletteOpen || state.tab === 'agents') return
+    const ask = (): void => { void agents.refreshInstances() }
+    ask()
+    const timer = setInterval(ask, AGENTS_POLL_MS)
+    return () => clearInterval(timer)
+  }, [state.paletteOpen, state.tab])
   const pointerCleanup = useRef<(() => void) | null>(null)
   const [geom, setGeom] = useState(storedGeometry)
   useEffect(() => {

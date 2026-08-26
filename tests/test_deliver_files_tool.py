@@ -288,3 +288,42 @@ def test_every_surface_sees_deliver_files_in_the_schema(tool) -> None:
 
     AgentLoop._set_tool_context(_Loop(), "web", "c1", None, session_key="web:c1")
     assert "deliver_files" in offered()
+
+
+def test_the_call_puts_its_title_and_description_in_the_registry(tmp_path) -> None:
+    """Not only on the turn event. The manifest reaches whichever client is
+    connected at that moment; the registry is what every later reader asks --
+    a reconnect, a second client, a shelf rebuilt after a compaction archived
+    the turn. Storing only the path and the size there would hand those readers
+    a file name where the agent had written a title."""
+    workspace = tmp_path / "chanwork"
+    workspace.mkdir()
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    tool = DeliverFilesTool(store, workspace=workspace, allowed_dirs=())
+    tool.set_context("web", "default", "web:s1")
+    _write(workspace, "brief.md")
+
+    with bind(workspace):
+        asyncio.run(tool.execute(files=[{"path": "brief.md", "title": "The brief", "description": "what it is"}]))
+
+    rows = store.for_conversation("web:s1")
+    assert [(r.name, r.title, r.description) for r in rows] == [("brief.md", "The brief", "what it is")]
+
+
+def test_a_re_delivery_refreshes_what_the_registry_says_the_file_is(tmp_path) -> None:
+    """The token is reused for a path this conversation already delivered, so
+    the row is rewritten rather than added -- and it has to carry the new
+    title, or the shelf keeps naming the file by an earlier draft of itself."""
+    workspace = tmp_path / "chanwork"
+    workspace.mkdir()
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    tool = DeliverFilesTool(store, workspace=workspace, allowed_dirs=())
+    tool.set_context("web", "default", "web:s1")
+    _write(workspace, "brief.md")
+
+    with bind(workspace):
+        asyncio.run(tool.execute(files=[{"path": "brief.md", "title": "first cut"}]))
+        asyncio.run(tool.execute(files=[{"path": "brief.md", "title": "second cut"}]))
+
+    rows = store.for_conversation("web:s1")
+    assert [r.title for r in rows] == ["second cut"]

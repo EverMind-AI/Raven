@@ -103,3 +103,71 @@ def test_drop_removes_and_persists(tmp_path) -> None:
 
     assert store.get(token) is None
     assert DeliverableStore(path).get(token) is None
+
+
+def test_the_store_remembers_what_the_agent_called_the_file(tmp_path):
+    """Title and description are stored, not only sent.
+
+    They ride the turn event to whichever client is connected at that moment.
+    Everything that asks later -- a reconnect, a second client, a shelf rebuilt
+    after a compaction archived the turn -- reads them from here or not at all.
+    """
+    store = DeliverableStore(tmp_path / "d.json")
+    target = tmp_path / "brief.md"
+    target.write_text("x")
+
+    store.register(
+        path=str(target),
+        name="brief.md",
+        media_type="text/markdown",
+        size=1,
+        conversation="tui:s1",
+        title="The brief",
+        description="what it is",
+    )
+
+    reopened = DeliverableStore(tmp_path / "d.json")
+    rows = reopened.for_conversation("tui:s1")
+    assert [(r.title, r.description) for r in rows] == [("The brief", "what it is")]
+
+
+def test_for_conversation_is_that_conversation_oldest_first(tmp_path):
+    store = DeliverableStore(tmp_path / "d.json")
+    for name in ("a.md", "b.md", "c.md"):
+        (tmp_path / name).write_text(name)
+    store.register(path=str(tmp_path / "a.md"), name="a.md", media_type="text/markdown", size=1, conversation="tui:s1")
+    store.register(path=str(tmp_path / "b.md"), name="b.md", media_type="text/markdown", size=1, conversation="tui:s2")
+    store.register(path=str(tmp_path / "c.md"), name="c.md", media_type="text/markdown", size=1, conversation="tui:s1")
+
+    rows = store.for_conversation("tui:s1")
+
+    assert [r.name for r in rows] == ["a.md", "c.md"]
+    assert [r.created_at for r in rows] == sorted(r.created_at for r in rows)
+    assert store.for_conversation("") == []
+    assert store.for_conversation("tui:nobody") == []
+
+
+def test_a_registry_written_before_titles_existed_still_loads(tmp_path):
+    """The two fields default, so an entry saved by an older build is read back
+    rather than dropped as malformed."""
+    path = tmp_path / "d.json"
+    target = tmp_path / "old.md"
+    target.write_text("x")
+    path.write_text(
+        json.dumps(
+            {
+                "tok1": {
+                    "path": str(target),
+                    "name": "old.md",
+                    "media_type": "text/markdown",
+                    "size": 1,
+                    "conversation": "tui:s1",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        )
+    )
+
+    rows = DeliverableStore(path).for_conversation("tui:s1")
+
+    assert [(r.name, r.title, r.description) for r in rows] == [("old.md", "", "")]

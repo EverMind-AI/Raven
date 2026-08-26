@@ -84,6 +84,10 @@ DS.workspace = {
   hostPlatform: () => HOST_PLATFORM,
   canBrowse: true,
   reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
+  /* The gateway's own registry of what this conversation handed over. The
+     shelf is built from the manifests on turn events while a client watches;
+     this is what it is built from when nobody was watching. */
+  deliverables: (key) => rpc.call('deliverables.list', { session_key: key }).then((r) => (r && r.files) || []),
   /* The other half of the viewer: a kind the page cannot render goes to the
      host's own application for it. `app` is a name the reader picked, or
      absent for the host default. Only offered while the gateway IS this

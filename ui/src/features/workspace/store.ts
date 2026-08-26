@@ -5,6 +5,7 @@ import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
 import { ds, shell, t } from '../../shell/bridge'
 import { copy } from '../../shell/clipboard'
+import { current as currentSession } from '../../shell/session'
 import { md } from '../../shell/prose'
 
 import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
@@ -332,6 +333,30 @@ export async function probeDeliveryMissing(path: string): Promise<void> {
     if (r.status === 404) deliveries.markMissing(path)
   } catch {
     /* No answer at all is not an answer about the file. */
+  }
+}
+
+/* Fill the shelf from the gateway's registry for this conversation. Called when
+   a conversation is opened -- including the re-open a reconnect does, which is
+   the case that used to empty the shelf: the transcript comes back from disk,
+   and a turn still in flight has not been written to it yet, so its deliveries
+   were in the page's memory and nowhere else. */
+export async function loadDeliveries(sessionKey: string): Promise<void> {
+  const src = source()
+  if (!src.deliverables || !sessionKey) return
+  try {
+    const files = await src.deliverables(sessionKey)
+    /* Asked for one conversation, answered into whichever is open now: the
+       reader can click another session while this is in flight, and the
+       registry it would seed is that one's. `seed` cannot catch it -- it skips
+       a path only when a turn row already claims it, and A's paths are not
+       among B's -- so B's shelf would list files B never delivered, bubble them
+       as new, and park them under B on the way out. The same guard the agents
+       lists and the desk replay use. */
+    if (currentSession() === sessionKey) deliveries.seed(files)
+  } catch {
+    /* A registry that cannot be read leaves the shelf with whatever the turn
+       events gave it, which is what it had before this existed. */
   }
 }
 

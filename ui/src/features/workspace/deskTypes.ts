@@ -17,6 +17,15 @@ export interface DeskSplits {
   right: number
 }
 
+/* How much each tab held the last time the reader looked at it. What is new is
+   the difference, which is what the tab's bubble says -- one rule for all three
+   rather than a badge per tab inventing its own idea of "new".
+
+   Held in `marks.ts` and parked with the conversation, not in `DeskState`: a
+   session switch resets the desk, and a mark reset beside a list that was
+   restored reports the whole list as new. */
+export type DeskMarks = Record<DeskTab, number>
+
 export interface DeskState {
   tab: DeskTab
   paletteOpen: boolean

@@ -406,6 +406,7 @@ window.RavenIslands = {
     changes: workspace.changes,
     urls: workspace.urls,
     showFile: workspace.showFile,
+    loadDeliveries: workspace.loadDeliveries,
     hunkFromEdit: workspaceHunks.fromEdit,
     hunkFromWrite: workspaceHunks.fromWrite,
     hunkFromUnified: workspaceHunks.fromUnified,

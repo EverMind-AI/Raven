@@ -59,7 +59,10 @@ export interface DeliveryRow {
   mediaType: string
   downloadPath: string
   missing: boolean
-  turn: number
+  /* Which turn delivered it, or null for a row that came from the gateway's
+     own registry rather than from a manifest on a turn event -- the registry
+     is what a conversation delivered, not when in the reading it happened. */
+  turn: number | null
 }
 
 /* The stable workspace record owned by the island store. */
@@ -90,6 +93,11 @@ export interface WorkspaceSource {
   hostPlatform(): string
   /* Whether this source can read a file for the viewer to render. */
   canBrowse?: boolean
+  /* What this conversation has handed over, from the gateway's own registry.
+     The manifests on turn events say the same thing while a client is
+     connected and watching; this answers after a reconnect, after a compaction
+     archived the turn that carried one, and for a client that was not open. */
+  deliverables?(sessionKey: string): Promise<unknown>
   reveal?(path: string): Promise<unknown>
   /* Hand the file to an application on the gateway's host. `app` is an
      application NAME the reader chose, or absent for the host default. */

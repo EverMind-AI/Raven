@@ -4012,13 +4012,19 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   user-select: none; touch-action: none; }
 .desk-drag[data-dragging="true"] { cursor: grabbing; }
 .desk-tabs { display: flex; align-items: center; gap: 4px; }
-.desk-tabs button { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
-  gap: 7px; border: 0; border-radius: 8px; padding: 0; background: transparent;
+/* `position: relative` for the bubble, which hangs off the corner rather than
+   sitting in the row: a collapsed tab is a 34px square and has no width to give
+   a number, and a bubble that took part in the layout is what pushed the icon
+   and the label out of one. */
+.desk-tabs button { position: relative; width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; gap: 7px; border: 0; border-radius: 8px; padding: 0; background: transparent;
   color: var(--muted); font: 500 12px var(--sans); cursor: pointer; }
 .desk-tabs button[aria-selected="true"] { width: auto; padding: 0 9px; background: var(--surface); color: var(--text); }
 .desk-tabs button svg { width: 16px; height: 16px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
-.desk-tabs button span:last-child { display: none; font-weight: 600; }
-.desk-tabs button[aria-selected="true"] span:last-child { display: inline; }
+/* By class, not by position: the bubble is a sibling of the label, and a
+   positional rule stopped matching the label the moment one existed. */
+.desk-tabs button .lb { display: none; font-weight: 600; }
+.desk-tabs button[aria-selected="true"] .lb { display: inline; }
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; }
 .desk-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
   cursor: nwse-resize; touch-action: none; }
@@ -4046,9 +4052,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The deliverables shelf. Two lines per row, because one product out of a turn
    reads as a human title and the file it landed as, and at this width they do
    not fit on one line. */
-.desk-count { min-width: 15px; height: 15px; flex: none; padding: 0 4px; border-radius: 999px;
-  background: var(--text); color: var(--ink); font: 9.5px/15px var(--mono); font-style: normal; text-align: center; }
-.desk-tabs button:not([aria-selected="true"]) .desk-count { margin: -10px 0 0 -6px; }
+/* What is new in a tab the reader is not on. Pinned to the corner and out of
+   the flow, so the tab it marks is the same size with it and without. */
+.desk-count { position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px;
+  border: 1.5px solid var(--ink); border-radius: 999px; background: var(--text); color: var(--ink);
+  font: 9px/11px var(--mono); font-style: normal; text-align: center; }
 .desk-grp { padding: 8px 11px 4px; color: var(--faint); font: 9.5px/1.4 var(--mono); letter-spacing: .06em;
   text-transform: uppercase; }
 .desk-dlv-row { height: auto; min-height: 44px; gap: 9px; padding: 6px 10px;

@@ -2457,6 +2457,12 @@ class AgentLoop:
         resolved.mkdir(parents=True, exist_ok=True)
         return resolved
 
+    @property
+    def deliverables(self) -> "DeliverableStore | None":
+        """The registry `deliver_files` writes into, for callers that only read
+        it -- the RPC surface that answers what a conversation handed over."""
+        return self._deliverables
+
     def peek_session_workdir(self, session_key: str) -> Path:
         """Where this session would work, with no side effect and no refusal.
 

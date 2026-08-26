@@ -1070,3 +1070,88 @@ async def test_fs_still_serves_the_workspace_when_it_is_inside_the_state_dir(
 
     got = await console_module.fs_read({"path": "report.md"}, agent_loop_factory=lambda: loop)
     assert got["content"] == "the agent wrote this"
+
+
+# ---------------------------------------------------------------------------
+# deliverables.list: what a conversation handed over, after nobody was watching
+# ---------------------------------------------------------------------------
+
+
+def _file(tmp_path: Path, name: str) -> Path:
+    """A real file for the registry to point at: `missing` is stat'd, so a
+    fixture that never touched the disk would report every row as gone."""
+    target = tmp_path / name
+    target.write_text(name)
+    return target
+
+
+async def test_deliverables_list_answers_for_the_conversation_not_the_transcript(tmp_path: Path) -> None:
+    """The registry is the answer after a reconnect or a compaction: a client
+    reads the manifests off turn events while it is connected, and this is what
+    is left when it was not."""
+    from raven.agent.tools._deliverables import DeliverableStore
+
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    mine = _file(tmp_path, "brief.md")
+    theirs = _file(tmp_path, "other.md")
+    store.register(
+        path=str(mine),
+        name="brief.md",
+        media_type="text/markdown",
+        size=12,
+        conversation="tui:s1",
+        title="The brief",
+        description="what it is",
+    )
+    store.register(
+        path=str(theirs),
+        name="other.md",
+        media_type="text/markdown",
+        size=9,
+        conversation="tui:s2",
+    )
+    loop = SimpleNamespace(deliverables=store)
+
+    result = await console_module.deliverables_list({"session_key": "tui:s1"}, agent_loop_factory=lambda: loop)
+
+    assert [f["name"] for f in result["files"]] == ["brief.md"], "another conversation's file is not this one's"
+    file = result["files"][0]
+    assert file["title"] == "The brief"
+    assert file["description"] == "what it is"
+    assert file["missing"] is False
+    # A token URL, never a path: the download route resolves the token and the
+    # path never travels in a URL.
+    assert file["download_path"].startswith("/files/download?token=")
+    assert str(mine) not in file["download_path"]
+    assert file["created_at"]
+
+
+async def test_deliverables_list_says_a_file_is_gone_rather_than_dropping_it(tmp_path: Path) -> None:
+    """It is still something this conversation handed over. Saying so is more
+    use than a row that quietly disappears."""
+    from raven.agent.tools._deliverables import DeliverableStore
+
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    target = _file(tmp_path, "gone.md")
+    store.register(
+        path=str(target),
+        name="gone.md",
+        media_type="text/markdown",
+        size=4,
+        conversation="tui:s1",
+    )
+    target.unlink()
+    loop = SimpleNamespace(deliverables=store)
+
+    result = await console_module.deliverables_list({"session_key": "tui:s1"}, agent_loop_factory=lambda: loop)
+
+    assert [f["missing"] for f in result["files"]] == [True]
+
+
+async def test_deliverables_list_is_empty_without_a_key_or_a_store() -> None:
+    """A draft has no conversation to ask about, and a runtime built without the
+    web channel has no registry -- neither is an error."""
+    loop = SimpleNamespace(deliverables=None)
+
+    assert (await console_module.deliverables_list({"session_key": ""}, agent_loop_factory=lambda: loop))["files"] == []
+    assert (await console_module.deliverables_list({"session_key": "tui:s1"}))["files"] == []
