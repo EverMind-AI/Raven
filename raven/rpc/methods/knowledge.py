@@ -241,6 +241,28 @@ async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     return {"document": _doc_row(doc)}
 
 
+async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
+    """Take one document out of its base, with its chunks and its blob.
+
+    The page's only way out of a document that will not index. Without it a
+    parse that keeps failing, or a row left `pending` by a gateway restart
+    mid-index, could be cleared only by deleting the base around it -- every
+    other document with it.
+
+    ``removed`` rather than a raise on a document that is already gone: two
+    clicks on the same row, or a row the reader deleted in another tab, is not
+    an error to report to them.
+    """
+    document_id = str(params.get("document_id") or "")
+    if not document_id:
+        raise ConfigValidationError("document_id is required")
+    try:
+        removed = await knowledge_manager().delete_document(document_id)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"delete failed: {exc}") from exc
+    return {"removed": bool(removed)}
+
+
 async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
     """Nearest chunks across the named bases.
 
@@ -282,6 +304,7 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
     dispatcher.register("knowledge.documents.add", knowledge_documents_add)
     dispatcher.register("knowledge.documents.index", knowledge_documents_index)
+    dispatcher.register("knowledge.documents.delete", knowledge_documents_delete)
     dispatcher.register("knowledge.search", knowledge_search)
 
 
@@ -292,6 +315,7 @@ __all__ = [
     "knowledge_bases_rename",
     "knowledge_documents_add",
     "knowledge_documents_index",
+    "knowledge_documents_delete",
     "knowledge_documents_list",
     "knowledge_manager",
     "knowledge_search",

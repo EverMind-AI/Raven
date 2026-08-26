@@ -3310,6 +3310,18 @@ class KnowledgeDocumentsIndexResult(_Strict):
     document: KnowledgeDocument
 
 
+class KnowledgeDocumentsDeleteParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsDeleteResult(_Strict):
+    removed: bool = Field(
+        description=(
+            "False when there was no such document, which is not an error: two clicks on one row answer the same way."
+        )
+    )
+
+
 class KnowledgeSearchParams(_Strict):
     base_ids: list[str]
     query: str
@@ -3330,6 +3342,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "knowledge.documents.list": (KnowledgeDocumentsListParams, KnowledgeDocumentsListResult),
     "knowledge.documents.add": (KnowledgeDocumentsAddParams, KnowledgeDocumentsAddResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
+    "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),

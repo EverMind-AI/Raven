@@ -371,6 +371,46 @@ async def test_a_directory_is_not_a_document(monkeypatch, tmp_path: Path) -> Non
         await kb.knowledge_documents_add({"base_id": "b1", "path": "uploads"})
 
 
+async def test_deleting_a_document_reports_what_it_did() -> None:
+    """The page's only way out of a document that will not index. Without it a
+    row stuck on `pending` or `failed` could be cleared only by deleting the
+    base around it -- every other document with it."""
+    manager = _FakeManager([], {})
+    gone: list[str] = []
+
+    async def _delete(document_id: str) -> bool:
+        gone.append(document_id)
+        return True
+
+    manager.delete_document = _delete  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_delete({"document_id": "d1"})
+
+    assert gone == ["d1"]
+    assert out == {"removed": True}
+
+
+async def test_deleting_what_is_already_gone_is_not_an_error() -> None:
+    """Two clicks on one row, or a row another tab removed first: answering
+    with a failure would report the reader's own success back as a problem."""
+    manager = _FakeManager([], {})
+
+    async def _delete(document_id: str) -> bool:
+        return False
+
+    manager.delete_document = _delete  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    assert await kb.knowledge_documents_delete({"document_id": "ghost"}) == {"removed": False}
+
+
+async def test_deleting_needs_a_document_id() -> None:
+    kb._set_manager_for_tests(_FakeManager([], {}))
+    with pytest.raises(ConfigValidationError, match="document_id is required"):
+        await kb.knowledge_documents_delete({})
+
+
 async def test_indexing_answers_the_record_rather_than_a_bare_ok() -> None:
     """Indexing is the step that can half-succeed, and the row shows its own
     status and error."""

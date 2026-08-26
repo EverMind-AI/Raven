@@ -1,4 +1,4 @@
-import { shell } from '../../shell/bridge'
+import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
 import type { KbBase, KbDoc, KbHit, KbStatus, KnowledgeSource } from './types'
@@ -189,6 +189,71 @@ async function run(baseId: string, text: string, mine: number): Promise<void> {
     if (state.openId === baseId && mine === seq) set({ hits })
   } catch (e) {
     if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
+  }
+}
+
+/* Index a document again, for a row that is not `ready`.
+
+   The same call `upload` makes; what is new is that it can be made a second
+   time. `index_document` re-reads the record and re-embeds from the stored
+   blob, so a failure that was the endpoint's -- a rate limit, a key that had
+   expired -- clears on a retry with nothing else to do. A row left `pending` by
+   a gateway restart mid-index is the same shape: nothing else ever picks it up,
+   because `index_pending` has no production caller. */
+export async function retry(doc: KbDoc): Promise<void> {
+  const baseId = state.openId
+  if (!baseId || state.busy) return
+  set({ busy: true, docs: state.docs.map((d) => (d.id === doc.id ? { ...d, status: 'indexing', error: '' } : d)) })
+  try {
+    const indexed = await source().index(doc.id)
+    if (state.openId === baseId) {
+      set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+    }
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
+    /* Put the row back the way it was: the optimistic `indexing` above is a
+       promise this call just failed to keep. */
+    if (state.openId === baseId) {
+      set({ docs: state.docs.map((d) => (d.id === doc.id ? doc : d)) })
+    }
+  } finally {
+    set({ busy: false })
+    void load()
+  }
+}
+
+/* Remove one document. Confirmed, because the blob and its chunks go with it
+   and an upload is not always still on the reader's disk. */
+export function removeDoc(doc: KbDoc): void {
+  const baseId = state.openId
+  if (!baseId) return
+  shell().confirmAsk(
+    t('gui.kb.doc_delete'),
+    t('gui.kb.doc_delete_body', { name: doc.source }),
+    t('gui.kb.doc_delete'),
+    () => {
+      /* Off the list first: the row is the thing the reader asked to be rid of,
+         and the reload below is what corrects a delete that did not land. */
+      set({ docs: state.docs.filter((d) => d.id !== doc.id) })
+      void source()
+        .removeDoc(doc.id)
+        .catch((e: unknown) => toast((e as Error)?.message || String(e)))
+        .finally(() => {
+          if (state.openId === baseId) void reopen(baseId)
+          void load()
+        })
+    },
+  )
+}
+
+/* Re-read one base's documents without disturbing the panel around them. */
+async function reopen(baseId: string): Promise<void> {
+  try {
+    const docs = await source().documents(baseId)
+    if (state.openId === baseId) set({ docs })
+  } catch {
+    /* The row list stays as the optimistic removal left it; the next open
+       corrects it. Toasting twice for one failure helps nobody. */
   }
 }
 
