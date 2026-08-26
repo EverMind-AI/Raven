@@ -1962,6 +1962,45 @@ async def test_cli_backend_derived_without_id_warns(tmp_path: Path) -> None:
     assert "not resumable" in out
 
 
+async def test_cli_backend_truncation_crosses_the_boundary_as_a_stated_fact(tmp_path: Path) -> None:
+    """A capped reply says so, and the whole of it survives the cap.
+
+    The defect this covers: the sub-agent's answer was sliced at the process
+    boundary and nothing downstream could tell. The reply read as complete, the
+    run was recorded completed, and the record advertised as the way back to the
+    full result was written from the same sliced string.
+    """
+    from raven.agent.subagent import activity
+
+    whole = "".join(f"line-{n}\n" for n in range(400))
+    be = CliAgentBackend(name="verbose", command=_fixture_cmd(tmp_path, "long.txt", [whole]), max_output_chars=2000)
+    with activity.collecting() as did:
+        out = await be.run("research", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert len(out) <= 2000
+    assert "[raven] Output truncated" in out
+    assert f"of {len(whole.strip())} characters" in out
+    assert did.full_output == whole.strip(), "the record's copy must be the answer, not the head of it"
+    assert did.truncation["output_truncated"] is True
+    assert did.truncation["output_chars_returned"] < did.truncation["output_chars_total"]
+    assert did.truncation["output_chars_discarded"] > 0
+    assert did.as_meta()["output_truncation_reason"] == "max_output_chars"
+
+
+async def test_cli_backend_says_nothing_about_truncation_when_it_fits(tmp_path: Path) -> None:
+    """The notice is a report of a loss, not a disclaimer on every reply."""
+    from raven.agent.subagent import activity
+
+    be = CliAgentBackend(name="brief", command="cat", max_output_chars=2000)
+    with activity.collecting() as did:
+        out = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "hi"
+    assert did.full_output is None
+    assert did.truncation == {}
+    assert "output_truncated" not in did.as_meta()
+
+
 async def test_cli_backend_truncation_preserves_warning(tmp_path: Path) -> None:
     # When base output exceeds max_output_chars and no id is extracted,
     # the warning must still appear in full, not be truncated away.
@@ -3067,6 +3106,44 @@ async def test_cli_backend_streams_no_more_than_it_returns(tmp_path: Path) -> No
     reply = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
 
     assert "".join(seen) == reply == "abcdef"
+
+
+async def test_a_streaming_cli_lane_shows_the_truncation_notice_on_screen(tmp_path: Path) -> None:
+    """The notice rides the *unbounded* callback, or it reaches nobody.
+
+    A streaming lane is never handed the return value a second time (see
+    ``manager.chat``), so for that caller the reply on screen is the only reply
+    there is. When the answer saturates the delta budget -- exactly when it is
+    about to be cut -- a notice sent through the budgeted wrapper is dropped,
+    and the reply simply stops mid-sentence. That is the defect this whole
+    change is named after, surviving in the one lane it came from.
+    """
+    from raven.agent.subagent import activity
+
+    pieces = tuple(f"paragraph-{n:03d} " for n in range(100))
+    lines = _claude_partial_transcript(pieces)
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines, name="verbose"), max_output_chars=400)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    with activity.collecting() as did:
+        reply = await be.run("go", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    streamed = "".join(seen)
+    assert "[raven] Output truncated" in streamed, "the notice has to survive a saturated delta budget"
+    # The budget still bounds the answer's own text: only raven's line is exempt,
+    # and it is exempt because it is the one line saying the rest is missing.
+    assert len(streamed.replace(_notice_of(streamed), "")) <= 400
+    assert "[raven] Output truncated" in reply
+    assert did.truncation["output_truncated"] is True
+    assert did.full_output == "".join(pieces).strip()
+
+
+def _notice_of(streamed: str) -> str:
+    """The raven line inside a streamed reply, so the answer's own text can be measured."""
+    return streamed[streamed.index("\n\n[raven] Output truncated") :]
 
 
 async def test_cli_backend_ignores_a_delta_hook_it_cannot_honour(tmp_path: Path) -> None:

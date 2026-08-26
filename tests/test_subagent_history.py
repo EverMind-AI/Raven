@@ -5,10 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from raven.agent.subagent_history import SpawnRecord, dag_root, session_history_root, spawn_root
+from raven.agent.subagent import activity
+from raven.agent.subagent.backends.base import clamp_output
+from raven.agent.subagent_history import (
+    SpawnRecord,
+    add_turn_to_instance_log,
+    dag_root,
+    session_history_root,
+    spawn_root,
+)
 from raven.session.manager import SessionManager
 
 
@@ -412,3 +421,100 @@ async def test_a_spawn_with_no_declared_identity_schedules_no_memory_record(tmp_
 
     assert manager._record_tasks == set()
     assert calls == []
+
+
+def test_spawn_record_keeps_the_whole_answer_when_the_reply_was_capped(tmp_path: Path) -> None:
+    """out.md is the recovery artifact the spawn tool advertises.
+
+    Written from the activity's full output rather than the value the caller was
+    handed: the two used to be the same truncated string, so the directory
+    offered as the way back to the complete result held a second copy of the
+    loss.
+    """
+    record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
+    whole = "x" * 400
+    with activity.collecting() as did:
+        delivered = asyncio.run(clamp_output(whole, 200, agent="Coder"))
+        record.finish(status="completed", output=delivered, activity=did)
+
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == whole
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["output_truncated"] is True
+    assert meta["output_chars_total"] == 400
+    assert meta["output_chars_returned"] + meta["output_chars_discarded"] == 400
+    assert meta["output_truncation_reason"] == "max_output_chars"
+
+
+def test_spawn_record_writes_what_it_was_given_when_nothing_was_dropped(tmp_path: Path) -> None:
+    """An activity with no truncation on it must not redirect the output row:
+    the full-output field is "what the caller is not being handed", not "the
+    output"."""
+    record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={})
+    with activity.collecting() as did:
+        record.finish(status="completed", output="short answer", activity=did)
+
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == "short answer"
+    assert "output_truncated" not in json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
+
+
+def _logged_answer(tmp_path: Path, output: str | None, run: Any) -> str | None:
+    """What the instance log recorded as this turn's answer, or None if no row.
+
+    ``build_turn`` omits the assistant row entirely for ``answer=None``, so
+    "there is no answer" and "the answer is empty" are distinguishable here the
+    same way they are on disk.
+    """
+    turns = add_turn_to_instance_log(
+        _session_dir(tmp_path, "web:abc"),
+        meta={"agent": "Coder", "handle": "h1"},
+        prompt="ask",
+        output=output,
+        activity=run,
+        kind="spawn",
+    )
+    return next((t["content"] for t in turns if t["role"] == "assistant"), None)
+
+
+def test_the_closing_row_wins_over_the_joined_output_when_a_lane_reports_one() -> None:
+    """Three states, and the middle one must not fall back.
+
+    `None` is "this transport cannot tell what was said last", so the joined
+    output stands in. `""` is "it ended on a step and said nothing after it",
+    which is a different fact: falling back there would attribute the whole
+    reply to a closing message the run never sent. Neither is exercised anywhere
+    else, so the distinction was free to rot.
+    """
+    assert _closing_answer(output="every burst joined", closing=None) == "every burst joined"
+    assert _closing_answer(output="every burst joined", closing="") is None
+    assert _closing_answer(output="every burst joined", closing="the last thing said") == "the last thing said"
+
+
+def _closing_answer(*, output: str, closing: str | None) -> str | None:
+    """The precedence in ``add_turn_to_instance_log``, read off a real turn."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as home:
+        with activity.collecting() as run:
+            if closing is not None:
+                activity.note_closing(closing)
+            return _logged_answer(Path(home), output, run)
+
+
+def test_a_truncation_notice_cannot_invent_a_closing_the_run_never_sent() -> None:
+    """`append_closing` is a no-op when nothing set a closing, and has to stay one.
+
+    The truncation notice appends to the closing row so a reader of the record
+    finds the sentence saying the answer is partial in the place they go for the
+    answer. But a cli run reports no closing at all, and if this appended
+    anyway it would turn `closing is None` into a non-empty string -- handing
+    the instance log a bare notice as that turn's entire answer, with the answer
+    itself dropped. That is a worse loss than the one being reported.
+    """
+    with activity.collecting() as run:
+        activity.append_closing("\n\n[raven] Output truncated: ...")
+        assert run.closing is None, "nothing set a closing, so there is nothing to append to"
+
+    with activity.collecting() as run:
+        activity.note_closing("")
+        activity.append_closing("\n\n[raven] Output truncated: ...")
+        assert run.closing == "\n\n[raven] Output truncated: ...", "an empty closing is still a closing"

@@ -25,6 +25,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent.subagent import manager as manager_mod
+from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.tools.base import Continuation
@@ -1761,3 +1762,41 @@ async def test_steer_instance_reports_no_turn_then_unsupported_then_the_runs_own
 
     # The block ended: the run is gone from the index, and so is the hook.
     assert await mgr.steer_instance("s1", "Coder", "h1", "hi") == "no_turn"
+
+
+async def test_a_capped_result_is_announced_as_capped_and_recorded_whole(monkeypatch, tmp_path):
+    """The two things a truncated result owes the host and the record.
+
+    The announce is what the main agent reads and summarises for the user, so a
+    result missing its tail must not arrive looking finished; the record is what
+    the announce points at as the way back to the whole of it, so it has to hold
+    the whole of it.
+    """
+
+    class _Verbose:
+        streams = False
+
+        async def run(self, task, **_: Any) -> str:
+            return await clamp_output("z" * 400, 200, agent="Verbose")
+
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _Verbose())
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "write a long report",
+        "long report",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a", "agent": "Verbose"},
+        _RecordingExecutor(),
+        manager.provider,
+        manager.model,
+    )
+
+    announced = submitted[0].text
+    assert "[raven] Output truncated" in announced
+    assert "of 400 characters" in announced
+    record_dir = Path(announced.rsplit("Record: ", 1)[1].splitlines()[0].strip())
+    assert (record_dir / "out.md").read_text(encoding="utf-8") == "z" * 400
+    assert json.loads((record_dir / "meta.json").read_text(encoding="utf-8"))["output_truncated"] is True

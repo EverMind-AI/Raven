@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import bounded_delta
+from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
@@ -480,6 +480,11 @@ class CliAgentBackend:
         # Re-checked rather than trusted: `streams` is what the manager reads to
         # decide whether to offer the hook, and a caller driving this backend
         # directly never consulted it.
+        # Two callbacks travel down, and the distinction matters: `sink` is
+        # budgeted so what streams stays a prefix of what returns, while the raw
+        # `on_delta` carries raven's own truncation notice. A reply that
+        # saturates the budget would otherwise swallow the one line explaining
+        # that it was cut -- which is the whole point of the notice.
         sink = bounded_delta(on_delta, self.max_output_chars) if self.streams else None
         started = time.monotonic()
         # One span per dispatch, so a resume that fails and retries as a fresh
@@ -500,6 +505,7 @@ class CliAgentBackend:
                     resumable=instance is not None,
                     attempts=attempts,
                     on_delta=sink,
+                    notice_sink=on_delta,
                 )
                 return output
             except Exception as exc:
@@ -552,6 +558,7 @@ class CliAgentBackend:
         resumable: bool,
         attempts: list[dict[str, Any]],
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        notice_sink: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         skey = session_key or "default"
         cwd = self.cwd or str(workspace)
@@ -573,7 +580,15 @@ class CliAgentBackend:
             guard = hold_handle(skey, self.name, handle) if resumable else nullcontext()
             async with guard:
                 return await self._run_stateful(
-                    task, task_id, cwd, skey, handle, resumable=resumable, attempts=attempts, on_delta=on_delta
+                    task,
+                    task_id,
+                    cwd,
+                    skey,
+                    handle,
+                    resumable=resumable,
+                    attempts=attempts,
+                    on_delta=on_delta,
+                    notice_sink=notice_sink,
                 )
 
         return await self._attempt(
@@ -587,6 +602,7 @@ class CliAgentBackend:
             handle=handle,
             attempts=attempts,
             on_delta=on_delta,
+            notice_sink=notice_sink,
         )
 
     async def _run_stateful(
@@ -600,6 +616,7 @@ class CliAgentBackend:
         resumable: bool,
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        notice_sink: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Resume this handle's session, or mint one.
 
@@ -635,6 +652,7 @@ class CliAgentBackend:
                     handle=handle,
                     attempts=attempts,
                     on_delta=on_delta,
+                    notice_sink=notice_sink,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -669,6 +687,7 @@ class CliAgentBackend:
             handle=handle,
             attempts=attempts,
             on_delta=on_delta,
+            notice_sink=notice_sink,
         )
 
     async def _attempt(
@@ -684,6 +703,7 @@ class CliAgentBackend:
         handle: str,
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        notice_sink: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
         stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id, attempts, on_delta=on_delta)
@@ -742,10 +762,17 @@ class CliAgentBackend:
                 "output, so this instance is not resumable. Use a new handle to recreate."
             )
 
-        if warning is not None:
-            # Reserve room for the warning so it survives truncation when possible,
-            # but clamp to max_output_chars regardless: cap protects downstream context.
-            base_output = output[: max(0, self.max_output_chars - len(warning))]
-            return (base_output + warning)[: self.max_output_chars]
-        else:
-            return output[: self.max_output_chars]
+        # The cap is applied here, at the process boundary, but never silently:
+        # `clamp_output` hands the whole answer to the run's activity, from which
+        # the record writes out.md, so what the caller is given being the head of
+        # the answer no longer means the head is all that survives.
+        return await clamp_output(
+            output,
+            self.max_output_chars,
+            agent=self.name,
+            reserved=warning or "",
+            # The unbounded one: `on_delta` here is the budgeted wrapper, and a
+            # reply that filled its budget has nothing left to say the reply was
+            # cut with.
+            sink=notice_sink,
+        )
