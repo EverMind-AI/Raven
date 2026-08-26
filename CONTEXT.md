@@ -799,6 +799,35 @@ it when the Curator Context Engine is active.
 _Avoid_: conflating with the Curator — the Curator builds the context window
 losslessly; the Consolidator is the legacy lossy path that writes long-term memory.
 
+### Knowledge
+
+**Knowledge Base** (`knowledge/`):
+A named set of documents a user uploaded, indexed for retrieval in a turn. Records
+the embedding model and vector width it was built with, because those are facts
+about the base rather than about today's config.
+_Avoid_: conflating with Memory — Memory is what the agent learned from its own
+turns; a Knowledge Base is material a person handed it.
+
+**Section**:
+One parsed region of a source document, before chunking — a heading and the text
+under it, a page, a slide. A parser produces Sections and never splits them.
+
+**Chunk**:
+One embeddable piece of a Section, carrying its place in its own document
+(`chunk_index` / `total_chunks`) and the Section it came from. A Chunk never spans
+two Sections, which is what keeps the structure a parser found from being averaged
+away before anything is retrieved.
+
+**Collection**:
+The vector store's container for one Knowledge Base's Chunks, named for the base's
+id. Sized to the embedding width at creation.
+
+**Stale Base**:
+A Knowledge Base whose recorded embedding model or width no longer matches the
+configured one. Refused rather than searched: its vectors answer to the old model,
+so a query embedded with the new one lands somewhere unrelated in the same space.
+Moving the endpoint or rotating the key does not make a base stale.
+
 ### Plugins
 
 **Plugin** (`plugin/`):

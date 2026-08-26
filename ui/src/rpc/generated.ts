@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 133 methods, 79 component schemas.
+// 142 methods, 82 component schemas.
 
 /* eslint-disable */
 /**
@@ -1231,6 +1231,52 @@ export interface MediaEvent {
      */
     items: MediaItem[];
   };
+}
+/**
+ * One base as the list view needs it.
+ *
+ * ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
+ * was created rather than read from today's config -- a base outlives a change
+ * to what the operator has configured, and the page has to be able to show the
+ * mismatch.
+ */
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  embedding_model: string;
+  dimensions: number;
+  created_at: string;
+  updated_at: string;
+  documents: number;
+}
+/**
+ * One uploaded document and where its indexing got to.
+ *
+ * ``error`` is empty unless ``status`` is ``failed``; a row carries the reason
+ * with it so a reader does not have to go looking for why nothing is
+ * searchable.
+ */
+export interface KnowledgeDocument {
+  id: string;
+  base_id: string;
+  source: string;
+  media_type: string;
+  size: number;
+  status: string;
+  chunk_count: number;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+/**
+ * One search hit. ``score`` is a similarity, so higher is nearer -- the
+ * direction every caller already reads.
+ */
+export interface KnowledgeHit {
+  score: number;
+  document_id: string;
+  text: string;
 }
 export interface SessionListParams {
   /**
@@ -3055,6 +3101,73 @@ export interface BrowserWatchResult {
   vw?: number;
   vh?: number;
 }
+export interface KnowledgeStatusParams {}
+/**
+ * Whether a base can be created, and with which model.
+ *
+ * ``model`` is empty exactly when ``configured`` is false. No credential is
+ * reported: the key's presence *is* the flag.
+ */
+export interface KnowledgeStatusResult {
+  configured: boolean;
+  model: string;
+}
+export interface KnowledgeBasesListParams {}
+export interface KnowledgeBasesListResult {
+  bases: KnowledgeBase[];
+}
+export interface KnowledgeBasesCreateParams {
+  name: string;
+  description?: string;
+}
+export interface KnowledgeBasesCreateResult {
+  base: KnowledgeBase;
+}
+export interface KnowledgeBasesRenameParams {
+  base_id: string;
+  name?: string;
+  description?: string;
+}
+export interface KnowledgeBasesRenameResult {
+  base: KnowledgeBase;
+}
+export interface KnowledgeBasesDeleteParams {
+  base_id: string;
+}
+/**
+ * False for a base that was not there: a second delete from a stale page
+ * reached the outcome its caller wanted.
+ */
+export interface KnowledgeBasesDeleteResult {
+  removed: boolean;
+}
+export interface KnowledgeDocumentsListParams {
+  base_id: string;
+}
+export interface KnowledgeDocumentsListResult {
+  documents: KnowledgeDocument[];
+}
+export interface KnowledgeDocumentsAddParams {
+  base_id: string;
+  path: string;
+}
+export interface KnowledgeDocumentsAddResult {
+  document: KnowledgeDocument;
+}
+export interface KnowledgeDocumentsIndexParams {
+  document_id: string;
+}
+export interface KnowledgeDocumentsIndexResult {
+  document: KnowledgeDocument;
+}
+export interface KnowledgeSearchParams {
+  base_ids: string[];
+  query: string;
+  top_k?: number;
+}
+export interface KnowledgeSearchResult {
+  hits: KnowledgeHit[];
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -3195,6 +3308,15 @@ export interface RpcMethods {
   'browser.mode': { params: BrowserModeParams; result: BrowserModeResult };
   'browser.close': { params: BrowserCloseParams; result: BrowserCloseResult };
   'browser.watch': { params: BrowserWatchParams; result: BrowserWatchResult };
+  'knowledge.status': { params: KnowledgeStatusParams; result: KnowledgeStatusResult };
+  'knowledge.bases.list': { params: KnowledgeBasesListParams; result: KnowledgeBasesListResult };
+  'knowledge.bases.create': { params: KnowledgeBasesCreateParams; result: KnowledgeBasesCreateResult };
+  'knowledge.bases.rename': { params: KnowledgeBasesRenameParams; result: KnowledgeBasesRenameResult };
+  'knowledge.bases.delete': { params: KnowledgeBasesDeleteParams; result: KnowledgeBasesDeleteResult };
+  'knowledge.documents.list': { params: KnowledgeDocumentsListParams; result: KnowledgeDocumentsListResult };
+  'knowledge.documents.add': { params: KnowledgeDocumentsAddParams; result: KnowledgeDocumentsAddResult };
+  'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
+  'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
 }
 
 /** The literal union of callable method names. */
@@ -3243,6 +3365,15 @@ export const RPC_METHODS = [
   "fs.reveal",
   "fs.upload",
   "image.attach",
+  "knowledge.bases.create",
+  "knowledge.bases.delete",
+  "knowledge.bases.list",
+  "knowledge.bases.rename",
+  "knowledge.documents.add",
+  "knowledge.documents.index",
+  "knowledge.documents.list",
+  "knowledge.search",
+  "knowledge.status",
   "mcp.list",
   "mcp.test",
   "mcp.tools",

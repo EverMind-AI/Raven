@@ -4252,3 +4252,76 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   .desk-grid .desk-pane[data-active="true"] { display: flex; }
   .desk-divider { display: none; }
 }
+/* ── knowledge bases ──────────────────────────────────────────────────
+   Same card language as the memory page: a base row is a thing you open,
+   and giving it its own idiom would only make the rail's two neighbours
+   look like two products. */
+.kbnew { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; }
+.kbnew .kbname {
+  flex: 1; max-width: 420px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 9px; padding: 8px 12px; color: var(--text); font: 12.5px var(--sans);
+  outline: none;
+}
+.kbnew .kbname:focus { border-color: var(--amber); }
+.kblist { display: grid; gap: 10px; }
+.kbrow {
+  position: relative; text-align: left; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--ink); box-shadow: var(--elev); padding: 12px 15px 11px;
+  display: grid; gap: 4px; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.kbrow:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
+.kbrow .nm { font-size: 13.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; padding-right: 64px; }
+.kbrow .st, .kbhd .st { display: flex; gap: 8px; align-items: center; }
+.kbrow .ds { font-size: 12.5px; color: var(--muted); line-height: 1.65;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Parked in the corner rather than in the flow: deleting is the one thing on
+   the card that is not opening it, and a button beside the name reads as the
+   card's purpose. */
+.kbrow > .mini { position: absolute; top: 10px; right: 12px; }
+/* The document count and the model: mono, because both are read as values.
+   The chip is the count -- the model recedes, since it matters only when it
+   disagrees with the one configured now. */
+.kbrow .who, .kbdoc .who {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  background: var(--raised); border-radius: 5px; padding: 1px 6px; flex: none;
+}
+.kbrow .mdl, .kbhd .mdl, .kbdoc .mdl {
+  font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none;
+}
+.kbhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft); }
+.kbhd b { font-size: 14px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.kbhd .back { flex: none; }
+.kbhd .mdl { margin-left: auto; }
+.kbtools { display: flex; gap: 10px; align-items: center; margin: 14px 0; }
+/* The file input is hidden behind its own label, so the label has to look and
+   behave like the button it stands in for. */
+.kbtools label.mini { cursor: pointer; flex: none; }
+.kbtools .kbask {
+  flex: 1; max-width: 420px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 9px; padding: 8px 12px; color: var(--text); font: 12.5px var(--sans);
+  outline: none;
+}
+.kbtools .kbask:focus { border-color: var(--amber); }
+.kbdocs { display: grid; gap: 8px; }
+.kbdoc {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
+  padding: 10px 13px; display: grid; gap: 3px;
+}
+.kbdoc .nm { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbdoc .st { display: flex; gap: 8px; align-items: center; }
+/* Why it failed, in the colour of a failure: a reason set in body text reads
+   as part of the document. */
+.kbdoc .ds { font-size: 11.5px; color: var(--clay); line-height: 1.6; }
+.kbhits { display: grid; gap: 10px; }
+.kbhit {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
+  box-shadow: var(--elev); padding: 11px 15px 12px; display: grid; gap: 5px;
+}
+/* The score leads the card and takes the amber: it is the only reason these
+   three passages are in this order. */
+.kbhit .st .mdl { font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
+.kbhit .ds { font-size: 12.5px; color: var(--text); line-height: 1.7; }

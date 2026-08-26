@@ -1594,6 +1594,61 @@ export interface MediaEvent {
   };
 }
 /**
+ * One base as the list view needs it.
+ *
+ * ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
+ * was created rather than read from today's config -- a base outlives a change
+ * to what the operator has configured, and the page has to be able to show the
+ * mismatch.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBase".
+ */
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  embedding_model: string;
+  dimensions: number;
+  created_at: string;
+  updated_at: string;
+  documents: number;
+}
+/**
+ * One uploaded document and where its indexing got to.
+ *
+ * ``error`` is empty unless ``status`` is ``failed``; a row carries the reason
+ * with it so a reader does not have to go looking for why nothing is
+ * searchable.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocument".
+ */
+export interface KnowledgeDocument {
+  id: string;
+  base_id: string;
+  source: string;
+  media_type: string;
+  size: number;
+  status: string;
+  chunk_count: number;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+/**
+ * One search hit. ``score`` is a similarity, so higher is nearer -- the
+ * direction every caller already reads.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeHit".
+ */
+export interface KnowledgeHit {
+  score: number;
+  document_id: string;
+  text: string;
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
@@ -4122,6 +4177,143 @@ export interface BrowserWatchResult {
   watching?: boolean;
   vw?: number;
   vh?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeStatusParams".
+ */
+export interface KnowledgeStatusParams {}
+/**
+ * Whether a base can be created, and with which model.
+ *
+ * ``model`` is empty exactly when ``configured`` is false. No credential is
+ * reported: the key's presence *is* the flag.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeStatusResult".
+ */
+export interface KnowledgeStatusResult {
+  configured: boolean;
+  model: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesListParams".
+ */
+export interface KnowledgeBasesListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesListResult".
+ */
+export interface KnowledgeBasesListResult {
+  bases: KnowledgeBase[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesCreateParams".
+ */
+export interface KnowledgeBasesCreateParams {
+  name: string;
+  description?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesCreateResult".
+ */
+export interface KnowledgeBasesCreateResult {
+  base: KnowledgeBase;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesRenameParams".
+ */
+export interface KnowledgeBasesRenameParams {
+  base_id: string;
+  name?: string;
+  description?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesRenameResult".
+ */
+export interface KnowledgeBasesRenameResult {
+  base: KnowledgeBase;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesDeleteParams".
+ */
+export interface KnowledgeBasesDeleteParams {
+  base_id: string;
+}
+/**
+ * False for a base that was not there: a second delete from a stale page
+ * reached the outcome its caller wanted.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesDeleteResult".
+ */
+export interface KnowledgeBasesDeleteResult {
+  removed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsListParams".
+ */
+export interface KnowledgeDocumentsListParams {
+  base_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsListResult".
+ */
+export interface KnowledgeDocumentsListResult {
+  documents: KnowledgeDocument[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddParams".
+ */
+export interface KnowledgeDocumentsAddParams {
+  base_id: string;
+  path: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddResult".
+ */
+export interface KnowledgeDocumentsAddResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsIndexParams".
+ */
+export interface KnowledgeDocumentsIndexParams {
+  document_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsIndexResult".
+ */
+export interface KnowledgeDocumentsIndexResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeSearchParams".
+ */
+export interface KnowledgeSearchParams {
+  base_ids: string[];
+  query: string;
+  top_k?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeSearchResult".
+ */
+export interface KnowledgeSearchResult {
+  hits: KnowledgeHit[];
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

@@ -475,6 +475,13 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # Carries the wizard's EverOS cluster split out of onboard_commands --
         # same reads, same argument, new file name.
         "raven/cli/onboard_everos.py",
+        # The same EverOS section again, read by the knowledge embedder: the
+        # three strings it needs to reach an OpenAI-compatible endpoint, and
+        # their absence read as "no embedding is configured, so there are no
+        # knowledge bases". That is a fact about EverOS's own section, not a
+        # verdict on a Raven provider -- see the module docstring for why the
+        # endpoint is inherited rather than picked from a provider catalogue.
+        "raven/knowledge/_embedding.py",
         # The connection-material reading layer itself: resolves flat fields,
         # api_key_list and endpoints into one list for whoever sends requests.
         # Configuredness still rules through auth, which consults this shape

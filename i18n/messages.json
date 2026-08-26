@@ -2663,6 +2663,78 @@
       "en": "More",
       "zh": "更多"
     },
+    "gui.nav.kb": {
+      "en": "Knowledge",
+      "zh": "\u77e5\u8bc6\u5e93"
+    },
+    "gui.kb.none": {
+      "en": "No knowledge base yet.",
+      "zh": "\u8fd8\u6ca1\u6709\u77e5\u8bc6\u5e93\u3002"
+    },
+    "gui.kb.unconfigured": {
+      "en": "No embedding endpoint is configured, so no base can be created yet.",
+      "zh": "\u8fd8\u6ca1\u6709\u914d\u7f6e embedding \u7aef\u70b9\uff0c\u73b0\u5728\u5efa\u4e0d\u4e86\u77e5\u8bc6\u5e93\u3002"
+    },
+    "gui.kb.new": {
+      "en": "New base",
+      "zh": "\u65b0\u5efa"
+    },
+    "gui.kb.new_hint": {
+      "en": "Name a knowledge base",
+      "zh": "\u7ed9\u77e5\u8bc6\u5e93\u8d77\u4e2a\u540d\u5b57"
+    },
+    "gui.kb.delete": {
+      "en": "Delete",
+      "zh": "\u5220\u9664"
+    },
+    "gui.kb.delete_body": {
+      "en": "Delete {name} and its {n} documents? The vectors go with them.",
+      "zh": "\u5220\u9664\u300c{name}\u300d\u53ca\u5176 {n} \u4efd\u6587\u6863\uff1f\u5411\u91cf\u4e00\u5e76\u5220\u9664\u3002"
+    },
+    "gui.kb.back": {
+      "en": "Back",
+      "zh": "\u8fd4\u56de"
+    },
+    "gui.kb.no_docs": {
+      "en": "No document in this base yet.",
+      "zh": "\u8fd9\u4e2a\u77e5\u8bc6\u5e93\u8fd8\u6ca1\u6709\u6587\u6863\u3002"
+    },
+    "gui.kb.upload": {
+      "en": "Add a document",
+      "zh": "\u6dfb\u52a0\u6587\u6863"
+    },
+    "gui.kb.ask": {
+      "en": "Search this base",
+      "zh": "\u5728\u8fd9\u4e2a\u5e93\u91cc\u68c0\u7d22"
+    },
+    "gui.kb.no_hits": {
+      "en": "Nothing matched.",
+      "zh": "\u6ca1\u6709\u5339\u914d\u7684\u5185\u5bb9\u3002"
+    },
+    "gui.kb.chunks": {
+      "en": "{n} chunks",
+      "zh": "{n} \u4e2a\u5206\u6bb5"
+    },
+    "gui.kb.doc_pending": {
+      "en": "Queued",
+      "zh": "\u6392\u961f\u4e2d"
+    },
+    "gui.kb.doc_indexing": {
+      "en": "Indexing",
+      "zh": "\u7d22\u5f15\u4e2d"
+    },
+    "gui.kb.doc_ready": {
+      "en": "Searchable",
+      "zh": "\u53ef\u68c0\u7d22"
+    },
+    "gui.kb.doc_failed": {
+      "en": "Failed",
+      "zh": "\u5931\u8d25"
+    },
+    "gui.kb.docs": {
+      "en": "{n} documents",
+      "zh": "{n} \u4efd\u6587\u6863"
+    },
     "gui.nav.mem": {
       "zh": "记忆",
       "en": "Memory"

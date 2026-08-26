@@ -5,9 +5,15 @@
    source. */
 function openMem() { RavenIslands.memory.open(); }
 function closeMem() { RavenIslands.memory.close(); }
+function openKb() { RavenIslands.knowledge.open(); }
+function closeKb() { RavenIslands.knowledge.close(); }
 function drawMem() {
   /* A language flip re-renders #memBody with the new catalogue. */
   RavenIslands.memory.redraw();
+}
+function drawKb() {
+  /* A language flip re-renders #kbBody with the new catalogue. */
+  RavenIslands.knowledge.redraw();
 }
 
 /* The fixture source: the demo has no memory engine behind it, so it

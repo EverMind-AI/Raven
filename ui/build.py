@@ -89,6 +89,7 @@ _LIVE_PARTS = [
     "140-skills.js",
     "150-plugins.js",
     "160-memory.js",
+    "165-knowledge.js",
     "170-workspace.js",
     "180-attachments.js",
     "190-session-actions.js",

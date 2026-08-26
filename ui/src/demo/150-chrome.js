@@ -40,6 +40,7 @@ document.addEventListener('keydown', (e) => {
     if ($('#jobVeil').dataset.open === 'true') return $('#jobNo').click();
     if ($('#cronPage').dataset.open === 'true') return closeCron();
     if ($('#memPage').dataset.open === 'true') return closeMem();
+    if ($('#kbPage').dataset.open === 'true') return closeKb();
     if ($('#capsPage').dataset.open === 'true') return closeCaps();
     if ($('#xaPage').dataset.open === 'true') return closeXa();
     if ($('#connPage').dataset.open === 'true') return closeConn();
@@ -113,6 +114,7 @@ $('#skillBtn').onclick = () => openSkills();
 $('#plugBtn').onclick = () => openPlugins();
 /* wrapper, not the reference: live.js replaces openMem with the RPC loader */
 $('#memBtn').onclick = () => openMem();
+$('#kbBtn').onclick = () => openKb();
 
 /* ── the 更多 flyout ──────────────────────────────────────────────────
    连接 / 入口 / 定时 live here. The renderer is the nav flyout module

@@ -50,6 +50,7 @@ from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
+from raven.rpc.methods.knowledge import register_knowledge_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.plughub import register_plughub_methods
@@ -243,6 +244,7 @@ def register_aligned_methods_except_system(
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
+    register_knowledge_methods(dispatcher)
     # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
     # already runs: skills (memory_engine.skill_forge) and plugins
     # (raven.plugin). Registered unconditionally so a network failure reads as a
@@ -271,6 +273,7 @@ __all__ = [
     "register_instance_methods",
     "register_dag_methods",
     "register_console_methods",
+    "register_knowledge_methods",
     "register_memory_methods",
     "register_plughub_methods",
     "register_session_methods",

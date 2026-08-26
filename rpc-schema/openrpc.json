@@ -5163,6 +5163,302 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "knowledge.status",
+      "summary": "Whether a knowledge base can be created, and with which embedding model.",
+      "params": [],
+      "result": {
+        "name": "KnowledgeStatusResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "Whether a base can be created, and with which model.\n\n``model`` is empty exactly when ``configured`` is false. No credential is\nreported: the key's presence *is* the flag.",
+          "properties": {
+            "configured": {
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "configured",
+            "model"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.list",
+      "summary": "Every knowledge base, with its document count.",
+      "params": [],
+      "result": {
+        "name": "KnowledgeBasesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bases": {
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeBase"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "bases"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.create",
+      "summary": "Create a knowledge base, sized to the embedding model as configured now.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "description",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeBasesCreateResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "$ref": "#/components/schemas/KnowledgeBase"
+            }
+          },
+          "required": [
+            "base"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.rename",
+      "summary": "Edit a base's name or description; neither touches its collection.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "description",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeBasesRenameResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "$ref": "#/components/schemas/KnowledgeBase"
+            }
+          },
+          "required": [
+            "base"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.delete",
+      "summary": "Drop a base with its documents, their blobs and its collection.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeBasesDeleteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "removed"
+          ],
+          "type": "object",
+          "description": "False for a base that was not there: a second delete from a stale page\nreached the outcome its caller wanted."
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.list",
+      "summary": "The documents in one base, with each one's indexing state.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "documents": {
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeDocument"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "documents"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.add",
+      "summary": "Take an uploaded file into a base; indexing is a separate call.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsAddResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.index",
+      "summary": "Embed one document's chunks and answer where that got to.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsIndexResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.search",
+      "summary": "Nearest chunks across the named bases.",
+      "params": [
+        {
+          "name": "base_ids",
+          "required": true,
+          "schema": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "top_k",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeSearchResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "hits": {
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeHit"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "hits"
+          ],
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
@@ -7431,6 +7727,117 @@
             "session.titled": "#/components/schemas/SessionTitledEvent"
           }
         }
+      },
+      "KnowledgeBase": {
+        "additionalProperties": false,
+        "description": "One base as the list view needs it.\n\n``embedding_model`` and ``dimensions`` are the base's own, recorded when it\nwas created rather than read from today's config -- a base outlives a change\nto what the operator has configured, and the page has to be able to show the\nmismatch.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "embedding_model": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "embedding_model",
+          "dimensions",
+          "created_at",
+          "updated_at",
+          "documents"
+        ],
+        "type": "object"
+      },
+      "KnowledgeDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "base_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "chunk_count": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "base_id",
+          "source",
+          "media_type",
+          "size",
+          "status",
+          "chunk_count",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object",
+        "description": "One uploaded document and where its indexing got to.\n\n``error`` is empty unless ``status`` is ``failed``; a row carries the reason\nwith it so a reader does not have to go looking for why nothing is\nsearchable."
+      },
+      "KnowledgeHit": {
+        "additionalProperties": false,
+        "properties": {
+          "score": {
+            "type": "number"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "score",
+          "document_id",
+          "text"
+        ],
+        "type": "object",
+        "description": "One search hit. ``score`` is a similarity, so higher is nearer -- the\ndirection every caller already reads."
       }
     },
     "errors": {
