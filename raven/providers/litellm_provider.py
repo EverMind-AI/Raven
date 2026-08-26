@@ -24,6 +24,7 @@ from raven.providers.base import (
     StreamDelta,
     ToolCallRequest,
     format_llm_error,
+    normalized_tool_name,
 )
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
@@ -784,7 +785,7 @@ class LiteLLMProvider(LLMProvider):
             tool_calls.append(
                 ToolCallRequest(
                     id=_short_tool_id(),
-                    name=tc.function.name,
+                    name=normalized_tool_name(tc.function.name),
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,

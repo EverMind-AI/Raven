@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
-from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
+from raven.providers.base import (
+    ErrorClassification,
+    LLMResponse,
+    RunMeta,
+    ToolCallRequest,
+    normalized_tool_name,
+)
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.transport_failure import flag_transport_failure, prompt_chars
 from raven.providers.truncation import flag_truncation
@@ -331,7 +337,10 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
     """Convert accumulator slots into final ToolCallRequest list."""
     result: list[ToolCallRequest] = []
     for slot in slots:
-        name = slot["function"]["name"]
+        # Normalised at this exit, the single place the streaming path turns an
+        # accumulator into a call: a name that is nothing but whitespace comes
+        # out empty and is dropped by the check below, which is what it is.
+        name = normalized_tool_name(slot["function"]["name"])
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
