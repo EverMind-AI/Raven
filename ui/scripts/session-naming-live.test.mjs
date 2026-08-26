@@ -52,7 +52,7 @@ function harness({ rows, current, titleCall }) {
     'sessionDraw',
     'plainTitle',
     'rpc',
-    `${namingBlock()}\nreturn { beginNaming, settleNaming };`,
+    `${namingBlock()}\nreturn { beginNaming, settleNaming, namingDeclined };`,
   )
   const api = install(
     document,
@@ -191,6 +191,82 @@ describe('the assembled live naming block', () => {
       expect(h.heading.classList.contains('skel')).toBe(false)
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('a server that declines to name', () => {
+  it('settles at once instead of waiting out the grace period', () => {
+    /* The bug this exists for: below the gate the server refuses in
+       microseconds and no `session.titled` ever comes, so the placeholder sat
+       for the whole grace period and only then showed the opening line. That
+       made "hi" the slowest thing you could send -- a long request generates
+       and lands in a second or two. */
+    vi.useFakeTimers()
+    try {
+      const rows = [{ id: 's1', title: 'gui.new_task' }]
+      const h = harness({ rows, current: 's1', titleCall: async () => ({}) })
+      h.beginNaming('你好')
+      expect(rows[0].naming).toBe(true)
+
+      h.namingDeclined('s1')
+
+      expect(rows[0].naming).toBe(false)
+      expect(rows[0].title).toBe('你好')
+      expect(h.heading.classList.contains('skel')).toBe(false)
+      /* Nothing left armed: the timer must be cleared, or it fires later and
+         overwrites a title the reader is already looking at. */
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not touch a session that never started waiting', () => {
+    /* `beginNaming` declines to start a wait for an already-named session, and
+       a decline arriving for that session must not blank its title. */
+    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const h = harness({ rows, current: 's1', titleCall: async () => ({}) })
+    h.beginNaming('please cut a desktop release')
+
+    h.namingDeclined('s1')
+
+    expect(rows[0].title).toBe('Release checklist')
+    expect(rows[0].naming).toBeUndefined()
+  })
+})
+
+describe('the wiring between turn.send and the placeholder', () => {
+  /* The functions above can all be right while nothing calls them -- this
+     feature has already shipped once with a correct namer that no code path
+     reached. These read the assembled layer, so they lock the call sites rather
+     than the functions; they cannot prove the branch behaves, which is what the
+     block above is for. */
+  /* A fixed window after each call, not a lazy match: `[\s\S]{0,400}?\n` stops
+     at the first newline, which is the call line itself and never the branch
+     under it. */
+  const sends = [...live.matchAll(/rpc\.call\('turn\.send'/g)].map((m) => live.slice(m.index, m.index + 320))
+
+  it('has a send site for the composer at all', () => {
+    expect(sends.length).toBeGreaterThan(0)
+  })
+
+  it('settles the placeholder on every composer send that can be declined', () => {
+    /* `target`-carrying sends are an instance's own lane and never name the
+       session, so they are not expected to carry the branch. */
+    const composer = sends.filter((s) => !s.includes('target:'))
+    expect(composer.length).toBe(2)
+    for (const site of composer) expect(site).toContain('namingDeclined')
+  })
+
+  it('reads the flag strictly, so an older server is not mistaken for a decline', () => {
+    /* A gateway too old to carry the field omits it. Falsy would then read as
+       "no title is coming" and tear the placeholder down while one is on the
+       way. */
+    const composer = sends.filter((s) => !s.includes('target:'))
+    for (const site of composer) {
+      expect(site).toMatch(/naming === false/)
+      expect(site).not.toMatch(/!\w*\.naming|naming\s*==\s*false/)
     }
   })
 })

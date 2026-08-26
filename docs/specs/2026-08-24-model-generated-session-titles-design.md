@@ -35,7 +35,7 @@
 
 不等 assistant 回复。三条理由:GUI 的占位动画必须尽快收敛,等回复会让动画挂 10s+;标题命名的是**用户的诉求**,不是模型的回答;首条消息拿到即可发起,与本轮推理并行。
 
-代价与闸门:纯问候("在吗")会生成低信息标题。首条消息 strip 后短于 `min_input_chars` 直接走机械截取,不花这次调用。
+代价与闸门:纯问候("在吗")会生成低信息标题。首条消息 strip 后窄于 `min_input_width` 个显示列直接走机械截取,不花这次调用;列而非码点,是因为一个阈值要同时对中英文成立 —— 6 码点会放过 "nihao" 却挡住更该命名的 "你能做什么"。闸门拒绝时 `turn.send` 会在返回值里说明 (`naming: false`),前端据此立即落标题,不再空等宽限期。
 
 与现有兜底的关系:`save()` 的机械标题**照旧先写**,保证任何时刻标题非空;模型标题回来后覆盖。
 
@@ -60,7 +60,7 @@ enabled: bool = True          # 已定:默认开
 model: str | None = None      # None 继承主模型
 timeout_seconds: float = 8.0
 budget: int = 24              # 模型生成预算(码点),见 D6
-min_input_chars: int = 8
+min_input_width: int = 6
 ```
 
 超时/空返回/超长/解析失败 → 不改标题、不发事件、不向用户报错,日志 debug 级。调用走 `chat_with_retry`(承 `llm_client.py:115` 的先例),输出用 tool-schema 约束(承 `prompts.py:39` 的先例)。标题语言跟随用户首条消息的语言,prompt 里给中英双示例,不强制英文。

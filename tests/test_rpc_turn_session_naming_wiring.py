@@ -69,7 +69,7 @@ def test_turn_send_hands_the_namer_the_configured_settings(
     # produce these values, which is what makes this test load-bearing.
     assert seen["enabled"] is True
     assert seen["budget"] == 24
-    assert seen["min_input_chars"] == 8
+    assert seen["min_input_width"] == 6
     assert seen["timeout_seconds"] == 8.0
 
 
@@ -124,3 +124,41 @@ def test_a_broken_seam_is_reported_with_its_cause(parsed: TurnSendParams, monkey
     joined = "\n".join(rendered)
     assert "RuntimeError" in joined, f"the warning carried no exception type: {joined!r}"
     assert "the seam is broken" in joined, f"the warning carried no cause: {joined!r}"
+
+
+def test_the_seam_reports_whether_a_namer_started(parsed: TurnSendParams, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`turn.send` answers "is a title coming?", and the answer must be the truth.
+
+    This is the whole reason the field exists. A client that cannot ask has only
+    one way to find out -- hold a placeholder until a grace period expires --
+    which made an opening refused in microseconds the slowest one to show a
+    name, and a short "hi" slower than a long request that really did generate.
+    """
+    monkeypatch.setattr("raven.rpc.session_naming.name_session_alongside_turn", lambda **k: object())
+    _use_loop(monkeypatch, _Loop())
+    assert turn_module._name_session(parsed, agent_loop_factory=lambda: _Loop(), emitter=None) is True
+
+    monkeypatch.setattr("raven.rpc.session_naming.name_session_alongside_turn", lambda **k: None)
+    assert turn_module._name_session(parsed, agent_loop_factory=lambda: _Loop(), emitter=None) is False
+
+
+def test_a_seam_that_cannot_run_reports_no_naming(parsed: TurnSendParams, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken seam must not claim a title is coming.
+
+    It already swallows its exception so a turn is never broken by naming; if it
+    swallowed it and returned nothing, the client would read that as "a name is
+    on its way" and wait out the full grace period for an event that cannot come.
+    """
+
+    def _explode(**_: object) -> None:
+        raise RuntimeError("seam is broken")
+
+    monkeypatch.setattr("raven.rpc.session_naming.name_session_alongside_turn", _explode)
+    _use_loop(monkeypatch, _Loop())
+
+    assert turn_module._name_session(parsed, agent_loop_factory=lambda: _Loop(), emitter=None) is False
+
+
+def test_no_agent_loop_reports_no_naming(parsed: TurnSendParams, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_loop(monkeypatch, None)
+    assert turn_module._name_session(parsed, agent_loop_factory=lambda: None, emitter=None) is False

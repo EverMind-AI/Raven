@@ -353,6 +353,21 @@ async function namingGaveUp(id) {
   settleNaming(id, title || (pending && pending.fallback) || '');
 }
 
+/* The server told us no name is coming for this one -- the opening line was
+   too short to name after, or the session already had a name, or the feature is
+   off. Settle now on the line we captured: waiting the full grace period for an
+   event that will never arrive is what made a two-character "hi" the SLOWEST
+   thing you could send, since a long message actually generates and lands in a
+   second or two while a short one always burned the whole timeout.
+
+   Only when a wait is actually open: `beginNaming` declines to start one for a
+   session that is already named, and this must not then blank its title. */
+function namingDeclined(id) {
+  const pending = namingTimers.get(id);
+  if (!pending) return;
+  settleNaming(id, pending.fallback || '');
+}
+
 function beginNaming(text) {
   const s = sess(sessionCurrent());
   if (!s || (s.title && s.title !== '新任务' && s.title !== T('gui.new_task'))) return;

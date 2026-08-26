@@ -196,8 +196,14 @@ def _name_session(
     *,
     agent_loop_factory: "AgentLoopFactory | None",
     emitter: SubscriptionEmitter | None,
-) -> None:
+) -> bool:
     """Hand this turn's opening line to the session namer, if it is one.
+
+    Returns whether a namer actually started, which is what `turn.send` passes
+    back to the caller. Without it a client cannot tell "a title is coming" from
+    "no title is coming", and its only way to find out was to hold a placeholder
+    until a grace period expired -- so every refusal here, which is decided in
+    microseconds, cost the front end its full wait before it showed anything.
 
     Wrapped in its own try/except for the reason the loop factory is invoked
     defensively everywhere else in this module: naming is a side errand, and no
@@ -210,7 +216,7 @@ def _name_session(
 
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         if agent_loop is None:
-            return
+            return False
         # One read for both. The extension blocks live in their own model, and
         # `Config` has no attribute for them at all: `config.raven.session_title`
         # raised AttributeError, which the except below turned into silence, and
@@ -221,7 +227,7 @@ def _name_session(
         raven_config = load_raven_config()
         config = raven_config.base
         settings = raven_config.session_title
-        name_session_alongside_turn(
+        task = name_session_alongside_turn(
             session_key=parsed.session_key,
             text=parsed.content or "",
             mgr=_manager_for(agent_loop, config),
@@ -230,9 +236,10 @@ def _name_session(
             enabled=settings.enabled,
             model=settings.model,
             budget=settings.budget,
-            min_input_chars=settings.min_input_chars,
+            min_input_width=settings.min_input_width,
             timeout_seconds=settings.timeout_seconds,
         )
+        return task is not None
     except Exception:
         # Warning, not debug. Every *refusal* to name a session is a decision
         # this code makes deliberately and reports at debug; reaching here means
@@ -245,6 +252,7 @@ def _name_session(
         # cli/_log_file.py do not format -- leaving a warning with no exception
         # type, message or frame in it at all.
         logger.opt(exception=True).warning("turn.send: session naming could not start")
+        return False
 
 
 async def turn_send(
@@ -293,7 +301,7 @@ async def turn_send(
                 await _emit_start_then_error(
                     emitter, parsed.session_key, turn_id, -32008, "model_not_available", target
                 )
-        return {"turn_id": turn_id, "accepted": True}
+        return {"turn_id": turn_id, "accepted": True, "naming": False}
 
     # Per lane, not per session: a direct chat runs on its instance's own lane
     # (see ``direct_lane``), so it is refused only by *that instance* still
@@ -346,7 +354,7 @@ async def turn_send(
         # slot; nothing is bound (no leak).
         if emitter is not None:
             await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
-        return {"turn_id": turn_id, "accepted": True}
+        return {"turn_id": turn_id, "accepted": True, "naming": False}
 
     # Bind immediately after submit with no await between (submit is synchronous,
     # so the worker — scheduled but not yet run — must see the binding). This map
@@ -386,10 +394,11 @@ async def turn_send(
     # that has nothing in it; and only for the main conversation, since a direct
     # chat's opening line names its instance's lane, not this session. Returns
     # immediately -- the call it may start runs on its own task.
+    naming = False
     if parsed.target is None:
-        _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
+        naming = _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
 
-    return {"turn_id": turn_id, "accepted": True}
+    return {"turn_id": turn_id, "accepted": True, "naming": naming}
 
 
 async def turn_subscribe(

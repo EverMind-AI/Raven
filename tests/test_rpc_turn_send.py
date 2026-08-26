@@ -89,8 +89,10 @@ async def test_turn_send_happy_path_returns_turn_id_and_accepted() -> None:
         turn_ids=turn_ids,
     )
 
-    assert set(result) == {"turn_id", "accepted"}
+    assert set(result) == {"turn_id", "accepted", "naming"}
     assert result["accepted"] is True
+    # No agent loop is wired in this harness, so no namer can have started.
+    assert result["naming"] is False
     assert isinstance(result["turn_id"], str) and len(result["turn_id"]) >= 16
     # The turn was submitted, the slot bound, message.start emitted.
     assert len(scheduler.submitted) == 1
@@ -245,7 +247,7 @@ async def test_turn_send_dispatches_via_dispatcher(dispatcher: Dispatcher) -> No
     )
 
     assert "error" not in resp, f"turn.send unexpectedly raised: {resp}"
-    assert set(resp["result"]) == {"turn_id", "accepted"}
+    assert set(resp["result"]) == {"turn_id", "accepted", "naming"}
     assert resp["result"]["accepted"] is True
 
 
@@ -659,3 +661,38 @@ async def test_turn_send_claims_a_direct_chat_by_its_own_lane() -> None:
         assert connection.frame_sink_for(lane) is sink
     finally:
         connection.unbind_connection(token)
+
+
+async def test_the_result_carries_the_namers_answer_rather_than_a_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`naming` is what the seam actually decided, in both directions.
+
+    Asserting it only on `_name_session` leaves the field free to be a literal
+    here, and a literal `True` puts the front end back to holding a placeholder
+    through its whole grace period for an event that is never coming -- the bug
+    the field exists to remove, reintroduced one layer up and invisible.
+    """
+    import raven.rpc.methods.turn as turn_module
+
+    # A key per case: a lane still holding an active turn refuses the next send
+    # outright, and both cases would then never reach the assertion.
+    for answer in (True, False):
+        monkeypatch.setattr(turn_module, "_name_session", lambda *a, **k: answer)
+        result = await turn_send(
+            {"session_key": f"tui:answer-{answer}", "content": "hello"},
+            scheduler=FakeScheduler(),
+            turn_ids={},
+        )
+        assert result["naming"] is answer
+
+
+async def test_a_turn_aimed_at_an_instance_never_claims_a_name_is_coming() -> None:
+    """A direct chat names its instance's lane, not this session."""
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "hello", "target": {"agent": "raven", "handle": "h1"}},
+        scheduler=FakeScheduler(),
+        turn_ids={},
+    )
+
+    assert result["naming"] is False

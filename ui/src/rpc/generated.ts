@@ -1449,6 +1449,10 @@ export interface TurnSendParams {
 export interface TurnSendResult {
   turn_id: string;
   accepted: boolean;
+  /**
+   * Whether a session-naming call was started for this turn. A client holding a placeholder for the name can settle it on false rather than wait out its grace period. Not quite the same as 'no session.titled is coming': a send that arrives while an earlier namer for the same session is still running is also declined, and that one's title may still land -- it overwrites, which is why the weaker guarantee is enough.
+   */
+  naming: boolean;
 }
 export interface TurnSubscribeParams {
   session_key: string;

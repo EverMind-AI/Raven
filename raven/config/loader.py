@@ -539,6 +539,27 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
     # skills_dir → local_dirs migration now handled by
     # SkillForgeConfig._migrate_skills_dir model_validator (R5).
 
+    # Same for the session-title gate, which changed both name and unit:
+    # ``min_input_chars`` counted code points, ``min_input_width`` counts
+    # display columns. The old key is not carried over -- 8 of one is not 8 of
+    # the other -- it is dropped so the new default applies. Worth the six
+    # lines because ``SessionTitleConfig`` forbids extras and this model is
+    # loaded by the gateway, the TUI and doctor: a stale key left in a
+    # hand-edited config stops those from starting at all, rather than merely
+    # skipping a title.
+    for block_key in ("sessionTitle", "session_title"):
+        session_title = data.get(block_key) if isinstance(data, dict) else None
+        if not isinstance(session_title, dict):
+            continue
+        for legacy_key in ("min_input_chars", "minInputChars"):
+            if legacy_key in session_title:
+                session_title.pop(legacy_key)
+                _log.info(
+                    "Migrated: dropped %s.%s (renamed to minInputWidth, and the unit changed)",
+                    block_key,
+                    legacy_key,
+                )
+
     # Strip retired sentinel keys that ``SentinelConfig(extra='forbid')``
     # would otherwise reject. Listed in both snake_case and camelCase
     # since user configs may use either.
