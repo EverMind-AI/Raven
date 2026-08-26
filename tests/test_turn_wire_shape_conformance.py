@@ -73,8 +73,8 @@ def _req() -> TurnRequest:
 # --- message.complete payload shape (B1 regression guard) ---
 
 
-async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
-    """B1 regression: message.complete payload must be ``{turn_id, usage}``.
+async def test_message_complete_payload_has_turn_id_usage_and_duration_only() -> None:
+    """B1 regression: message.complete payload must be ``{turn_id, usage, duration_ms}``.
 
     Driven through the real spine (build_rpc_spine): the sink emits message.complete
     after the render barrier. No id is bound for this turn, so it also pins that
@@ -111,8 +111,14 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
     assert len(completions) == 1, f"expected 1 message.complete; got {events}"
 
     payload = completions[0]["payload"]
-    assert set(payload) == {"turn_id", "usage"}, f"payload keys must be exactly {{turn_id, usage}}; got {set(payload)}"
+    expected = {"turn_id", "usage", "duration_ms"}
+    assert set(payload) == expected, f"payload keys must be exactly {expected}; got {set(payload)}"
     assert isinstance(payload["turn_id"], str) and payload["turn_id"]
+    # The turn's own clock, so a live client draws the span the runtime measured
+    # rather than the one its own stopwatch saw. A real elapsed time, hence a
+    # shape check -- the exact-key assertion above is what keeps the payload
+    # from growing a field nobody declared.
+    assert isinstance(payload["duration_ms"], int) and payload["duration_ms"] >= 0
     assert "content" not in payload  # B1: must not leak
     _assert_event_validates(completions[0])  # Pydantic accepts
 

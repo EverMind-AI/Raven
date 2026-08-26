@@ -710,7 +710,13 @@ async def test_streaming_turn_emits_token_deltas_then_message_complete():
     assert emitter.types() == ["token.delta", "token.delta", "message.complete"]
     last_key, last = emitter.emitted[-1]
     assert last_key == "tui:c1"
-    assert last["payload"] == {
+    # The turn's own clock: a real elapsed time, so it is checked for shape
+    # rather than value -- and lifted out so the rest of the payload keeps being
+    # compared whole, which is what catches a field arriving unannounced.
+    payload = dict(last["payload"])
+    duration_ms = payload.pop("duration_ms")
+    assert isinstance(duration_ms, int) and duration_ms >= 0
+    assert payload == {
         "turn_id": "t1",
         "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
     }
