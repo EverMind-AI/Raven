@@ -43,6 +43,33 @@ const step = (index: number, narration: string, tools: EpisodeTool[]): Episode =
 // their absence is a contract, not an accident.
 const RETIRED = ['▸', '▾', '├', '└', '│', '·', '✗']
 
+describe('SteerRow', () => {
+  it('draws a steer as one marked line inside the turn', () => {
+    const out = frame(
+      <EpisodeMessage
+        cols={92}
+        msg={{
+          episodes: [
+            { index: 0, narration: 'Looking around.', tools: [] },
+            { index: 1, steer: 'the docs first', steerAtMs: Date.UTC(2026, 7, 26, 11, 28), tools: [] }
+          ],
+          foldId: 't1',
+          kind: 'episodes',
+          role: 'assistant',
+          text: 'On it.'
+        }}
+        t={DEFAULT_THEME}
+      />
+    )
+
+    expect(out).toContain('Looking around.')
+    expect(out).toContain('\u21b3 steer')
+    expect(out).toContain('the docs first')
+    expect(out.indexOf('Looking around.')).toBeLessThan(out.indexOf('the docs first'))
+    expect(out.indexOf('the docs first')).toBeLessThan(out.indexOf('On it.'))
+  })
+})
+
 describe('EpisodeView', () => {
   it('renders a turn with no fold glyphs at all', () => {
     const f = view([
@@ -475,6 +502,16 @@ describe('a stretch holding a dag call', () => {
     // folds to one summary row and draws nothing.
     expect(f).toContain('\u256d')
     expect(f).toContain('run subagent dag')
+  })
+
+  it('draws the call once, in the panel that is its result', () => {
+    // The row above the panel said `run subagent dag 3 nodes: a, b, c` and the
+    // panel's header said the same thing again underneath it. The header won:
+    // it is inside the frame, beside the tally the row could not carry.
+    const f = view([step(0, 'planning', [call('s2', 'run_subagent_dag', '2 nodes: a, b', { dag: DAG_RUN })])])
+
+    expect(f.split('run subagent dag').length - 1).toBe(1)
+    expect(f).not.toContain('2 nodes: a, b')
   })
 
   it('keeps the graph when the reader folds it by hand', () => {

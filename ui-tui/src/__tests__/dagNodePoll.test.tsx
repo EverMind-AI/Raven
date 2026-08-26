@@ -4,7 +4,10 @@
 //
 // Whether anything ever *calls* the trace read, and whether it stops calling.
 // The reductions and the store are covered on their own; this is the half that
-// decides if a reader ever sees a moving line.
+// decides whether an opened node ever fills in.
+//
+// Every read here is a node a reader has opened: nothing else is polled, since
+// nothing else draws a trace.
 
 import { renderSync } from '@hermes/ink'
 import React from 'react'
@@ -134,6 +137,9 @@ const flaky = () => {
   return { calls, rpc: rpc as never }
 }
 
+/** The one node every test below opens; only an open node is polled at all. */
+const OPEN_A = new Set([dagNodeKey('r1', 'a')])
+
 // Module-scope so it is the same function reference across every render --
 // an inline closure here would change on every render and mask what a test
 // keying on `runs`/`openKeys` alone is trying to isolate.
@@ -178,7 +184,7 @@ describe('useDagNodePoll', () => {
   it('reads a running node at once, without waiting for a tick', async () => {
     const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)
 
     expect(calls).toHaveLength(1)
@@ -193,7 +199,7 @@ describe('useDagNodePoll', () => {
   it('keeps reading it on the interval', async () => {
     const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 2 + 10)
 
     expect(calls.length).toBeGreaterThanOrEqual(3)
@@ -201,7 +207,7 @@ describe('useDagNodePoll', () => {
 
   it('keeps polling a running node across a re-render with a fresh runs array', async () => {
     const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
-    const app = mount(rpc, [run(node('a', 'running'))])
+    const app = mount(rpc, [run(node('a', 'running'))], OPEN_A)
 
     await vi.advanceTimersByTimeAsync(0)
     expect(calls).toHaveLength(1)
@@ -210,7 +216,7 @@ describe('useDagNodePoll', () => {
     // the shape a real re-render hands down when the run state was rebuilt from
     // an unrelated event. The same component type, so this is a re-render and
     // not a remount: a remount would trivially restart the poll and prove nothing.
-    app.rerender(<Probe openKeys={new Set()} pinnedRuns={[]} rpc={rpc} runs={[run(node('a', 'running'))]} />)
+    app.rerender(<Probe openKeys={OPEN_A} pinnedRuns={[]} rpc={rpc} runs={[run(node('a', 'running'))]} />)
     await vi.advanceTimersByTimeAsync(0)
 
     // No new read here: a re-render that changes no dependency must not
@@ -229,7 +235,7 @@ describe('useDagNodePoll', () => {
     // copy is still pinned onto its tool row. This is the whole reported bug.
     const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
 
-    mount(rpc, [], new Set(), [run(node('a', 'running'))])
+    mount(rpc, [], OPEN_A, [run(node('a', 'running'))])
     await vi.advanceTimersByTimeAsync(0)
 
     expect(calls).toHaveLength(1)
@@ -239,15 +245,31 @@ describe('useDagNodePoll', () => {
   it('prefers the live copy over the pinned one when both name the same run', async () => {
     const liveRunning = answering([{ role: 'assistant', text: 'hi' }])
 
-    mount(liveRunning.rpc, [run(node('a', 'running'))], new Set(), [run(node('a', 'completed'))])
+    mount(liveRunning.rpc, [run(node('a', 'running'))], OPEN_A, [run(node('a', 'completed'))])
     await vi.advanceTimersByTimeAsync(0)
     expect(liveRunning.calls).toHaveLength(1)
 
+    await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 2 + 10)
+    expect(liveRunning.calls.length).toBeGreaterThanOrEqual(3)
+
+    // The same node, live as completed and pinned as running: read once, the
+    // way a settled node is, rather than polled on the pinned copy's word.
     const liveCompleted = answering([{ role: 'assistant', text: 'done' }])
 
-    mount(liveCompleted.rpc, [run(node('a', 'completed'))], new Set(), [run(node('a', 'running'))])
-    await vi.advanceTimersByTimeAsync(0)
-    expect(liveCompleted.calls).toHaveLength(0)
+    mount(liveCompleted.rpc, [run(node('a', 'completed'))], OPEN_A, [run(node('a', 'running'))])
+    await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 2 + 10)
+    expect(liveCompleted.calls).toHaveLength(1)
+  })
+
+  it('reads nothing for a running node nobody has opened', async () => {
+    // The live line under a running row is gone, so a closed node has nothing
+    // on screen to keep up to date -- and this read is twice a second, per node.
+    const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
+
+    mount(rpc, [run(node('a', 'running'))])
+    await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 2 + 10)
+
+    expect(calls).toHaveLength(0)
   })
 
   it('reads nothing when no node is running and none is open', async () => {
@@ -307,7 +329,7 @@ describe('useDagNodePoll', () => {
     // `runs` never changes across this test: the node is shown as `running`
     // throughout, exactly the case where a displayed-status check would poll
     // forever. Only the response settles it.
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)
 
     expect(calls).toHaveLength(1)
@@ -326,7 +348,7 @@ describe('useDagNodePoll', () => {
   it('does not settle a node whose response reports it is still running', async () => {
     const { calls, rpc } = running([{ role: 'assistant', text: 'hi' }])
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)
     expect(getDagNodeTrace(dagNodeKey('r1', 'a'))?.settled).toBe(false)
 
@@ -342,7 +364,7 @@ describe('useDagNodePoll', () => {
     // read the same as `pending`/`running`, not as an unrecognised terminal.
     const { calls, rpc } = nullStatus([{ role: 'assistant', text: 'hi' }])
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)
     expect(getDagNodeTrace(dagNodeKey('r1', 'a'))?.settled).toBe(false)
 
@@ -354,7 +376,7 @@ describe('useDagNodePoll', () => {
 
   it('stops on unmount', async () => {
     const { calls, rpc } = answering([{ role: 'assistant', text: 'hi' }])
-    const app = mount(rpc, [run(node('a', 'running'))])
+    const app = mount(rpc, [run(node('a', 'running'))], OPEN_A)
 
     await vi.advanceTimersByTimeAsync(0)
     const seen = calls.length
@@ -370,7 +392,7 @@ describe('useDagNodePoll', () => {
       throw new Error('run dir is gone')
     }) as never
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS + 10)
 
     // Below the cap a throw persists a rising failure count rather than
@@ -384,7 +406,7 @@ describe('useDagNodePoll', () => {
     // nothing in flight -- messages stays empty and only status carries the news.
     const { calls, rpc } = finishedEmpty()
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)
 
     expect(calls).toHaveLength(1)
@@ -398,7 +420,7 @@ describe('useDagNodePoll', () => {
   it('stops reading a pinned running node after enough consecutive read failures', async () => {
     const { calls, rpc } = throwing()
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * (DAG_TRACE_READ_FAILURE_CAP - 1) + 10)
 
     expect(calls).toHaveLength(DAG_TRACE_READ_FAILURE_CAP)
@@ -412,7 +434,7 @@ describe('useDagNodePoll', () => {
   it('does not accumulate a failure streak across a transient success', async () => {
     const { calls, rpc } = flaky()
 
-    mount(rpc, [run(node('a', 'running'))])
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
 
     // Call 1 throws (streak 1); call 2 succeeds and must reset the streak.
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS + 10)
@@ -450,9 +472,7 @@ describe('useDagNodePoll', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(calls).toHaveLength(1)
 
-    app.rerender(
-      <Probe openKeys={open} pinnedRuns={[]} rpc={rpc as never} runs={[run(node('a', 'completed'))]} />
-    )
+    app.rerender(<Probe openKeys={open} pinnedRuns={[]} rpc={rpc as never} runs={[run(node('a', 'completed'))]} />)
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 2 + 10)
 
     expect(calls.length).toBeGreaterThan(1)
@@ -472,7 +492,11 @@ describe('useDagNodePoll', () => {
       throw new Error('run dir is gone')
     }
 
-    const app = mount(rpc as never, [run(node('a', 'running'), node('b', 'completed'))], new Set([dagNodeKey('r1', 'b')]))
+    const app = mount(
+      rpc as never,
+      [run(node('a', 'running'), node('b', 'completed'))],
+      new Set([dagNodeKey('r1', 'a'), dagNodeKey('r1', 'b')])
+    )
 
     // Drive 'a' most of the way to the cap: one read short of it.
     await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * (DAG_TRACE_READ_FAILURE_CAP - 2) + 10)
@@ -484,7 +508,7 @@ describe('useDagNodePoll', () => {
     // 'a', which keeps throwing on every read throughout.
     app.rerender(
       <Probe
-        openKeys={new Set()}
+        openKeys={OPEN_A}
         pinnedRuns={[]}
         rpc={rpc as never}
         runs={[run(node('a', 'running'), node('b', 'completed'))]}

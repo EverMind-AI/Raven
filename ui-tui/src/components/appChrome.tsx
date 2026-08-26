@@ -10,7 +10,7 @@ import unicodeSpinners from 'unicode-animations'
 
 import type { IndicatorStyle } from '../app/interfaces.js'
 import type { Theme } from '../theme.js'
-import type { Msg, Usage } from '../types.js'
+import type { Usage } from '../types.js'
 
 import { $delegationState } from '../app/delegationStore.js'
 import { $liveAgents, liveAgentCounts } from '../app/liveAgentsStore.js'
@@ -19,11 +19,10 @@ import { $uiState } from '../app/uiStore.js'
 import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 import { fmtDuration } from '../domain/messages.js'
-import { stickyPromptFromViewport } from '../domain/viewport.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { buildSubagentTree, treeTotals } from '../lib/subagentTree.js'
 import { clipToWidth, clipToWidthFromEnd, fmtK } from '../lib/text.js'
-import { useScrollbarSnapshot, useViewportSnapshot } from '../lib/viewportStore.js'
+import { useScrollbarSnapshot } from '../lib/viewportStore.js'
 
 const FACE_TICK_MS = 2500
 const HEART_COLORS = ['#ff5fa2', '#ff4d6d']
@@ -443,15 +442,6 @@ export function FloatBox({ children, color }: { children: ReactNode; color: stri
   )
 }
 
-export function StickyPromptTracker({ messages, offsets, scrollRef, onChange }: StickyPromptTrackerProps) {
-  const { atBottom, bottom, top } = useViewportSnapshot(scrollRef)
-  const text = stickyPromptFromViewport(messages, offsets, top, bottom, atBottom)
-
-  useEffect(() => onChange(text), [onChange, text])
-
-  return null
-}
-
 export function TranscriptScrollbar({ scrollRef, t }: TranscriptScrollbarProps) {
   const [hover, setHover] = useState(false)
   const [grab, setGrab] = useState<number | null>(null)
@@ -540,13 +530,6 @@ interface StatusRuleProps {
   updateAvailable?: boolean
   updateCommand?: string
   usage: Usage
-}
-
-interface StickyPromptTrackerProps {
-  messages: readonly Msg[]
-  offsets: ArrayLike<number>
-  onChange: (text: string) => void
-  scrollRef: RefObject<ScrollBoxHandle | null>
 }
 
 interface TranscriptScrollbarProps {

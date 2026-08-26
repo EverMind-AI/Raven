@@ -33,6 +33,11 @@ def call(*, id: str, name: str, arguments_json: str, at: str | None = None) -> d
     return {"t": "call", "id": id, "name": name, "arguments_json": arguments_json, "at": at}
 
 
+def user(text: str, at: str | None = None) -> dict[str, Any]:
+    """Something the person said mid-turn -- a steer merged into the run."""
+    return {"t": "user", "text": text, "at": at}
+
+
 def result(*, id: str, text: str, ok: bool, at: str | None = None) -> dict[str, Any]:
     return {"t": "result", "id": id, "text": text, "ok": ok, "at": at}
 
@@ -82,6 +87,28 @@ def rows(
                 pending_at = None
             narration = []
             msgs.append(entry)
+        elif kind == "user":
+            # Flush what the agent had said and thought so far into a row of
+            # its own first, or that text rides the next call and is drawn
+            # after the words it was answering -- the conversation reads inside
+            # out. Then the person's words, in the position they were said.
+            if narration or pending:
+                said: dict[str, Any] = {"role": "assistant", "content": "".join(narration).strip()}
+                if pending:
+                    said["reasoning_content"] = "".join(pending)
+                if pending_at:
+                    said["timestamp"] = pending_at
+                msgs.append(said)
+                narration = []
+                pending = []
+                pending_at = None
+            # Marked, because a reader cannot otherwise tell it from the prompt
+            # that opened a turn: both are user rows, and only this one landed
+            # inside a turn already running.
+            steer: dict[str, Any] = {"role": "user", "content": ev.get("text") or "", "steer": True}
+            if at := ev.get("at"):
+                steer["timestamp"] = at
+            msgs.append(steer)
         elif kind == "result":
             text = ev.get("text") or ""
             row: dict[str, Any] = {
@@ -105,4 +132,4 @@ def rows(
     return msgs
 
 
-__all__ = ["call", "result", "rows", "say", "thought"]
+__all__ = ["call", "result", "rows", "say", "thought", "user"]

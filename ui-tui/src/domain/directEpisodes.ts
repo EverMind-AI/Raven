@@ -47,6 +47,7 @@ export const foldDirectTurns = (turns: DirectTurn[]): Msg[] =>
         role: turn.role,
         text: failed ? turn.content.slice(FAILED_MARKER.length).trim() : turn.content,
         ...(turn.reasoning_content ? { reasoning: turn.reasoning_content } : {}),
+        ...(turn.steer ? { steer: true } : {}),
         ...(turn.tool_calls ? { calls: turn.tool_calls } : {}),
         ...(turn.call_id ? { foldSeed: turn.call_id } : {}),
         ...(turn.tool_call_id ? { toolCallId: turn.tool_call_id } : {}),

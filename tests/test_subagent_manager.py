@@ -1713,3 +1713,51 @@ async def test_cancel_while_queued_emits_a_cancelled_status(monkeypatch) -> None
 
     release.set()
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# steer_instance: the status is the run's, reached through the live index
+# ---------------------------------------------------------------------------
+
+
+async def test_steer_instance_finds_a_run_registered_under_an_empty_session_key() -> None:
+    """The writers register `session_key or ""`; the lookup has to fall back the
+    same way, or every steer with an empty key answers no_turn and the words go
+    out as a second prompt to a busy instance."""
+    from raven.agent.subagent import activity
+
+    mgr = _make_manager(1)
+    with activity.collecting(live_key="rec-1", instance=("", "Coder", "h1")) as run:
+
+        async def steer(text: str) -> str:
+            return "injected"
+
+        activity.offer_steer(run, steer)
+        assert await mgr.steer_instance("", "Coder", "h1", "hi") == "injected"
+
+
+async def test_steer_instance_reports_no_turn_then_unsupported_then_the_runs_own_answer() -> None:
+    from raven.agent.subagent import activity
+
+    mgr = _make_manager(1)
+    assert await mgr.steer_instance("s1", "Coder", "h1", "hi") == "no_turn"
+
+    with activity.collecting(live_key="rec-1", instance=("s1", "Coder", "h1")) as run:
+        # A run in flight whose transport publishes no hook cannot be steered.
+        assert await mgr.steer_instance("s1", "Coder", "h1", "hi") == "unsupported"
+
+        seen: list[str] = []
+
+        async def steer(text: str) -> str:
+            seen.append(text)
+            return "injected"
+
+        activity.offer_steer(run, steer)
+        assert await mgr.steer_instance("s1", "Coder", "h1", "look at the docs") == "injected"
+        assert seen == ["look at the docs"]
+
+        activity.offer_steer(run, None)
+        assert await mgr.steer_instance("s1", "Coder", "h1", "hi") == "unsupported"
+
+    # The block ended: the run is gone from the index, and so is the hook.
+    assert await mgr.steer_instance("s1", "Coder", "h1", "hi") == "no_turn"

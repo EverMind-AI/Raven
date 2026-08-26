@@ -7,10 +7,10 @@ import { stringWidth } from '@hermes/ink'
 
 import type { EpisodeTool, Msg } from '../types.js'
 
-import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
 import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
+import { dagDetailRoom, dagRowDetail, dagTraceBoxRows } from './dagStatus.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
 import { boundedHistoryRenderText } from './text.js'
@@ -51,7 +51,7 @@ export const messageHeightKey = (msg: Msg) => {
     msg.episodes
       ?.map(
         ep =>
-          `${ep.narration?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}`).join(',')}`
+          `${ep.narration?.length ?? 0}:${ep.steer?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}`).join(',')}`
       )
       .join('\u0001') ?? ''
 
@@ -99,11 +99,12 @@ const INDENT = 2
 const STEP = 2
 
 /**
- * Row count for one DAG call's panel: a header, the ascii picture when one fits,
- * a row per node, each of those rows' live slot, and an outputs line once the
- * run is done. Exactly `DagPanel`'s own structure, and it reuses the same layout
- * function the panel renders from, so the estimate cannot drift from what it
- * actually draws.
+ * Row count for one DAG call's panel: its frame and header, the ascii picture
+ * when one fits, a row per node plus the turned-in line for a node that has one,
+ * each of those rows' open trace box, an outputs line once the run is done, and
+ * the hint under its own rule. Exactly `DagPanel`'s own structure, and it reuses
+ * the same layout and detail helpers the panel renders from, so the estimate
+ * cannot drift from what it actually draws.
  *
  * The rows are unconditional. They were dropped for a while under a labelled
  * picture, on the grounds that the boxes already named every node -- which
@@ -115,20 +116,34 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
     return 0
   }
 
-  const picture = layoutDagGraph(run.nodes, { width })
+  // The panel's border and padding, which is what its contents are laid out in.
+  const inner = Math.max(24, width - 4)
+  const picture = layoutDagGraph(run.nodes, { width: inner })
 
-  // What `DagNodeSlot` draws under each row: a box when expanded, one live line
-  // while it runs, nothing otherwise. `dagNodeToggleKey` is reused rather than
-  // restated because it is also the rule for what a click can open. The box is a
-  // constant because it is a fixed height; reading its real height here would
-  // make this estimator depend on the fold it is estimating.
+  // What `DagNodeSlot` draws under each row: a box when expanded, nothing
+  // otherwise. `dagNodeToggleKey` is reused rather than restated because it is
+  // also the rule for what a click can open. The box's height is fixed per node
+  // -- taller once the node has stopped -- so it is read off the status rather
+  // than off the fold this is estimating.
   const slots = run.nodes.reduce((rows, node) => {
     const toggle = dagNodeToggleKey(run.runId, node)
 
-    return rows + (toggle && open.has(toggle) ? DAG_TRACE_BOX_ROWS : node.status === 'running' ? 1 : 0)
+    return rows + (toggle && open.has(toggle) ? dagTraceBoxRows(node.status) : 0)
   }, 0)
 
-  return 1 + (picture?.height ?? 0) + run.nodes.length + slots + (run.done && run.dir ? 1 : 0)
+  // The line turned in under a node's name, when it has anything to say there.
+  const ordinalWidth = String(run.nodes.length).length
+  const room = dagDetailRoom(inner, ordinalWidth)
+  const details = run.nodes.reduce((rows, node) => {
+    const detail = dagRowDetail(node, picture?.drawn ?? null, room)
+
+    return rows + (detail.summary || detail.deps || detail.error ? 1 : 0)
+  }, 0)
+
+  // Two border rows, the header, the two rules and the hint.
+  const chrome = 6
+
+  return chrome + (picture?.height ?? 0) + run.nodes.length + details + slots + (run.done && run.dir ? 1 : 0)
 }
 
 export const estimatedMsgHeight = (
@@ -191,23 +206,30 @@ export const estimatedMsgHeight = (
           continue
         }
 
-        // A DAG call's graph renders under its own row at every fold depth,
-        // including the folded default -- see dagFor/WorkSegment in
-        // episodeView.tsx -- so this mirrors that instead of the one-row
-        // approximation below. depth/width match episodeView's own
-        // INDENT/STEP and width formula so the two cannot drift apart.
+        // A DAG call's graph renders at every fold depth, including the folded
+        // default -- see dagFor/WorkSegment in episodeView.tsx -- so this
+        // mirrors that instead of the one-row approximation below. A dag call
+        // draws no row of its own: the panel is a titled box that carries the
+        // call, so only the other tools in the stretch are counted as rows.
+        // depth/width match episodeView's own INDENT/STEP and width formula so
+        // the two cannot drift apart.
         const dagWidth = cols ? Math.max(20, cols - 4) : 116
 
         if (seg.tools.length === 1) {
-          h += 1 + dagPanelRows(dagTools[0]!.dag!, Math.max(24, dagWidth - (INDENT + STEP)), dagOpen)
+          h += dagPanelRows(dagTools[0]!.dag!, Math.max(28, dagWidth - INDENT), dagOpen)
         } else {
-          h += 1 + seg.tools.length
+          h += 1 + (seg.tools.length - dagTools.length)
 
           for (const tool of dagTools) {
-            h += dagPanelRows(tool.dag!, Math.max(24, dagWidth - (INDENT + STEP * 2)), dagOpen)
+            h += dagPanelRows(tool.dag!, Math.max(28, dagWidth - (INDENT + STEP)), dagOpen)
           }
         }
 
+        continue
+      }
+
+      if (seg.episode.steer) {
+        h += wrappedLines(seg.episode.steer, bodyWidth)
         continue
       }
 

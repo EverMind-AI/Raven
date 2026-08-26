@@ -126,6 +126,7 @@ def test_instance_methods_are_registered() -> None:
         "subagents.instance.create",
         "subagents.instance.history",
         "subagents.instance.forget",
+        "subagents.instance.steer",
     ):
         assert name in registered, name
 

@@ -28,6 +28,7 @@ import { asRpcResult } from '../lib/rpc.js'
 import { resetDagNodeTraces } from './dagNodeStore.js'
 import { resetDirectChat } from './directChatStore.js'
 import { resetFolds } from './foldStore.js'
+import { resetLiveAgents } from './liveAgentsStore.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -99,7 +100,6 @@ export interface UseSessionLifecycleOptions {
   setHistoryItems: StateSetter<Msg[]>
   setLastUserMsg: StateSetter<string>
   setSessionStartedAt: StateSetter<number>
-  setStickyPrompt: StateSetter<string>
   setVoiceProcessing: StateSetter<boolean>
   setVoiceRecording: StateSetter<boolean>
   sys: (text: string) => void
@@ -116,7 +116,6 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     setHistoryItems,
     setLastUserMsg,
     setSessionStartedAt,
-    setStickyPrompt,
     setVoiceProcessing,
     setVoiceRecording,
     sys
@@ -149,18 +148,20 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     // message, and both of those die with the session, so a set left behind only
     // grows for as long as the process lives. Each watched dag node's trace goes
     // too: a trace belongs to the conversation on screen, and a resumed one is a
-    // different conversation.
+    // different conversation. So do the delegated runs behind the Live Agents
+    // Strip: its graph lines are kept for the session deliberately, so nothing
+    // else would ever take them off it.
     resetDirectChat()
     resetFolds()
     resetDagNodeTraces()
+    resetLiveAgents()
     setHistoryItems([])
     setLastUserMsg('')
-    setStickyPrompt('')
     composerActions.setPasteSnips([])
     // Half-prune: new session has new keys, but keep a warm pool in case
     // the user resumes back to the prior session.
     evictInkCaches('half')
-  }, [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
+  }, [composerActions, setHistoryItems, setLastUserMsg, setVoiceProcessing, setVoiceRecording])
 
   const resetVisibleHistory = useCallback(
     (info: null | SessionInfo = null) => {
@@ -170,13 +171,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       turnController.persistedToolLabels.clear()
 
       setHistoryItems(info ? [introMsg(info)] : [])
-      setStickyPrompt('')
       setLastUserMsg('')
       composerActions.setPasteSnips([])
       patchTurnState({ activity: [] })
       patchUiState({ info, usage: usageFrom(info) })
     },
-    [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt]
+    [composerActions, setHistoryItems, setLastUserMsg]
   )
 
   const newSession = useCallback(

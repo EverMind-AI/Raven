@@ -48,7 +48,7 @@
     ]
   },
   "memory": {
-    "backend": "everos",
+    "backend": null,
     "userId": "raven-code",
     "agentId": "raven-code",
     "memoryTopK": 5
@@ -62,5 +62,9 @@
         "base_url": "http://localhost:18791"
       }
     }
+  },
+  "skillForge": {
+    "rewriteEnabled": false,
+    "llmGateEnabled": false
   }
 }

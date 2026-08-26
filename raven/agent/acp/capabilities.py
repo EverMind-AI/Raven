@@ -37,7 +37,7 @@ from loguru import logger
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
 from raven.agent.acp.permissions import auto_approver
-from raven.agent.acp.protocol import AcpError, AcpRemoteError
+from raven.agent.acp.protocol import STEER_CAPABILITY, AcpError, AcpRemoteError
 
 _FILENAME = "subagent_acp_capabilities.json"
 
@@ -80,6 +80,10 @@ class CapabilitySnapshot:
     a later fork feature would otherwise have to re-handshake every agent to
     learn something this connection already reported."""
     can_load: bool = False
+    can_steer: bool = False
+    """Whether the agent serves raven's ``_raven/session/steer`` extension,
+    read from ``agentCapabilities._meta``. Decides whether text typed at an
+    instance mid-turn can be merged into that turn or has to wait for it."""
     prompt_modalities: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
@@ -110,6 +114,7 @@ class CapabilitySnapshot:
             "canResume": self.can_resume,
             "canFork": self.can_fork,
             "canLoad": self.can_load,
+            "canSteer": self.can_steer,
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
             "authMethods": list(self.auth_methods),
@@ -153,6 +158,7 @@ class CapabilitySnapshot:
             can_resume=bool(row.get("canResume")),
             can_fork=bool(row.get("canFork")),
             can_load=bool(row.get("canLoad")),
+            can_steer=bool(row.get("canSteer")),
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
             auth_methods=_strs("authMethods"),
@@ -266,6 +272,7 @@ class _Handshake:
     can_fork: bool = False
     can_load: bool = False
     can_delete: bool = False
+    can_steer: bool = False
     prompt_modalities: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
@@ -300,6 +307,9 @@ def _read_initialize(result: Any) -> _Handshake:
         can_fork="fork" in session_caps,
         can_load=bool(caps.get("loadSession")),
         can_delete="delete" in session_caps,
+        # The one extension raven itself serves, announced in the schema's
+        # extension carrier; a client that did not read it must not call it.
+        can_steer=STEER_CAPABILITY in _dict(caps.get("_meta")),
         prompt_modalities=modalities,
         auth_methods=auth_ids,
     )
@@ -308,6 +318,17 @@ def _read_initialize(result: Any) -> _Handshake:
 def handshake_of(result: Any) -> _Handshake:
     """The parsed capabilities one ``initialize`` answer carries."""
     return _read_initialize(result)
+
+
+def steer_offered(initialize: Any) -> bool:
+    """Whether the agent that answered this ``initialize`` takes a steer.
+
+    Read from the live handshake rather than the stored snapshot, for the reason
+    the dialect is: the snapshot was measured on some earlier connect and may
+    predate the agent learning the extension, while this is the process that
+    is about to answer the prompt.
+    """
+    return _read_initialize(initialize).can_steer
 
 
 def _read_session_models(result: Any) -> tuple[str, ...]:
@@ -364,6 +385,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             can_resume=hs.can_resume,
             can_fork=hs.can_fork,
             can_load=hs.can_load,
+            can_steer=hs.can_steer,
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
             auth_methods=hs.auth_methods,
@@ -446,5 +468,6 @@ __all__ = [
     "SnapshotStore",
     "default_snapshot_path",
     "snapshot_fingerprint",
+    "steer_offered",
     "verify_agent",
 ]

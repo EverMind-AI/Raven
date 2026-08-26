@@ -268,6 +268,13 @@ class DirectTurn(_Strict):
             "snapshot: the next read replaces them, and the record replaces them once the turn lands."
         ),
     )
+    steer: bool | None = Field(
+        default=None,
+        description=(
+            "Set on a user row that was a steer: words merged into a turn already running, not the "
+            "prompt that opened one. A reader draws it inside the turn rather than as a new one."
+        ),
+    )
 
 
 class UsageSnapshot(_Strict):
@@ -1938,6 +1945,20 @@ class SubagentsInstanceForgetResult(_Strict):
     removed: bool
 
 
+class SubagentsInstanceSteerParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+    text: str
+
+
+class SubagentsInstanceSteerResult(_Strict):
+    # ``injected``: merged into the turn the instance is running. ``no_turn``:
+    # nothing is running, nothing was started, the caller keeps the text.
+    # ``unsupported``: the run's transport cannot take text mid-turn.
+    status: Literal["injected", "no_turn", "unsupported"]
+
+
 # ---------------------------------------------------------------------------
 # Method registry — used by tests/test_rpc_schema_match.py to walk every
 # method and compare its Pydantic Params/Result models against the OpenRPC
@@ -3409,6 +3430,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.instance.create": (SubagentsInstanceCreateParams, SubagentsInstanceCreateResult),
     "subagents.instance.history": (SubagentsInstanceHistoryParams, SubagentsInstanceHistoryResult),
     "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
+    "subagents.instance.steer": (SubagentsInstanceSteerParams, SubagentsInstanceSteerResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),

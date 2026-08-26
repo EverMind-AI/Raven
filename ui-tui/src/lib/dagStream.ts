@@ -2,95 +2,19 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// A DAG node's live transcript, reduced to what will fit on screen.
+// A DAG node's live transcript, reduced to what will fit in the box its row
+// opens into.
 //
-// Two reductions of the same wire messages, because the slot under a node row
-// has two sizes: one line of the newest characters while the row is collapsed,
-// and a slice of whole messages while it is expanded. Both are pure and take
-// their budget as an argument -- the panel's width and its fixed row count are
-// the only things that decide how much of a run is legible, and a reduction that
-// read either from a store could not be tested against a known budget.
-
-import { stringWidth } from '@hermes/ink'
+// Pure, and takes its budget as an argument: the box's fixed row count is the
+// only thing that decides how much of a run is legible, and a reduction that
+// read that from a store could not be tested against a known budget.
 
 import type { TranscriptMessage } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
 import { DAG_TRACE_FIT_MAX_ROWS } from '../config/limits.js'
-import { callSubject } from '../domain/episodeFold.js'
 import { toTranscriptMessages } from '../domain/messages.js'
-import { clipToWidthFromEnd, formatToolCall } from './text.js'
 import { estimatedMsgHeight } from './virtualHeights.js'
-
-const SEP = ' · '
-
-// A cap on how much of one message is examined. A tool result can be megabytes
-// and only the last cells of it can ever be shown, so the work must follow the
-// budget rather than the payload. Four chars per cell is well clear of the worst
-// real case (a double-width char is two cells for one char). The thought and text
-// are budget-capped; tool-call labels are small by design and handled separately.
-const CHARS_PER_CELL = 4
-
-/** The last `budget` code units, without orphaning a surrogate at the front. */
-const lastChars = (text: string, budget: number): string =>
-  text.length > budget ? text.slice(-budget).replace(/^[\uDC00-\uDFFF]/, '') : text
-
-/** One message's contribution to the flattened stream, in wire order. */
-const contribution = (msg: TranscriptMessage, budget: number): string => {
-  if (msg.role === 'tool') {
-    return lastChars(msg.text ?? '', budget).trim()
-  }
-
-  const parts = [lastChars(msg.reasoning_content ?? '', budget), lastChars(msg.text ?? '', budget)]
-
-  for (const call of msg.tool_calls ?? []) {
-    parts.push(formatToolCall(call.name, callSubject(call.arguments)))
-  }
-
-  return parts
-    .map(part => part.trim())
-    .filter(Boolean)
-    .join(SEP)
-}
-
-/**
- * The last `width` cells of everything the node has produced.
- *
- * Walked from the newest message backwards and stopped as soon as the budget is
- * covered: the transcript is capped at 400 messages server-side and this is
- * re-derived twice a second, so the cost has to follow the row width rather than
- * the run's length.
- */
-export const dagStreamTail = (messages: readonly TranscriptMessage[], width: number): string => {
-  if (width <= 0) {
-    return ''
-  }
-
-  // `dag.node` brackets a node's transcript with its prompt as a leading
-  // `role: 'user'` row (raven/rpc/methods/dag.py `_with_messages`). The row
-  // above this one already shows that prompt, so a node with nothing of its
-  // own would otherwise echo it back forever as if it were new.
-  const body = messages.length > 0 && messages[0]!.role === 'user' ? messages.slice(1) : messages
-
-  const budget = width * CHARS_PER_CELL
-  let acc = ''
-
-  for (let i = body.length - 1; i >= 0; i--) {
-    const part = contribution(body[i]!, budget)
-
-    if (!part) {
-      continue
-    }
-
-    acc = acc ? `${part}${SEP}${acc}` : part
-
-    if (stringWidth(acc) >= width) {
-      break
-    }
-  }
-
-  return clipToWidthFromEnd(acc, width)
-}
 
 // What the box's own rendering does, so the fit is measured against the same
 // thing it draws: a `MessageLine` with no details expanded.
@@ -119,6 +43,36 @@ const TRACE_ESTIMATE = { compact: false, details: false }
  * like a terse sub-agent's could otherwise walk the full transcript on every
  * poll tick without ever overflowing.
  */
+/**
+ * One message cut down to `rows`, oldest lines first.
+ *
+ * The box has a fixed height and this fork does not truncate a child that
+ * overflows it -- it squeezes the column, dropping scattered lines and painting
+ * the last one over the footer, which reads as a corrupted box rather than a
+ * full one. So nothing oversized may be handed to it: a single message taller
+ * than the whole box is cut here instead, from its head, since the tail is the
+ * part a reader opened the node to see. The `…` says so.
+ */
+const trimToRows = (msg: Msg, rows: number, cols: number): Msg => {
+  const height = (text: string) => estimatedMsgHeight({ ...msg, text }, cols, TRACE_ESTIMATE)
+  const lines = (msg.text ?? '').split('\n')
+
+  let from = 0
+
+  while (from < lines.length - 1 && height(lines.slice(from).join('\n')) > rows) {
+    from += 1
+  }
+
+  let text = lines.slice(from).join('\n')
+
+  // One line long enough to wrap past the box on its own: keep its tail.
+  while (text.length > cols && height(text) > rows) {
+    text = text.slice(Math.max(1, Math.ceil(cols / 2)))
+  }
+
+  return { ...msg, text: from > 0 || text !== msg.text ? `\u2026${text}` : text }
+}
+
 export const fitTraceTail = (
   messages: readonly TranscriptMessage[],
   rows: number,
@@ -154,6 +108,14 @@ export const fitTraceTail = (
 
     shown = folded
     taken = take
+  }
+
+  const height = (msg: Msg) => estimatedMsgHeight(msg, cols, TRACE_ESTIMATE)
+
+  // Only the one-message case can reach here oversized: the loop above keeps the
+  // last slice that fit, and its first iteration is taken unconditionally.
+  if (shown.reduce((total, msg) => total + height(msg), 0) > rows) {
+    shown = [trimToRows(shown[shown.length - 1]!, rows, cols)]
   }
 
   return { hidden: messages.length - taken, shown }

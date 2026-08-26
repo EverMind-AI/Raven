@@ -41,12 +41,15 @@ import { createSlashHandler } from './createSlashHandler.js'
 import {
   $directChat,
   bindScrollReader,
+  getDirectChat,
+  isTargetWorking,
   isViewWorking,
   recallScroll,
   viewKeyOf,
   visibleRows
 } from './directChatStore.js'
 import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './directChatSync.js'
+import { bindDirectSender } from './directSend.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
 import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
@@ -144,7 +147,6 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   const [historyItems, setHistoryItems] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [lastUserMsg, setLastUserMsg] = useState('')
-  const [stickyPrompt, setStickyPrompt] = useState('')
   const [catalog, setCatalog] = useState<null | SlashCatalog>(null)
   const [voiceEnabled, setVoiceEnabled] = useState(false)
   const [voiceRecording, setVoiceRecording] = useState(false)
@@ -488,7 +490,6 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     setHistoryItems,
     setLastUserMsg,
     setSessionStartedAt,
-    setStickyPrompt,
     setVoiceProcessing,
     setVoiceRecording,
     sys
@@ -518,6 +519,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     }
 
     chatStreamRef.current = handle
+    const unbindSender = bindDirectSender(handle.sendTo)
     void handle.attach().catch(err => {
       // Surface subscription failure to the system message log; do not crash
       // the React tree. turn.cancel / send still callable if user inputs.
@@ -525,6 +527,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     })
 
     return () => {
+      unbindSender()
       chatStreamRef.current = null
       void handle.detach().catch(() => {})
     }
@@ -582,9 +585,14 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // only memory of a direct chat that survives a restart -- they are absent
   // from the session transcript by design. Keyed on the view rather than on the
   // whole store, so a delta arriving mid-load cannot re-enter this.
+  // Settled rather than entered when the instance is idle: a run that ended
+  // while another view was on screen left its last live snapshot in the store,
+  // and the entering read keeps what it finds. See `InstanceConversation`.
   useEffect(() => {
     if (directChatRef.current !== null) {
-      void fetchDirectHistory(rpc, getUiState().sid, directChatRef.current)
+      const read = isTargetWorking(getDirectChat(), directChatRef.current) ? 'enter' : 'settled'
+
+      void fetchDirectHistory(rpc, getUiState().sid, directChatRef.current, read)
     }
   }, [rpc, viewKey])
 
@@ -1064,8 +1072,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       clearSelection,
       deleteSessionWithFallback: session.deleteSessionWithFallback,
       onModelSelect,
-      resumeById: session.resumeById,
-      setStickyPrompt
+      resumeById: session.resumeById
     }),
     [
       answerApproval,
@@ -1112,32 +1119,19 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       cwdLabel: fmtCwdBranch(cwd, gitBranch),
       goodVibesTick,
       sessionStartedAt: ui.sid ? sessionStartedAt : null,
-      showStickyPrompt: !!stickyPrompt,
       statusColor: statusColorOf(ui.status, ui.theme.color),
-      stickyPrompt,
       turnStartedAt: ui.sid ? turnStartedAt : null,
       // CLI parity: the classic prompt_toolkit status bar shows a red dot
       // on REC (cli.py:_get_voice_status_fragments line 2344).
       voiceLabel: voiceRecording ? '● REC' : voiceProcessing ? '◉ STT' : `voice ${voiceEnabled ? 'on' : 'off'}`
     }),
-    [
-      cwd,
-      gitBranch,
-      goodVibesTick,
-      sessionStartedAt,
-      stickyPrompt,
-      turnStartedAt,
-      ui,
-      voiceEnabled,
-      voiceProcessing,
-      voiceRecording
-    ]
+    [cwd, gitBranch, goodVibesTick, sessionStartedAt, turnStartedAt, ui, voiceEnabled, voiceProcessing, voiceRecording]
   )
 
   const appTranscript = useMemo(
     // `visibleItems`, not `historyItems`: every consumer of this prop indexes
-    // into the rendered rows (first/last user row, sticky-prompt tracking), so
-    // in direct mode it has to be the transcript actually on screen.
+    // into the rendered rows (first/last user row), so in direct mode it has to
+    // be the transcript actually on screen.
     () => ({ historyItems: visibleItems, scrollRef, virtualHistory, virtualRows }),
     [virtualHistory, virtualRows, visibleItems]
   )

@@ -396,6 +396,40 @@ def resolve_workspace(state_dir: Path, override: str | None) -> Path:
     return workspace
 
 
+
+def _serve_acp(args) -> int:
+    """Serve `raven acp` on this process's stdio, under a rendered config.
+
+    The adaptation the checkout cannot carry: `raven acp` finds its config
+    through RAVEN_HOME, and a vendored folder does not work that way -- its
+    secrets live in this folder's `.env` and have to be merged into a copy
+    first. Rendering here rather than in the checkout is what keeps the next
+    upstream drop from wiping it.
+
+    stdio is inherited untouched: fd 0/1/2 ARE the protocol channel, so the
+    child must own exactly the descriptors this process was handed.
+    """
+    root = Path(args.checkout).expanduser().resolve()
+    raven_bin = root / ".venv" / "bin" / "raven"
+    if not raven_bin.is_file():
+        raise SystemExit(f"error: venv missing at {raven_bin}; run `uv sync` in {root}")
+
+    global _LOG_FILE, _VERBOSE
+    _VERBOSE = args.verbose
+    _LOG_FILE = RUN_ROOT / "acp-launcher.log"
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    config = render_config(Path(args.config).resolve())
+    log(f"[run] acp: serving on stdio under {config}")
+    try:
+        proc = subprocess.Popen([str(raven_bin), "acp", "--config", str(config)], cwd=str(root))
+        return proc.wait()
+    finally:
+        # The rendered copy holds the merged secrets at 0600; a served session
+        # ending must not leave it behind.
+        config.unlink(missing_ok=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the Raven-Code coding agent on one task")
     ap.add_argument("--task", help="The coding task")
@@ -419,7 +453,15 @@ def main() -> int:
     ap.add_argument("--checkout", default=str(CHECKOUT))
     ap.add_argument("--keep-going", action="store_true", help="Do not fail when no answer was committed")
     ap.add_argument("--verbose", action="store_true", help="Mirror diagnostics to stderr; never when spawned")
+    ap.add_argument(
+        "--acp",
+        action="store_true",
+        help="Serve the Agent Client Protocol on stdio instead of running one task",
+    )
     args = ap.parse_args()
+
+    if args.acp:
+        return _serve_acp(args)
 
     if args.prompt_file:
         task = Path(args.prompt_file).read_text(encoding="utf-8").strip()

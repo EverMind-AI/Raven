@@ -165,6 +165,13 @@ export const fetchDirectHistory = async (
       return
     }
 
+    // A settled read that finds no record cannot correct anything: the rows on
+    // screen came from somewhere, and an empty file is not a better account of
+    // the conversation than they are.
+    if (read === 'settled' && r.turns.length === 0 && getDirectTranscript(key).length > 0) {
+      return
+    }
+
     const { live, settled } = splitLive(r.turns)
 
     // Folded into episodes rather than mapped row-for-row, so a direct chat

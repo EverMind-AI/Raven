@@ -37,6 +37,8 @@ export interface SubagentProgress {
   goal: string
   id: string
   index: number
+  /** The sub-agent instance whose conversation this run is a turn of; absent for a stateless run. */
+  instance?: { agent: string; handle: string }
   inputTokens?: number
   iteration?: number
   liveRef?: SubagentLiveRef
@@ -174,6 +176,10 @@ export interface Episode {
   startedAt?: number
   reasoning?: string
   narration?: string
+  // What the person said mid-turn (a steer). An episode carrying one has no
+  // tools and no prose of its own: it marks where in the turn the words landed.
+  steer?: string
+  steerAtMs?: number
   tools: EpisodeTool[]
   durationMs?: number
   // Wall time spent before this step's first tool (≈ the model's thinking

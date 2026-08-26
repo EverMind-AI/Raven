@@ -33,11 +33,11 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.acp.capabilities import CapabilitySnapshot
+from raven.agent.acp.capabilities import CapabilitySnapshot, steer_offered
 from raven.agent.acp.elicitor import Elicitor
 from raven.agent.acp.permissions import PERMISSION_METHOD
 from raven.agent.acp.pool import get_pool
-from raven.agent.acp.protocol import AcpError, AcpRemoteError
+from raven.agent.acp.protocol import STEER_METHOD, AcpError, AcpRemoteError
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends import turn_rows
@@ -60,6 +60,10 @@ if TYPE_CHECKING:
 # recorded raw and skipped, never guessed at.
 _ANSWER_UPDATES = ("agent_message_chunk",)
 _THOUGHT_UPDATES = ("agent_thought_chunk",)
+# What the person said mid-turn. Only a steer produces one during a live turn:
+# every other user message reached the agent as the prompt and is already on
+# the caller's side, so this frame is the one record of a steer landing.
+_USER_UPDATES = ("user_message_chunk",)
 
 # A tool call ends whatever message was being written: an agent that says what
 # it is about to do, runs a command and then reports back has sent two messages,
@@ -118,8 +122,13 @@ class _TurnCollector:
         self,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         dialect: AcpDialect | None = None,
+        prompt: str | None = None,
     ) -> None:
         self._on_delta = on_delta
+        # The prompt this turn was opened with. A ``user_message_chunk`` that
+        # repeats it is an agent echoing the question back (the spec uses the
+        # frame for replays), not a steer, and must not become a user row.
+        self._prompt = (prompt or "").strip()
         # The spec by default, so a collector built without one (every test that
         # only cares about answer text) still reads tool calls correctly.
         self._dialect = dialect or AcpDialect()
@@ -180,6 +189,13 @@ class _TurnCollector:
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
+        elif kind in _USER_UPDATES:
+            said = "".join(content_texts(update.get("content")))
+            if said and said.strip() != self._prompt:
+                # A steer ends the message being written the way a tool call
+                # does: what the agent says next answers the new words.
+                self._tool_ran = bool(self.answer)
+                self.events.append({"t": "user", "text": said, "at": self._now()})
         elif kind in _THOUGHT_UPDATES:
             chunks = content_texts(update.get("content"))
             self.thoughts.extend(chunks)
@@ -226,7 +242,7 @@ class _TurnCollector:
         # Republished on every update rather than once at the end: the live
         # index is how a panel watches the run, and a transcript that only
         # exists after the answer is not a live view of anything.
-        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, "tool_call", "tool_call_update", "plan"):
+        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, *_USER_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
 
     def _revise_call(self, update: dict[str, Any]) -> None:
@@ -405,10 +421,14 @@ class _TurnCollector:
 
         Empty when the turn ended on a tool call and said nothing after it, which
         is a real outcome and not the same as "not reported".
+
+        A steer is a boundary too: what was said before the person's words is
+        already on its own row above them, and repeating it here printed the
+        first half of the reply twice.
         """
         said: list[str] = []
         for ev in reversed(self.events):
-            if ev["t"] == "call":
+            if ev["t"] in ("call", "user"):
                 break
             if ev["t"] == "say":
                 said.append(ev["text"])
@@ -436,6 +456,8 @@ class _TurnCollector:
                 events.append(turn_rows.say(ev["text"]))
             elif kind == "thought":
                 events.append(turn_rows.thought(ev["text"], at=ev.get("at")))
+            elif kind == "user":
+                events.append(turn_rows.user(ev["text"], at=ev.get("at")))
             elif kind == "call":
                 acp_call: ToolCall = ev["call"]
                 events.append(
@@ -563,7 +585,7 @@ class AcpAgentBackend:
             sink = bounded_delta(on_delta, self.max_output_chars)
             # From the live handshake, not the stored snapshot: this is the
             # process actually answering, and a snapshot can be stale.
-            collector = _TurnCollector(sink, dialect_for(connection.initialize))
+            collector = _TurnCollector(sink, dialect_for(connection.initialize), prompt=task)
             # Built here, in the turn's context, for the reason `_TurnCollector`
             # documents: the read loop's ContextVars predate this run, and the
             # asker is bound per turn.
@@ -574,6 +596,8 @@ class AcpAgentBackend:
             async with connection.session_lock(session_id):
                 connection.router.attach(session_id, collector)
                 connection.elicitors.attach(session_id, elicitor)
+                if self.can_steer or steer_offered(connection.initialize):
+                    activity.offer_steer(collector._run, self._steerer(client, session_id))
                 try:
                     result = await client.request(
                         "session/prompt",
@@ -602,6 +626,7 @@ class AcpAgentBackend:
                     record_frames(span, cancelled)
                     raise
                 finally:
+                    activity.offer_steer(collector._run, None)
                     connection.router.detach(session_id, collector)
                     connection.elicitors.detach(session_id, elicitor)
                     # Detaching stops only the *next* request from routing here.
@@ -643,6 +668,39 @@ class AcpAgentBackend:
                 await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
             return await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
+
+    @property
+    def can_steer(self) -> bool:
+        """Whether this agent takes text mid-turn (``_raven/session/steer``).
+
+        Read from the handshake snapshot like ``is_stateful``: the agent declares
+        the extension in ``agentCapabilities._meta``, and calling an undeclared
+        extension gets a method-not-found in the middle of somebody's turn. A
+        snapshot measured before the agent learned the extension says no; the
+        turn itself also asks the live handshake (``steer_offered``), so a stale
+        snapshot delays nothing.
+        """
+        return bool(self._snapshot and self._snapshot.can_steer)
+
+    def _steerer(self, client: Any, session_id: str) -> Callable[[str], Awaitable[str]]:
+        """The steer hook for one prompt: merge text into that session's turn.
+
+        Answers the agent's own status -- ``injected`` or ``no_turn`` -- and
+        ``unsupported`` if the agent refuses the method after all. Never raises
+        for a refusal: the caller is a person typing, and the honest answer is
+        a status they can act on.
+        """
+
+        async def steer(text: str) -> str:
+            try:
+                answer = await client.request(STEER_METHOD, {"sessionId": session_id, "text": text}, timeout=30)
+            except AcpRemoteError as exc:
+                logger.warning("acp agent {!r} refused a steer: {}", self.name, exc)
+                return "unsupported"
+            status = answer.get("status") if isinstance(answer, dict) else None
+            return status if status in ("injected", "no_turn") else "no_turn"
+
+        return steer
 
     async def _finished(
         self,

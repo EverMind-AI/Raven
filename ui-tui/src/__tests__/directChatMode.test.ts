@@ -10,6 +10,7 @@ import {
   getDirectChat,
   getDirectTranscript,
   isDirectTarget,
+  isTargetWorking,
   isViewWorking,
   leaveDirect,
   MAIN_VIEW_KEY,
@@ -18,6 +19,7 @@ import {
   recallScroll,
   rememberScroll,
   resetDirectChat,
+  rowsOf,
   sendingPausedReason,
   setDirectTranscript,
   visibleRows
@@ -470,5 +472,48 @@ describe('/new-instance', () => {
 
     expect(getDirectChat().active).toBeNull()
     expect(errors).toHaveLength(1)
+  })
+})
+
+describe('rowsOf', () => {
+  const target = { agent: 'A', handle: 'one' }
+
+  it('answers for an instance that is not on screen', () => {
+    expect(getDirectChat().active).toBeNull()
+    expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual(['reading this instance\u2019s conversation\u2026'])
+
+    setDirectTranscript(directKey('A', 'one'), [])
+    expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual([
+      'nothing said to this instance yet \u2014 type to start'
+    ])
+
+    appendDirectMessage(directKey('A', 'one'), { role: 'user', text: 'hi' })
+    expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual(['hi'])
+  })
+
+  it('is what visibleRows shows once that instance is entered', () => {
+    appendDirectMessage(directKey('A', 'one'), { role: 'user', text: 'hi' })
+    enterDirect('A', 'one')
+
+    expect(visibleRows(getDirectChat(), [])).toBe(rowsOf(getDirectChat(), target))
+  })
+})
+
+describe('isTargetWorking', () => {
+  const row = (agent: string, handle: string, status: string) =>
+    ({ agent, handle, status, createdAtMs: 1, kind: 'acp', sessionKey: 's1', updatedAtMs: 1 }) as never
+
+  it('reads either signal for an instance the view is not on', () => {
+    const target = { agent: 'A', handle: 'one' }
+    expect(isTargetWorking(getDirectChat(), target)).toBe(false)
+
+    markRunning(target)
+    expect(isTargetWorking(getDirectChat(), target)).toBe(true)
+    clearRunning(target)
+
+    patchDirectChat({ instances: [row('A', 'one', 'running')] })
+    expect(isTargetWorking(getDirectChat(), target)).toBe(true)
+    expect(isTargetWorking(getDirectChat(), { agent: 'A', handle: 'two' })).toBe(false)
+    expect(isTargetWorking(getDirectChat(), null)).toBe(false)
   })
 })

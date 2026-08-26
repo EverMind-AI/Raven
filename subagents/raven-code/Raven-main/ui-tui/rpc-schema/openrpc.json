@@ -505,6 +505,34 @@
       ]
     },
     {
+      "name": "session.steer",
+      "summary": "Merge text into the turn this session is running. Answers no_turn, and starts nothing, when no turn is running.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SessionSteerResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string", "enum": ["injected", "no_turn"] }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "mcp.list",
       "summary": "List MCP servers.",
       "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'list'], width=W).",

@@ -22,6 +22,13 @@ class BusyPolicy(StrEnum):
     APPEND = "append"
     INJECT = "inject"
     INTERRUPT = "interrupt"
+    # INJECT's sibling for a person steering the turn in flight. Identical while
+    # a turn is running (merged at the next tool-loop gap); differs only when
+    # there is nothing to merge into. INJECT then falls back to a turn of its
+    # own, because a channel message must not be lost. A steer is dropped
+    # instead: its sender is told ``no_turn`` and keeps the text, and a turn
+    # nobody asked for is the worse outcome. See ``Scheduler.steer``.
+    STEER = "steer"
 
 
 @dataclass(frozen=True)
@@ -62,3 +69,13 @@ class TurnRequest:
     # conversation). Runs through the lane so the session write stays serialized;
     # the model never sees it, so it cannot be rewritten. See AgentLoop.run_turn.
     deliver_text: str | None = None
+
+
+def session_of(conversation_id: str) -> str:
+    """The session a lane belongs to.
+
+    A sub-agent's direct chat runs on its own lane, ``<session>#<agent>/<handle>``,
+    so the lane is not the session. Split on the first separator only: a handle
+    may contain anything at all, and the session id never contains ``#``.
+    """
+    return conversation_id.split("#", 1)[0]

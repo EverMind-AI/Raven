@@ -171,6 +171,35 @@ const DetailBlock = memo(function DetailBlock({
 // whatever columns it has left on a live tail of the reasoning. That is the
 // only view of it in that state, and a bare label plus a ticking clock says
 // nothing about whether the model is getting anywhere.
+// The person's words merged into a running turn, drawn where they landed: one
+// indented line, not the filled card a prompt gets, because a steer did not
+// open a turn -- it bent the one already running.
+const SteerRow = memo(function SteerRow({
+  at,
+  t,
+  text,
+  width
+}: {
+  at?: number
+  t: Theme
+  text: string
+  width: number
+}) {
+  const when = at ? new Date(at).toTimeString().slice(0, 5) : ''
+
+  return (
+    <Box width={width}>
+      <Box flexShrink={0} width={INDENT} />
+      <Text>
+        <Text color={t.color.accent}>{'\u21b3 steer'}</Text>
+        {when ? <Text color={t.color.muted}>{` ${when}`}</Text> : null}
+        <Text color={t.color.muted}>{' \u00b7 '}</Text>
+        <Text bold>{text}</Text>
+      </Text>
+    </Box>
+  )
+})
+
 const ReasoningRow = memo(function ReasoningRow({
   onToggle,
   running,
@@ -374,7 +403,15 @@ const WorkSegment = memo(function WorkSegment({
   const summaryRoom = Math.max(8, width - INDENT)
   const solo = tools.length === 1
 
+  // A dag call has no row of its own: its panel is a titled box carrying the
+  // call, the graph and the tally, and the row above it said the first of those
+  // a second time -- with the node ids spelled out again, which is what the box
+  // header replaced.
   const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void) => {
+    if (tool.dag) {
+      return null
+    }
+
     const parts = toolParts(tool)
     const running = live && !tool.done
     const failed = callFailed(tool)
@@ -403,7 +440,7 @@ const WorkSegment = memo(function WorkSegment({
   const dagFor = (tool: EpisodeTool, depth: number) =>
     tool.dag ? (
       <Box key={`g:${tool.id}`} paddingLeft={depth}>
-        <DagPanel run={tool.dag} t={t} width={Math.max(24, width - depth)} />
+        <DagPanel now={now} run={tool.dag} t={t} width={Math.max(28, width - depth)} />
       </Box>
     ) : null
 
@@ -465,7 +502,7 @@ const WorkSegment = memo(function WorkSegment({
       return (
         <Box flexDirection="column">
           {callRow(latest, INDENT, toggleSelf)}
-          {dagFor(latest, INDENT + STEP)}
+          {dagFor(latest, INDENT)}
           {isOpen ? detailFor(latest, INDENT, toggleSelf) : null}
         </Box>
       )
@@ -488,7 +525,7 @@ const WorkSegment = memo(function WorkSegment({
           tools.map(tool => (
             <Box flexDirection="column" key={tool.id}>
               {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP * 2)}
+              {dagFor(tool, INDENT + STEP)}
               {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
             </Box>
           ))
@@ -496,15 +533,17 @@ const WorkSegment = memo(function WorkSegment({
           <>
             {/* The spinner above already says "in flight"; a second one on the
                 call in hand just makes two things twitch at once. */}
-            <ActivityRow
-              depth={INDENT + STEP}
-              label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-              onToggle={() => toggleCall(latest.id)}
-              t={t}
-              time={durationLabel(elapsed, true)}
-              width={summaryRoom}
-            />
-            {dagFor(latest, INDENT + STEP * 2)}
+            {latest.dag ? null : (
+              <ActivityRow
+                depth={INDENT + STEP}
+                label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
+                onToggle={() => toggleCall(latest.id)}
+                t={t}
+                time={durationLabel(elapsed, true)}
+                width={summaryRoom}
+              />
+            )}
+            {dagFor(latest, INDENT + STEP)}
             {openCalls.has(latest.id) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
           </>
         )}
@@ -521,7 +560,7 @@ const WorkSegment = memo(function WorkSegment({
     return (
       <Box flexDirection="column">
         {callRow(tool, INDENT, toggleSelf)}
-        {dagFor(tool, INDENT + STEP)}
+        {dagFor(tool, INDENT)}
         {isOpen ? detailFor(tool, INDENT, toggleSelf) : null}
       </Box>
     )
@@ -543,7 +582,7 @@ const WorkSegment = memo(function WorkSegment({
         ? tools.map(tool => (
             <Box flexDirection="column" key={tool.id}>
               {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP * 2)}
+              {dagFor(tool, INDENT + STEP)}
               {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
             </Box>
           ))
@@ -632,6 +671,10 @@ export const EpisodeView = memo(function EpisodeView({
   )
 
   const renderTalk = (ep: Episode) => {
+    if (ep.steer !== undefined) {
+      return <SteerRow at={ep.steerAtMs} key={`t:${ep.index}`} t={t} text={ep.steer} width={width} />
+    }
+
     const reasoning = (ep.reasoning ?? '').trim()
     const hasReasoning = hasMeaningfulReasoning(reasoning)
     const running = ep.index === liveIndex

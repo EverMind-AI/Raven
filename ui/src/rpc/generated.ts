@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 142 methods, 83 component schemas.
+// 143 methods, 83 component schemas.
 
 /* eslint-disable */
 /**
@@ -770,6 +770,10 @@ export interface DirectTurn {
    * Set on a row from a turn still running, which no record holds yet. Such rows are a snapshot: the next read replaces them, and the record replaces them once the turn lands.
    */
   live?: boolean;
+  /**
+   * Set on a user row that was a steer: words merged into a turn already running, not the prompt that opened one. A reader draws it inside the turn rather than as a new one.
+   */
+  steer?: boolean;
 }
 export interface UsageSnapshot {
   prompt_tokens: number;
@@ -1810,6 +1814,15 @@ export interface SubagentsInstanceForgetParams {
 }
 export interface SubagentsInstanceForgetResult {
   removed: boolean;
+}
+export interface SubagentsInstanceSteerParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+  text: string;
+}
+export interface SubagentsInstanceSteerResult {
+  status: 'injected' | 'no_turn' | 'unsupported';
 }
 export interface SystemHelloParams {
   client_version: string;
@@ -3238,6 +3251,7 @@ export interface RpcMethods {
   'subagents.instance.create': { params: SubagentsInstanceCreateParams; result: SubagentsInstanceCreateResult };
   'subagents.instance.history': { params: SubagentsInstanceHistoryParams; result: SubagentsInstanceHistoryResult };
   'subagents.instance.forget': { params: SubagentsInstanceForgetParams; result: SubagentsInstanceForgetResult };
+  'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
@@ -3463,6 +3477,7 @@ export const RPC_METHODS = [
   "subagents.instance.create",
   "subagents.instance.forget",
   "subagents.instance.history",
+  "subagents.instance.steer",
   "subagents.instances",
   "subagents.list",
   "subagents.probe",

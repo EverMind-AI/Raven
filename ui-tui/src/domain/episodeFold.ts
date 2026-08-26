@@ -40,6 +40,9 @@ export interface FoldRow {
   /** Wall time spent thinking before this row's first call or its reply. */
   reasoningMs?: number
   role: 'assistant' | 'system' | 'tool' | 'user'
+  /** A `user` row that was a steer: words merged into the turn already running.
+   *  It does not open a turn; it is drawn inside the one it landed in. */
+  steer?: boolean
   /** A `tool` row's own subject, for that same unclaimed case. */
   summary?: string
   text: string
@@ -173,6 +176,15 @@ const deriveResult = (row: FoldRow): { ok: boolean; text: string } => {
   return { ok: true, text: row.text }
 }
 
+// A closing punctuation mark or a CJK character continues the sentence with no
+// space; anything else was a new word, and the stripped rows lost the space
+// between them.
+const CONTINUES_DIRECTLY = /^[,.;:!?，。；：、）)\]】」』…\p{Script=Han}]/u
+
+/** Rejoin prose a steer row split, restoring the space the stripped rows lost. */
+export const joinProse = (before: string, after: string): string =>
+  before.endsWith(' ') || CONTINUES_DIRECTLY.test(after) ? `${before}${after}` : `${before} ${after}`
+
 /**
  * Fold rows into transcript messages.
  *
@@ -197,8 +209,40 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
   let foldCall: string | undefined
   let foldSeed: string | undefined
   const pending = new Map<string, EpisodeTool>()
+  // A steer waiting for its place. It is not drawn where its row sits -- that
+  // is mid-sentence, wherever the stream happened to be -- but at the end of
+  // the paragraph the agent was writing when it landed, so the prose reads
+  // whole and the steer still sits between what came before and what it changed.
+  let pendingSteer: { atMs?: number; text: string } | null = null
+
+  const placeSteer = () => {
+    if (pendingSteer === null) {
+      return
+    }
+
+    episodes.push({
+      index: episodes.length,
+      steer: pendingSteer.text,
+      tools: [],
+      ...(pendingSteer.atMs ? { steerAtMs: pendingSteer.atMs } : {})
+    })
+    pendingSteer = null
+  }
+
+  // The prose so far becomes an episode of its own, so a steer (or the prose
+  // that continues it) can follow it in order. Without this the answer text is
+  // drawn after every episode, which would put the steer above words said
+  // before it.
+  const settleAnswer = () => {
+    if (answer) {
+      episodes.push({ index: episodes.length, narration: answer, tools: [] })
+      answer = ''
+    }
+  }
 
   const flush = () => {
+    placeSteer()
+
     if (episodes.length || answer) {
       msgs.push({ episodes, foldId: foldCall ?? foldSeed, kind: 'episodes', role: 'assistant', text: answer })
     }
@@ -215,6 +259,14 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
     // over in place of a runtime-opened user row, or to carry a turn-artifact
     // summary verbatim via `passthrough`, so it closes whatever turn is open
     // and passes through the same way a user row does.
+    if (row.role === 'user' && row.steer) {
+      placeSteer()
+      settleAnswer()
+      pendingSteer = { text: row.text.trim(), ...(row.atMs ? { atMs: row.atMs } : {}) }
+
+      continue
+    }
+
     if (row.role === 'user' || row.role === 'system') {
       flush()
       msgs.push(row.passthrough ?? { role: row.role, text: row.text })
@@ -269,13 +321,27 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
     const reasoning = row.reasoning?.trim() ?? ''
     const calls = row.calls ?? []
 
-    if (!calls.length) {
-      // No call to hang an episode on. Prose here is the turn's answer; a row
-      // carrying only a thought still gets an episode, or the last thought
-      // before the reply would vanish.
-      if (row.text.trim()) {
-        answer = answer ? `${answer}\n\n${row.text.trim()}` : row.text.trim()
-      } else if (reasoning) {
+    if (!calls.length && pendingSteer !== null && row.text.trim()) {
+      // The first prose after a steer finishes the paragraph the steer cut
+      // into: its head (up to the first paragraph break) rejoins what was
+      // being said, the steer follows, and the rest continues below it.
+      const text = row.text.trim()
+      const cut = text.indexOf('\n\n')
+      const head = cut === -1 ? text : text.slice(0, cut)
+      const rest = cut === -1 ? '' : text.slice(cut + 2).trim()
+      const prev = episodes[episodes.length - 1]
+
+      if (head) {
+        if (prev && prev.narration !== undefined && prev.tools.length === 0 && prev.steer === undefined) {
+          prev.narration = joinProse(prev.narration, head)
+        } else {
+          episodes.push({ index: episodes.length, narration: head, tools: [] })
+        }
+      }
+
+      placeSteer()
+
+      if (reasoning) {
         episodes.push({
           index: episodes.length,
           reasoning,
@@ -284,8 +350,40 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
         })
       }
 
+      if (rest) {
+        answer = rest
+      }
+
       continue
     }
+
+    if (!calls.length) {
+      // No call to hang an episode on. Prose here is the turn's answer, and a
+      // thought still gets an episode of its own whether or not prose came with
+      // it: the reply's own reasoning -- often the longest of the turn -- is
+      // written on the reply row, and dropping it there hid a minute of thinking
+      // behind the answer it produced.
+      placeSteer()
+
+      if (reasoning) {
+        episodes.push({
+          index: episodes.length,
+          reasoning,
+          tools: [],
+          ...(row.reasoningMs != null ? { reasoningMs: row.reasoningMs } : {})
+        })
+      }
+
+      if (row.text.trim()) {
+        answer = answer ? `${answer}\n\n${row.text.trim()}` : row.text.trim()
+      }
+
+      continue
+    }
+
+    // A steer the agent answered by acting rather than speaking sits before
+    // the step it prompted.
+    placeSteer()
 
     const tools = calls.map((call): EpisodeTool => {
       const intent = callIntent(call.arguments)

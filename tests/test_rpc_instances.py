@@ -20,6 +20,7 @@ from raven.rpc.methods.instances import (
     instances_forget,
     instances_history,
     instances_list,
+    instances_steer,
 )
 
 
@@ -45,6 +46,13 @@ class _FakeManager:
 
     def _session_dir(self, session_key: str) -> Path:
         return self.session_dirs[session_key]
+
+    steered: list[tuple[str, str, str, str]] = []
+    steer_status = "injected"
+
+    async def steer_instance(self, session_key: str, agent: str, handle: str, text: str) -> str:
+        self.steered.append((session_key, agent, handle, text))
+        return self.steer_status
 
 
 class _FakeHandoff:
@@ -1378,3 +1386,46 @@ class TestWhatEachRowIsCalled:
 
         assert "runTitle" not in row
         assert "title" not in row
+
+
+# ---------------------------------------------------------------------------
+# subagents.instance.steer
+# ---------------------------------------------------------------------------
+
+
+async def test_instance_steer_hands_the_text_to_the_manager_and_returns_its_status() -> None:
+    manager = _FakeManager()
+    manager.steered = []
+    manager.steer_status = "injected"
+    params = {"session_key": "tui:s1", "agent": "Coder", "handle": "h1", "text": "check the tests too"}
+
+    assert await instances_steer(params, agent_loop_factory=lambda: _FakeLoop(manager)) == {"status": "injected"}
+    assert manager.steered == [("tui:s1", "Coder", "h1", "check the tests too")]
+
+    manager.steer_status = "unsupported"
+    assert await instances_steer(params, agent_loop_factory=lambda: _FakeLoop(manager)) == {"status": "unsupported"}
+
+
+async def test_instance_steer_without_a_live_loop_or_text_is_no_turn() -> None:
+    manager = _FakeManager()
+    manager.steered = []
+    params = {"session_key": "tui:s1", "agent": "Coder", "handle": "h1", "text": "x"}
+
+    assert await instances_steer(params, agent_loop_factory=None) == {"status": "no_turn"}
+    assert await instances_steer({**params, "text": "   "}, agent_loop_factory=lambda: _FakeLoop(manager)) == {
+        "status": "no_turn"
+    }
+    assert manager.steered == []
+
+
+def test_log_turns_carry_the_steer_mark_and_nothing_else_grows_one() -> None:
+    from raven.rpc.methods.instances import _log_turns
+
+    turns = _log_turns(
+        [
+            {"role": "user", "content": "do it", "timestamp": "2026-08-26T10:00:00"},
+            {"role": "user", "content": "the docs first", "steer": True, "timestamp": "2026-08-26T10:00:05"},
+        ]
+    )
+    assert "steer" not in turns[0]
+    assert turns[1]["steer"] is True

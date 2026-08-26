@@ -18,7 +18,7 @@ import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
 import { openAgentsOverlay } from '../components/agentsOverlay.js'
 import { chipsForWidth, cycleTarget } from '../components/instanceChips.js'
-import { TYPING_IDLE_MS } from '../config/timing.js'
+import { ESC_CLEAR_WINDOW_MS, TYPING_IDLE_MS } from '../config/timing.js'
 import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
@@ -75,6 +75,33 @@ export function decideCtrlC(state: CtrlCState): CtrlCAction {
   return state.hasPendingInput ? 'clear-input' : 'quit'
 }
 
+export type EscapeAction = 'arm-clear' | 'clear-input' | 'ignore'
+
+export interface EscapeState {
+  /** A previous Esc armed the clear and its window is still open. */
+  escClearArmed: boolean
+  /** The composer holds text, or a wrapped line is buffered. */
+  hasPendingInput: boolean
+}
+
+/**
+ * Which rung of the plain-Esc ladder a keypress lands on, once the higher
+ * meanings of Esc (voice chord, queue edit, selection, direct mode) have all
+ * declined it.
+ *
+ * - `arm-clear`: first Esc over a typed line. Only arms, so the hint can offer
+ *   the clear before a single stray Esc discards what the user wrote.
+ * - `clear-input`: second Esc inside the window. Drops the line.
+ * - `ignore`: nothing to clear.
+ */
+export function decideEscape(state: EscapeState): EscapeAction {
+  if (!state.hasPendingInput) {
+    return 'ignore'
+  }
+
+  return state.escClearArmed ? 'clear-input' : 'arm-clear'
+}
+
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
   starting: boolean,
@@ -103,6 +130,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   const isBlocked = useStore($isBlocked)
   const pagerPageSize = Math.max(5, (terminal.stdout?.rows ?? 24) - 6)
   const scrollIdleTimer = useRef<null | ReturnType<typeof setTimeout>>(null)
+  const escClearTimer = useRef<null | ReturnType<typeof setTimeout>>(null)
 
   // Wheel accel ported from claude-code: inter-event timing drives step size,
   // direction flips reset. wheelStep (WHEEL_SCROLL_STEP) is the base; final
@@ -111,7 +139,31 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   const precisionWheelRef = useRef(initPrecisionWheel())
 
-  useEffect(() => () => clearTimeout(scrollIdleTimer.current ?? undefined), [])
+  useEffect(
+    () => () => {
+      clearTimeout(scrollIdleTimer.current ?? undefined)
+      clearTimeout(escClearTimer.current ?? undefined)
+    },
+    []
+  )
+
+  const disarmEscClear = () => {
+    clearTimeout(escClearTimer.current ?? undefined)
+    escClearTimer.current = null
+
+    if (getUiState().escClearArmed) {
+      patchUiState({ escClearArmed: false })
+    }
+  }
+
+  const armEscClear = () => {
+    clearTimeout(escClearTimer.current ?? undefined)
+    escClearTimer.current = setTimeout(() => {
+      escClearTimer.current = null
+      patchUiState({ escClearArmed: false })
+    }, ESC_CLEAR_WINDOW_MS)
+    patchUiState({ escClearArmed: true })
+  }
 
   const scrollTranscript = (delta: number) => {
     if (getUiState().busy) {
@@ -280,6 +332,12 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   useInput((ch, key) => {
     const live = getUiState()
 
+    // The window closes on anything but another Esc, so the clear can only ever
+    // land on a press the user made with the hint in front of them.
+    if (live.escClearArmed && !key.escape) {
+      disarmEscClear()
+    }
+
     if (isBlocked) {
       // When approval/clarify/confirm overlays are active, their own useInput
       // handlers must receive keystrokes (arrow keys, numbers, Enter).  Only
@@ -442,6 +500,23 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     // existing priority, and before the cancel-turn path below.
     if (key.escape && getDirectChat().active !== null) {
       return leaveDirect()
+    }
+
+    if (key.escape) {
+      const action = decideEscape({
+        escClearArmed: live.escClearArmed,
+        hasPendingInput: Boolean(cState.input || cState.inputBuf.length)
+      })
+
+      if (action === 'clear-input') {
+        disarmEscClear()
+
+        return cActions.clearIn()
+      }
+
+      if (action === 'arm-clear') {
+        return armEscClear()
+      }
     }
 
     // The agents overlay, from anywhere: the status bar's ⚡ HUD advertises

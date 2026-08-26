@@ -53,6 +53,24 @@ the retraction is the only signal that the run behind the question has stopped
 listening."""
 
 
+# -- the one extension a raven serves over ACP -------------------------------
+#
+# Schema 1.20.0 has no steering method: a prompt is the only way text reaches an
+# agent, and two prompts on one session are refused because ``session/update``
+# carries no request correlation. So mid-turn steering has to be an extension,
+# and the schema's own convention for one is an underscore-prefixed method name
+# -- the single namespace a conformant client will not mistake for a standard
+# method it should have implemented.
+#
+# Paired: the method is announced in ``agentCapabilities._meta`` under
+# ``STEER_CAPABILITY`` and is invisible to a client that did not read the
+# declaration, which is the point. Both directions live here -- the agent
+# direction serves the method, the client direction calls it -- so a typo cannot
+# make one side silently disagree with the other.
+STEER_METHOD = "_raven/session/steer"
+STEER_CAPABILITY = "raven.steer"
+
+
 class AcpError(Exception):
     """Base for every ACP transport failure."""
 

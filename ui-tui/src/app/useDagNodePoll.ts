@@ -74,11 +74,15 @@ export const useDagNodePoll = (
           continue
         }
 
-        const running = node.status === RUNNING
-
-        if (running || openKeys.has(key)) {
-          out.push({ nodeId: node.id, running, runId: run.runId })
+        // Only what a reader has opened. A running node used to be polled
+        // whether or not anyone was looking, to feed the live line under its
+        // row; that line is gone, so polling a closed node is a `dag.node` read
+        // twice a second for something nothing draws.
+        if (!openKeys.has(key)) {
+          continue
         }
+
+        out.push({ nodeId: node.id, running: node.status === RUNNING, runId: run.runId })
       }
     }
 

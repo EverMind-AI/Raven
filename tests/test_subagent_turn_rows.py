@@ -54,3 +54,42 @@ def test_an_in_flight_read_appends_the_partial_answer() -> None:
         "content": "half an ans",
         "timestamp": "2026-08-21T10:00:09",
     }
+
+
+def test_a_steer_flushes_what_was_said_before_it_and_lands_as_a_user_row() -> None:
+    """The person's words go where they were said. What the agent had said and
+    thought up to then becomes a row of its own first, or it would ride the next
+    call and be drawn after the words it was answering."""
+    rows = tr.rows(
+        [
+            tr.thought("first plan", at="2026-08-26T10:00:00"),
+            tr.say("starting with the tests"),
+            tr.user("no, the docs first", at="2026-08-26T10:00:05"),
+            tr.call(id="c1", name="Read", arguments_json="{}", at="2026-08-26T10:00:06"),
+        ]
+    )
+    assert [r["role"] for r in rows] == ["assistant", "user", "assistant"]
+    assert rows[0] == {
+        "role": "assistant",
+        "content": "starting with the tests",
+        "reasoning_content": "first plan",
+        "timestamp": "2026-08-26T10:00:00",
+    }
+    assert rows[1] == {
+        "role": "user",
+        "content": "no, the docs first",
+        "steer": True,
+        "timestamp": "2026-08-26T10:00:05",
+    }
+    assert "reasoning_content" not in rows[2], "the thought was flushed, not carried onto the call"
+
+
+def test_a_steer_with_nothing_said_before_it_adds_no_empty_row() -> None:
+    rows = tr.rows([tr.user("go faster")])
+    assert rows == [{"role": "user", "content": "go faster", "steer": True}]
+
+
+def test_a_steer_row_is_marked_so_a_reader_can_tell_it_from_a_prompt() -> None:
+    msgs = tr.rows([tr.say("on it"), tr.user("the docs first", at="t1")])
+    steer = next(m for m in msgs if m["role"] == "user")
+    assert steer == {"role": "user", "content": "the docs first", "steer": True, "timestamp": "t1"}

@@ -643,3 +643,59 @@ async def test_inject_fallback_re_enqueue_also_triggers_the_depth_warning(monkey
         logger.remove(sink_id)
     assert any("depth" in line and "3" in line for line in lines)  # fallback drove the warning
     await sched.shutdown(grace=0.01)
+
+
+# --- busy policy: STEER (merge-or-refuse, never a turn of its own) ---
+
+
+async def test_steer_merges_into_the_running_turn():
+    gate = asyncio.Event()
+    outcome = TurnOutcome(usage=Usage(3, 4, 7), explicit_reply=True)
+    runner = MergingRunner(gate, outcome)
+    sched = Scheduler(runner, OriginPools(user=1, system=1), _sink)
+    host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
+    await runner.started.wait()
+    assert sched.steer(_req(channel="tg", chat_id="1", text="steer")) is True
+    gate.set()
+    assert await asyncio.wait_for(host.result(), timeout=1.0) == outcome
+    assert runner.merged == ["steer"]
+    assert runner.merged  # merged as a steer, not run as a turn: the runner ran once
+
+
+async def test_steer_with_no_running_turn_is_refused_and_starts_nothing():
+    runner = NonDrainingRunner(asyncio.Event())
+    sched = Scheduler(runner, OriginPools(user=1, system=1), _sink)
+    assert sched.steer(_req(channel="tg", chat_id="1", text="steer")) is False
+    await asyncio.sleep(0)
+    assert runner.ran == []  # no lane created, no worker started
+    assert sched.has_inflight("tg:1") is False
+
+
+async def test_steer_that_misses_its_turn_is_dropped_not_promoted():
+    gate = asyncio.Event()
+    runner = NonDrainingRunner(gate)
+    lines, sink_id = _capture_logs()
+    sched = Scheduler(runner, OriginPools(user=1, system=1), _sink)
+    host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
+    await runner.started.wait()
+    assert sched.steer(_req(channel="tg", chat_id="1", text="steer")) is True
+    gate.set()  # host completes WITHOUT draining -> a STEER is dropped, an INJECT would fall back
+    try:
+        await asyncio.wait_for(host.result(), timeout=1.0)
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink_id)
+    assert runner.ran == ["host"]  # the steer never became a turn
+    assert any("steer dropped" in line for line in lines)
+
+
+async def test_steer_from_a_non_user_origin_is_refused():
+    gate = asyncio.Event()
+    runner = MergingRunner(gate, TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    sched = Scheduler(runner, OriginPools(user=1, system=1), _sink)
+    host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
+    await runner.started.wait()
+    assert sched.steer(_req(channel="tg", chat_id="1", origin=Origin.SENTINEL, text="nudge")) is False
+    gate.set()
+    await asyncio.wait_for(host.result(), timeout=1.0)
+    assert runner.merged == []

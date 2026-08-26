@@ -8,6 +8,7 @@ import { useStore } from '@nanostores/react'
 import { Fragment, memo, useMemo, useRef } from 'react'
 
 import type { AppLayoutProps } from '../app/interfaces.js'
+import type { Theme } from '../theme.js'
 
 import { $directChat, sendingPausedReason } from '../app/directChatStore.js'
 import { useGateway } from '../app/gatewayContext.js'
@@ -24,7 +25,7 @@ import {
 } from '../lib/inputMetrics.js'
 import { PerfPane } from '../lib/perfPane.js'
 import { AgentsOverlay } from './agentsOverlay.js'
-import { GoodVibesHeart, StatusRule, StickyPromptTracker, TranscriptScrollbar, WorkingIndicator } from './appChrome.js'
+import { GoodVibesHeart, StatusRule, TranscriptScrollbar, WorkingIndicator } from './appChrome.js'
 import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel, StartupLoader } from './branding.js'
 import { FpsOverlay } from './fpsOverlay.js'
@@ -35,6 +36,27 @@ import { MessageLine } from './messageLine.js'
 import { QueuedMessages } from './queuedMessages.js'
 import { LiveTodoPanel, StreamingAssistant } from './streamingAssistant.js'
 import { TextInput, type TextInputMouseApi } from './textInput.js'
+
+const ESC_CLEAR_HINT = 'esc again to clear'
+
+// The composer's top border, with room kept at its right end for a transient
+// hint. Rendered as one row of segments rather than a spliced string so the
+// hint can carry its own color without re-measuring the rule.
+const ComposerTopRule = memo(function ComposerTopRule({ hint, t, width }: { hint: string; t: Theme; width: number }) {
+  const dashes = width - hint.length - 3
+
+  if (!hint || dashes < 4) {
+    return <Text color={t.color.primary}>{'─'.repeat(width)}</Text>
+  }
+
+  return (
+    <Box>
+      <Text color={t.color.primary}>{'─'.repeat(dashes)}</Text>
+      <Text color={t.color.warn}>{` ${hint} `}</Text>
+      <Text color={t.color.primary}>{'─'}</Text>
+    </Box>
+  )
+})
 
 const PromptPrefix = memo(function PromptPrefix({
   bold = false,
@@ -166,13 +188,6 @@ const TranscriptPane = memo(function TranscriptPane({
       <NoSelect flexShrink={0} marginLeft={1}>
         <TranscriptScrollbar scrollRef={transcript.scrollRef} t={ui.theme} />
       </NoSelect>
-
-      <StickyPromptTracker
-        messages={transcript.historyItems}
-        offsets={transcript.virtualHistory.offsets}
-        onChange={actions.setStickyPrompt}
-        scrollRef={transcript.scrollRef}
-      />
     </>
   )
 })
@@ -255,15 +270,7 @@ const ComposerPane = memo(function ComposerPane({
         </Text>
       )}
 
-      {status.showStickyPrompt ? (
-        <Text color={ui.theme.color.muted} wrap="truncate-end">
-          <Text color={ui.theme.color.label}>↳ </Text>
-
-          {status.stickyPrompt}
-        </Text>
-      ) : (
-        <Box height={1} onMouseDown={captureInputDrag} onMouseDrag={dragFromSpacer} onMouseUp={endInputDrag} />
-      )}
+      <Box height={1} onMouseDown={captureInputDrag} onMouseDrag={dragFromSpacer} onMouseUp={endInputDrag} />
 
       <StatusRulePane at="top" composer={composer} status={status} />
 
@@ -286,7 +293,11 @@ const ComposerPane = memo(function ComposerPane({
               </Box>
             ))}
 
-            <Text color={ui.theme.color.primary}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
+            <ComposerTopRule
+              hint={ui.escClearArmed ? ESC_CLEAR_HINT : ''}
+              t={ui.theme}
+              width={Math.max(1, composer.cols - 2)}
+            />
             <Box
               onMouseDown={captureInputDrag}
               onMouseDrag={dragFromPromptRow}
@@ -461,8 +472,17 @@ export const AppLayout = memo(function AppLayout({
 
   return (
     <Shell {...shellProps}>
-      <Box flexDirection="column" flexGrow={1}>
-        <Box flexDirection="row" flexGrow={1}>
+      {/* flexBasis 0 on both growing boxes, for the reason the agents overlay's
+          detail row has it: with an auto basis yoga measures the box against
+          its content to resolve the basis, which writes the transcript's full
+          content height into the ScrollBox, and a cached final pass can leave
+          that height standing for one frame -- the view jumps to its top and
+          snaps back. Which keystrokes trigger the re-measure depends on the
+          composer's own wrapping, so it shows rarely here and often there.
+          Only under the alternate screen: inline mode has no fixed height to
+          grow into, and a zero basis there would collapse the transcript. */}
+      <Box flexDirection="column" flexGrow={1} {...(INLINE_MODE ? {} : { flexBasis: 0, flexShrink: 1, minHeight: 0 })}>
+        <Box flexDirection="row" flexGrow={1} {...(INLINE_MODE ? {} : { flexBasis: 0, flexShrink: 1, minHeight: 0 })}>
           {overlay.agents ? (
             <PerfPane id="agents">
               <AgentsOverlayPane />

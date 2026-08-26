@@ -216,7 +216,7 @@ function AppChromePage() {
 
       <Box marginTop={1}>
         <Text color={t.color.muted}>
-          (GoodVibesHeart, TranscriptScrollbar, StickyPromptTracker need live scroll/animation state — omitted)
+          (GoodVibesHeart, TranscriptScrollbar need live scroll/animation state — omitted)
         </Text>
       </Box>
     </Box>

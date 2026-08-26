@@ -150,8 +150,7 @@ describe('layoutDagGraph', () => {
   })
 })
 
-const bandRows = (geometry: DagGraphGeometry) =>
-  Math.max(...geometry.boxes.map(box => box.y)) + BOX_BAND_HEIGHT
+const bandRows = (geometry: DagGraphGeometry) => Math.max(...geometry.boxes.map(box => box.y)) + BOX_BAND_HEIGHT
 
 describe('layoutDagGraph long edges', () => {
   const SKIPPER = [node('a'), node('b', ['a']), node('c', ['b', 'a'])]
@@ -175,9 +174,7 @@ describe('layoutDagGraph long edges', () => {
     const g = laid(SKIPPER)
     const covered = new Set(
       g.boxes.flatMap(box =>
-        [box.y, box.y + 1, box.y + 2].flatMap(y =>
-          Array.from({ length: box.width }, (_, i) => `${box.x + i},${y}`)
-        )
+        [box.y, box.y + 1, box.y + 2].flatMap(y => Array.from({ length: box.width }, (_, i) => `${box.x + i},${y}`))
       )
     )
 
@@ -251,5 +248,25 @@ describe('layoutDagGraph width degradation', () => {
         expect(g.width).toBeLessThanOrEqual(width)
       }
     }
+  })
+})
+
+describe('box labels', () => {
+  it('starts every label one space in from its own left border', () => {
+    // Not centred: the ordinal, the glyph and the agent name each have to land
+    // on one column down the picture, and centring inside a box sized by the
+    // widest label moved all three of them per box.
+    const g = laid([node('a'), node('with_a_much_longer_id', ['a'])])
+
+    g.boxes.forEach(box => expect(box.label.startsWith(' ')).toBe(true))
+    expect(new Set(g.boxes.map(box => box.label.indexOf('\u2713')))).toHaveProperty('size', 1)
+  })
+
+  it('pads the ordinal so a two-digit run keeps its glyph column', () => {
+    const g = laid(Array.from({ length: 12 }, (_unused, i) => node(`n${i}`)))
+
+    expect(g.boxes[0]?.label.startsWith('  1 ')).toBe(true)
+    expect(g.boxes[11]?.label.startsWith(' 12 ')).toBe(true)
+    expect(new Set(g.boxes.map(box => box.label.indexOf('\u2713')))).toHaveProperty('size', 1)
   })
 })

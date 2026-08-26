@@ -236,7 +236,22 @@ class TurnController {
   // diverge on what survives a cancel. `appendMessage`/`sys` are optional:
   // callers without a transcript sink (older/no-op cases) get the idle-only
   // teardown with nothing appended.
-  finalizeInterruptedTurn({ appendMessage, sys }: FinalizeInterruptDeps) {
+  finalizeInterruptedTurn(deps: FinalizeInterruptDeps) {
+    this.finalizeAbortedTurn(deps, 'interrupted')
+  }
+
+  // A turn the server ended with an error keeps what it streamed the same way
+  // an interrupted one does. Dropping it here (the earlier behaviour) left a
+  // reader with the prompt and the error line and nothing of the minutes of
+  // steps, prose and graphs in between -- which is exactly what the reader
+  // needs to see to judge what the failure cost.
+  finalizeFailedTurn(deps: FinalizeInterruptDeps) {
+    this.finalizeAbortedTurn(deps, 'failed')
+    this.clearStatusTimer()
+    this.persistedToolLabels.clear()
+  }
+
+  private finalizeAbortedTurn({ appendMessage, sys }: FinalizeInterruptDeps, marker: 'failed' | 'interrupted') {
     // A re-entrant call (e.g. a second Ctrl+C force-reset racing the server's
     // cancel error) finds turn state already drained: it must not re-emit the
     // bare interrupted indicator that the first call already surfaced.
@@ -267,7 +282,7 @@ class TurnController {
       return
     }
 
-    const interruptedText = partial ? `${partial}\n\n*[interrupted]*` : '*[interrupted]*'
+    const interruptedText = partial ? `${partial}\n\n*[${marker}]*` : `*[${marker}]*`
 
     // Episodes mode: never dump the raw expanded segments. Commit the accrued
     // steps as one collapsed episodes message (mirrors recordMessageComplete);
@@ -306,7 +321,9 @@ class TurnController {
       if (partial) {
         appendMessage({ role: 'assistant', text: interruptedText })
       } else if (!reentrant) {
-        sys?.('interrupted')
+        if (marker === 'interrupted') {
+          sys?.('interrupted')
+        }
       }
 
       return
@@ -327,7 +344,9 @@ class TurnController {
         ...(tools.length && { tools })
       })
     } else if (!reentrant) {
-      sys?.('interrupted')
+      if (marker === 'interrupted') {
+        sys?.('interrupted')
+      }
     }
   }
 
@@ -545,14 +564,8 @@ class TurnController {
     })
   }
 
-  recordError() {
-    this.idle()
-    this.clearReasoning()
-    this.clearStatusTimer()
-    this.pendingSegmentTools = []
-    this.segmentMessages = []
-    this.turnTools = []
-    this.persistedToolLabels.clear()
+  recordError(deps: FinalizeInterruptDeps = {}) {
+    this.finalizeFailedTurn(deps)
   }
 
   recordMessageComplete(payload: { rendered?: string; reasoning?: string; text?: string }) {
@@ -1118,9 +1131,7 @@ class TurnController {
     if (getTurnState().dagRuns.some(run => run.toolCallId === toolCallId)) {
       patchTurnState(state => ({
         ...state,
-        dagRuns: state.dagRuns.map(run =>
-          run.toolCallId === toolCallId ? withPromptTemplates(run, templates) : run
-        )
+        dagRuns: state.dagRuns.map(run => (run.toolCallId === toolCallId ? withPromptTemplates(run, templates) : run))
       }))
 
       for (const run of getTurnState().dagRuns.filter(item => item.toolCallId === toolCallId)) {

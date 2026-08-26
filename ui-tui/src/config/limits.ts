@@ -33,12 +33,20 @@ export const DAG_NODE_POLL_MS = 500
 
 // Rows of trace inside an expanded node's box. Blank-padded when the trace is
 // shorter, so the box's height never depends on its content.
+//
+// A node still working gets the small window: it is re-read twice a second, and
+// a tall box redrawing that often shoves everything under it. A node that has
+// stopped will never move again, so it gets a window worth opening -- the box
+// cannot scroll, so its height is the only thing that decides how much of a
+// finished trace a reader can see without `/dag`.
 export const DAG_TRACE_ROWS = 8
+export const DAG_TRACE_ROWS_SETTLED = 20
 
-// The box's outer height: DAG_TRACE_ROWS plus a header, a footer, and the two
-// border rows. `height` on a bordered Box is the outer height -- the fork sets a
-// Yoga border -- so this is what the height model adds and what the Box takes.
+// The box's outer height: its rows plus a header, a footer, and the two border
+// rows. `height` on a bordered Box is the outer height -- the fork sets a Yoga
+// border -- so this is what the height model adds and what the Box takes.
 export const DAG_TRACE_BOX_ROWS = DAG_TRACE_ROWS + 4
+export const DAG_TRACE_BOX_ROWS_SETTLED = DAG_TRACE_ROWS_SETTLED + 4
 
 // How many trailing wire rows the trace box will consider when deciding what
 // fits. The fold can collapse an un-narrated run of tool calls into one row, so

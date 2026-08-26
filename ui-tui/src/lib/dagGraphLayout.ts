@@ -23,6 +23,7 @@ import type { DagRunNode } from '../domain/dagRun.js'
 
 import { layoutDag } from './dagLayout.js'
 import { DAG_STATUS_GLYPH } from './dagStatus.js'
+import { padToWidth } from './text.js'
 
 /** Rows one band of boxes occupies: top border, label, bottom border. */
 export const BOX_BAND_HEIGHT = 3
@@ -37,7 +38,8 @@ export interface DagGraphBox {
   /** Cell row of the box's top border; the label sits at `y + 1`. */
   y: number
   width: number
-  /** Label already centred to `width - 2` cells. */
+  /** Label already laid out to `width - 2` cells: one space in from the left
+   * border, then padded out to the right. */
   label: string
 }
 
@@ -88,18 +90,21 @@ interface Stub {
   x?: number
 }
 
-const labelOf = (node: DagRunNode, ordinal: number, style: DagGraphLabelStyle) => {
-  const head = `${ordinal} ${DAG_STATUS_GLYPH[node.status].glyph}`
+const labelOf = (node: DagRunNode, ordinal: number, ordinalWidth: number, style: DagGraphLabelStyle) => {
+  const head = `${String(ordinal).padStart(ordinalWidth)} ${DAG_STATUS_GLYPH[node.status].glyph}`
 
   return style === 'compact' ? head : `${head} ${node.subagent.replace(/^raven-/, '')}`
 }
 
-const centre = (text: string, room: number) => {
-  const slack = Math.max(0, room - stringWidth(text))
-  const left = Math.floor(slack / 2)
-
-  return `${' '.repeat(left)}${text}${' '.repeat(slack - left)}`
-}
+/**
+ * A label placed in its box: one space in from the left border, padded out.
+ *
+ * Left, not centred. Centring gave every box a different offset -- the widest
+ * agent name decided the box width and the rest floated inside it -- so the
+ * ordinals, the status glyphs and the agent names each stepped in and out down
+ * the column, and nothing in the picture could be read as a column at all.
+ */
+const place = (text: string, room: number) => padToWidth(` ${text}`, room)
 
 /**
  * Order a column's nodes by the mean band of their dependencies.
@@ -321,7 +326,11 @@ const build = (nodes: readonly DagRunNode[], style: DagGraphLabelStyle): DagGrap
   }
 
   const gutterWidth = laneCount.map(count => GUTTER_PAD * 2 + Math.max(1, count) + 1)
-  const boxWidth = Math.max(...nodes.map((node, index) => stringWidth(labelOf(node, index + 1, style)))) + 4
+  // Padded to the run's widest ordinal, so a two-digit run does not step its
+  // glyph column sideways at the tenth box.
+  const ordinalWidth = String(nodes.length).length
+  const boxWidth =
+    Math.max(...nodes.map((node, index) => stringWidth(labelOf(node, index + 1, ordinalWidth, style)))) + 4
   const xOf: number[] = []
   let cursor = 0
 
@@ -336,7 +345,7 @@ const build = (nodes: readonly DagRunNode[], style: DagGraphLabelStyle): DagGrap
 
   // ── Boxes, in submitted order so an ordinal and a box agree ──────
   const boxes: DagGraphBox[] = nodes.map((node, index) => ({
-    label: centre(labelOf(node, index + 1, style), boxWidth - 2),
+    label: place(labelOf(node, index + 1, ordinalWidth, style), boxWidth - 2),
     nodeId: node.id,
     width: boxWidth,
     x: xOf[column.get(node.id)!]!,

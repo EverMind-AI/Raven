@@ -6,11 +6,20 @@
 // both are testable without a render, and so the transcript's folded row and the
 // expanded graph can never disagree about a run's tally.
 
+import { stringWidth } from '@hermes/ink'
+
 import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { DagNodeDetail } from '../rpc/index.js'
 import type { Theme } from '../theme.js'
 
+import {
+  DAG_TRACE_BOX_ROWS,
+  DAG_TRACE_BOX_ROWS_SETTLED,
+  DAG_TRACE_ROWS,
+  DAG_TRACE_ROWS_SETTLED
+} from '../config/limits.js'
 import { callSubject } from '../domain/episodeFold.js'
+import { fmtDuration } from '../domain/messages.js'
 import { clipToWidth, compactPreview, formatToolCall } from './text.js'
 
 /** Glyph + tone per status. A `Record` over the union rather than a lookup with
@@ -131,6 +140,130 @@ export const dagSharedInstances = (nodes: readonly Pick<DagRunNode, 'instance'>[
   }
 
   return new Set([...counts].filter(([, n]) => n > 1).map(([id]) => id))
+}
+
+/**
+ * The run's tally as glyph + count, in a fixed status order, zeros dropped.
+ *
+ * Glyphs rather than words: the panel's header carries this beside the run id
+ * and the elapsed time, and `3 nodes - 1 done - 1 running` spent the whole row
+ * saying what `1\u2713 1\u25cf 1\u25cb` says in eight cells. Same glyphs the rows and the
+ * picture use, so a header count and the row it refers to are read as one.
+ *
+ * A finished run reports the manifest's tally where it has one, which is
+ * authoritative; a live one counts its own nodes.
+ */
+export const dagRunTally = (run: DagRunState): { count: number; status: DagRunNodeStatus }[] => {
+  const counted = (status: DagRunNodeStatus) => run.nodes.filter(node => node.status === status).length
+  const fromManifest = (status: DagRunNodeStatus, manifest: number | undefined) =>
+    run.done ? (manifest ?? counted(status)) : counted(status)
+
+  const order: [DagRunNodeStatus, number][] = [
+    ['completed', fromManifest('completed', run.summary?.completed)],
+    ['running', counted('running')],
+    ['pending', counted('pending')],
+    ['failed', fromManifest('failed', run.summary?.failed)],
+    ['skipped', fromManifest('skipped', run.summary?.skipped)],
+    ['cancelled', fromManifest('cancelled', run.summary?.cancelled)],
+    ['interrupted', counted('interrupted')]
+  ]
+
+  return order.filter(([, count]) => count > 0).map(([status, count]) => ({ count, status }))
+}
+
+/**
+ * How long one node took, or has been going.
+ *
+ * Empty for a node whose run dir recorded no timings, since a made-up zero
+ * would read as a node that did nothing. A node that has not started says what
+ * it is waiting as instead -- the column then reads down as time-or-state
+ * rather than going blank for the half of the graph that has not run yet.
+ */
+export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 'status'>, now: number): string => {
+  if (node.status === 'pending') {
+    return 'queued'
+  }
+
+  if (node.startedAt === undefined) {
+    return ''
+  }
+
+  return fmtDuration((node.endedAt ?? now) - node.startedAt)
+}
+
+/**
+ * How long the whole run has taken: its first node's start to its last node's
+ * end, or to `now` while any node is still going.
+ *
+ * Read off the nodes rather than tracked separately because the nodes are the
+ * only thing either transport (live frames, `dag.get` snapshot) timestamps.
+ * `undefined` when nothing has started, which is also every run whose dir
+ * predates the timestamps.
+ */
+export const dagRunElapsedMs = (run: DagRunState, now: number): number | undefined => {
+  const starts = run.nodes.map(node => node.startedAt).filter((ms): ms is number => ms !== undefined)
+
+  if (starts.length === 0) {
+    return undefined
+  }
+
+  const started = Math.min(...starts)
+  const live = run.nodes.some(node => node.status === 'running' || node.status === 'pending')
+  const ends = run.nodes.map(node => node.endedAt).filter((ms): ms is number => ms !== undefined)
+
+  if (live || ends.length === 0) {
+    return Math.max(0, now - started)
+  }
+
+  return Math.max(0, Math.max(...ends) - started)
+}
+
+/**
+ * How many rows of trace one node's box shows, and how tall that box is.
+ *
+ * Off the node's own status rather than the trace store's `settled`: the box's
+ * height has to be knowable by the transcript's height model, which sees the
+ * graph and not the traces.
+ */
+export const dagTraceRows = (status: DagRunNodeStatus): number =>
+  status === 'running' || status === 'pending' ? DAG_TRACE_ROWS : DAG_TRACE_ROWS_SETTLED
+
+export const dagTraceBoxRows = (status: DagRunNodeStatus): number =>
+  status === 'running' || status === 'pending' ? DAG_TRACE_BOX_ROWS : DAG_TRACE_BOX_ROWS_SETTLED
+
+/** Cells the turned-in line has, inside a panel `inner` wide. Shared with the
+ *  transcript's height model, which has to agree with the panel about whether a
+ *  node has a second line at all.
+ *
+ *  The line starts where the node's name does: its turn-in mark stands in the
+ *  ordinal's column, so the mark costs nothing beyond the indent the row above
+ *  already spends on the glyph (`2`), the ordinal, and the gap after it (`2`). */
+export const dagDetailRoom = (inner: number, ordinalWidth: number): number =>
+  Math.max(0, inner - (2 + ordinalWidth + 2))
+
+/**
+ * What a node's row says under its name: the line it was dispatched with, what
+ * it is still waiting on, and how it failed.
+ *
+ * One place, because the panel draws it and the transcript's height model has
+ * to know whether it exists. Clipped in cells here rather than left to ink's
+ * `truncate-end`, which is a no-op on the nested Texts this is drawn as.
+ *
+ * The three share `room` in the order a reader needs them: the error first,
+ * then the dependency list, then the summary with what is left.
+ */
+export const dagRowDetail = (
+  node: Pick<DagRunNode, 'dependsOn' | 'error' | 'id' | 'nodeSummary' | 'promptTemplate'>,
+  drawn: ReadonlySet<string> | null,
+  room: number
+): { deps: string; error: string; summary: string } => {
+  const error = node.error ? clipToWidth(node.error, Math.max(0, room)) : ''
+  const afterError = room - (error ? stringWidth(error) : 0)
+  const wanted = dagNodeDeps(node, drawn).trim()
+  const deps = wanted && afterError > 4 ? clipToWidth(wanted, afterError - 2) : ''
+  const left = afterError - (deps ? stringWidth(deps) + 2 : 0)
+
+  return { deps, error, summary: left > 4 ? dagNodeSummary(node.nodeSummary, node.promptTemplate, left) : '' }
 }
 
 /**
