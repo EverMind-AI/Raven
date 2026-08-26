@@ -1,6 +1,7 @@
 import { ds, t } from '../../shell/bridge'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
+import { SEND, SEND_PX, SEND_STROKE } from '../../shell/ico'
 import { current as currentSession } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { note as transcriptNote } from '../transcript/mount'
@@ -146,8 +147,11 @@ export function dropOwnedDraft(): void {
    said -- so an empty field with something attached must still be sendable. */
 export const hasAtts = (): boolean => state.atts.length > 0
 
-const ICON_SEND = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-  + ' stroke-width="2.4" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7"/></svg>'
+/* From the shared constants, not from its own copy of them: a sub-agent's
+   composer renders the same arrow through `SendGlyph`, and the two drifted into
+   different sizes and stroke weights while each held its own numbers. */
+export const ICON_SEND = `<svg width="${SEND_PX}" height="${SEND_PX}" viewBox="0 0 24 24" fill="none"`
+  + ` stroke="currentColor" stroke-width="${SEND_STROKE}" aria-hidden="true"><path d="${SEND}"/></svg>`
 const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
   + '<rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>'
 

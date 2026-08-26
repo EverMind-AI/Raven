@@ -27,10 +27,32 @@ export function ico(d: string, cls?: string): SVGSVGElement {
   return s
 }
 
-/* The two paths this bundle draws so far, named so a reader can tell which
-   glyph a call means without decoding the coordinates. */
+/* The paths this bundle draws so far, named so a reader can tell which glyph a
+   call means without decoding the coordinates. */
 export const CROSS = 'M7 7l10 10M17 7 7 17'
 export const CHEVRON_DOWN = 'M6.5 10 12 15.5 17.5 10'
+export const SEND = 'M5 12h13M12 5l7 7-7 7'
+
+/* The send arrow, which is not drawn like the others: it sits inside a 30px
+   filled disc, so it is set small and heavy rather than at this file's 24px
+   hairline weight. Both composers wear it -- the page's own and a sub-agent's
+   -- and they used to build it apart, so the sub-agent's came out 20px at 1.8
+   against the page's 14px at 2.4: the same arrow, visibly a different button.
+   The size and the weight live here with the path, and
+   `composer/store.ts::ICON_SEND` builds its string from the same three
+   numbers (SEND_PX / SEND_STROKE), with a test holding the two renderings
+   attribute for attribute. */
+export const SEND_PX = 14
+export const SEND_STROKE = 2.4
+
+export function SendGlyph(): JSX.Element {
+  return (
+    <svg width={SEND_PX} height={SEND_PX} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={SEND_STROKE} aria-hidden="true">
+      <path d={SEND} />
+    </svg>
+  )
+}
 
 /* The same glyph for a React caller, attribute for attribute. Two of them
    because the page has two kinds of caller, not because they are two glyphs:
