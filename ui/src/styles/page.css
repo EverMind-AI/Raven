@@ -3989,6 +3989,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   height: var(--desk-launcher-size); padding: 0;
   right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge)); transform: translateY(-50%);
   pointer-events: auto; border: 0; background: transparent; box-shadow: none; }
+.desk-follow-toggle { transition: background .16s ease, color .16s ease; }
 .desk-follow-toggle[aria-expanded="true"] { color: var(--text); background: var(--raised); }
 .desk-follow-toggle:hover { background: var(--raised); }
 .desk-follow-toggle svg { stroke-linecap: round; stroke-linejoin: round; }
@@ -3999,7 +4000,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   overflow: hidden; resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
   border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
-  animation: desk-up .14s ease-out; }
+  /* Its own handle sits off the top-right corner, so that corner is where the
+     palette comes from and goes back to. */
+  transform-origin: 100% 0; }
 /* Under the launcher and flush with it, not beside it: the transcript column is
    centred, so a desk hung to the LEFT of the launcher reached back across what
    the reader was reading. Kept in step with anchoredGeometry() in
@@ -4007,7 +4010,26 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-palette[data-anchored="true"] { left: auto;
   right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge));
   top: calc(var(--desk-launcher-center) + var(--desk-launcher-size) / 2 + var(--desk-palette-gap)); }
-@keyframes desk-up { from { opacity: 0; transform: translateY(-5px) scale(.985); } }
+/* Two curves rather than one duration in both directions: arriving is eased out
+   over longer so the panel settles, leaving is eased in over less so it gets out
+   of the reader's way. The exit length is also in DeskPalette.tsx, which is what
+   decides when the palette stops existing -- a leaving element has to be on
+   screen to leave. */
+.desk-palette[data-phase="in"] { animation: desk-in .19s cubic-bezier(.16, 1, .3, 1); }
+.desk-palette[data-phase="out"] { animation: desk-out .13s cubic-bezier(.33, 0, .68, 0) forwards; }
+@keyframes desk-in { from { opacity: 0; transform: translateY(-6px) scale(.965); } }
+@keyframes desk-out { to { opacity: 0; transform: translateY(-4px) scale(.985); } }
+/* The frame arrives first and its contents settle into it, which is the
+   difference between a panel appearing and a panel being placed. `backwards`,
+   not `both`: the from-state has to hold through the delay, and nothing should
+   be left on the element afterwards -- a lingering identity transform makes a
+   containing block out of a scroll box. */
+.desk-palette[data-phase="in"] .desk-body { animation: desk-settle .26s .05s cubic-bezier(.16, 1, .3, 1) backwards; }
+@keyframes desk-settle { from { opacity: 0; transform: translateY(5px); } }
+@media (prefers-reduced-motion: reduce) {
+  .desk-palette[data-phase="in"], .desk-palette[data-phase="out"],
+  .desk-palette[data-phase="in"] .desk-body { animation: none; }
+}
 .desk-drag { height: 48px; flex: none; cursor: grab; padding: 7px 8px; border-bottom: 1px solid var(--line-soft);
   user-select: none; touch-action: none; }
 .desk-drag[data-dragging="true"] { cursor: grabbing; }
@@ -4047,7 +4069,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   border-radius: 6px; font: 10px/1 var(--mono); }
 .desk-diff-row .desk-name { font: 11px/1.4 var(--mono); }
 .desk-diff-row .chgs { font-size: 10.5px; }
-.desk-empty { padding: 24px 12px; text-align: center; color: var(--faint); font-size: 12px; }
+/* One empty state, whichever tab is showing: the tab's icon, what is not here,
+   and where it would come from. Centred in the body rather than sitting at the
+   top of it -- an empty tab is a state, not a first row. */
+.desk-empty { display: grid; align-content: center; justify-items: center; gap: 5px; height: 100%;
+  padding: 12px 22px; text-align: center; color: var(--faint); font-size: 12px; }
+.desk-empty svg { width: 30px; height: 30px; color: var(--line); stroke-linecap: round; }
+.desk-empty b { color: var(--text); font: 600 12px var(--sans); }
+.desk-empty span { font-size: 11px; }
 
 /* The deliverables shelf. Two lines per row, because one product out of a turn
    reads as a human title and the file it landed as, and at this width they do
@@ -4078,11 +4107,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row.gone { opacity: .55; }
 .desk-dlv-row .dlv-gone { flex: none; padding: 0 5px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--clay); font: 9px/1.6 var(--mono); font-style: normal; }
-.desk-dlv-empty { display: grid; align-content: center; justify-items: center; gap: 5px; height: 100%;
-  padding: 12px 22px; }
-.desk-dlv-empty svg { width: 30px; height: 30px; color: var(--line); stroke-linecap: round; }
-.desk-dlv-empty b { color: var(--text); font: 600 12px var(--sans); }
-.desk-dlv-empty span { font-size: 11px; }
 
 .agent-roster { padding: 0; gap: 0; }
 .agent-group { min-width: 0; }

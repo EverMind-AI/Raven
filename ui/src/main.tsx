@@ -166,6 +166,9 @@ window.sessionSet = session.setCurrent
 session.onChange(() => {
   sheets.sync()
   dagSheet.sync()
+  /* The desk palette is open or shut per conversation, and this is the event
+     that says which one is on screen -- see deskStore.sync. */
+  desk.sync()
   rail.draw()
 })
 find.onChange(rail.draw)
@@ -445,7 +448,16 @@ window.RavenIslands = {
     parkDraft: composer.parkDraft,
     loadDraft: composer.loadDraft,
     dropDraft: composer.dropDraft,
-    claimDraft: composer.claimDraft,
+    /* One announcement, two owners. The live layer calls this at the moment a
+       draft becomes a session, and both the composer's draft text and the
+       desk's palette are filed under the draft and have to follow it there --
+       see deskStore.claimDraft for why the desk cannot work this out from the
+       session pointer on its own. Wrapped here for the same reason
+       `workspace.reset` is: the legacy layer says the thing once. */
+    claimDraft: (id: string | null) => {
+      composer.claimDraft(id)
+      desk.claimDraft(id)
+    },
     drawMeter: composer.drawMeter,
     fitField: composer.fitField,
     dockLift: composer.dockLift,

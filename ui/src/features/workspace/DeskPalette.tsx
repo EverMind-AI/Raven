@@ -59,9 +59,25 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
   )
 }
 
+/* One nothing for all three tabs: the tab's own icon, what is not here, and
+   where it would come from. They were two designs -- a line of grey text on
+   Diff, an illustrated block on the shelf -- and an empty tab is the state a
+   reader sees most often, so the two read as two different kinds of nothing. */
+function DeskEmpty({ kind, title, hint }: { kind: DeskTab; title: string; hint: string }): JSX.Element {
+  return (
+    <div className="desk-empty">
+      <DeskIcon kind={kind} />
+      <b>{title}</b>
+      <span>{hint}</span>
+    </div>
+  )
+}
+
 function DiffNav(): JSX.Element {
   const changes = workspace.shared().changes
-  if (!changes.length) return <div className="desk-empty">{t('gui.ws.no_changes')}</div>
+  if (!changes.length) {
+    return <DeskEmpty kind="diff" title={t('gui.ws.no_changes')} hint={t('gui.ws.no_changes_sub')} />
+  }
   return (
     <div className="desk-list">
       {changes.map((change) => (
@@ -115,13 +131,9 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
 function DeliverablesNav(): JSX.Element {
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const rows = deliveries.list()
-  if (!rows.length) return (
-    <div className="desk-empty desk-dlv-empty">
-      <DeskIcon kind="deliverables" />
-      <b>{t('gui.ws.dlv_none')}</b>
-      <span>{t('gui.ws.dlv_none_sub')}</span>
-    </div>
-  )
+  if (!rows.length) {
+    return <DeskEmpty kind="deliverables" title={t('gui.ws.dlv_none')} hint={t('gui.ws.dlv_none_sub')} />
+  }
   const now = workspace.currentTurn()
   const out: JSX.Element[] = []
   let group: string | null = null
@@ -143,7 +155,54 @@ function AgentsNav(): JSX.Element {
     agents.refreshInstances()
     agents.refreshRoster()
   }, [])
+  /* Answered here rather than left to the shared list: `AgentList` is the
+     standalone page's list as well, and its own note belongs to that page. In
+     the desk, one nothing looks like the other two. */
+  if (!state.instances.length && !state.roster.length) {
+    return (
+      <DeskEmpty
+        kind="agents"
+        title={t('gui.ws.agents_none')}
+        hint={t(agents.absent() ? 'gui.ws.agents_absent' : 'gui.ws.agents_none_sub')}
+      />
+    )
+  }
   return <AgentList s={state} onOpen={desk.openDeskAgent} compact />
+}
+
+/* Long enough to read as a movement, short enough that a reader who wanted the
+   desk gone does not wait for it. Kept in step with the `desk-out` animation in
+   page.css -- the number is here because this is what decides when the palette
+   stops existing, and the stylesheet has no say in that. */
+const EXIT_MS = 130
+
+/* One animation's worth of life after the reader shuts it.
+ *
+ * A leaving element has to be on screen to leave, and React's answer to "it is
+ * closed" is that it is not rendered -- so the palette outlives the flag by
+ * exactly the length of the exit and then goes. `null` is the third state and
+ * not a synonym for closed: it is the only one where nothing is in the DOM.
+ *
+ * The reader can also change their mind mid-exit, which the cleanup covers:
+ * opening again cancels the pending removal and the phase goes straight back to
+ * `in`, so a double-click on the launcher lands on an open desk rather than one
+ * that vanishes a moment later. */
+function usePhase(shown: boolean): 'in' | 'out' | null {
+  const [phase, setPhase] = useState<'in' | 'out' | null>(shown ? 'in' : null)
+  useEffect(() => {
+    if (shown) {
+      setPhase('in')
+      return
+    }
+    setPhase((now) => (now === 'in' ? 'out' : null))
+    /* Armed either way rather than only for a palette that was up: an updater
+       does not run until React renders, so nothing here can read the phase it
+       just asked for -- and a timer that lands on an already-null phase sets it
+       to null again, which React drops. */
+    const timer = setTimeout(() => setPhase(null), EXIT_MS)
+    return () => clearTimeout(timer)
+  }, [shown])
+  return phase
 }
 
 function storedGeometry(): DeskGeometry {
@@ -160,6 +219,12 @@ function storedGeometry(): DeskGeometry {
 
 export function DeskPalette(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  /* Not `state.paletteOpen`: a fullscreen pane is the whole window and the desk
+     is not on it (deskStore.showing). Everything below reads this one answer,
+     the marks included -- a tab marked seen behind a fullscreen pane is news
+     the reader never saw. */
+  const shown = desk.showing()
+  const phase = usePhase(shown)
   /* On the root, not on the tab bodies: the tab strip reads all three sources
      for its bubbles and is drawn whichever tab is showing, so subscribing only
      where each body mounts left every badge out of the one case it exists for
@@ -171,7 +236,7 @@ export function DeskPalette(): JSX.Element | null {
      lands while the reader is sitting on it, which is why this runs on every
      render rather than only on a switch. */
   useEffect(() => {
-    if (state.paletteOpen) desk.seeTab(state.tab)
+    if (shown) desk.seeTab(state.tab)
   })
   /* The other two tabs are told what happened: a write reaches the workspace
      record and a delivery reaches the registry, both on the turn's own events.
@@ -185,12 +250,12 @@ export function DeskPalette(): JSX.Element | null {
      started" living in the event handler. Only while the palette is open, and
      only for the tab the reader is not on -- the panel refreshes its own. */
   useEffect(() => {
-    if (!state.paletteOpen || state.tab === 'agents') return
+    if (!shown || state.tab === 'agents') return
     const ask = (): void => { void agents.refreshInstances() }
     ask()
     const timer = setInterval(ask, AGENTS_POLL_MS)
     return () => clearInterval(timer)
-  }, [state.paletteOpen, state.tab])
+  }, [shown, state.tab])
   const pointerCleanup = useRef<(() => void) | null>(null)
   const [geom, setGeom] = useState(storedGeometry)
   useEffect(() => {
@@ -273,11 +338,19 @@ export function DeskPalette(): JSX.Element | null {
     window.addEventListener('pointercancel', finish, { signal: controller.signal })
     target.addEventListener('lostpointercapture', finish, { signal: controller.signal })
   }
-  if (!state.paletteOpen) return null
+  if (!phase) return null
   return (
     <div
       className="desk-palette"
       data-anchored={!geom.detached}
+      /* Which way it is moving, for the stylesheet -- and genuinely inert
+         while it leaves. A tab clicked on the way out would act on a desk the
+         reader has already dismissed, a screen reader has no reason to be told
+         about a strip that is going, and a focused tab would be left holding
+         focus inside it. `inert` is the one attribute that answers all three;
+         `aria-hidden` answers only the middle one. */
+      data-phase={phase}
+      inert={phase === 'out' || undefined}
       style={{
         ...(geom.detached ? { left: geom.x, top: geom.y } : {}),
         width: geom.w,

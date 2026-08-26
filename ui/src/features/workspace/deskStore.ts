@@ -7,17 +7,12 @@ import { show as toast } from '../../shell/toast'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as marks from './marks'
+import * as palette from './palette'
 import * as workspace from './store'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { DeskDuo, DeskMarks, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
-
-const DESK_OPEN_KEY = 'raven.gui.desk.open'
-
-function storedOpen(): boolean {
-  try { return localStorage.getItem(DESK_OPEN_KEY) === 'true' } catch { return false }
-}
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
    order they opened it, and where the frame put it.
@@ -132,7 +127,7 @@ function remember(): void {
 function initialState(): DeskState {
   return {
     tab: 'diff',
-    paletteOpen: storedOpen(),
+    paletteOpen: palette.read(currentSession()),
     panes: [],
     solo: null,
     active: null,
@@ -264,10 +259,54 @@ export function seeTab(tab: DeskTab): void {
   if (marks.set(tab, totals()[tab])) update({})
 }
 
+/* Whether the palette is on screen, which is not the same question as whether
+   the reader left it open. A fullscreen pane IS the window -- there is no
+   column for the desk to hang off and nothing of it should be over the pane --
+   so the desk is not showing while one is up.
+ *
+ * One answer, because more than the rendering reads it: the marks are moved
+ * from the same flag, and a bubble cleared behind a fullscreen pane is news the
+ * reader never saw. */
+export const showing = (): boolean => state.paletteOpen && !state.solo
+
 export function toggleDesk(): void {
   const paletteOpen = !state.paletteOpen
-  try { localStorage.setItem(DESK_OPEN_KEY, String(paletteOpen)) } catch {}
+  /* Filed under the conversation, so this conversation is how the reader left
+     it the next time they open it (palette.ts). */
+  palette.write(currentSession(), paletteOpen)
   update({ paletteOpen })
+}
+
+function applyPalette(key: string | null): void {
+  const paletteOpen = palette.read(key)
+  if (paletteOpen !== state.paletteOpen) update({ paletteOpen })
+}
+
+/* The conversation changed under the desk, so the palette's own answer did too.
+ *
+ * Driven from the session pointer (main.tsx) rather than from `reset`, and that
+ * is the whole reason this exists: a reset runs on the way OUT -- before the
+ * pointer moves, while `session.resume` is still in flight -- so it cannot know
+ * whose desk is about to be on screen. The pointer moving is the one event that
+ * does, and every way of arriving somewhere goes through it. */
+export function sync(): void {
+  applyPalette(currentSession())
+}
+
+/* The draft on screen just became this conversation.
+ *
+ * Announced by the page that performs it -- main.tsx binds this beside the
+ * composer's claim on its own draft, the one legacy call that already says
+ * this -- rather than inferred here. At the pointer, "the draft became this
+ * session" and "the reader opened this session while a draft was up" are the
+ * same move, null to an id, and three sites make the second one: opening a
+ * conversation from the rail, forking one, and opening a cron run (the last two
+ * move the pointer BEFORE the desk is reset, so no ordering rule separates
+ * them either). Inferring it therefore carried an answer about the new-task
+ * screen into a forked session and into a cron run. */
+export function claimDraft(key: string | null): void {
+  palette.adopt(key)
+  applyPalette(key)
 }
 
 const TABS: readonly DeskTab[] = ['diff', 'deliverables', 'agents']
@@ -277,6 +316,9 @@ const TABS: readonly DeskTab[] = ['diff', 'deliverables', 'agents']
    through the palette's own switch and draw the agents list, so it is stopped
    here instead: the tab does not change and the palette still opens. */
 export function openDeskTab(tab: DeskTab): void {
+  /* Asking for a view of the desk is asking for the desk, so it outranks a
+     collapse this conversation had on file. */
+  palette.write(currentSession(), true)
   commit({ paletteOpen: true, ...(TABS.includes(tab) ? { tab } : {}) })
 }
 
@@ -387,11 +429,17 @@ export function notifyDesk(): void {
 }
 
 export function reset(): void {
+  /* The palette is NOT shut here, and that is the point: a reset runs on the way
+     out, before the pointer moves, so the conversation whose desk is about to be
+     on screen is not known yet (`sync`). Shutting it now and opening it again a
+     moment later is a flicker with no information in it. `initialState` reads
+     the conversation being left, which is what is on screen. */
   state = initialState()
   listeners.forEach((listener) => listener())
 }
 
 export function _resetForTests(): void {
+  palette._clearForTests()
   state = initialState()
   marks._clearForTests()
   KEPT.clear()

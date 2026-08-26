@@ -368,6 +368,221 @@ describe('what a reload finds on the desk', () => {
     expect(desk.getState().active).toBe('file:/workspace/a.ts')
   })
 
+  describe('the palette a conversation is opened with', () => {
+    /* The default is the screen, not the last thing the reader did somewhere
+       else: a conversation shows the desk, the new-task screen does not. */
+    it('opens on a conversation and stays shut on a draft', () => {
+      setCurrent(null)
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(false)
+
+      setCurrent('s2')
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+
+    it('comes back collapsed to the conversation it was collapsed in', () => {
+      desk.sync()
+      desk.toggleDesk()
+      expect(desk.getState().paletteOpen).toBe(false)
+
+      /* Away and back the way the page does it: the desk is torn down on the
+         way out and the pointer moves after. */
+      desk.reset()
+      setCurrent('s2')
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      desk.reset()
+      setCurrent('s1')
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
+
+    /* A reset runs on the way OUT, while `session.resume` is still in flight,
+       so it cannot know whose desk is about to be on screen. Closing the
+       palette there and opening it again a moment later is a flicker with no
+       information in it. */
+    it('leaves the palette where it is until the pointer moves', () => {
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      desk.reset()
+
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+
+    /* The first message turns a draft into a session in place -- same screen,
+       same composer -- and the desk the reader had just put away must not open
+       in their face. Driven the way the page drives it: the pointer moves to
+       the new id and the layer that did it says so (main.tsx binds
+       `claimDraft` to the composer's claim and this one together). */
+    it('carries a collapse made on the draft into the session it becomes', () => {
+      setCurrent(null)
+      desk.sync()
+      desk.toggleDesk()
+      expect(desk.getState().paletteOpen).toBe(true)
+      desk.toggleDesk()
+
+      setCurrent('s9')
+      desk.sync()
+      desk.claimDraft('s9')
+
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
+
+    /* `#newBtn` is unconditional, so pressing New task while already on the
+       new-task screen runs the reset and then `sessionSet(null)`, which is a
+       no-op -- nothing moves. An answer dropped by the reset would be gone with
+       the reader still looking at the screen they gave it on, and the desk
+       would open on their next message. Reported in review. */
+    it('keeps the answer when New task is pressed on the new-task screen', () => {
+      setCurrent(null)
+      desk.sync()
+      desk.toggleDesk()
+      desk.toggleDesk()
+
+      desk.reset()
+      setCurrent(null)
+      desk.sync()
+      setCurrent('s9')
+      desk.sync()
+      desk.claimDraft('s9')
+
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
+
+    /* An answer given on the new-task screen is about the new-task screen. The
+       reader who opens some existing conversation instead finds that one as
+       they left it -- which is only sayable because the transition is
+       announced rather than guessed from the pointer. */
+    it("does not carry the draft's answer into a conversation it opens instead", () => {
+      setCurrent(null)
+      desk.sync()
+      /* Twice: the draft starts shut, so putting it away deliberately is an
+         open and a close -- and a collapse is the answer that would be visible
+         if it were carried somewhere it does not belong. */
+      desk.toggleDesk()
+      desk.toggleDesk()
+      expect(desk.getState().paletteOpen).toBe(false)
+
+      desk.reset()
+      setCurrent('s9')
+      desk.sync()
+
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+
+    /* The answer is about the new-task screen, not about one draft, so the next
+       new task keeps it: a reader who opened the desk there does not have to
+       open it again on the next one. Opened rather than put away on purpose --
+       shut is this screen's default, so a held "shut" and a cleared one are the
+       same screen, and only this direction can tell holding from clearing. */
+    it('holds the answer across drafts', () => {
+      setCurrent(null)
+      desk.sync()
+      desk.toggleDesk()
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      /* Away to a conversation and back to a new task, the long way round. */
+      desk.reset()
+      setCurrent('a')
+      desk.sync()
+      desk.reset()
+      setCurrent(null)
+      desk.sync()
+
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+
+    /* The other half of the same rule, and the one with a conversation in it: an
+       answer that outlived the draft that gave it still only reaches a
+       conversation started FROM that screen. */
+    it('spends an older draft answer on the conversation a later draft becomes', () => {
+      setCurrent(null)
+      desk.sync()
+      desk.toggleDesk()
+      desk.toggleDesk()
+
+      desk.reset()
+      setCurrent('a')
+      desk.sync()
+      /* Not this one: the reader opened it, they did not start it here. */
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      desk.reset()
+      setCurrent(null)
+      desk.sync()
+      setCurrent('b')
+      desk.sync()
+      desk.claimDraft('b')
+
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
+
+    /* Forking a conversation and opening a cron run both move the pointer to a
+       brand new id BEFORE the desk is reset, so an ordering rule does not tell
+       them apart from a draft's first message either. Neither is the reader's
+       draft becoming a session, and neither says so. */
+    it('does not carry it into a new conversation an action opened', () => {
+      setCurrent(null)
+      desk.sync()
+      desk.toggleDesk()
+      desk.toggleDesk()
+
+      setCurrent('forked-1')
+      desk.sync()
+      desk.reset()
+
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+
+    /* Asking for a view of the desk is asking for the desk. */
+    it('lets a request for a tab outrank the collapse on file', () => {
+      desk.sync()
+      desk.toggleDesk()
+
+      desk.openDeskTab('deliverables')
+      desk.reset()
+      setCurrent('s2')
+      desk.sync()
+      desk.reset()
+      setCurrent('s1')
+      desk.sync()
+
+      expect(desk.getState().paletteOpen).toBe(true)
+    })
+  })
+
+  describe('a fullscreen pane', () => {
+    /* The pane IS the window while it is up: there is no column for the desk to
+       hang off, and nothing of the desk belongs over it. */
+    it('is not something the palette shows over', () => {
+      desk.sync()
+      desk.openDeskFile('/workspace/a.ts')
+      expect(desk.showing()).toBe(true)
+
+      desk.toggleSolo('file:/workspace/a.ts')
+
+      expect(desk.showing()).toBe(false)
+      /* The reader did not put the palette away, so it is still open -- and
+         comes back as it was when the pane does. */
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      desk.toggleSolo('file:/workspace/a.ts')
+      expect(desk.showing()).toBe(true)
+    })
+
+    it('is not showing a palette the reader shut either', () => {
+      desk.sync()
+      desk.toggleDesk()
+      desk.openDeskFile('/workspace/a.ts')
+      desk.toggleSolo('file:/workspace/a.ts')
+
+      expect(desk.showing()).toBe(false)
+    })
+  })
+
   it('refuses a split that is not a percentage', () => {
     /* The surface hands these straight to a CSS grid template. */
     desk.openDeskFile('/workspace/a.ts')

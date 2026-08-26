@@ -9,6 +9,7 @@ import * as workspace from './store'
 import type { JSX } from 'react'
 
 export {
+  claimDraft,
   notifyDesk,
   openDeskAgent,
   openDeskAgentRecord,
@@ -16,6 +17,7 @@ export {
   openDeskFile,
   openDeskTab,
   reset,
+  sync,
   toggleDesk,
 } from './deskStore'
 
