@@ -1291,6 +1291,10 @@ export interface MessageCompleteEvent {
     turn_id: string;
     usage: UsageSnapshot;
     target?: DirectTarget;
+    /**
+     * How long the whole turn took, measured server-side from the moment the runner picked the turn up to the moment it returned. Sent so a live client does not have to time the turn with its own clock: a browser stopwatch starts when the events arrive rather than when the work did, and only exists while that page is open, so the same turn came out one number live and another after a reload. Absent means unknown, same rule as reasoning_ms -- fall back to timing it locally, never to zero.
+     */
+    duration_ms?: number;
   };
 }
 /**

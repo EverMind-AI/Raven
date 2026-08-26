@@ -26,10 +26,20 @@ function flushSay() {
   live.say = '';
 }
 
-/* How long the turn took: asked, to the last word of the answer. Not until
-   the runtime is idle -- post-turn housekeeping would make this disagree with
-   what a reloaded transcript computes from the stamps on disk. */
-const turnDur = () => {
+/* How long the turn took. The runtime measures it and sends it on
+   message.complete, so that number is the one to draw: timing it here measures
+   when the events reached this page, which is a different span and one a
+   reload cannot reproduce -- a page that was not open for the turn never saw
+   its start, so the same turn came out one number live and another on replay.
+
+   The local subtraction stays as the fallback, for a server too old to send
+   the field and for a stop, which ends the turn without a message.complete. It
+   stops at the last word of the answer, which is NOT what a reloaded
+   transcript computes: the stamps on disk are written by `_save_turn` after
+   the turn is fully unwound, so post-turn housekeeping is inside their span
+   and outside this one. Hence a fallback, not a second opinion. */
+const turnDur = (serverMs) => {
+  if (serverMs != null) return dur(Math.max(serverMs, 1000));
   const ms = (live.answerAt || Date.now()) - live.startedAt;
   return live.startedAt ? dur(Math.max(ms, 1000)) : null;
 };
@@ -85,6 +95,13 @@ function onEvent(ev) {
         },
       });
     }
+    /* Re-anchor the fallback clock. Nobody typed this turn, so no liveSend ran
+       to move it, and it was last set when the PARENT turn ended -- with the
+       sub-agent's whole run sitting in between. The server's `duration_ms`
+       covers the number that gets drawn; this covers the paths that fall back
+       to timing it here, a stop being the one that always does. */
+    live.startedAt = Date.now();
+    live.answerAt = 0;
     turnOwner = sessionCurrent();
     turn.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter();
   } else if (ev.type === 'episode.start') {
@@ -149,7 +166,7 @@ function onEvent(ev) {
        finish unwinding before turn.cancel replies; only that reply may release
        the queued send. */
     if (turn.phase() === 'cancelling') return;
-    finishTurn(p.usage || {});
+    finishTurn(p);
   } else if (ev.type === 'error') {
     killStatus();
     /* A cancelled turn is the one "error" a person asked for; the event still
@@ -251,11 +268,12 @@ DS.transcript.openDagRun = function (runId) {
   setWs(true, 'agents');
 };
 
-function finishTurn(usage) {
+function finishTurn(p) {
+  const usage = p.usage || {};
   killStatus();
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
+  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur(p.duration_ms));
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */

@@ -412,6 +412,7 @@ class RpcOutlet:
         turn_id: str,
         usage: dict[str, Any],
         target: dict[str, str] | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         # ``target`` is passed in rather than read from the map: the sink drops
         # the turn's slots before finalizing (so the next turn.send cannot race
@@ -422,6 +423,8 @@ class RpcOutlet:
         payload: dict[str, Any] = {"turn_id": turn_id, "usage": usage}
         if target is not None:
             payload["target"] = target
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
         await self._emitter.emit(self._subscription(conversation_id), {"type": "message.complete", "payload": payload})
 
     async def emit_error(
@@ -522,7 +525,12 @@ def _make_rpc_sink(
             target = _drop(event.conversation_id, owns=owns)
             # The ending turn's own id, never the lane slot's current value: the
             # slot may hold a client turn that has not started yet.
-            await outlet.emit_complete(event.conversation_id, event.turn_id, usage, target)
+            # The scheduler already timed this turn (spine/scheduler.py measures
+            # `latency_ms` around the runner call); passing it on is the whole
+            # point -- a client that has to time the turn itself is timing when
+            # the events reached it, which is a different span and one that does
+            # not survive a reload.
+            await outlet.emit_complete(event.conversation_id, event.turn_id, usage, target, round(event.latency_ms))
             return
         if isinstance(event, TurnFailed):
             await _finish(event.conversation_id)
