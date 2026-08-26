@@ -5059,6 +5059,10 @@
       "en": "{n} new",
       "zh": "{n} 项新的"
     },
+    "gui.ws.agents_working": {
+      "en": "Subagents working",
+      "zh": "子智能体处理中"
+    },
     "gui.ws.deliverables": {
       "en": "Deliverables",
       "zh": "产物"

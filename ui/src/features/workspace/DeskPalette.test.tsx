@@ -6,7 +6,7 @@ import { DeskPalette } from './DeskPalette'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
-import * as marks from './marks'
+import * as seen from './seen'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
@@ -202,11 +202,11 @@ describe('opening and shutting the desk', () => {
       deliveries.record(1, manifest([{ path: '/w/b.md', name: 'b.md' }]))
     })
 
-    expect(marks.of_('deliverables')).toBe(0)
+    expect([...seen.of_('deliverables')]).toEqual([])
 
     /* And the moment the pane gives the screen back, it counts as seen. */
     await act(async () => { desk.toggleSolo('file:/w/a.md') })
-    expect(marks.of_('deliverables')).toBe(1)
+    expect([...seen.of_('deliverables')]).toEqual(['/w/b.md'])
   })
 })
 
@@ -369,7 +369,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['Diff', 'gui.ws.deliverables', 'gui.ws.agents'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.agents', 'Diff'])
 
     await act(async () => {
       desk.update({ tab: 'deliverables' })
@@ -414,55 +414,6 @@ describe('the desk shelf', () => {
 
   /* Nothing tells the desk that a turn spawned a sub-agent: the instance list
      is asked for, and while the reader is on another tab nobody was asking. */
-  it('keeps the agents count live while the reader is on another tab', async () => {
-    vi.useFakeTimers()
-    try {
-      render(<DeskPalette />)
-      await act(async () => {
-        desk.update({ paletteOpen: true, tab: 'diff' })
-      })
-      /* The open itself asks once, so what the reader had at that moment is
-         what "new" is measured from. */
-      await act(async () => { await Promise.resolve() })
-      expect(bubble('agents')).toBeNull()
-
-      agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', resumable: true }]
-      await act(async () => {
-        vi.advanceTimersByTime(9000)
-        await Promise.resolve()
-        await Promise.resolve()
-      })
-
-      expect(bubble('agents')).toBe('1')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('stops asking for the list once the palette is shut', async () => {
-    vi.useFakeTimers()
-    try {
-      render(<DeskPalette />)
-      await act(async () => {
-        desk.update({ paletteOpen: true, tab: 'diff' })
-      })
-      await act(async () => { await Promise.resolve() })
-      const before = asked.length
-
-      await act(async () => {
-        desk.update({ paletteOpen: false })
-      })
-      await act(async () => {
-        vi.advanceTimersByTime(30000)
-        await Promise.resolve()
-      })
-
-      expect(asked.length).toBe(before)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   /* The window a resume opens: the desk is reset, the replay repopulates the
      change list, and the palette's effect marks the shown tab seen -- all
      before the note is read back to restore the panes. A mark that wrote the

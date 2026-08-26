@@ -3,7 +3,10 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import * as agents from '../subagents/store'
+import * as deliveries from './deliveries'
 import * as desk from './deskStore'
+import * as workspace from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
@@ -14,8 +17,16 @@ import type { InstanceRow } from '../subagents/types'
    a no-op fake, which left both calls cuttable with the suite green. */
 const panelCalls: boolean[] = []
 
+/* What `subagents.instances()` answers, which is what the agents tab counts. */
+let agentRows: InstanceRow[] = []
+
 function wire(): void {
   panelCalls.length = 0
+  agentRows = []
+  window.DS = {
+    workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
+    agents: { list: async () => [], instances: async () => agentRows },
+  }
   const fakeShell: Shell = {
     T: (key) => key,
     confirmAsk: (_title, _body, _label, fn) => fn(),
@@ -38,6 +49,8 @@ beforeEach(wire)
 afterEach(() => {
   desk._resetForTests()
   sessionReset()
+  agents.reset()
+  window.DS = undefined
   window.RavenShell = undefined
   localStorage.clear()
   sessionStorage.clear()
@@ -609,5 +622,229 @@ describe('what a reload finds on the desk', () => {
     const { duo: _omitted, ...before } = kept
     desk.applyLayout(before as typeof kept)
     expect(desk.getState().duo).toBe('rows')
+  })
+})
+
+/* What the desk has to say, and to whom.
+ *
+ * One record of what the reader has seen, held as identities, feeding three tab
+ * bubbles and the launcher that stands in for all three while they are down. */
+describe('what is new', () => {
+  const deliver = (...paths: string[]): void =>
+    deliveries.restore(paths.map((path, i) => ({
+      turn: 1, path, name: path.split('/').pop() || path, title: path, description: '',
+      ext: 'md', mediaType: '', size: 10 + i, downloadPath: '', missing: false,
+    })))
+  const changed = (...keys: string[]): void =>
+    workspace.restore({
+      changes: keys.map((key) => ({
+        key, dir: '', name: key, kind: 'edit', add: 1, del: 0, hunks: [], turn: 1, open: false,
+      })),
+      /* Carried through: a workspace restore also restores the shelf, so a
+         helper that passed [] here would wipe whatever was delivered first and
+         make these cases depend on the order they were called in. */
+      urls: [], file: null, turn: 1, unseen: 0, deliveries: deliveries.snapshot(),
+    })
+
+  /* A conversation's desk defaults to open (palette.ts); every case here is
+     about what is counted while it is not. */
+  beforeEach(() => { desk.update({ paletteOpen: false }) })
+
+  afterEach(() => {
+    deliveries.restore([])
+    workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
+  })
+
+  /* The reason the record holds identities and not a count. Reading ONE of
+     three has no expression as a number: subtracting one lands on the right
+     total and cannot say which, so an arrival plus a read cancel out and the
+     tab goes quiet holding something unread. */
+  it('drops one item from the count when that one item is opened elsewhere', () => {
+    deliver('/w/a.md', '/w/b.md', '/w/c.md')
+    expect(desk.unseen('deliverables')).toBe(3)
+
+    /* Not through the shelf: this is the door the conversation's own delivery
+       card goes through. */
+    desk.openDeskFile('/w/b.md')
+    expect(desk.unseen('deliverables')).toBe(2)
+
+    /* Twice is once: seen is a fact about the item, not a decrement. */
+    desk.openDeskFile('/w/b.md')
+    expect(desk.unseen('deliverables')).toBe(2)
+
+    /* And one more arriving is one more unread, not arithmetic that happens to
+       come out even. */
+    deliver('/w/a.md', '/w/b.md', '/w/c.md', '/w/d.md')
+    expect(desk.unseen('deliverables')).toBe(3)
+  })
+
+  /* And the case arithmetic cannot reach at all, which is why the record holds
+     identities rather than a number to subtract.
+
+     A shelf can lose a row and gain one between two readings -- a reconnect
+     re-seeds it from the gateway's registry, and a compaction can take the turn
+     that carried a manifest with it. Once one thing the reader has read is no
+     longer listed, "how many, minus how many I have read" is not an
+     approximation of the answer, it is a smaller number: here it reports one
+     unread file while two sit unread on the shelf. */
+  it('still counts both new files when a read one has left the shelf', () => {
+    deliver('/w/a.md', '/w/b.md')
+    desk.openDeskFile('/w/a.md')
+    expect(desk.unseen('deliverables')).toBe(1)
+
+    deliver('/w/b.md', '/w/c.md')
+
+    expect(desk.unseen('deliverables')).toBe(2)
+  })
+
+  /* Opening a file is not reading a change. What the viewer shows is the file
+     as it stands now; the hunk some turn wrote is a different thing, shown
+     somewhere else, and retiring it from here would quietly mark a change read
+     because the reader opened that file for an unrelated reason. */
+  it('does not read a change just because that file was opened', () => {
+    changed('/w/a.ts')
+    deliver('/w/a.ts')
+    expect(desk.unseen('diff')).toBe(1)
+
+    desk.openDeskFile('/w/a.ts')
+
+    expect(desk.unseen('deliverables')).toBe(0)
+    expect(desk.unseen('diff')).toBe(1)
+  })
+
+  it('reads a change when the change itself is opened', () => {
+    changed('/w/a.ts', '/w/b.ts')
+    desk.openDeskDiff({
+      key: '/w/a.ts', dir: '', name: 'a.ts', kind: 'edit', add: 1, del: 0, hunks: [], turn: 1, open: false,
+    })
+    expect(desk.unseen('diff')).toBe(1)
+  })
+
+  /* The launcher's own case: the palette is DOWN, so the tab the reader left it
+     on is not a tab they are looking at. The count this replaced exempted the
+     shown tab unconditionally, on the argument that a shut palette draws no
+     bubble -- which stopped being true the moment the launcher drew one, and
+     took with it the one tab a reader is most likely to have left in front. */
+  it('counts what lands on the tab the collapsed desk was left on', () => {
+    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.seeTab('deliverables')
+    desk.update({ paletteOpen: false })
+
+    deliver('/w/a.md')
+
+    expect(desk.unseen('deliverables')).toBe(1)
+    expect(desk.unseenAll()).toBe(1)
+  })
+
+  it('says nothing about the tab the reader is actually looking at', () => {
+    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    deliver('/w/a.md')
+    expect(desk.unseen('deliverables')).toBe(0)
+  })
+})
+
+/* Which tab the desk comes up on. Not the one it was left on: the reader
+   collapsed it and went back to the conversation, and what they reach for it
+   about is whatever happened while it was down. */
+describe('choosing a tab on the way up', () => {
+  const deliver = (...paths: string[]): void =>
+    deliveries.restore(paths.map((path) => ({
+      turn: 1, path, name: path, title: path, description: '',
+      ext: 'md', mediaType: '', size: 1, downloadPath: '', missing: false,
+    })))
+  const changed = (...keys: string[]): void =>
+    workspace.restore({
+      changes: keys.map((key) => ({
+        key, dir: '', name: key, kind: 'edit', add: 1, del: 0, hunks: [], turn: 1, open: false,
+      })),
+      /* Carried through: a workspace restore also restores the shelf, so a
+         helper that passed [] here would wipe whatever was delivered first and
+         make these cases depend on the order they were called in. */
+      urls: [], file: null, turn: 1, unseen: 0, deliveries: deliveries.snapshot(),
+    })
+  const open = (): string => { desk.toggleDesk(); return desk.getState().tab }
+  const shut = (): void => { desk.toggleDesk() }
+
+  beforeEach(() => { desk.update({ paletteOpen: false }) })
+
+  afterEach(() => {
+    deliveries.restore([])
+    workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
+  })
+
+  it('opens a conversation that has produced nothing on the shelf', () => {
+    expect(open()).toBe('deliverables')
+  })
+
+  it('opens on the shelf when a file was handed over', () => {
+    deliver('/w/a.md')
+    changed('/w/b.ts')
+    expect(open()).toBe('deliverables')
+  })
+
+  /* The ordering H3 is about. `unseen` exempts the tab that is showing, so a
+     decision taken after `paletteOpen` flips exempts whichever tab was
+     remembered from its own rung -- and with the shelf remembered, which is
+     also the fallback, the desk still lands on the shelf and the rung it takes
+     is the fallback. A rule that never fires looks exactly like one that always
+     does, so this asserts the rung and not the destination. */
+  it('takes the shelf rung, not the fallback, when the shelf has news', () => {
+    desk.update({ tab: 'deliverables' })
+    deliver('/w/a.md')
+    expect(desk.pickTab()).toBe('deliverables')
+    /* The proof it was rung one: with the shelf read, the same state falls
+       through to a lower rung instead of landing here again. */
+    desk.seeTab('deliverables')
+    changed('/w/b.ts')
+    expect(desk.pickTab()).toBe('diff')
+  })
+
+  it('opens on the delegated work when the shelf is read and a run is new', async () => {
+    deliver('/w/a.md')
+    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.seeTab('deliverables')
+    desk.update({ paletteOpen: false })
+    changed('/w/b.ts')
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
+    await agents.refreshInstances(true)
+    expect(open()).toBe('agents')
+  })
+
+  /* Rung two is "unseen", not "exists", so a run the reader already looked at
+     stops holding the desk against a change that just landed. */
+  it('lets a change past a run that has already been seen', async () => {
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
+    await agents.refreshInstances(true)
+    desk.update({ paletteOpen: true, tab: 'agents' })
+    desk.seeTab('agents')
+    desk.update({ paletteOpen: false })
+    changed('/w/b.ts')
+    expect(open()).toBe('diff')
+  })
+
+  /* What a reload comes back to has to be what is on screen. The note is
+     written from the desk's own state, so the picked tab only reaches it if
+     opening records -- otherwise a reload lands on the tab the reader left,
+     until the next pane they open rewrites the note behind them. */
+  it('records the tab it picked, so a reload comes back to it', () => {
+    changed('/w/b.ts')
+    desk.openDeskFile('/w/x.ts')
+    expect(open()).toBe('diff')
+    expect(desk.saved('s1')?.tab).toBe('diff')
+  })
+
+  it('leaves the tab alone on the way down', () => {
+    changed('/w/b.ts')
+    expect(open()).toBe('diff')
+    shut()
+    expect(desk.getState().tab).toBe('diff')
+  })
+
+  /* Naming a tab beats guessing one: this is the legacy shell asking for a
+     particular view of the desk. */
+  it('does not overrule a caller that named the tab', () => {
+    deliver('/w/a.md')
+    desk.openDeskTab('diff')
+    expect(desk.getState().tab).toBe('diff')
   })
 })

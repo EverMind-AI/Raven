@@ -31,13 +31,10 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
    bubble is a sibling, and the moment one existed the positional selector
    stopped matching the label, which put the full label on every collapsed
    34px tab. */
-/* Slow on purpose: this feeds a number on a tab, not a spinner. */
-const AGENTS_POLL_MS = 8000
-
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['diff', 'deliverables', 'agents'] as DeskTab[]).map((tab) => {
+      {(['deliverables', 'agents', 'diff'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.agents')
         const fresh = desk.unseen(tab)
@@ -238,24 +235,6 @@ export function DeskPalette(): JSX.Element | null {
   useEffect(() => {
     if (shown) desk.seeTab(state.tab)
   })
-  /* The other two tabs are told what happened: a write reaches the workspace
-     record and a delivery reaches the registry, both on the turn's own events.
-     Background work is not -- the instance list is asked for, by the panel when
-     it draws and by a resume, and nothing asks while a turn quietly spawns a
-     sub-agent. So the tab that is NOT showing would have counted zero for the
-     whole run and badged nothing.
-     Asked here rather than wired into the turn stream because the list is
-     already a polled thing with its own floor (2.5s in the agents store, which
-     rate-limits this), and the alternative is a second definition of "something
-     started" living in the event handler. Only while the palette is open, and
-     only for the tab the reader is not on -- the panel refreshes its own. */
-  useEffect(() => {
-    if (!shown || state.tab === 'agents') return
-    const ask = (): void => { void agents.refreshInstances() }
-    ask()
-    const timer = setInterval(ask, AGENTS_POLL_MS)
-    return () => clearInterval(timer)
-  }, [shown, state.tab])
   const pointerCleanup = useRef<(() => void) | null>(null)
   const [geom, setGeom] = useState(storedGeometry)
   useEffect(() => {
