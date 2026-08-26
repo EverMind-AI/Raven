@@ -13,7 +13,7 @@ whether it runs on its own key or inherits the host's. Until the venv is built t
 discovered row is listed and disabled, which is why this step offers to build it
 rather than only mentioning that it is unbuilt.
 
-The tree is not a checkout-only thing any more either: the beta wheel carries it,
+The tree is not a checkout-only thing any more either: every wheel carries it,
 and it is installed out to the raven home on first use so the venvs survive an
 upgrade. An install genuinely without it finds nothing and the step says so.
 
@@ -277,8 +277,9 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     if root is None:
         console.print(
             _t(
-                "  [dim]No sub-agent tree in this installation (source checkouts only).[/dim]",
-                "  [dim]本次安装没有子代理目录(仅源码检出才有)。[/dim]",
+                "  [dim]No sub-agent tree in this installation. A release wheel carries one; "
+                "reinstall from a release, or run from a source checkout.[/dim]",
+                "  [dim]本次安装没有子代理目录。发布版 wheel 自带子代理;可重装发布版,或改用源码检出运行。[/dim]",
             )
         )
         return 0
