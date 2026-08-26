@@ -424,8 +424,14 @@ export function DeskSurface(): JSX.Element | null {
   )
 }
 
-export function DeskFollowToggle(): JSX.Element {
+export function DeskFollowToggle(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  /* Nothing of the desk is over a fullscreen pane, its own handle included: the
+     pane IS the window while it is up, and the way back out is the pane's own
+     restore button. The palette leaves for the same reason (DeskPalette), and
+     both come back as they were when it does -- the flag and the geometry are
+     untouched by this. */
+  if (state.solo) return null
   return (
     <button
       className="ghost-ic desk-follow-toggle"

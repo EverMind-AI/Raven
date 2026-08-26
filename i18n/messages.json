@@ -4863,6 +4863,10 @@
       "en": "No background work yet",
       "zh": "还没有后台任务"
     },
+    "gui.ws.agents_none_sub": {
+      "en": "Sub-agents this session starts show up here",
+      "zh": "这个会话启动的子智能体会出现在这里"
+    },
     "gui.ws.desk_limit": {
       "en": "You can open up to 4 panes at once.",
       "zh": "最多同时打开 4 个窗口"
@@ -5070,6 +5074,10 @@
     "gui.ws.no_changes": {
       "en": "No changes yet",
       "zh": "还没有变更"
+    },
+    "gui.ws.no_changes_sub": {
+      "en": "Files this session edits show up here",
+      "zh": "这个会话改动的文件会出现在这里"
     },
     "gui.ws.no_web": {
       "en": "No pages yet",

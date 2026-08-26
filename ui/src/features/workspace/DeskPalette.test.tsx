@@ -6,6 +6,7 @@ import { DeskPalette } from './DeskPalette'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
+import * as marks from './marks'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
@@ -106,6 +107,136 @@ afterEach(() => {
   setCurrent(null)
   agents.reset()
   localStorage.clear()
+})
+
+/* The palette outlives the flag by one animation, so "on screen" and "open" are
+   not the same question in these tests. */
+const palette = (): HTMLElement | null => document.querySelector('.desk-palette')
+const phase = (): string | null => palette()?.getAttribute('data-phase') ?? null
+
+const emptyOf = (): { title: string; hint: string; icon: boolean } | null => {
+  const box = document.querySelector('.desk-empty')
+  if (!box) return null
+  return {
+    title: box.querySelector('b')?.textContent || '',
+    hint: box.querySelector('span')?.textContent || '',
+    icon: !!box.querySelector('svg'),
+  }
+}
+
+describe('opening and shutting the desk', () => {
+  it('leaves for one animation and then stops existing', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => { desk.update({ paletteOpen: true }) })
+      expect(phase()).toBe('in')
+
+      await act(async () => { desk.update({ paletteOpen: false }) })
+      /* Still there, because a leaving element has to be on screen to leave --
+         and inert, because a tab clicked on the way out would act on a desk the
+         reader has already dismissed. */
+      expect(phase()).toBe('out')
+      expect(palette()?.hasAttribute('inert')).toBe(true)
+
+      await act(async () => { vi.advanceTimersByTime(200) })
+      expect(palette()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* A double-click on the handle used to land on a palette that vanished a
+     moment later. */
+  it('cancels the exit when the reader opens it again mid-flight', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => { desk.update({ paletteOpen: true }) })
+      await act(async () => { desk.update({ paletteOpen: false }) })
+      await act(async () => { desk.update({ paletteOpen: true }) })
+
+      await act(async () => { vi.advanceTimersByTime(200) })
+
+      expect(phase()).toBe('in')
+      expect(palette()?.hasAttribute('inert')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* Nothing of the desk over a fullscreen pane: the pane IS the window. */
+  it('is not on screen while a pane is fullscreen', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => {
+        desk.update({ paletteOpen: true })
+        desk.openDeskFile('/w/a.md')
+      })
+      await act(async () => { desk.toggleSolo('file:/w/a.md') })
+      await act(async () => { vi.advanceTimersByTime(200) })
+      expect(palette()).toBeNull()
+
+      await act(async () => { desk.toggleSolo('file:/w/a.md') })
+      expect(phase()).toBe('in')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* A bubble is cleared by the reader LOOKING at the tab, and behind a
+     fullscreen pane they are not looking at any of them. Read off the mark
+     itself: `unseen` answers zero for the tab that is selected whatever the
+     mark says, so the tab the palette is parked on is exactly where a mark
+     moving unseen would leave no trace. */
+  it('does not mark a tab seen behind a fullscreen pane', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.update({ paletteOpen: true, tab: 'deliverables' })
+      desk.openDeskFile('/w/a.md')
+    })
+    await act(async () => { desk.toggleSolo('file:/w/a.md') })
+
+    await act(async () => {
+      deliveries.record(1, manifest([{ path: '/w/b.md', name: 'b.md' }]))
+    })
+
+    expect(marks.of_('deliverables')).toBe(0)
+
+    /* And the moment the pane gives the screen back, it counts as seen. */
+    await act(async () => { desk.toggleSolo('file:/w/a.md') })
+    expect(marks.of_('deliverables')).toBe(1)
+  })
+})
+
+describe('a tab with nothing in it', () => {
+  /* One design for all three, which is what was asked for: an icon, what is
+     not here, and where it would come from. Diff was a line of grey text and
+     the shelf an illustrated block, and the two read as two different kinds of
+     nothing. */
+  it('says the same kind of nothing whichever tab it is', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: 'gui.ws.no_changes_sub', icon: true })
+
+    await act(async () => { desk.update({ tab: 'deliverables' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
+
+    await act(async () => { desk.update({ tab: 'agents' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_none_sub', icon: true })
+    /* And one class, so there is one stylesheet rule to keep them aligned. */
+    expect(document.querySelector('.desk-dlv-empty')).toBeNull()
+  })
+
+  it('says so in the same shape when the server does not report the work', async () => {
+    window.DS!.agents = { list: async () => [], instances: async () => [], absent: () => true }
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_absent', icon: true })
+  })
 })
 
 describe('the desk shelf', () => {

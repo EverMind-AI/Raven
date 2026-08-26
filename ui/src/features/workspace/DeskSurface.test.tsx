@@ -2,7 +2,7 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DeskSurface } from './DeskSurface'
+import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
@@ -50,6 +50,29 @@ afterEach(() => {
   window.RavenShell = undefined
   window.DS = undefined
   vi.unstubAllGlobals()
+})
+
+describe('the desk handle', () => {
+  /* The reader asked for nothing of the desk to be visible over a fullscreen
+     pane, and the handle is the part that would otherwise sit on top of it:
+     `#deskHost` is above the fullscreen layer in the z ladder. */
+  it('leaves the screen while a pane is fullscreen, and comes back with it', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => {
+      desk.openDeskFile('/w/a.md')
+    })
+    expect(document.querySelector('.desk-follow-toggle')).toBeTruthy()
+
+    await act(async () => {
+      desk.toggleSolo('file:/w/a.md')
+    })
+    expect(document.querySelector('.desk-follow-toggle')).toBeNull()
+
+    await act(async () => {
+      desk.toggleSolo('file:/w/a.md')
+    })
+    expect(document.querySelector('.desk-follow-toggle')).toBeTruthy()
+  })
 })
 
 describe('the pane of a delivered file', () => {
