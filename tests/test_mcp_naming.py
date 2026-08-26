@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from raven.mcp.naming import (
-    MAX_NAME_LENGTH,
-    _assemble,
-    legacy_tool_name,
-    spellings,
-    tool_name,
-)
+from raven.mcp.naming import _assemble, legacy_tool_name, spellings, tool_name
+from raven.providers.tool_names import MAX_NAME_LENGTH
 
 
 class TestBasicShape:

@@ -1,62 +1,29 @@
 """Model-facing names for MCP tools.
 
-The name a server advertises is not usable as-is: providers accept only
-``[A-Za-z0-9_-]`` and cap the length at 64, and two servers may advertise the
-same tool name. This module is the single place that turns a ``(server, tool)``
-pair into the string the model sees.
+The name a server advertises is not usable as-is: two servers may advertise the
+same tool name, and neither is guaranteed to be spelled in what the providers
+accept. This module is the single place that turns a ``(server, tool)`` pair
+into the string the model sees.
 
-Verified against three independent sources, because getting the character set
-wrong is silent rather than loud:
-
-- Anthropic Messages API: ``name`` must match ``^[a-zA-Z0-9_-]{1,64}$``.
-- OpenAI: "a-z, A-Z, 0-9, or contain underscores and dashes, maximum length 64".
-- litellm, the path raven actually takes, rewrites only names that are already
-  illegal and truncates at 128 -- so a 100-char legal name passes litellm and
-  is rejected by Anthropic. The 64 cap has to be enforced here.
+What the providers accept -- the character set and the 64-character cap, and the
+sources that were checked for it -- belongs to
+:mod:`raven.providers.tool_names`, which is where the constraint comes from.
+This module is one of its consumers.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Container
 from dataclasses import dataclass
 
+from raven.providers.tool_names import MAX_NAME_LENGTH, sanitary_form
+
 PREFIX = "mcp"
 SEPARATOR = "_"
-MAX_NAME_LENGTH = 64
 SUFFIX_HASH_LENGTH = 12
 
-_ILLEGAL = re.compile(r"[^A-Za-z0-9_-]")
-
-
-def _clean(value: str) -> str:
-    """Replace what no provider accepts, and nothing else.
-
-    The dash stays: every provider takes it, so a server named ``bcp-search``
-    keeps the name it already registers today and no config entry written
-    against it goes stale.
-    """
-    return _ILLEGAL.sub("_", value)
-
-
-def sanitary_form(value: str) -> str:
-    """What ``value`` becomes on the way into a tool name.
-
-    The public face of :func:`_clean`, for the one caller that has to *show* the
-    rewrite rather than perform it: a warning that names only the original tells
-    the reader a name is wrong without telling them what to look for instead.
-    """
-    return _clean(value)
-
-
-def is_sanitary(value: str) -> bool:
-    """Whether this string survives :func:`_clean` unchanged.
-
-    Exposed so a caller can warn about a name *before* it silently becomes a
-    different one, which is the only point at which anyone can act on it.
-    """
-    return not _ILLEGAL.search(value)
+__all__ = ["MCPToolRef", "PREFIX", "SEPARATOR", "legacy_tool_name", "spellings", "tool_name"]
 
 
 def _suffix(server: str, tool: str) -> str:
@@ -108,7 +75,7 @@ def tool_name(server: str, tool: str, *, taken: Container[str] = frozenset()) ->
     one of them, and a name that overflows :data:`MAX_NAME_LENGTH`, both get a
     suffix derived from the raw ``(server, tool)`` pair.
     """
-    clean_server, clean_tool = _clean(server), _clean(tool)
+    clean_server, clean_tool = sanitary_form(server), sanitary_form(tool)
     plain = _assemble(clean_server, clean_tool)
     if not _overflows(clean_server, clean_tool) and plain not in taken:
         return plain
@@ -165,7 +132,7 @@ def spellings(server: str, tool: str) -> frozenset[str]:
     but the *spelling* does not, so an entry naming it keeps meaning the same
     tool after the other server is removed or the race lands the other way.
     """
-    clean_server, clean_tool = _clean(server), _clean(tool)
+    clean_server, clean_tool = sanitary_form(server), sanitary_form(tool)
     out = {
         legacy_tool_name(server, tool),
         _assemble(clean_server, clean_tool, _suffix(server, tool)),

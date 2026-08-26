@@ -21,14 +21,9 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
-from raven.providers.base import (
-    ErrorClassification,
-    LLMResponse,
-    RunMeta,
-    ToolCallRequest,
-    normalized_tool_name,
-)
+from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import flag_transport_failure, prompt_chars
 from raven.providers.truncation import flag_truncation
 

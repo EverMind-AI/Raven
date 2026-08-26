@@ -364,7 +364,8 @@ class MCPConnectionManager:
         catalogue are already clean, and dashes survive sanitising, so the
         warning should be rare in practice.
         """
-        from raven.mcp.naming import PREFIX, SEPARATOR, is_sanitary, sanitary_form
+        from raven.mcp.naming import PREFIX, SEPARATOR
+        from raven.providers.tool_names import is_sanitary, sanitary_form
 
         for name in cfg_servers:
             if name in self._warned_names or is_sanitary(name):
