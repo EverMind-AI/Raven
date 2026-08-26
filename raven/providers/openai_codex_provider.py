@@ -31,6 +31,7 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
+from raven.providers.tool_names import normalized_tool_name
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -410,7 +411,7 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
                 tool_calls.append(
                     ToolCallRequest(
                         id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
-                        name=buf.get("name") or item.get("name"),
+                        name=normalized_tool_name(buf.get("name") or item.get("name")),
                         arguments=args,
                         run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                     )
