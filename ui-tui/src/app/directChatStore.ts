@@ -202,14 +202,12 @@ const UNUSED = 'nothing said to this instance yet \u2014 type to start'
  * anything was said to it is the one case where the read legitimately returns
  * no turns, and `/new-instance` is what made it reachable.
  */
-export const visibleRows = (state: DirectChatState, main: Msg[]): Msg[] => {
-  const active = state.active
+export const visibleRows = (state: DirectChatState, main: Msg[]): Msg[] =>
+  state.active === null ? main : rowsOf(state, state.active)
 
-  if (active === null) {
-    return main
-  }
-
-  const rows = state.transcripts.get(directKey(active.agent, active.handle))
+/** One instance's conversation as the chat view shows it -- never zero rows; see `visibleRows`. */
+export const rowsOf = (state: DirectChatState, target: DirectTargetRef): Msg[] => {
+  const rows = state.transcripts.get(directKey(target.agent, target.handle))
 
   if (rows === undefined) {
     return [{ kind: 'slash', role: 'system', text: READING }]
@@ -232,18 +230,19 @@ const IN_FLIGHT = new Set(['pending', 'running'])
  * for the other two lanes. Reading only `running` is what left a spawned turn
  * showing nothing while it worked.
  */
-export const isViewWorking = (state: DirectChatState): boolean => {
-  const active = state.active
+export const isViewWorking = (state: DirectChatState): boolean => isTargetWorking(state, state.active)
 
-  if (active === null) {
+/** `isViewWorking` for any instance, not only the one on screen. */
+export const isTargetWorking = (state: DirectChatState, target: DirectTargetRef | null): boolean => {
+  if (target === null) {
     return false
   }
 
-  if (isRunning(state, active)) {
+  if (isRunning(state, target)) {
     return true
   }
 
-  const row = state.instances.find(r => r.agent === active.agent && r.handle === active.handle)
+  const row = state.instances.find(r => r.agent === target.agent && r.handle === target.handle)
 
   return row !== undefined && IN_FLIGHT.has(row.status ?? '')
 }

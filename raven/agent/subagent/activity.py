@@ -27,7 +27,7 @@ rather than raising into a backend's happy path.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -93,6 +93,13 @@ class RunActivity:
     # in-flight signal IS its console (a cli agent that streams no transcript).
     # Live-only, like transcript: the finished record keeps the full output.
     console: str = ""
+    # How to merge a person's words into this run while it is in flight, or
+    # None when its transport cannot. Set by the backend for the span of its
+    # prompt (``offer_steer``); a reader of the run's conversation reaches it
+    # through ``live_instance``. Answers the steer's status string rather than
+    # raising for a refusal. Not persisted: a live handle, not a fact about the
+    # run, which is why it is absent from ``as_meta``.
+    steer: Callable[[str], Awaitable[str]] | None = None
 
     @property
     def tokens(self) -> int | None:
@@ -186,6 +193,12 @@ def collecting(
             _live.pop(live_key, None)
         if instance:
             _live_instances.pop(instance, None)
+
+
+def offer_steer(activity: RunActivity | None, steer: Callable[[str], Awaitable[str]] | None) -> None:
+    """Publish (or, with None, withdraw) the way to steer the run being collected."""
+    if activity is not None:
+        activity.steer = steer
 
 
 def live(key: str) -> RunActivity | None:

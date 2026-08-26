@@ -1080,7 +1080,8 @@ invisible to the model and is about the answer itself.
 
 **Capability Snapshot** (`raven/agent/acp/capabilities.py`):
 What one ACP agent reported at its last handshake - protocol version, whether it can
-resume / fork / load a session, its models and auth methods - recorded by a Test and read
+resume / fork / load a session, whether it takes a Steer (`canSteer`, from
+`agentCapabilities._meta`), its models and auth methods - recorded by a Test and read
 back as the source of a Subagent's statefulness. Keyed by agent name and stamped with a
 fingerprint of the fields that decide how it launches (`command`, `cwd`, `env`,
 `readyTimeoutMs`; deliberately not `name` / `enabled`, which change nothing about what an
@@ -1107,6 +1108,26 @@ The same trust boundary the cli transport already ran under (`codex -a never`,
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
+
+**Steer** (`raven/agent/acp/protocol.py`, `raven/agent/subagent/activity.py`,
+`raven/agent/subagent/manager.py`):
+A person's words merged into a Subagent's turn while it is still running, read by the agent
+before its next model call, as opposed to a prompt that opens a turn. ACP 1.20.0 has no such
+method - a second `session/prompt` on a busy session is refused - so it is raven's own
+extension: the agent serves `_raven/session/steer` (`STEER_METHOD`) and announces it in
+`agentCapabilities._meta` under `raven.steer` (`STEER_CAPABILITY`); a client that did not
+read the declaration must not call it. The backend publishes the way to steer a run
+(`RunActivity.steer`, via `offer_steer`) for exactly the span of its prompt and withdraws it
+after, so the hook is a fact about the run, not the agent. `SubagentManager.steer_instance`
+and `subagents.instance.steer` answer one of three statuses rather than raising:
+`injected` (merged; the run reads it before its next step), `no_turn` (nothing is running,
+nothing was started, the caller keeps the text and may send it as a turn), `unsupported`
+(the run's transport cannot take text mid-turn - a cli agent, or an acp agent without the
+extension). The agent announces the merged words back as a `user_message_chunk`, which the
+record keeps as a user row marked `steer`, in the position they were said.
+_Avoid_: "inject" for the whole feature - `injected` is one status of a steer, and the spine's
+`BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
+"interrupt" - a steer does not stop the turn.
 
 **Elicitation Pass-Through** (`raven/agent/acp/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised

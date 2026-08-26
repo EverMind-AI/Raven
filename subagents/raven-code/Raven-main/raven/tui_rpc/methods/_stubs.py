@@ -119,11 +119,9 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     # promoted to a real handler in
     # ``raven.tui_rpc.methods.slash_routing.session_status`` that delegates
     # to ``cli.dispatch(["status"])``.
-    (
-        "session.steer",
-        "session.steer not supported in Raven v0.1",
-        "Edit the system prompt via config.json `agents.defaults.system_prompt`.",
-    ),
+    # NOTE: ``session.steer`` was previously stubbed (-32012) but is now
+    # promoted to a real handler in ``raven.tui_rpc.methods.turn.session_steer``
+    # that merges text into the running turn through ``Scheduler.steer``.
     # NOTE: ``session.undo`` was previously stubbed (-32012) but is now promoted
     # to a real handler in ``raven.tui_rpc.methods.session.session_undo`` that
     # drops the last turn in place (parity test

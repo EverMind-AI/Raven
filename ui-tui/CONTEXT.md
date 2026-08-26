@@ -105,28 +105,58 @@ _Avoid_: "StatusRulePane" — the exported component is `StatusRule`, there is n
 **Agents Overlay**:
 The overlay showing the subagent tree (`SubagentNode` hierarchy with subtree
 token/cost aggregates) merged with the Live Agents rows; opened with `/agents` or Ctrl+T,
-including for past turns by history index. A running row's detail pane polls that run's
-own transcript (`subagent.context` for a spawn, `dag.node` for a graph node — the same
-message shape by design) and redraws it while the run works.
+including for past turns by history index. A run's detail pane shows its conversation in
+one of two ways. A run bound to a sub-agent instance (`SubagentProgress.instance`, the
+stateful spawn's handle) draws that instance's Direct Chat there — the same store rows,
+folds and polling as the chat view — and, when the registry row is `resumable`, a composer
+under the pane that sends to that instance (`sendDirect`) -- or, while the instance is
+mid-turn, steers it (`subagents.instance.steer`: the words are merged into the running turn
+and read before its next step, and the run announces them itself as a user row marked
+`steer`; the fold draws that row as a steer episode -- one indented line inside the turn,
+placed after the paragraph it cut into -- rather than as a new turn; `no_turn` falls back
+to a send, `unsupported` hands the text back to the draft). Tab moves the keys
+between the composer and the pane, and Esc with a draft clears it before it goes back to
+the list. Any
+other run (a stateless spawn, a graph node) polls its own per-step transcript
+(`subagent.context` for a spawn, `dag.node` for a graph node — the same message shape by
+design), read-only, and redraws it while the run works.
 
 **Live Agents** (`ui-tui/src/app/liveAgentsStore.ts`):
 The session's delegated runs — spawns and dag nodes — folded from `subagent.status` and
 `dag.*` events, reconciled against `subagent.list` on the boundaries events cannot cover
 (cold start, reconnect, a missed terminal frame). Deliberately not turn-scoped: a
 background spawn outlives the turn that made it, and `$turnState.subagents` is cleared at
-every turn end. Feeds the Status Bar's ⚡ HUD, the Live Agents Strip, and the Agents
-Overlay's live view.
+every turn end. Cleared when the session on screen changes, since that is what the runs
+belong to. Feeds the Status Bar's ⚡ HUD, the Live Agents Strip, and the Agents Overlay's
+live view.
 _Avoid_: "running agents" — finished rows linger for a retention window so a just-ended
 run is still inspectable.
 
+**Live DAG Run** (`ui-tui/src/app/liveAgentsStore.ts`):
+One `run_subagent_dag` graph at graph granularity, folded from the same `dag.*` events as
+the node rows: its goal line, when it started and ended, and every node's last known
+status. Held beside the rows rather than reduced out of them because the rows are pruned
+once they settle, and a tally read off a pruned list would shrink back down as the graph
+aged out. Kept for the session, which is what lets a finished graph keep a line on the
+Live Agents Strip. Seeded from `subagent.list` only for a graph the disk still shows
+working, on the same terms as a spawn row; a node the snapshot stops naming is cancelled,
+so a graph that died with its gateway stops reading as live.
+_Avoid_: the `DagRunSummary` of `domain/dagRun.ts` — that is the count block one
+`dag.run_completed` frame carried, for the DAG Panel.
+
 **Live Agents Strip** (`ui-tui/src/components/liveAgentsStrip.tsx`):
-The rows under the status rule, one per *active* delegated run (running or queued, spawns
-and dag nodes alike), with a ticking elapsed time. Clicking a row opens the Agents Overlay
-straight into that run's detail (`agentsFocusId`, consumed once), where its transcript
-streams as it works. Hidden entirely while nothing is active — a live monitor, not a
-history; finished runs are the Agents Overlay's business.
-_Avoid_: confusing it with Instance Chips — a chip addresses an *instance* for Direct
-Chat (talking), a strip row watches a *run* (working).
+What the session has delegated, under the status rule, in two layers. A **graph line** per
+Live DAG Run — `dag <goal> - x/y done - n running - n queued - n failed - elapsed`, zero
+counts dropped — carries the run's whole tally and *stays* once the run is over, its
+elapsed time frozen at its own end. Under each, an **agent line** per active node of that
+graph, then the loose spawns: running or queued only, with a ticking elapsed time, and each
+one leaves as it settles. Clicking an agent line opens the Agents Overlay straight into
+that run's detail (`agentsFocusId`, consumed once), where its transcript streams as it
+works; clicking a graph line opens the overlay itself, a graph being no single transcript.
+Hidden entirely only when the session has delegated nothing at all.
+_Avoid_: reading it as a history of everything delegated — the graph lines are capped at
+the newest few and the agent layer holds only what is in flight; the full record is the
+Agents Overlay's business.
 
 **Subagents Overlay**:
 The overlay for configuring third-party sub-agents - listing them by whether they can
@@ -157,7 +187,8 @@ Streaming fills the view as it answers, one whose transport does not lands in a 
 frame at the end, and the view treats both identically. Each instance runs on its own lane,
 so several can be answering at once and you can talk to one while another writes; what is
 refused is a *second* prompt to the instance already mid-reply, which would serialise on that
-instance's handle anyway. A sub-agent's turn is not cancellable: Ctrl+C means the main
+instance's handle anyway -- from the Agents Overlay's composer such words are *steered*
+into the running turn instead. A sub-agent's turn is not cancellable: Ctrl+C means the main
 agent's turn, as it always did.
 _Avoid_: "sub-agent session" - that is the CLI-side session a handle resumes, not this view.
 
@@ -171,40 +202,69 @@ _Avoid_: "add agent" - nothing is added to the roster; an agent that already exi
 another instance.
 
 **Instance Chip** (`ui-tui/src/components/instanceChips.tsx`):
-One entry in the strip above the composer, naming a sub-agent instance this session has
-used and switching to its Direct Chat when selected. The first chip is always the way back
-to the main agent, and it and the active chip are the two the strip never truncates away.
-Two independent marks: the chip you are *on* is painted in the theme's accent, and a chip
-whose instance is *replying* carries a bullet - the second can be any chip, including one
-you are not looking at. Ordered by when each instance first appeared and never resorted, so
-the accent never slides sideways while several instances answer at once. Drawn from the
-instance registry, re-read after any event that could have moved it; a *failed* re-read
-leaves the strip as it was rather than emptying it, since a quiet rpc reports "the call
-failed" and "there is nothing" the same way.
+One entry in the ordered list of sub-agent instances this session has used, drawn as
+`[label]` in one row above the composer (`InstanceChips`; a running instance carries a
+bullet, the active one is painted in `accent` and bold, a click switches to it), and the unit
+Shift+Left / Shift+Right cycles through to switch Direct Chat. The row is for the instances a
+person can talk to (`/new-instance`, a stateful spawn's handle); a dag run is shown on the
+Live Agents Strip instead. The first chip is always the way back to the main agent, and it
+and the active one are the two a width fit never truncates away. Ordered by when each instance first
+appeared and never resorted, so one press keeps landing on the same instance while several
+answer at once. Drawn from the instance registry, re-read after any event that could have
+moved it; a *failed* re-read leaves the list as it was rather than emptying it, since a quiet
+rpc reports "the call failed" and "there is nothing" the same way. Where the instances are
+*seen* is the Agents Overlay and the Live Agents Strip.
 _Avoid_: "agent chip" - a chip is one *instance* of an agent, and one agent can have
 several.
 
 **DAG Panel** (`ui-tui/src/components/dagPanel.tsx`):
-One `run_subagent_dag` run drawn under the tool row that started it: a dependency
-graph of boxed nodes, one column per depth, then one detail row per node. Fed
-either by live `dag.*` frames during the turn or, on resume, by one `dag.get`
-snapshot fetched per run and folded onto the same tool call -- both paths land
-on `tool.dag`, so a resumed session shows the graph too, just never the
+One `run_subagent_dag` run as a framed card in the transcript: a header naming
+the call, the size of the graph, the run id, the tally in status glyphs
+(`1✓ 1● 2○`) and the run's elapsed time; then the dependency graph of boxed
+nodes, one column per depth, each box's label a fixed space in from its own left
+border so the ordinals, glyphs and agent names read as columns; then two lines per
+node -- its ordinal, its own name, the agent that ran it and what it cost on the
+first, and the line it was dispatched with turned in under the name on the second,
+where its unmet dependencies and its error go too -- the turn-in mark standing in
+the ordinal's column so the text below starts exactly where the node's name does; then a hint naming both ways
+into a node. A node with nothing to say on the second line does not draw one. The card carries the call, so the transcript
+row for a dag call is suppressed (`WorkSegment`): the row and the header said the
+same sentence twice. The summary is the one part of a row with no width of its
+own: it takes what its own line leaves once the error and the dependency list --
+served first -- have taken theirs, and is dropped outright rather than shown as
+three words. It is on its own line because it is a sentence and the rest of the
+row is columns: sharing one line, a CJK summary at two cells a character pushed
+the agent and elapsed columns so far right that neither could be read down. Nothing
+here relies on ink's `truncate-end`, which is a no-op on a Text holding nested
+Texts, and every line of this panel is nested Texts: each is cut in cells by the
+panel, or it wraps and walks out through the frame. Same for the header, which
+gives up its run id, then its elapsed time, to keep the call and the tally. A running node
+hangs nothing under its row -- the live character tail that used to sit there cost
+a row per running node and moved several times a second; its trace is what the row
+opens into, and `dag.node` is polled only for a node someone has opened. Fed either by
+live `dag.*` frames during the turn or, on resume, by one `dag.get` snapshot
+fetched per run and folded onto the same tool call -- both paths land on
+`tool.dag`, so a resumed session shows the graph too, just never the
 frame-by-frame replay a live turn drew. The Work Segment holding this call draws
 the panel by default, without a click, and folding that segment back by hand
 still leaves the panel drawn -- only the summary row folds. Clicking a row, or
 the node's box in the graph, opens that node's **Trace box**; both carry the
 same key, so they cannot disagree about what is open.
-
-**Stream line**: the single row under a running DAG node's row, carrying the
-last line's worth of what its sub-agent has produced, refreshed while it works.
-Not a step ticker: it is a character tail, so it moves.
-_Avoid_: "log line", "tail row".
+_Avoid_: reading the elapsed columns as billed time -- they are wall clock, off
+the runner's own `started_at` / `ended_at`, and a node that shares a stateful
+instance spends some of that waiting its turn.
 
 **Trace box**: the fixed-height bordered block a DAG node row expands into,
-holding the node's conversation trace drawn by the transcript's own renderer.
-Replaces the stream line rather than joining it, and is the same height whatever
-the trace's length.
+holding the tail of the node's conversation trace drawn by the transcript's own
+renderer, under the node's id and the line it was dispatched with. The only thing
+a node row hangs, and the same height whatever the trace's length -- short while
+the node still works, since it is re-read twice a second and a tall box redrawing
+that often shoves the transcript under it, and taller once the node has stopped,
+since it cannot scroll and its height is then the only thing deciding how much is
+readable without `/dag`. Nothing oversized may be handed to it: this fork does
+not truncate a child that overflows a fixed height, it squeezes the column --
+dropping scattered lines and painting the last over the footer -- so `fitTraceTail`
+cuts a too-tall message down from its head and marks the cut with a leading `…`.
 _Avoid_: "detail panel", "node output".
 
 **Ordinal** (`DagPanel`, `/dag`):

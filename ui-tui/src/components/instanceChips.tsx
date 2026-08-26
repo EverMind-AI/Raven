@@ -27,11 +27,12 @@ const chipWidth = (c: Chip) => c.label.length + (c.running ? 4 : 3)
 /**
  * Which chips fit in `cols`, and how many were dropped.
  *
- * Pure and exported so the fitting rule is testable without a renderer.
- * Two chips are never dropped: the main-agent chip, which is the way back, and
- * the active one -- a strip that hides where you are is worse than a truncated
- * one. Truncation is from the right, so the instances this session used first
- * are the ones that survive.
+ * Pure and exported so the fitting rule is testable without a renderer. The
+ * same list is what shift-arrow cycles through. Two chips are never dropped:
+ * the main-agent chip, which is the way back, and the active one -- a strip
+ * that hides where you are is worse than a truncated one. Truncation is from
+ * the right, so the instances this session used first are the ones that
+ * survive.
  */
 export function chipsForWidth(
   rows: readonly InstanceRow[],
@@ -45,10 +46,9 @@ export function chipsForWidth(
   // that belongs here -- so dropping these hides nothing.
   // Ordered by when each instance first appeared, and so never reordered under
   // the user: `updatedAtMs` bumps on every status change, which -- now that
-  // several instances answer at once -- moved the chips around mid-conversation.
-  // The one painted as active would slide sideways while its neighbour took its
-  // place, which reads as the highlight jumping between agents rather than as
-  // the strip resorting.
+  // several instances answer at once -- moved the cycle order around
+  // mid-conversation, so one shift-arrow press stopped landing on the same
+  // instance twice.
   const ordered = rows.filter(r => r.kind !== 'dag-node').sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))
   const all: Chip[] = [
     { active: active === null, label: MAIN_CHIP_LABEL, running: false, target: null },
@@ -77,17 +77,6 @@ export function chipsForWidth(
   return { chips: kept, overflow: all.length - kept.length }
 }
 
-/**
- * The colour a chip is painted in.
- *
- * Pure and exported for the same reason `chipsForWidth` is: the rule is worth
- * testing without a renderer. `accent` rather than `label` for the active chip
- * because label and muted are *the same value* in the default dark theme and in
- * the 256-colour one -- asking for those two painted every chip identically and
- * left bold as the only cue to which conversation you were in.
- */
-export const chipColor = (chip: Chip, t: Theme): string => (chip.active ? t.color.accent : t.color.muted)
-
 /** The chip immediately before / after the active one, wrapping at both ends. */
 export function cycleTarget(chips: readonly Chip[], step: -1 | 1): DirectTargetRef | null {
   if (chips.length === 0) {
@@ -99,6 +88,17 @@ export function cycleTarget(chips: readonly Chip[], step: -1 | 1): DirectTargetR
   return chips[(from + step + chips.length) % chips.length]!.target
 }
 
+/**
+ * The colour a chip is painted in.
+ *
+ * Pure and exported for the same reason `chipsForWidth` is: the rule is worth
+ * testing without a renderer. `accent` rather than `label` for the active chip
+ * because label and muted are *the same value* in the default dark theme and in
+ * the 256-colour one -- asking for those two painted every chip identically and
+ * left bold as the only cue to which conversation you were in.
+ */
+export const chipColor = (chip: Chip, t: Theme): string => (chip.active ? t.color.accent : t.color.muted)
+
 export interface InstanceChipsProps {
   cols: number
   t: Theme
@@ -108,7 +108,9 @@ export interface InstanceChipsProps {
  * The session's sub-agent instances, above the composer.
  *
  * One row, never wrapped: `ComposerPane` is `flexShrink={0}`, so a second row
- * costs a transcript row -- which is what `chipsForWidth` is for.
+ * costs a transcript row -- which is what `chipsForWidth` is for. A dag run
+ * shows on the Live Agents Strip instead; this row is for the instances a
+ * person opened by hand (`/new-instance`, a spawn's handle) and can talk to.
  */
 export function InstanceChips({ cols, t }: InstanceChipsProps) {
   const direct = useStore($directChat)

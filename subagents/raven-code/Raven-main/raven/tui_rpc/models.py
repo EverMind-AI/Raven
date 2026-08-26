@@ -421,6 +421,11 @@ class TurnSendParams(_Strict):
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
+    # Attachment paths, workspace-relative or absolute. The ACP layer always
+    # sends this key, empty for a text-only prompt, so a _Strict model without
+    # it refuses every prompt. Bounded here so a malformed caller is refused at
+    # the schema rather than resolving thousands of paths.
+    media: list[str] | None = Field(default=None, max_length=64)
 
 
 class TurnSendResult(_Strict):
@@ -450,6 +455,18 @@ class TurnCancelParams(_Strict):
 
 class TurnCancelResult(_Strict):
     cancelled: bool
+
+
+class SessionSteerParams(_Strict):
+    session_id: str
+    text: str
+
+
+class SessionSteerResult(_Strict):
+    # ``injected``: merged into the turn running now, to be read before its next
+    # model call. ``no_turn``: nothing was running, nothing was started, and the
+    # caller keeps the text -- a steer never becomes a turn of its own.
+    status: Literal["injected", "no_turn"]
 
 
 # ---------------------------------------------------------------------------
@@ -844,6 +861,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "turn.subscribe": (TurnSubscribeParams, TurnSubscribeResult),
     "turn.unsubscribe": (TurnUnsubscribeParams, TurnUnsubscribeResult),
     "turn.cancel": (TurnCancelParams, TurnCancelResult),
+    "session.steer": (SessionSteerParams, SessionSteerResult),
     # mcp.*
     "mcp.list": (McpListParams, McpListResult),
     "mcp.test": (McpTestParams, McpTestResult),

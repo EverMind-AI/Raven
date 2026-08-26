@@ -48,17 +48,14 @@ const actions: AppLayoutActions = {
   clearSelection: () => {},
   deleteSessionWithFallback: async () => false,
   onModelSelect: () => {},
-  resumeById: () => {},
-  setStickyPrompt: () => {}
+  resumeById: () => {}
 }
 
 const status: AppLayoutStatusProps = {
   cwdLabel: '~/repo',
   goodVibesTick: 0,
   sessionStartedAt: null,
-  showStickyPrompt: false,
   statusColor: 'green',
-  stickyPrompt: '',
   turnStartedAt: null,
   voiceLabel: ''
 }

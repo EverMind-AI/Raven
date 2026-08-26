@@ -282,3 +282,20 @@ def sync_workspace_templates(workspace: Path, silent: bool = False, only: list[s
         for name in added:
             _c.print(f"  [dim]Created {name}[/dim]")
     return added
+
+
+def safe_path_segment(name: str) -> str:
+    """Like ``safe_filename``, but safe to use as a bare directory name.
+
+    ``safe_filename`` leaves ``.`` and ``..`` intact. That is harmless where a
+    suffix follows (``sessions/<chat_id>.jsonl`` turns ``..`` into ``...jsonl``)
+    but not for a directory segment: ``<root>/<channel>/..`` resolves back out
+    of the root, and every key that normalises the same way would then share
+    one directory. Dot-only names are exactly that set -- any other name
+    containing dots is an ordinary component -- so they fold to underscores,
+    which is what ``safe_filename`` already produces for unsafe input.
+    """
+    cleaned = safe_filename(name)
+    if cleaned and not cleaned.strip("."):
+        return "_" * len(cleaned)
+    return cleaned

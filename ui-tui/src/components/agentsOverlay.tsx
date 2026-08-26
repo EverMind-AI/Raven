@@ -9,7 +9,13 @@ import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } 
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
-import type { DagNodeResult, SubagentContextResult, TranscriptMessage } from '../rpc/generated.js'
+import type {
+  DagNodeResult,
+  InstanceRow,
+  SubagentContextResult,
+  SubagentsInstanceSteerResult,
+  TranscriptMessage
+} from '../rpc/generated.js'
 import type { Theme } from '../theme.js'
 import type { SubagentLiveRef, SubagentNode, SubagentProgress } from '../types.js'
 
@@ -19,12 +25,24 @@ import {
   applyDelegationStatus,
   toggleOverlaySection
 } from '../app/delegationStore.js'
+import {
+  $directChat,
+  appendDirectMessage,
+  directKey,
+  type DirectTargetRef,
+  getDirectChat,
+  isTargetWorking,
+  rowsOf
+} from '../app/directChatStore.js'
+import { fetchDirectHistory, scheduleInstanceRefresh } from '../app/directChatSync.js'
+import { sendDirect } from '../app/directSend.js'
 import { $liveAgents, toSubagentProgress } from '../app/liveAgentsStore.js'
 import { scheduleLiveAgentsRefresh } from '../app/liveAgentsSync.js'
 import { patchOverlayState } from '../app/overlayStore.js'
 import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '../app/spawnHistoryStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
 import { getUiState } from '../app/uiStore.js'
+import { useDirectStepPoll } from '../app/useDirectStepPoll.js'
 import { toTranscriptMessages } from '../domain/messages.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
@@ -44,6 +62,7 @@ import {
 } from '../lib/subagentTree.js'
 import { compactPreview } from '../lib/text.js'
 import { MessageLine } from './messageLine.js'
+import { TextInput } from './textInput.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 
@@ -415,6 +434,115 @@ function Field({ name, t, value }: { name: string; t: Theme; value: ReactNode })
 const TRANSCRIPT_TAIL_MSGS = 6
 const TRANSCRIPT_POLL_MS = 600
 const CONSOLE_TAIL_CHARS = 1200
+// A conversation row is a whole folded turn, so the window is wider than the
+// per-step transcript's.
+const CONVERSATION_TAIL_ROWS = 12
+
+/** Structurally `GatewayRpc`, restated so the overlay can build one off its gateway. */
+type Rpc = <T extends object>(
+  method: string,
+  params?: Record<string, unknown>,
+  opts?: { quiet?: boolean }
+) => Promise<null | T>
+
+const readSid = () => getUiState().sid
+
+/** The Direct Chat a run's detail pane can open: which instance, and whether it takes a prompt. */
+export interface InstanceConversationRef {
+  resumable: boolean
+  target: DirectTargetRef
+}
+
+/**
+ * The conversation behind one run, or null when it has none.
+ *
+ * A run has one when the manager bound it to an instance -- a stateful
+ * sub-agent's spawn. Whether that instance can be *talked to* is the registry
+ * row's `resumable`, answered by the server; an instance the strip has not
+ * listed yet reads as not resumable rather than guessed at, and the composer
+ * appears once the refresh lands.
+ */
+export const conversationOf = (item: SubagentProgress, instances: InstanceRow[]): InstanceConversationRef | null => {
+  const instance = item.instance
+
+  if (instance === undefined) {
+    return null
+  }
+
+  const row = instances.find(r => r.agent === instance.agent && r.handle === instance.handle)
+
+  return { resumable: row?.resumable === true, target: instance }
+}
+
+/**
+ * One instance's Direct Chat, drawn inside the detail pane.
+ *
+ * Reads the same store rows the chat view would show for this instance --
+ * `fetchDirectHistory` on entry, `useDirectStepPoll` while it works, and the
+ * deltas `chatStream` routes by the event's own target -- so what is seen here
+ * and what Direct Chat shows are one transcript, not two readings of it.
+ */
+export function InstanceConversation({
+  cols,
+  live,
+  rpc,
+  scope,
+  t,
+  target
+}: {
+  cols: number
+  live: boolean
+  rpc: Rpc
+  scope: string
+  t: Theme
+  target: DirectTargetRef
+}) {
+  const direct = useStore($directChat)
+  const { agent, handle } = target
+  // Stable per instance: the poll arms its interval on the target's identity,
+  // and the tree hands out a fresh object every time the live rows move.
+  const stable = useMemo(() => ({ agent, handle }), [agent, handle])
+  const working = live || isTargetWorking(direct, stable)
+  const workingRef = useRef(working)
+  workingRef.current = working
+
+  // An idle instance is read as settled, not entered: the store may still hold
+  // the last live snapshot of a run that ended while this pane was closed, and
+  // the entering read keeps whatever it finds. The turn that ran in between is
+  // on disk and nowhere else.
+  useEffect(() => {
+    void fetchDirectHistory(rpc, readSid(), stable, workingRef.current ? 'enter' : 'settled')
+  }, [rpc, stable])
+
+  useDirectStepPoll(rpc, readSid, stable, working)
+
+  const rows = rowsOf(direct, stable)
+  const tail = rows.slice(-CONVERSATION_TAIL_ROWS)
+  const dropped = rows.length - tail.length
+
+  return (
+    <OverlaySection
+      count={rows.length}
+      defaultOpen
+      id="transcript"
+      scope={scope}
+      t={t}
+      title={working ? `Conversation · ${agent}/${handle} · live` : `Conversation · ${agent}/${handle}`}
+    >
+      {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
+
+      {tail.map((m, i) => (
+        <MessageLine
+          cols={Math.max(40, cols - 6)}
+          isStreaming={working && i === tail.length - 1 && m.role === 'assistant'}
+          key={dropped + i}
+          msg={m}
+          t={t}
+        />
+      ))}
+    </OverlaySection>
+  )
+}
 
 /**
  * The run's own transcript, read back while it runs.
@@ -578,15 +706,19 @@ function LiveTranscript({
 
 function Detail({
   cols,
+  conversation,
   gw,
   id,
   node,
+  rpc,
   t
 }: {
   cols: number
+  conversation: InstanceConversationRef | null
   gw: GatewayClient
   id?: string
   node: SubagentNode
+  rpc: Rpc
   t: Theme
 }) {
   const { aggregate: agg, item } = node
@@ -631,7 +763,16 @@ function Detail({
         {item.apiCalls ? <Field name="api calls" t={t} value={String(item.apiCalls)} /> : null}
       </Box>
 
-      {item.liveRef ? (
+      {conversation ? (
+        <InstanceConversation
+          cols={cols}
+          live={item.status === 'running' || item.status === 'queued'}
+          rpc={rpc}
+          scope={item.id}
+          t={t}
+          target={conversation.target}
+        />
+      ) : item.liveRef ? (
         <LiveTranscript
           cols={cols}
           gw={gw}
@@ -902,11 +1043,28 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   // The turn-scoped tree (legacy gateway bus) and the cross-turn live rows
   // (`subagent.status` + `dag.*`) describe the same runs from different
   // sources; the richer turn rows win when both name an id.
+  // The turn rows carry no record id or instance of their own, so those two
+  // are borrowed from the live row of the same run.
   const liveSubagents = useMemo(() => {
+    const live = new Map(liveAgentRows.map(r => [r.id, toSubagentProgress(r)]))
+    const merged = turnSubagents.map(s => {
+      const row = live.get(s.id)
+
+      return row ? { ...s, instance: s.instance ?? row.instance, liveRef: s.liveRef ?? row.liveRef } : s
+    })
     const seen = new Set(turnSubagents.map(s => s.id))
 
-    return [...turnSubagents, ...liveAgentRows.filter(r => !seen.has(r.id)).map(toSubagentProgress)]
+    return [...merged, ...liveAgentRows.filter(r => !seen.has(r.id)).map(r => live.get(r.id)!)]
   }, [liveAgentRows, turnSubagents])
+
+  const direct = useStore($directChat)
+  const instances = direct.instances
+  const rpc: Rpc = useMemo(
+    () =>
+      async <T extends object>(method: string, params: Record<string, unknown> = {}) =>
+        asRpcResult<T>(await gw.request<T>(method, params)),
+    [gw]
+  )
 
   // historyIndex === 0: live turn.  1..N pulls the Nth-most-recent archived
   // snapshot.  /replay passes N on open.
@@ -922,6 +1080,10 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   // cc-style view switching: list = full-width row picker, detail = full-width
   // scrollable pane.  Two panes side-by-side in Ink fought Yoga flex.
   const [mode, setMode] = useState<'detail' | 'list'>('list')
+  // The conversation composer: what is typed, and whether keys go to it or to
+  // the pane. Typing wins by default when the run can be talked to.
+  const [draft, setDraft] = useState('')
+  const [composing, setComposing] = useState(true)
 
   const detailScrollRef = useRef<null | ScrollBoxHandle>(null)
   const prevLiveCountRef = useRef(liveSubagents.length)
@@ -944,6 +1106,16 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   const rows = useMemo(() => prepareRows(tree, sort, filter), [tree, sort, filter])
 
   const selected = rows[cursor] ?? null
+  const conversation = selected ? conversationOf(selected.item, instances) : null
+  const composerOn = mode === 'detail' && conversation?.resumable === true
+  // Whether the instance is mid-turn, from either signal (see `isTargetWorking`)
+  // plus the run's own status, which the strip knows before the registry does.
+  const conversationWorking =
+    conversation !== null &&
+    selected !== null &&
+    (isTargetWorking(direct, conversation.target) ||
+      selected.item.status === 'running' ||
+      selected.item.status === 'queued')
 
   const cols = stdout?.columns ?? 80
   const rowsH = Math.max(8, (stdout?.rows ?? 24) - 10)
@@ -984,7 +1156,10 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   useEffect(() => {
     // Reset detail scroll on navigation so the top of the new node shows.
     detailScrollRef.current?.scrollTo(0)
+    setDraft('')
+    setComposing(true)
   }, [cursor, historyIndex, mode])
+
 
   useEffect(() => {
     // Warm caps + paused flag on open, and settle the live rows against disk.
@@ -992,6 +1167,9 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
       .then(r => applyDelegationStatus(asRpcResult<DelegationStatusResponse>(r)))
       .catch(() => {})
     scheduleLiveAgentsRefresh()
+    // The registry rows answer `resumable`, which decides whether a detail
+    // pane gets a composer.
+    scheduleInstanceRefresh()
   }, [gw])
 
   useEffect(() => {
@@ -1076,6 +1254,66 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
     onClose()
   }
 
+  const sendToInstance = (text: string) => {
+    const content = text.trim()
+
+    if (!conversation || !selected || content.length === 0) {
+      return
+    }
+
+    const { target } = conversation
+    const key = directKey(target.agent, target.handle)
+    const item = selected.item
+    const name = `${target.agent}/${target.handle}`
+
+    const deliver = (text: string) => {
+      appendDirectMessage(key, { role: 'user', text })
+      sendDirect(target, text).catch((e: Error) => {
+        appendDirectMessage(key, { role: 'system', text: `error: ${e.message}` })
+      })
+      detailScrollRef.current?.scrollToBottom?.()
+    }
+
+    setDraft('')
+
+    // Mid-turn the words are merged into the run rather than queued behind it:
+    // a second prompt would serialise on the instance's handle behind a wait
+    // with no bound. The run announces the merged words itself (a user row on
+    // its live transcript), so nothing is echoed here; a refusal hands the
+    // text back to the draft rather than losing it.
+    const working =
+      isTargetWorking(getDirectChat(), target) || item.status === 'running' || item.status === 'queued'
+
+    if (!working) {
+      return deliver(content)
+    }
+
+    setFlash(`steering ${name}…`)
+    rpc<SubagentsInstanceSteerResult>('subagents.instance.steer', {
+      agent: target.agent,
+      handle: target.handle,
+      session_key: readSid() ?? '',
+      text: content
+    })
+      .then(r => {
+        if (r?.status === 'injected') {
+          setFlash(`steer landed — ${name} reads it before its next step`)
+          detailScrollRef.current?.scrollToBottom?.()
+        } else if (r?.status === 'unsupported') {
+          setDraft(content)
+          setFlash(`${name} cannot take a message mid-turn; send it once the run lands`)
+        } else {
+          // The run ended between the keystroke and the call: nothing to
+          // merge into, so the words go as the next turn.
+          deliver(content)
+        }
+      })
+      .catch((e: Error) => {
+        setDraft(content)
+        setFlash(`steer failed: ${e.message}`)
+      })
+  }
+
   // ── Input ──────────────────────────────────────────────────────────
 
   const detailPageSize = Math.max(4, rowsH - 2)
@@ -1083,6 +1321,33 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   const scrollDetail = (dy: number) => detailScrollRef.current?.scrollBy(dy)
 
   useInput((ch, key) => {
+    // Composer focused: letters are the prompt's. Esc clears a draft before it
+    // leaves, so a half-typed message is never lost to a reflex; Tab hands the
+    // keys to the pane; paging and the wheel still scroll the conversation.
+    if (composerOn && composing) {
+      if (key.escape) {
+        return draft.length > 0 ? setDraft('') : setMode('list')
+      }
+
+      if (key.tab) {
+        return setComposing(false)
+      }
+
+      if (key.pageUp || key.wheelUp) {
+        return scrollDetail(key.pageUp ? -detailPageSize : -wheelDetailDy)
+      }
+
+      if (key.pageDown || key.wheelDown) {
+        return scrollDetail(key.pageDown ? detailPageSize : wheelDetailDy)
+      }
+
+      return
+    }
+
+    if (composerOn && key.tab) {
+      return setComposing(true)
+    }
+
     if (ch === 'q') {
       return closeWithCleanup()
     }
@@ -1268,10 +1533,26 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
           </Box>
         </Box>
       ) : (
-        <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
+        /* flexBasis 0 is load-bearing. With an auto basis, yoga sizes this row
+           by measuring its content with no height bound, and a later pass that
+           hits the row's layout cache leaves the ScrollBox at that content
+           height for one frame -- the pane then shows its top and snaps back.
+           It fired on exactly the composer keystrokes that re-measure a
+           sibling (a draft ending in a space); a fixed basis needs no measure. */
+        <Box flexBasis={0} flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
           <ScrollBox flexDirection="column" flexGrow={1} flexShrink={1} ref={detailScrollRef}>
             <Box flexDirection="column" paddingBottom={4} paddingRight={1}>
-              {selected ? <Detail cols={cols} gw={gw} id={formatRowId(cursor).trim()} node={selected} t={t} /> : null}
+              {selected ? (
+                <Detail
+                  cols={cols}
+                  conversation={conversation}
+                  gw={gw}
+                  id={formatRowId(cursor).trim()}
+                  node={selected}
+                  rpc={rpc}
+                  t={t}
+                />
+              ) : null}
             </Box>
           </ScrollBox>
 
@@ -1281,19 +1562,58 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
         </Box>
       )}
 
-      <Box flexDirection="column" marginTop={1}>
-        {flash ? <Text color={t.color.accent}>{flash}</Text> : null}
+      {/* Pinned height, like the footer: this sits under the flexGrow pane, and
+          a row that changes height resizes the pane above it and repaints the
+          screen. A draft longer than the row is clipped rather than wrapped. */}
+      {composerOn && conversation ? (
+        <Box flexDirection="row" flexShrink={0} height={1} marginTop={1} overflow="hidden">
+          <Text bold color={composing ? t.color.accent : t.color.muted}>
+            {'› '}
+          </Text>
+          <Box flexGrow={1} height={1} overflow="hidden">
+            <TextInput
+              columns={Math.max(20, cols - 4)}
+              focus={composing}
+              onChange={setDraft}
+              onSubmit={sendToInstance}
+              placeholder={
+                composing
+                  ? `message ${conversation.target.agent}/${conversation.target.handle} · Enter to ${
+                      conversationWorking ? 'steer the running turn' : 'send'
+                    }`
+                  : 'Tab to type'
+              }
+              value={draft}
+            />
+          </Box>
+        </Box>
+      ) : null}
+
+      {/* Two rows, always: the flash line is drawn empty rather than omitted,
+          and no hint names state that changes on a keystroke -- the footer
+          that said what Esc would do to the draft changed length on exactly
+          the keys that empty or fill it, and flickered the pane on each. */}
+      <Box flexDirection="column" flexShrink={0} height={2} marginTop={1}>
+        <Text color={t.color.accent} wrap="truncate-end">
+          {flash || ' '}
+        </Text>
 
         {mode === 'list' ? (
-          <Text color={t.color.muted}>
+          <Text color={t.color.muted} wrap="truncate-end">
             ↑↓/jk move · g/G top/bottom · Enter/→ open detail{controlsHint} · s sort:{SORT_LABEL[sort]} · f filter:
             {FILTER_LABEL[filter]}
             {history.length > 0 ? ` · [ / ] history ${historyIndex}/${history.length}` : ''}
             {' · q close'}
           </Text>
+        ) : composerOn && composing ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            Enter {conversationWorking ? 'steer' : 'send'} · Tab pane keys · PgUp/PgDn page · Esc clear draft / back
+            to list
+          </Text>
         ) : (
-          <Text color={t.color.muted}>
-            ↑↓/jk scroll · PgUp/PgDn page · g/G top/bottom · Esc/← back to list{controlsHint} · q close
+          <Text color={t.color.muted} wrap="truncate-end">
+            ↑↓/jk scroll · PgUp/PgDn page · g/G top/bottom{composerOn ? ' · Tab type' : ''} · Esc/← back to list
+            {controlsHint} · q close
           </Text>
         )}
       </Box>

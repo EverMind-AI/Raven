@@ -42,8 +42,7 @@ const actions: AppLayoutActions = {
   clearSelection: () => {},
   deleteSessionWithFallback: async () => false,
   onModelSelect: () => {},
-  resumeById: () => {},
-  setStickyPrompt: () => {}
+  resumeById: () => {}
 }
 
 const composer: AppLayoutComposerProps = {
@@ -69,9 +68,7 @@ const makeProps = (turnStartedAt: null | number): AppLayoutProps => {
     cwdLabel: CWD_LABEL,
     goodVibesTick: 0,
     sessionStartedAt: null,
-    showStickyPrompt: false,
     statusColor: 'green',
-    stickyPrompt: '',
     turnStartedAt,
     voiceLabel: ''
   }

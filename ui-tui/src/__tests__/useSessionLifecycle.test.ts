@@ -219,7 +219,6 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
         setHistoryItems,
         setLastUserMsg: vi.fn(),
         setSessionStartedAt: vi.fn(),
-        setStickyPrompt: vi.fn(),
         setVoiceProcessing: vi.fn(),
         setVoiceRecording: vi.fn(),
         sys: vi.fn()

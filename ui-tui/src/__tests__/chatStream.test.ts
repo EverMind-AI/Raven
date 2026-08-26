@@ -710,6 +710,29 @@ describe('createChatStream — direct-chat routing', () => {
     expect(getDirectTranscript(directKey('A', 'one')).map(m => m.role)).toEqual(['system'])
   })
 
+  it('sendTo addresses the instance named, not the view on screen', async () => {
+    const fake = makeFakeRpc()
+    const sent: unknown[] = []
+    const inner = fake.rpc.bind(fake)
+    fake.rpc = (async (method: string, params: unknown) => {
+      if (method === 'turn.send') {
+        sent.push(params)
+      }
+      return inner(method, params)
+    }) as typeof fake.rpc
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    const target = { agent: 'A', handle: 'one' }
+
+    await stream.sendTo(target, 'hi')
+
+    expect(sent).toEqual([{ session_key: 'tui:default', content: 'hi', target }])
+    // The main view stays where it was, and it is the instance that is busy.
+    expect(getDirectChat().active).toBeNull()
+    expect(getDirectChat().running).toEqual([directKey('A', 'one')])
+    expect(stream.isTurnActive()).toBe(false)
+  })
+
   it('sends the active target with the turn, and omits the key on the main conversation', async () => {
     const sent: unknown[] = []
     const fake = makeFakeRpc()

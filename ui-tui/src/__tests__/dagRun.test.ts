@@ -54,6 +54,25 @@ describe('foldDagEvent', () => {
     expect(run?.nodes.find(n => n.id === 'b')?.status).toBe('pending')
   })
 
+  it("keeps a node's timings, and does not lose them to a later frame that has none", () => {
+    // `started_at` rides the frame that starts a node and `ended_at` the one
+    // that ends it; a frame carrying neither must not blank what a row prints
+    // as the node's elapsed time.
+    const running = foldDagEvent(foldDagEvent(null, started(CHAIN)), {
+      type: 'dag.node_updated',
+      payload: { node: 'a', run_id: 'dag-1', started_at: 1_000, status: 'running' }
+    })
+
+    expect(running?.nodes[0]).toMatchObject({ startedAt: 1_000 })
+
+    const done = foldDagEvent(running, {
+      type: 'dag.node_updated',
+      payload: { ended_at: 4_000, node: 'a', run_id: 'dag-1', status: 'completed' }
+    })
+
+    expect(done?.nodes[0]).toMatchObject({ endedAt: 4_000, startedAt: 1_000, status: 'completed' })
+  })
+
   it('drops an update that arrives before the run started', () => {
     // The subscription can attach mid-run; without the graph there is nothing
     // to draw, and inventing a node from an update would draw a partial graph

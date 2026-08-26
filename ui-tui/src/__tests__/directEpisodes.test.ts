@@ -41,6 +41,18 @@ describe('callSubject', () => {
 })
 
 describe('foldDirectTurns', () => {
+  it('carries a steer row into the turn instead of opening one', () => {
+    const msgs = foldDirectTurns([
+      turn({ call_id: 'log-0', content: 'do it', role: 'user' }),
+      turn({ call_id: 'log-1', content: 'on it', role: 'assistant' }),
+      turn({ at_ms: 7_000, call_id: 'log-2', content: 'the docs first', role: 'user', steer: true }),
+      turn({ call_id: 'log-3', content: 'steered: the docs first', role: 'assistant' })
+    ])
+
+    expect(msgs.map(m => m.role)).toEqual(['user', 'assistant'])
+    expect(msgs[1]!.episodes!.some(ep => ep.steer === 'the docs first' && ep.steerAtMs === 7_000)).toBe(true)
+  })
+
   it('gives each turn one episodes message, so a run of calls can fold', () => {
     const msgs = foldDirectTurns([
       turn({ role: 'user', content: 'look around' }),
@@ -162,15 +174,25 @@ describe('foldDirectTurns', () => {
     const turns = [
       turn({ role: 'user', content: 'fix the bug', call_id: 'c1', at_ms: 1 }),
       turn({
-        role: 'assistant', call_id: 'c1', at_ms: 2,
+        role: 'assistant',
+        call_id: 'c1',
+        at_ms: 2,
         tool_calls: [call('t1', 'commandExecution.read', { path: '/w/calc.py' })]
       }),
       turn({ role: 'tool', content: 'def add(a, b):', call_id: 'c1', tool_call_id: 't1', at_ms: 3 }),
       turn({
-        role: 'assistant', call_id: 'c1', at_ms: 4,
+        role: 'assistant',
+        call_id: 'c1',
+        at_ms: 4,
         tool_calls: [call('t2', 'apply_patch', { path: 'calc.py' })]
       }),
-      turn({ role: 'tool', content: 'Success. Updated the following files:', call_id: 'c1', tool_call_id: 't2', at_ms: 5 })
+      turn({
+        role: 'tool',
+        content: 'Success. Updated the following files:',
+        call_id: 'c1',
+        tool_call_id: 't2',
+        at_ms: 5
+      })
     ]
 
     const msgs = foldDirectTurns(turns)

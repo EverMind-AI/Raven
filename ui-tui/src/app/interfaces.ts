@@ -138,6 +138,12 @@ export interface UiState {
    * turn ends (see `turnController.idle`).
    */
   escapeArmed: boolean
+  /**
+   * Set by the first Esc while the composer holds a line, and cleared by the
+   * second one (which drops the line), by any other keypress, or by the
+   * `ESC_CLEAR_WINDOW_MS` timeout. Drives the input's `esc again to clear` hint.
+   */
+  escClearArmed: boolean
   detailsMode: DetailsMode
   detailsModeCommandOverride: boolean
   info: null | SessionInfo
@@ -366,7 +372,6 @@ export interface AppLayoutActions {
   deleteSessionWithFallback: (id: string) => Promise<boolean>
   onModelSelect: (model: string, providerSlug: string) => void
   resumeById: (id: string) => void
-  setStickyPrompt: (value: string) => void
 }
 
 export interface AppLayoutComposerProps {
@@ -393,9 +398,7 @@ export interface AppLayoutStatusProps {
   cwdLabel: string
   goodVibesTick: number
   sessionStartedAt: null | number
-  showStickyPrompt: boolean
   statusColor: string
-  stickyPrompt: string
   turnStartedAt: null | number
   voiceLabel: string
 }

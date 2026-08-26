@@ -11,7 +11,7 @@ import type { TranscriptMessage } from '../rpc/index.js'
 
 import { resetDagNodeTraces, setDagNodeTrace } from '../app/dagNodeStore.js'
 import { DagNodeSlot } from '../components/dagNodeTrace.js'
-import { DAG_TRACE_BOX_ROWS, DAG_TRACE_FIT_MAX_ROWS } from '../config/limits.js'
+import { DAG_TRACE_BOX_ROWS, DAG_TRACE_BOX_ROWS_SETTLED, DAG_TRACE_FIT_MAX_ROWS } from '../config/limits.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
@@ -27,14 +27,7 @@ const node = (status: DagRunNodeStatus, promptTemplate = 'audit the journal writ
 const slot = (over: { node: DagRunNode; open?: boolean }) =>
   stripAnsi(
     render(
-      <DagNodeSlot
-        node={over.node}
-        open={over.open ?? false}
-        ordinal={2}
-        runId="r1"
-        t={DEFAULT_THEME}
-        width={64}
-      />
+      <DagNodeSlot node={over.node} open={over.open ?? false} ordinal={2} runId="r1" t={DEFAULT_THEME} width={64} />
     ).lastFrame() ?? ''
   )
 
@@ -64,42 +57,12 @@ describe('DagNodeSlot', () => {
     expect(slot({ node: node('completed') }).trim()).toBe('')
   })
 
-  it('draws a placeholder for a running node with nothing said yet', () => {
-    expect(slot({ node: node('running') })).toContain('working')
-  })
-
-  it('draws a placeholder for a running node whose only stored message is its prompt', () => {
-    // `dag.node` brackets a trace with the prompt as a leading user row. A node
-    // that has produced nothing of its own has only that row, and the tail must
-    // not echo it back as if it were something the sub-agent just said.
-    setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [ask('audit the journal writer')], false)
-
-    expect(slot({ node: node('running') })).toContain('working')
-  })
-
-  it('draws the tail of the stream for a running node', () => {
+  it('draws nothing under a running node either, until it is opened', () => {
+    // The live tail that used to sit here cost a row per running node and moved
+    // several times a second; watching one node is what opening it is for.
     setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [say('the journal writes one frame per line')], false)
 
-    expect(slot({ node: node('running') })).toContain('per line')
-  })
-
-  it('keeps the stream line to one row', () => {
-    setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [say('x'.repeat(400))], false)
-
-    const rows = slot({ node: node('running') }).split('\n').filter(Boolean)
-
-    expect(rows).toHaveLength(1)
-  })
-
-  it('keeps the stream line to one row for a cjk and emoji tail', () => {
-    // The underlying clipping is unit-tested in dagStream.test.ts; this pins
-    // the integration, where the spinner and the indent share the row with a
-    // tail made of double-width and surrogate-pair characters.
-    setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [say('写入了很多帧的调试信息和表情包 🎉🚀🔥🎊✨'.repeat(10))], false)
-
-    const rows = slot({ node: node('running') }).split('\n').filter(Boolean)
-
-    expect(rows).toHaveLength(1)
+    expect(slot({ node: node('running') }).trim()).toBe('')
   })
 
   it('draws the trace in a box when expanded', () => {
@@ -109,6 +72,35 @@ describe('DagNodeSlot', () => {
 
     expect(frame).toContain('the answer')
     expect(frame).toContain('n3f8a2')
+  })
+
+  it('gives a finished node the taller box, since nothing will redraw it', () => {
+    // The box cannot scroll, so its height is the only thing deciding how much
+    // of a finished trace is readable without `/dag`. A running node keeps the
+    // short one: it is re-read twice a second, and a tall box redrawing that
+    // often shoves everything under it.
+    setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [say('the answer')], false)
+
+    const running = slot({ node: node('running'), open: true }).split('\n').length
+    const settled = slot({ node: node('completed'), open: true }).split('\n').length
+
+    expect(settled).toBeGreaterThan(running)
+  })
+
+  it('never draws more rows than the box holds, whatever one message says', () => {
+    // Overflow is not clipped by this fork: the column is squeezed instead,
+    // which drops scattered lines and paints the last one over the footer.
+    const huge = say(Array.from({ length: 80 }, (_unused, i) => `line ${i} of a long message`).join('\n'))
+    setDagNodeTrace(dagNodeKey('r1', 'n3f8a2'), [ask('go'), huge], true)
+
+    const rows = slot({ node: node('completed'), open: true })
+      .split('\n')
+      .filter(Boolean)
+
+    expect(rows).toHaveLength(DAG_TRACE_BOX_ROWS_SETTLED)
+    // The tail, contiguous: the cut is at the head and says so.
+    expect(rows.some(row => row.includes('line 79 of a long message'))).toBe(true)
+    expect(rows.some(row => row.includes('earlier messages'))).toBe(true)
   })
 
   it('holds the box to its fixed height whatever the trace length', () => {

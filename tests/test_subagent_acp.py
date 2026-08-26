@@ -265,7 +265,9 @@ def test_snapshot_store_ignores_a_row_it_cannot_read(tmp_path: Path) -> None:
 # ---- the roster ------------------------------------------------------------
 
 
-def _snapshot(agent: str, cfg: Any, *, can_resume: bool, can_load: bool = False) -> CapabilitySnapshot:
+def _snapshot(
+    agent: str, cfg: Any, *, can_resume: bool, can_load: bool = False, can_steer: bool = False
+) -> CapabilitySnapshot:
     return CapabilitySnapshot(
         agent=agent,
         fingerprint=snapshot_fingerprint(cfg),
@@ -274,6 +276,7 @@ def _snapshot(agent: str, cfg: Any, *, can_resume: bool, can_load: bool = False)
         measured_at_ms=1,
         can_resume=can_resume,
         can_load=can_load,
+        can_steer=can_steer,
     )
 
 
@@ -2953,3 +2956,120 @@ async def test_a_second_run_on_a_pooled_connection_asks_its_own_turns_user(tmp_p
     assert [c for _, c in first.seen] == ["tui:c1"]
     assert [c for _, c in second.seen] == ["tui:c2"]
     assert second.seen[0][0].startswith("a(t2): ")
+
+
+# ---- steering -----------------------------------------------------------------
+
+
+async def test_the_handshake_reads_the_steer_extension_from_meta() -> None:
+    snapshot = await verify_agent(stub_config("a"))
+    assert snapshot.can_steer is True, "the stub declares raven.steer in agentCapabilities._meta"
+    assert CapabilitySnapshot.from_row(snapshot.to_row()).can_steer is True
+
+
+async def test_a_steer_reaches_the_running_turn_and_is_written_where_it_was_said(tmp_path: Path) -> None:
+    """The whole path a person's mid-turn words take: the run publishes a hook
+    for the span of its prompt, the hook calls the agent's extension, the agent
+    announces the words back as a ``user_message_chunk``, and the record shows
+    them between what was said before and the answer that followed."""
+    from raven.agent.subagent import activity
+
+    cfg = stub_config("a", mode="steerable")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=False, can_steer=True),
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    with activity.collecting(live_key="rec-1", instance=("s1", "a", "h1"), prompt="do the thing") as run:
+        turn = asyncio.create_task(backend.run("do the thing", task_id="t1", workspace=tmp_path, executor=None))
+        for _ in range(500):
+            if run.steer is not None and run.transcript:
+                break
+            await asyncio.sleep(0.02)
+        assert run.steer is not None, "the backend publishes the steer hook while its prompt is in flight"
+
+        assert await run.steer("the docs first") == "injected"
+        reply = await asyncio.wait_for(turn, timeout=10)
+
+    assert reply.startswith("on it") and reply.endswith("steered: the docs first"), reply
+    roles = [(m["role"], m.get("content")) for m in run.transcript]
+    assert ("user", "the docs first") in roles, roles
+    said_before = next(i for i, m in enumerate(run.transcript) if m.get("content") == "on it")
+    steer_at = next(i for i, m in enumerate(run.transcript) if m.get("role") == "user")
+    assert said_before < steer_at, "what the agent had said lands before the words that redirected it"
+    assert run.closing == "steered: the docs first", (
+        "the closing row holds only what followed the steer; the words before it are on their own row"
+    )
+    assert sum(1 for m in run.transcript if m.get("content") == "on it") == 1, "said once, not again after the steer"
+    assert run.steer is None, "the hook is withdrawn with the prompt"
+
+
+async def test_a_stale_snapshot_does_not_hide_a_steer_the_live_handshake_offers(tmp_path: Path) -> None:
+    """The snapshot on disk was measured before the agent learned the extension;
+    the connection answering this prompt declares it. The hook is published."""
+    from raven.agent.subagent import activity
+
+    cfg = stub_config("a", mode="steerable")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=False, can_steer=False),
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    assert backend.can_steer is False
+    with activity.collecting(live_key="rec-1", instance=("s1", "a", "h1"), prompt="go") as run:
+        turn = asyncio.create_task(backend.run("go", task_id="t1", workspace=tmp_path, executor=None))
+        for _ in range(500):
+            if run.steer is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert run.steer is not None, "the live handshake, not the stale snapshot, decides"
+        assert await run.steer("the docs first") == "injected"
+        reply = await asyncio.wait_for(turn, timeout=10)
+    assert reply.endswith("steered: the docs first"), reply
+
+
+async def test_a_backend_without_the_extension_publishes_no_steer_hook(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    cfg = stub_config("a", mode="steerable")
+    cfg.env["ACP_STUB_NO_STEER"] = "1"
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=False, can_steer=False),
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    with activity.collecting(live_key="rec-1", instance=("s1", "a", "h1")) as run:
+        turn = asyncio.create_task(backend.run("go", task_id="t1", workspace=tmp_path, executor=None))
+        for _ in range(200):
+            if run.transcript:
+                break
+            await asyncio.sleep(0.02)
+        assert run.steer is None
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+
+async def test_a_user_chunk_that_echoes_the_prompt_is_not_a_steer() -> None:
+    """The spec uses ``user_message_chunk`` for replays; an agent that echoes the
+    prompt back at the start of a turn must not put a second copy of the
+    question on the record as if someone had steered."""
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector(prompt="do the thing")
+
+    async def feed(text: str) -> None:
+        await col(
+            "session/update",
+            {"update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}}},
+        )
+
+    await feed("do the thing")
+    await feed("the docs first")
+    assert [(e["t"], e["text"]) for e in col.events] == [("user", "the docs first")]

@@ -30,6 +30,10 @@ export interface DagRunNode {
   id: string
   subagent: string
   dependsOn: string[]
+  /** Wire clock, in ms, as the runner stamped it. Absent until the node starts,
+   * and on a run whose dir predates the fields. */
+  startedAt?: number
+  endedAt?: number
   /** Shared stateful handle; nodes naming the same one ran sequentially. */
   instance?: string
   status: DagRunNodeStatus
@@ -77,9 +81,26 @@ const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Rec
   }))
 })
 
-const withNodeStatus = (run: DagRunState, id: string, status: DagRunNodeStatus): DagRunState => ({
+const withNodeStatus = (
+  run: DagRunState,
+  id: string,
+  status: DagRunNodeStatus,
+  times: { endedAt?: number; startedAt?: number } = {}
+): DagRunState => ({
   ...run,
-  nodes: run.nodes.map(node => (node.id === id ? { ...node, status } : node))
+  nodes: run.nodes.map(node =>
+    node.id === id
+      ? {
+          ...node,
+          status,
+          // A later frame carrying no timestamp does not erase one an earlier
+          // frame reported: `ended_at` rides only the terminal frame, and
+          // `started_at` only the one that started the node.
+          ...(times.startedAt !== undefined ? { startedAt: times.startedAt } : {}),
+          ...(times.endedAt !== undefined ? { endedAt: times.endedAt } : {})
+        }
+      : node
+  )
 })
 
 const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload']): DagRunState => {
@@ -172,7 +193,10 @@ export const foldDagEvent = (
   }
 
   return prev.nodes.some(node => node.id === event.payload.node)
-    ? withNodeStatus(prev, event.payload.node, event.payload.status)
+    ? withNodeStatus(prev, event.payload.node, event.payload.status, {
+        endedAt: event.payload.ended_at,
+        startedAt: event.payload.started_at
+      })
     : prev
 }
 
@@ -207,6 +231,8 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
       dependsOn: [...(file.depends_on ?? [])],
       ...(file.instance ? { instance: file.instance } : {}),
       status: file.status,
+      ...(file.started_at !== undefined ? { startedAt: file.started_at } : {}),
+      ...(file.ended_at !== undefined ? { endedAt: file.ended_at } : {}),
       ...(template ? { promptTemplate: template } : {}),
       ...(summary ? { nodeSummary: summary } : {}),
       ...(file.output_file ? { outputFile: file.output_file } : {}),

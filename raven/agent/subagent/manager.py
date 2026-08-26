@@ -53,6 +53,9 @@ _SPAWN_WINDOW_SECONDS = 3600
 # a wedged CLI subagent already holds must never stall behind a slow or
 # corrupt registry write.
 _REGISTRY_WRITE_TIMEOUT_S = 2.0
+# How long a steer waits for a run that is live but has not put its prompt on the
+# wire yet to publish its hook, before it is called unsupported.
+_STEER_HOOK_GRACE_S = 3.0
 # ``spawn`` reports a refusal by returning its reason rather than raising, so a
 # caller that has to tell "dispatched" from "declined" has only the string. Both
 # refusals below open with this, and the spawn tool tests for it before publishing
@@ -812,6 +815,43 @@ class SubagentManager:
                 ids.discard(task_id)
                 if not ids:
                     del self._instance_tasks[key]
+
+    async def steer_instance(self, session_key: str, agent: str, handle: str, text: str) -> str:
+        """Merge a person's words into the turn this instance is running now.
+
+        Answers a status rather than raising: ``injected`` (the run will read
+        the text before its next model call), ``no_turn`` (nothing is running
+        for this instance -- the caller still holds the text and can send it as
+        a turn), or ``unsupported`` (the run's transport cannot take text
+        mid-turn; a cli agent, or an acp agent without the extension).
+
+        Reached through the live activity index rather than a backend call
+        because the steer belongs to the *run*: the backend publishes the hook
+        for exactly the span of its prompt, and a run with no hook is one that
+        cannot be steered, whatever its agent could do in general.
+        """
+        # The same key the writers use: `collecting(...)` registers the run under
+        # `session_key or ""`, and so does the history read beside this. A
+        # different fallback here found nothing and called every steer no_turn.
+        run = activity.live_instance(session_key or "", agent, handle)
+        if run is None:
+            return "no_turn"
+        # The run is live from the moment it is recorded, and its hook only
+        # from the moment the prompt is on the wire -- a connect and a session
+        # open apart. A steer typed in that gap is not unsupported, it is early;
+        # waiting the gap out is what keeps the two answers honest.
+        deadline = asyncio.get_running_loop().time() + _STEER_HOOK_GRACE_S
+        while run.steer is None:
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.05)
+            live = activity.live_instance(session_key or "", agent, handle)
+            if live is None:
+                return "no_turn"
+            run = live
+        if run.steer is None:
+            return "unsupported"
+        return await run.steer(text)
 
     def declared_stateful(self, agent: str | None) -> bool:
         """Whether reusing this agent's handle continues its conversation.

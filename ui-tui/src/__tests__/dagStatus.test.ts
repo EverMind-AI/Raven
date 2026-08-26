@@ -10,9 +10,12 @@ import type { DagNodeDetail } from '../rpc/index.js'
 import {
   DAG_STATUS_GLYPH,
   dagNodeDeps,
+  dagNodeElapsed,
   dagNodeHandle,
   dagNodeSummary,
+  dagRunElapsedMs,
   dagRunHeadline,
+  dagRunTally,
   dagSharedInstances,
   formatDagNodeDetail
 } from '../lib/dagStatus.js'
@@ -233,7 +236,11 @@ describe('formatDagNodeDetail trace', () => {
     const text = formatDagNodeDetail({
       ...base,
       messages: [
-        { role: 'assistant', text: 'looking', tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }] },
+        {
+          role: 'assistant',
+          text: 'looking',
+          tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }]
+        },
         { role: 'tool', text: '12 lines', tool_call_id: 'c' }
       ],
       output: 'ok',
@@ -264,7 +271,11 @@ describe('formatDagNodeDetail trace', () => {
       ...base,
       messages: [
         { role: 'user', text: 'do it' },
-        { role: 'assistant', text: 'reading the file', tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }] },
+        {
+          role: 'assistant',
+          text: 'reading the file',
+          tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }]
+        },
         { role: 'tool', text: '12 lines', tool_call_id: 'c' },
         { role: 'assistant', text: 'done' }
       ],
@@ -280,7 +291,6 @@ describe('formatDagNodeDetail trace', () => {
     expect(text).toContain('12 lines')
   })
 })
-
 
 describe('dagNodeDeps', () => {
   const joined = { dependsOn: ['a', 'b'], id: 'c', subagent: 'raven-code' }
@@ -321,5 +331,79 @@ describe('dagSharedInstances', () => {
 
   it('ignores nodes with no handle at all', () => {
     expect(dagSharedInstances([{}, {}]).size).toBe(0)
+  })
+})
+
+describe('dagRunTally', () => {
+  it('counts by status, in one order, dropping the zeroes', () => {
+    const tally = dagRunTally(
+      run({ nodes: [node('a', 'completed'), node('b', 'running'), node('c', 'pending'), node('d', 'pending')] })
+    )
+
+    expect(tally).toEqual([
+      { count: 1, status: 'completed' },
+      { count: 1, status: 'running' },
+      { count: 2, status: 'pending' }
+    ])
+  })
+
+  it('takes a finished run at the manifest word, which is authoritative', () => {
+    // The client can miss a node's terminal frame; the manifest cannot.
+    const tally = dagRunTally(
+      run({ done: true, nodes: [node('a', 'completed')], summary: { completed: 3, failed: 1, total: 4 } })
+    )
+
+    expect(tally).toEqual([
+      { count: 3, status: 'completed' },
+      { count: 1, status: 'failed' }
+    ])
+  })
+})
+
+describe('dag elapsed', () => {
+  const timed = (over: { endedAt?: number; startedAt?: number; status: DagRunNodeStatus }) => ({
+    ...node('n', over.status),
+    ...over
+  })
+
+  it('reads a finished node as what it took and a running one as what it has taken', () => {
+    expect(dagNodeElapsed(timed({ endedAt: 5_000, startedAt: 2_000, status: 'completed' }), 9_000)).toBe('3s')
+    expect(dagNodeElapsed(timed({ startedAt: 2_000, status: 'running' }), 9_000)).toBe('7s')
+  })
+
+  it('says what a node that has not started is waiting as', () => {
+    expect(dagNodeElapsed(timed({ status: 'pending' }), 9_000)).toBe('queued')
+  })
+
+  it('says nothing for a node whose run dir recorded no timings', () => {
+    // A zero would read as a node that did nothing, which is a different claim.
+    expect(dagNodeElapsed(timed({ status: 'completed' }), 9_000)).toBe('')
+  })
+
+  it('measures a run from its first start to its last end', () => {
+    const finished = run({
+      done: true,
+      nodes: [
+        { ...timed({ endedAt: 4_000, startedAt: 1_000, status: 'completed' }), id: 'a' },
+        { ...timed({ endedAt: 9_000, startedAt: 4_000, status: 'completed' }), id: 'b' }
+      ]
+    })
+
+    expect(dagRunElapsedMs(finished, 100_000)).toBe(8_000)
+  })
+
+  it('keeps a live run running against the clock, whatever has already ended', () => {
+    const live = run({
+      nodes: [
+        { ...timed({ endedAt: 4_000, startedAt: 1_000, status: 'completed' }), id: 'a' },
+        { ...timed({ startedAt: 4_000, status: 'running' }), id: 'b' }
+      ]
+    })
+
+    expect(dagRunElapsedMs(live, 10_000)).toBe(9_000)
+  })
+
+  it('has nothing to report for a run whose nodes carry no timings', () => {
+    expect(dagRunElapsedMs(run({ nodes: [node('a', 'pending')] }), 10_000)).toBeUndefined()
   })
 })

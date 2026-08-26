@@ -2,22 +2,19 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// The slot under one DAG node's row: nothing, a live line, or a box.
+// The slot under one DAG node's row: nothing, or the box the row opens into.
 //
-// Three states of one place rather than three places, because the second click
-// has to read as "go back" -- a box that appeared *beside* the line it replaced
-// would leave the reader looking for what changed.
+// A running node used to keep a live tail here, one line of whatever it was
+// producing. It cost the panel a row per running node and moved a few times a
+// second, which is what a graph of three nodes reads as at a glance: churn. The
+// trace it was a window on is a click away, in the box, and that click is what
+// says the reader wants to watch one node rather than the shape.
 //
 // The box is a constant height, and both halves of that are deliberate: its
 // footer is drawn whether or not anything was cut, and a short trace is
 // blank-padded. A box that grew as the run produced messages would shove every
 // row beneath it several times a second, and the height model could then not
 // state a panel's height without folding the trace first.
-//
-// StreamLine and TraceBox are separate components rather than two branches of
-// one, because a hook cannot be conditional: folding and measuring the trace
-// has to live on a component that only mounts once the box is actually shown,
-// or a collapsed running node would pay for a measurement it never draws.
 
 import { Box, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
@@ -28,17 +25,12 @@ import type { TranscriptMessage } from '../rpc/index.js'
 import type { Theme } from '../theme.js'
 
 import { $dagNodeTraces } from '../app/dagNodeStore.js'
-import { DAG_TRACE_BOX_ROWS, DAG_TRACE_ROWS } from '../config/limits.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
-import { dagNodeHandle } from '../lib/dagStatus.js'
-import { dagStreamTail, fitTraceTail } from '../lib/dagStream.js'
+import { dagNodeHandle, dagNodeSummary, dagTraceBoxRows, dagTraceRows } from '../lib/dagStatus.js'
+import { fitTraceTail } from '../lib/dagStream.js'
 import { MessageLine } from './messageLine.js'
-import { Spinner } from './thinking.js'
 
 const INDENT = 2
-
-// The spinner and the space after it.
-const SPINNER_CELLS = 2
 
 // Bounds the fallback block. The template is shown as authored, where a
 // `{{ ref:<path> }}` is thirty-odd literal characters rather than the file, so
@@ -48,6 +40,10 @@ const PROMPT_CHARS = 4000
 /** What the node was asked, for a node whose trace could not be read. */
 const NodePrompt = ({ node, t, width }: { node: DagRunNode; t: Theme; width: number }) => {
   const prompt = node.promptTemplate ?? ''
+  // The line the node was dispatched with. It used to lead the node's row; the
+  // row now leads with the id, so this is where it lives -- and it is the only
+  // thing a node dispatched without a template has to show at all.
+  const summary = dagNodeSummary(node.nodeSummary, undefined, Math.max(8, width))
 
   return (
     <Box flexDirection="column" width={Math.max(8, width)}>
@@ -55,33 +51,13 @@ const NodePrompt = ({ node, t, width }: { node: DagRunNode; t: Theme; width: num
         {node.id}
         {node.outputFile ? ` → ${node.outputFile}` : ''}
       </Text>
+      {summary && (
+        <Text color={t.color.muted} wrap="truncate-end">
+          {summary}
+        </Text>
+      )}
       <Text color={t.color.text} wrap="wrap">
         {prompt.length > PROMPT_CHARS ? `${prompt.slice(0, PROMPT_CHARS)}\n…` : prompt}
-      </Text>
-    </Box>
-  )
-}
-
-// No `wrap="truncate-end"` here, deliberately: the Spinner is a nested <Text>,
-// and a nested Text makes ink's own truncation a no-op (see the note on
-// `clipToWidth`, text.ts:63). `dagStreamTail` has already cut to `room`, which
-// is the actual guarantee that this stays one row.
-const StreamLine = ({
-  messages,
-  t,
-  width
-}: {
-  messages?: readonly TranscriptMessage[]
-  t: Theme
-  width: number
-}) => {
-  const room = Math.max(8, width - INDENT - SPINNER_CELLS)
-  const tail = useMemo(() => (messages ? dagStreamTail(messages, room) : ''), [messages, room])
-
-  return (
-    <Box paddingLeft={INDENT} width={Math.max(8, width)}>
-      <Text color={t.color.muted}>
-        <Spinner color={t.color.accent} variant="tool" /> {tail || 'working…'}
       </Text>
     </Box>
   )
@@ -103,14 +79,17 @@ const TraceBox = ({
 }) => {
   // Borders take a column each side, and the box is indented from the row.
   const inner = Math.max(24, width - INDENT - 2)
-  const fit = useMemo(() => fitTraceTail(messages ?? [], DAG_TRACE_ROWS, inner), [inner, messages])
+  // A finished node's box is the taller one: it will never redraw again, and its
+  // height is the only thing deciding how much of the trace is readable here.
+  const rows = dagTraceRows(node.status)
+  const fit = useMemo(() => fitTraceTail(messages ?? [], rows, inner), [inner, messages, rows])
 
   return (
     <Box
       borderColor={t.color.border}
       borderStyle="round"
       flexDirection="column"
-      height={DAG_TRACE_BOX_ROWS}
+      height={dagTraceBoxRows(node.status)}
       marginLeft={INDENT}
       overflow="hidden"
       width={Math.max(28, width - INDENT)}
@@ -126,7 +105,7 @@ const TraceBox = ({
       </Text>
 
       {fit.shown.length > 0 ? (
-        <Box flexDirection="column" flexGrow={1}>
+        <Box flexDirection="column" height={rows} overflow="hidden">
           {/* `hidden` offsets the key out of the window, so a row keeps its
               instance as the tail slides instead of inheriting the previous
               row's state (see the same note in `agentsOverlay`). */}
@@ -166,7 +145,7 @@ export const DagNodeSlot = memo(function DagNodeSlot({
   const messages = traces.get(dagNodeKey(runId, node.id))?.messages
 
   if (!open) {
-    return node.status === 'running' ? <StreamLine messages={messages} t={t} width={width} /> : null
+    return null
   }
 
   return <TraceBox messages={messages} node={node} ordinal={ordinal} t={t} width={width} />

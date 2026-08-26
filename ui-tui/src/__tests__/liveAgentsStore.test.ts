@@ -7,9 +7,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { DagRunStartedEvent, SubagentCall } from '../rpc/index.js'
 
 import {
+  $dagRuns,
   $liveAgents,
   applyDagEvent,
   applySubagentStatus,
+  dagRunCounts,
   liveAgentCounts,
   resetLiveAgents,
   toSubagentProgress
@@ -120,6 +122,15 @@ describe('reconcile and selectors', () => {
     expect(progress.status).toBe('running')
     expect(progress.liveRef).toEqual({ callId: 'rec-1', kind: 'spawn' })
   })
+
+  it('names the instance a stateful spawn is a turn of, and none for a stateless one', () => {
+    status({ call_id: 'rec-1', instance: 'refactor-auth', status: 'running' })
+    expect(toSubagentProgress($liveAgents.get()[0]!).instance).toEqual({ agent: 'raven', handle: 'refactor-auth' })
+
+    resetLiveAgents()
+    status({ call_id: 'rec-2', status: 'running' })
+    expect(toSubagentProgress($liveAgents.get()[0]!).instance).toBeUndefined()
+  })
 })
 
 describe('reconcileFromList', () => {
@@ -181,5 +192,138 @@ describe('reconcileFromList', () => {
     reconcileFromList([{ id: 'rec-1', kind: 'spawn', label: 'find the bug', message_count: 2, status: 'ok' }])
 
     expect($liveAgents.get()[0]?.status).toBe('completed')
+  })
+})
+
+describe('$dagRuns', () => {
+  const completion = (statuses: Record<string, string>) => ({
+    payload: {
+      dir: '/tmp/run-1',
+      files: Object.entries(statuses).map(([node, status]) => ({ node, status: status as never })),
+      run_id: 'run-1',
+      summary: {}
+    },
+    type: 'dag.run_completed' as const
+  })
+
+  it('tallies the whole graph, and keeps tallying it after its rows are gone', () => {
+    applyDagEvent({ ...dagStarted(), payload: { ...dagStarted().payload, task_summary: 'ship the site' } })
+    applyDagEvent({
+      payload: { node: 'research', run_id: 'run-1', started_at: 1000, status: 'running' },
+      type: 'dag.node_updated'
+    })
+
+    const running = $dagRuns.get()[0]!
+    expect(running).toMatchObject({ runId: 'run-1', summary: 'ship the site' })
+    expect(running.startedAtMs).toBeDefined()
+    expect(dagRunCounts(running)).toEqual({ done: 0, failed: 0, pending: 1, running: 1, total: 2 })
+
+    applyDagEvent(completion({ research: 'completed', write: 'failed' }))
+
+    // The rows may be pruned from under it; the tally is the run's own.
+    $liveAgents.set([])
+
+    const done = $dagRuns.get()[0]!
+    expect(dagRunCounts(done)).toEqual({ done: 2, failed: 1, pending: 0, running: 0, total: 2 })
+    expect(done.endedAtMs).toBeDefined()
+  })
+
+  it('keeps a node its own end when the run completes later', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent({
+      payload: { ended_at: 61_000, node: 'research', run_id: 'run-1', started_at: 1_000, status: 'completed' },
+      type: 'dag.node_updated'
+    })
+    applyDagEvent({
+      payload: { node: 'write', run_id: 'run-1', started_at: 61_000, status: 'running' },
+      type: 'dag.node_updated'
+    })
+
+    applyDagEvent(completion({ research: 'completed', write: 'completed' }))
+
+    // research ran for a minute; the run ended much later, and that is not
+    // research's elapsed time.
+    const research = $liveAgents.get().find(r => r.id === 'run-1/research')!
+    expect(research.endedAtMs).toBe(61_000)
+    expect(toSubagentProgress(research).durationSeconds).toBe(60)
+  })
+
+  it('ends a run whose completion frame never came, when its last node settles', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent({
+      payload: { node: 'research', run_id: 'run-1', status: 'completed' },
+      type: 'dag.node_updated'
+    })
+    expect($dagRuns.get()[0]?.endedAtMs).toBeUndefined()
+
+    applyDagEvent({ payload: { node: 'write', run_id: 'run-1', status: 'skipped' }, type: 'dag.node_updated' })
+    expect($dagRuns.get()[0]?.endedAtMs).toBeDefined()
+  })
+
+  it('never opens a run on a node frame alone, whose node set it cannot know', () => {
+    applyDagEvent({
+      payload: { node: 'orphan', run_id: 'run-9', status: 'running' },
+      type: 'dag.node_updated'
+    })
+
+    expect($dagRuns.get()).toEqual([])
+  })
+
+  it('keeps a terminal node terminal on a late frame, as the rows do', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(completion({ research: 'completed', write: 'completed' }))
+    applyDagEvent({ payload: { node: 'research', run_id: 'run-1', status: 'running' }, type: 'dag.node_updated' })
+
+    expect(dagRunCounts($dagRuns.get()[0]!)).toMatchObject({ done: 2, running: 0 })
+  })
+})
+
+describe('$dagRuns reconcile', () => {
+  const dagItem = (node: string, status: string): SubagentCall => ({
+    id: `run-2/${node}`,
+    kind: 'dag',
+    label: node,
+    message_count: 1,
+    node,
+    run_id: 'run-2',
+    status
+  })
+
+  it('seeds a graph the disk still shows working, with every node it lists', async () => {
+    const { reconcileFromList } = await import('../app/liveAgentsStore.js')
+
+    reconcileFromList([dagItem('a', 'ok'), dagItem('b', 'run'), dagItem('c', 'queued')])
+
+    const run = $dagRuns.get()[0]!
+    expect(run.runId).toBe('run-2')
+    expect(dagRunCounts(run)).toEqual({ done: 1, failed: 0, pending: 1, running: 1, total: 3 })
+  })
+
+  it('does not resurrect a graph that was over before this session opened', async () => {
+    const { reconcileFromList } = await import('../app/liveAgentsStore.js')
+
+    reconcileFromList([dagItem('a', 'ok'), dagItem('b', 'ok')])
+
+    expect($dagRuns.get()).toEqual([])
+  })
+
+  it('cancels a node the disk stopped listing, so an abandoned graph stops reading as live', async () => {
+    const { reconcileFromList } = await import('../app/liveAgentsStore.js')
+
+    reconcileFromList([dagItem('a', 'run'), dagItem('b', 'queued')])
+    expect(dagRunCounts($dagRuns.get()[0]!)).toMatchObject({ pending: 1, running: 1 })
+
+    reconcileFromList([dagItem('a', 'ok')])
+
+    expect(dagRunCounts($dagRuns.get()[0]!)).toEqual({ done: 2, failed: 1, pending: 0, running: 0, total: 2 })
+  })
+
+  it('leaves a graph alone when the snapshot names no node of it', async () => {
+    const { reconcileFromList } = await import('../app/liveAgentsStore.js')
+
+    reconcileFromList([dagItem('a', 'run')])
+    reconcileFromList([])
+
+    expect(dagRunCounts($dagRuns.get()[0]!)).toMatchObject({ running: 1 })
   })
 })

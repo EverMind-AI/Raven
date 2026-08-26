@@ -161,10 +161,6 @@ describe('chipsForWidth — what is addressable', () => {
 
 describe('which chip the strip paints as the one you are on', () => {
   it('gives the active chip a colour no inactive chip is painted in', () => {
-    // The regression: the strip asked for `label` on the active chip and
-    // `muted` on the rest, and those are the same value in the default dark
-    // theme and in the 256-colour one -- so every chip rendered identically and
-    // bold was the only surviving cue.
     for (const [name, theme] of Object.entries(THEMES)) {
       expect(theme.color.accent, name).not.toBe(theme.color.muted)
     }

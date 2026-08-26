@@ -960,6 +960,14 @@ export function TextInput({
           v = v.slice(0, c)
         }
       } else if (event.keypress.isPasted || inp.length > 0) {
+        // A Ctrl chord this composer does not bind is somebody else's (Ctrl+T
+        // opens the agents overlay); the letter it carries is not typing.
+        // Every chord the composer does use was handled above, so anything
+        // reaching here with ctrl held is a leak, not an insert.
+        if (k.ctrl && !event.keypress.isPasted) {
+          return
+        }
+
         const bracketed = event.keypress.isPasted || inp.includes('[200~')
         const text = inp.replace(BRACKET_PASTE, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 

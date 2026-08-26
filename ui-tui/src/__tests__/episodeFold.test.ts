@@ -6,11 +6,71 @@ import { describe, expect, it } from 'vitest'
 
 import type { FoldRow } from '../domain/episodeFold.js'
 
-import { callIntent, foldRowsIntoEpisodes } from '../domain/episodeFold.js'
+import { callIntent, foldRowsIntoEpisodes, joinProse } from '../domain/episodeFold.js'
 
 const row = (over: Partial<FoldRow> & Pick<FoldRow, 'role'>): FoldRow => ({ text: '', ...over })
 
 describe('foldRowsIntoEpisodes', () => {
+  it('keeps the reasoning written on a reply row, not only on a thought-only row', () => {
+    const msgs = foldRowsIntoEpisodes([
+      row({ reasoning: 'a minute of thinking', reasoningMs: 60_000, role: 'assistant', text: 'the reply' })
+    ])
+
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]!.text).toBe('the reply')
+    expect(msgs[0]!.episodes).toEqual([{ index: 0, reasoning: 'a minute of thinking', reasoningMs: 60_000, tools: [] }])
+  })
+
+  it('draws a steer inside the turn, after the paragraph it cut into', () => {
+    const msgs = foldRowsIntoEpisodes([
+      row({ role: 'user', text: 'do the thing' }),
+      row({ role: 'assistant', text: 'The homepage links to detail.html.\n\nWait' }),
+      row({ atMs: 5_000, role: 'user', steer: true, text: 'hello there' }),
+      row({ role: 'assistant', text: ', but the task says otherwise.\n\nSo my task is clear.' })
+    ])
+
+    // One turn, not two: the steer did not open a new one.
+    expect(msgs.map(m => m.role)).toEqual(['user', 'assistant'])
+    const turn = msgs[1]!
+    expect(turn.episodes!.map(ep => ep.steer ?? ep.narration)).toEqual([
+      'The homepage links to detail.html.\n\nWait, but the task says otherwise.',
+      'hello there'
+    ])
+    expect(turn.episodes![1]).toMatchObject({ steer: 'hello there', steerAtMs: 5_000, tools: [] })
+    expect(turn.text).toBe('So my task is clear.')
+  })
+
+  it('places a steer the agent answered by acting before the step it prompted', () => {
+    const msgs = foldRowsIntoEpisodes([
+      row({ role: 'assistant', text: 'Looking around.' }),
+      row({ role: 'user', steer: true, text: 'check the docs' }),
+      row({ calls: [{ arguments: '{"path":"README.md"}', id: 'c1', name: 'read_file' }], role: 'assistant', text: '' }),
+      row({ role: 'tool', text: 'contents', toolCallId: 'c1' })
+    ])
+
+    expect(msgs[0]!.episodes!.map(ep => ep.steer ?? ep.narration ?? ep.tools[0]!.name)).toEqual([
+      'Looking around.',
+      'check the docs',
+      'read_file'
+    ])
+  })
+
+  it('places a steer nothing followed at the end of the turn', () => {
+    const msgs = foldRowsIntoEpisodes([
+      row({ role: 'assistant', text: 'Done.' }),
+      row({ role: 'user', steer: true, text: 'thanks' })
+    ])
+
+    expect(msgs[0]!.episodes!.map(ep => ep.steer ?? ep.narration)).toEqual(['Done.', 'thanks'])
+    expect(msgs[0]!.text).toBe('')
+  })
+
+  it('rejoins split prose with a space only where one was lost', () => {
+    expect(joinProse('Wait', ', but no')).toBe('Wait, but no')
+    expect(joinProse('the file', 'Let me look')).toBe('the file Let me look')
+    expect(joinProse('我先看', '一下文件')).toBe('我先看一下文件')
+  })
+
   it('builds one episodes message per turn, with a tool per call', () => {
     const msgs = foldRowsIntoEpisodes([
       row({ role: 'user', text: 'do it' }),

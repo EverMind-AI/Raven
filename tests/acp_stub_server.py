@@ -102,9 +102,17 @@ CAPABILITIES = {
         "loadSession": True,
         "promptCapabilities": {"image": True},
         "sessionCapabilities": _SESSION_CAPS,
+        # raven's own extension, the way a raven-as-agent announces it. Served
+        # only in the ``steerable`` mode; declaring it everywhere keeps the
+        # capability read under test in every other mode too.
+        "_meta": {"raven.steer": {}},
     },
     "authMethods": [{"id": "stub-auth", "name": "Stub auth"}],
 }
+# An agent that never learned the extension, for the test that a client must
+# not call what was not declared.
+if os.environ.get("ACP_STUB_NO_STEER"):
+    del CAPABILITIES["agentCapabilities"]["_meta"]
 
 
 def send(frame: dict) -> None:
@@ -144,6 +152,26 @@ _AWAITING_CANCEL: list = []
 # string; this is what a peer that does not read the schema can still send.
 _UNHASHABLE_ID = [7]
 _AWAITING_MALFORMED: list = []
+
+# Prompts held open until a steer arrives (steerable): the turn then answers the
+# steered text, so a test can tell a merged steer from a dropped one.
+_AWAITING_STEER: list = []
+
+
+def handle_steer(request_id, params) -> None:
+    text = params.get("text") or ""
+    if MODE != "steerable" or not _AWAITING_STEER:
+        ok(request_id, {"status": "no_turn"})
+        return
+    prompt_id, session_id = _AWAITING_STEER.pop(0)
+    # What a raven agent does on an accepted steer: announce the person's words
+    # on the session stream, then answer them, then the turn ends.
+    update(session_id, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}})
+    ok(request_id, {"status": "injected"})
+    update(
+        session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"steered: {text}"}}
+    )
+    ok(prompt_id, {"stopReason": "end_turn"})
 
 
 def handle_response(frame) -> None:
@@ -397,6 +425,11 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working"}})
         _AWAITING_CANCEL.append((request_id, session_id))
         return
+    if MODE == "steerable":
+        update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "starting"}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "on it"}})
+        _AWAITING_STEER.append((request_id, session_id))
+        return
     if MODE == "cancelled":
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I will "}})
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "start by"}})
@@ -558,6 +591,8 @@ def main() -> None:
                 ok(request_id, {})
         elif method == "session/prompt":
             handle_prompt(request_id, params)
+        elif method == "_raven/session/steer":
+            handle_steer(request_id, params)
         elif request_id is not None:
             err(request_id, -32601, f"unknown method {method}")
 

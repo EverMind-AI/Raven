@@ -452,6 +452,8 @@ def _log_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         if isinstance(row.get("reasoning_content"), str) and row["reasoning_content"].strip():
             turn["reasoning_content"] = row["reasoning_content"]
+        if row.get("steer") is True:
+            turn["steer"] = True
         if isinstance(row.get("tool_call_id"), str):
             turn["tool_call_id"] = row["tool_call_id"]
         calls = _wire_tool_calls(row.get("tool_calls"))
@@ -547,6 +549,27 @@ async def _delete_acp_session(agent: str, session_id: str) -> None:
     await get_pool().delete_session(agent, session_id)
 
 
+async def instances_steer(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """Merge text into the turn one instance is running (``subagents.instance.steer``).
+
+    The status is the manager's word (see ``SubagentManager.steer_instance``);
+    a session with no live loop answers ``no_turn``, the same way the reads here
+    degrade to empty: nothing is running that could be steered.
+    """
+    manager = _manager(agent_loop_factory)
+    text = str(params.get("text") or "")
+    if manager is None or not text.strip():
+        return {"status": "no_turn"}
+    status = await manager.steer_instance(
+        str(params.get("session_key") or ""), str(params.get("agent") or ""), str(params.get("handle") or ""), text
+    )
+    return {"status": status}
+
+
 def register_instance_methods(
     dispatcher: "Dispatcher",
     *,
@@ -563,10 +586,14 @@ def register_instance_methods(
     async def _create(params: dict[str, Any]) -> dict[str, Any]:
         return await instances_create(params, agent_loop_factory=agent_loop_factory)
 
+    async def _steer(params: dict[str, Any]) -> dict[str, Any]:
+        return await instances_steer(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.instances", _list)
     dispatcher.register("subagents.instance.create", _create)
     dispatcher.register("subagents.instance.history", _history)
     dispatcher.register("subagents.instance.forget", instances_forget)
+    dispatcher.register("subagents.instance.steer", _steer)
 
 
 __all__ = [
@@ -574,5 +601,6 @@ __all__ = [
     "instances_forget",
     "instances_history",
     "instances_list",
+    "instances_steer",
     "register_instance_methods",
 ]

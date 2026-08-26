@@ -32,6 +32,7 @@ import type {
   TurnSubscribeParams
 } from '../rpc/index.js'
 import type { Msg, TurnArtifacts } from '../types.js'
+import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
@@ -104,6 +105,8 @@ export interface ChatStreamHandle {
   attach: () => Promise<void>
   detach: () => Promise<void>
   send: (content: string) => Promise<TurnSendResult>
+  /** `send` addressed explicitly, for a caller that is not looking at the target's view. */
+  sendTo: (target: DirectTargetRef | null, content: string) => Promise<TurnSendResult>
   cancel: () => Promise<void>
   isTurnActive: () => boolean
   /**
@@ -485,7 +488,7 @@ const onError = (
     const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
     sys(`error: ${message} (code=${code})${extra}`)
   }
-  turnController.recordError()
+  turnController.recordError({ appendMessage })
   patchUiState({ status: `error: ${message.slice(0, 80)}` })
   patchTurnState({ activity: [], outcome: '' })
 }
@@ -648,18 +651,19 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     }
   }
 
-  const send = async (content: string): Promise<TurnSendResult> => {
+  const send = (content: string): Promise<TurnSendResult> => sendTo(getDirectChat().active, content)
+
+  const sendTo = async (active: DirectTargetRef | null, content: string): Promise<TurnSendResult> => {
     // Per view: several instances answer at once, and refusing on "any turn is
     // running" is what made switching to a second instance and typing do
     // nothing at all -- the throw never left this process.
-    const view = viewKeyOf(getDirectChat().active)
+    const view = viewKeyOf(active)
     if (state.turns.has(view) || sending.has(view)) {
       throw new Error('turn already in progress — wait for message.complete or cancel first')
     }
     // Omitted entirely on the main conversation rather than sent as null:
     // TurnSendParams forbids extras but not nulls, so both validate -- and an
     // absent key keeps the wire shape identical to every existing client's.
-    const active = getDirectChat().active
     const params: TurnSendParams = {
       session_key: opts.sessionKey,
       content,
@@ -719,5 +723,5 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
   // so it answers for the turn Ctrl+C can act on -- the main agent's.
   const isTurnActive = (): boolean => state.turns.has(MAIN_VIEW_KEY)
 
-  return { attach, detach, send, cancel, isTurnActive, forceReset }
+  return { attach, detach, send, sendTo, cancel, isTurnActive, forceReset }
 }

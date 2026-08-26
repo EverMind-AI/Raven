@@ -69,14 +69,17 @@ const charAt = (picture: ReturnType<typeof renderDagGraph>, x: number, y: number
   picture[y]!.map(span => span.text).join('')[x]!
 
 describe('renderDagGraph', () => {
-  it('draws a diamond', () => {
+  it('draws a diamond, every label one space in from its own left border', () => {
+    // Left, not centred: an ordinal, a glyph and an agent name each have to sit
+    // on one column down the picture, which centring inside a box sized by the
+    // widest label cannot do.
     expect(draw(DIAMOND)).toBe(
       [
         '╭──────────────╮      ╭──────────────╮      ╭──────────────╮',
-        '│ 1 ✓ research │──┬──▸│   3 ✓ code   │──┬──▸│   5 ✓ code   │',
+        '│ 1 ✓ research │──┬──▸│ 3 ✓ code     │──┬──▸│ 5 ✓ code     │',
         '╰──────────────╯  │   ╰──────────────╯  │   ╰──────────────╯',
         '╭──────────────╮  │   ╭──────────────╮  │',
-        '│ 2 ✓ research │──┴──▸│   4 ✓ code   │──╯',
+        '│ 2 ✓ research │──┴──▸│ 4 ✓ code     │──╯',
         '╰──────────────╯      ╰──────────────╯'
       ].join('\n')
     )

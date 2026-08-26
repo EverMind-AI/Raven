@@ -681,6 +681,21 @@ export interface TurnCancelResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSteerParams".
+ */
+export interface SessionSteerParams {
+  session_id: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSteerResult".
+ */
+export interface SessionSteerResult {
+  status: "injected" | "no_turn";
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "McpListParams".
  */
 export interface McpListParams {}

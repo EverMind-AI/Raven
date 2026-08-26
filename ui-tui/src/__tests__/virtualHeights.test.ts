@@ -107,11 +107,12 @@ describe('virtual height estimates', () => {
     const msg = withDagTool(dag)
 
     const dagWidth = Math.max(20, 80 - 4)
-    const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, dagWidth - 4) })
-    // 1 call row, plus DagPanel's own: header + picture + a row per node +
-    // outputs line.
+    const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, Math.max(28, dagWidth - 2) - 4) })
+    // No call row: a dag call's panel is the box that carries the call. Then
+    // DagPanel's own chrome -- two border rows, the header, two rules and the
+    // hint -- around the picture, a row per node, and the outputs line.
     const rows = dag.nodes.length
-    const expected = 1 + (1 + (picture?.height ?? 0) + rows + 1)
+    const expected = 6 + (picture?.height ?? 0) + rows + 1
 
     expect(estimatedMsgHeight(msg, 80, { compact: false, details: false })).toBe(expected)
   })
@@ -121,10 +122,11 @@ describe('virtual height estimates', () => {
     const msg = withDagTool(dag, { id: 't1', name: 'ls', ok: true, summary: 'ls' })
 
     const dagWidth = Math.max(20, 80 - 4)
-    const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, dagWidth - 6) })
-    // Summary row + one row per call (both calls, open by default), plus one DagPanel.
+    const picture = layoutDagGraph(dag.nodes, { width: Math.max(24, Math.max(28, dagWidth - 4) - 4) })
+    // Summary row + a row for the one call that draws one (the dag call does
+    // not), plus the panel.
     const rows = dag.nodes.length
-    const expected = 1 + 2 + (1 + (picture?.height ?? 0) + rows)
+    const expected = 1 + 1 + (6 + (picture?.height ?? 0) + rows)
 
     expect(estimatedMsgHeight(msg, 80, { compact: false, details: false })).toBe(expected)
   })
@@ -153,34 +155,33 @@ describe('dag panel height', () => {
       { dependsOn: ['a'], id: 'b', status: 'pending', subagent: 'echo' }
     ])
 
-  it('counts a stream line for each running node', () => {
+  it('costs a running node no more than a finished one, having no slot of its own', () => {
+    // The live line under a running row is gone; only an opened node has a slot.
     const idle = msgWithDag(chain('completed'))
     const busy = msgWithDag(chain('running'))
 
-    expect(estimatedMsgHeight(busy, NARROW_COLS, BASE)).toBe(estimatedMsgHeight(idle, NARROW_COLS, BASE) + 1)
+    expect(estimatedMsgHeight(busy, NARROW_COLS, BASE)).toBe(estimatedMsgHeight(idle, NARROW_COLS, BASE))
   })
 
-  it('counts the box for an expanded node instead of the line', () => {
+  it('counts the box an expanded node opens', () => {
     const msg = msgWithDag(chain('running'))
     const open = new Set([dagNodeKey('r1', 'a')])
 
     expect(estimatedMsgHeight(msg, NARROW_COLS, { ...BASE, dagOpen: open })).toBe(
-      estimatedMsgHeight(msg, NARROW_COLS, BASE) - 1 + DAG_TRACE_BOX_ROWS
+      estimatedMsgHeight(msg, NARROW_COLS, BASE) + DAG_TRACE_BOX_ROWS
     )
   })
 
   it('counts the slots under a labelled picture too, because the rows are drawn there', () => {
     // The rows were dropped under a labelled picture for a while, and the slots
-    // went with them. They are back -- a box cannot hold the summary a node was
-    // dispatched with -- so a running node costs its live line again and an open
-    // one costs its box, exactly as under a compact picture.
-    const idle = msgWithDag(chain('completed'))
+    // went with them. They are back -- a box holds neither the node's name nor
+    // what it cost -- so an open node costs its box exactly as under a compact
+    // picture.
     const busy = msgWithDag(chain('running'))
     const open = new Set([dagNodeKey('r1', 'a')])
 
-    expect(estimatedMsgHeight(busy, 100, BASE)).toBe(estimatedMsgHeight(idle, 100, BASE) + 1)
     expect(estimatedMsgHeight(busy, 100, { ...BASE, dagOpen: open })).toBe(
-      estimatedMsgHeight(busy, 100, BASE) - 1 + DAG_TRACE_BOX_ROWS
+      estimatedMsgHeight(busy, 100, BASE) + DAG_TRACE_BOX_ROWS
     )
   })
 

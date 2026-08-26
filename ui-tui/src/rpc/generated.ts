@@ -958,6 +958,10 @@ export interface DirectTurn {
    * Set on a row from a turn still running, which no record holds yet. Such rows are a snapshot: the next read replaces them, and the record replaces them once the turn lands.
    */
   live?: boolean;
+  /**
+   * Set on a user row that was a steer: words merged into a turn already running, not the prompt that opened one. A reader draws it inside the turn rather than as a new one.
+   */
+  steer?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2566,6 +2570,23 @@ export interface SubagentsInstanceForgetParams {
  */
 export interface SubagentsInstanceForgetResult {
   removed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSteerParams".
+ */
+export interface SubagentsInstanceSteerParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSteerResult".
+ */
+export interface SubagentsInstanceSteerResult {
+  status: 'injected' | 'no_turn' | 'unsupported';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

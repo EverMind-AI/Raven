@@ -1672,6 +1672,44 @@
       "errors": []
     },
     {
+      "name": "subagents.instance.steer",
+      "summary": "Merge text into the turn one instance is running now. no_turn when nothing runs (nothing is started); unsupported when the run's transport cannot take text mid-turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceSteerResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string", "enum": ["injected", "no_turn", "unsupported"] }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "system.hello",
       "summary": "Initial handshake (must be the first RPC call from client).",
       "params": [
@@ -6938,6 +6976,10 @@
           "live": {
             "type": "boolean",
             "description": "Set on a row from a turn still running, which no record holds yet. Such rows are a snapshot: the next read replaces them, and the record replaces them once the turn lands."
+          },
+          "steer": {
+            "type": "boolean",
+            "description": "Set on a user row that was a steer: words merged into a turn already running, not the prompt that opened one. A reader draws it inside the turn rather than as a new one."
           }
         }
       },

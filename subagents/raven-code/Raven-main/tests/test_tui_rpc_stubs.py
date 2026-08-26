@@ -37,7 +37,6 @@ _STUB_CASES = [
     ("session.save", "session.save not supported", True),
     # session.status promoted to real handler in slash_routing.py —
     # see test_tui_rpc_slash_routing.py::test_session_status_*
-    ("session.steer", "session.steer not supported", True),
     # session.title / session.undo promoted to real handlers in methods/session.py
     # (parity tests live in test_tui_rpc_session.py)
     ("session.usage", "session.usage not supported", True),
