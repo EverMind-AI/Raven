@@ -19,6 +19,7 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
+from raven.providers.tool_names import normalized_tool_name
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -230,7 +231,7 @@ class AzureOpenAIProvider(LLMProvider):
                     tool_calls.append(
                         ToolCallRequest(
                             id=tc["id"],
-                            name=tc["function"]["name"],
+                            name=normalized_tool_name(tc["function"]["name"]),
                             arguments=args,
                             run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                         )

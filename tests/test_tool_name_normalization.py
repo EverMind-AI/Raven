@@ -6,8 +6,12 @@ because the name is also written back into the history, the bad one was
 replayed to the model on every turn afterwards, which is why the model could
 not correct it by reasoning about it.
 
-Both response paths are pinned, because the fault is not in either of them: it
-is in treating a string an upstream wrote as an identifier this repo declared.
+Every exit that builds a `ToolCallRequest` out of upstream data is pinned, and
+a guard test enumerates them from the source rather than trusting this list --
+the first version of this change covered two of the four and said it covered
+all of them. Replay is deliberately not one of them: it reconstructs a recorded
+run, and normalising there would make a replay diverge from the run it replays.
+
 The boundary is pinned too. Stripping surrounding whitespace is a fact (a
 registry key is written in code and has none); folding case or interior spaces
 would be a guess, and "that tool does not exist" is only worth something while
@@ -16,12 +20,18 @@ it is certain.
 
 from __future__ import annotations
 
+import ast
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from raven.agent.loop.streaming import _finalize_tool_calls
+from raven.providers.azure_openai_provider import AzureOpenAIProvider
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.tool_names import normalized_tool_name, sanitary_form
 
@@ -65,6 +75,18 @@ def _slot(name: Any) -> dict[str, Any]:
     return {"id": "call_1", "function": {"name": name, "arguments_buf": ['{"path": "a.txt"}']}}
 
 
+class _SseStream:
+    """SSE response stand-in. Ends rather than stalling: `_consume_sse` returns
+    when the stream does, so a trailing stall would trip the idle cap first."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
 def _provider() -> LiteLLMProvider:
     with (
         patch("raven.providers.litellm_provider.litellm"),
@@ -104,6 +126,94 @@ def test_the_name_written_back_into_the_history_is_the_clean_one() -> None:
     call = _parsed("  read_file\n").tool_calls[0]
 
     assert call.to_openai_tool_call()["function"]["name"] == "read_file"
+
+
+def test_the_azure_exit_hands_on_a_usable_key() -> None:
+    """The third exit. `AgentLoop` reaches `chat_with_retry` -- and so this
+    parser -- whenever the turn caller wired no delta callback, which is every
+    headless entry point."""
+    provider = AzureOpenAIProvider(api_key="sk-test", api_base="https://x.openai.azure.com")
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"name": " read_file", "arguments": '{"path": "a.txt"}'}}
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+    assert [tc.name for tc in provider._parse_response(response).tool_calls] == ["read_file"]
+
+
+@pytest.mark.asyncio
+async def test_the_codex_exit_hands_on_a_usable_key() -> None:
+    """The fourth exit. Its name arrives on one SSE event and the call is built
+    on a later one, so the raw string outlives the event that carried it."""
+    from raven.providers.openai_codex_provider import _consume_sse
+
+    added = json.dumps(
+        {"type": "response.output_item.added", "item": {"type": "function_call", "call_id": "c1", "name": " read_file"}}
+    )
+    done = json.dumps(
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "c1", "arguments": '{"path": "a.txt"}'},
+        }
+    )
+    completed = json.dumps({"type": "response.completed"})
+
+    _, tool_calls, _ = await _consume_sse(
+        _SseStream([f"data: {added}", "", f"data: {done}", "", f"data: {completed}", ""]), timeout=1.0
+    )
+
+    assert [tc.name for tc in tool_calls] == ["read_file"]
+
+
+def test_every_exit_that_builds_a_call_from_upstream_data_normalises_it() -> None:
+    """The guard the first version of this change needed and did not have.
+
+    Two of the four exits were covered while the docstring and this module both
+    claimed all of them were, and nothing went red. Reading the tree rather than
+    a hand-kept list is what makes a fifth exit arrive as a failure here instead
+    of as a refused tool call in production.
+    """
+    exempt = {
+        # Replays a recorded run. Repairing a name here would make the replay
+        # disagree with the run it is reproducing, which is the one thing it
+        # exists not to do.
+        "raven/trajectory/replay.py",
+    }
+    offenders: list[str] = []
+    for path in sorted(Path("raven").rglob("*.py")):
+        rel = path.as_posix()
+        if rel in exempt:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            body = list(ast.walk(func))
+            builds = [n for n in body if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "ToolCallRequest"]
+            if not builds:
+                continue
+            # Asked of the whole function rather than of the `name=` expression:
+            # the streaming exit normalises into a local and passes that, which
+            # an inline-only check reads as a miss.
+            normalises = any(
+                isinstance(n, ast.Call) and getattr(n.func, "id", None) == "normalized_tool_name" for n in body
+            )
+            if not normalises:
+                offenders.extend(f"{rel}:{n.lineno}" for n in builds)
+
+    assert not offenders, (
+        f"these build a ToolCallRequest from an upstream name without normalising it: {offenders}. "
+        "Wrap the name in normalized_tool_name, or add the file to `exempt` here with the reason."
+    )
 
 
 # ---------- the boundary, which is the point ---------------------------------
