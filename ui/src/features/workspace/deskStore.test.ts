@@ -198,6 +198,38 @@ describe('desk store', () => {
    the reader OPENED -- a path, an (agent, handle) -- and where the frame put it;
    resuming replays those opens, so a restored window goes through the same verb
    a clicked one does and reads its own body back from the gateway. */
+describe('arranging the desk', () => {
+  it('reorders the panes and turns the pair, and a drop is what a reload replays', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+
+    desk.arrange(['file:/workspace/b.ts', 'file:/workspace/a.ts'], 'cols')
+
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
+    expect(desk.getState().duo).toBe('cols')
+    const kept = desk.saved('s1')!
+    expect(kept.open.map((intent) => (intent as { path: string }).path))
+      .toEqual(['/workspace/b.ts', '/workspace/a.ts'])
+    expect(kept.duo).toBe('cols')
+  })
+
+  it('refuses an order that does not name exactly the panes that are up, each once', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+
+    /* Stale by one close, a pane this desk never had, and a duplicate that
+       would put one pane object in the list twice. */
+    desk.arrange(['file:/workspace/b.ts'], 'cols')
+    desk.arrange(['file:/workspace/b.ts', 'file:/workspace/zz.ts'], 'cols')
+    desk.arrange(['file:/workspace/b.ts', 'file:/workspace/b.ts'], 'cols')
+
+    expect(desk.getState().panes.map((pane) => pane.id))
+      .toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
+    expect(desk.getState().duo).toBe('rows')
+  })
+})
+
 describe('what a reload finds on the desk', () => {
   it('records the file windows, by path, in the order they were opened', () => {
     desk.openDeskFile('/workspace/a.ts')
@@ -344,5 +376,20 @@ describe('what a reload finds on the desk', () => {
     desk.applyLayout(kept)
 
     expect(desk.getState().splits).toEqual({ column: 50, left: 50, right: 70 })
+  })
+
+  it('reads the pair orientation back, and a note from before the field as a stack', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskFile('/workspace/b.ts')
+    const kept = desk.saved('s1')!
+
+    desk.applyLayout({ ...kept, duo: 'cols' })
+    expect(desk.getState().duo).toBe('cols')
+
+    /* A stored note that predates the field, and one carrying a value no
+       version ever wrote: both are the stack every desk was until then. */
+    const { duo: _omitted, ...before } = kept
+    desk.applyLayout(before as typeof kept)
+    expect(desk.getState().duo).toBe('rows')
   })
 })

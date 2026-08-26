@@ -1,13 +1,14 @@
 /** Pane chrome and responsive layout for the floating workspace surface. */
 
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal, flushSync } from 'react-dom'
 
 import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
 import { t } from '../../shell/bridge'
 import { ChgDiff, FileView } from './WorkspacePage'
 import * as deliveries from './deliveries'
 import { DeskIcon } from './DeskIcon'
+import { dragProposal, slotRects } from './deskDrag'
 import {
   workspaceAvailableWidth,
   workspaceColumnCount,
@@ -16,6 +17,7 @@ import {
 import * as desk from './deskStore'
 import * as workspace from './store'
 
+import type { DeskArrangement, SlotRect } from './deskDrag'
 import type { DeskPane } from './deskTypes'
 import type { DeliveryRow } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
@@ -54,7 +56,16 @@ function DeliveryStrip({ row }: { row: DeliveryRow }): JSX.Element {
   )
 }
 
-function Pane({ pane }: { pane: DeskPane }): JSX.Element {
+interface PaneProps {
+  pane: DeskPane
+  /* The header is the handle: the body scrolls and selects, the chrome moves
+     the window. Wired from the surface, which owns the pointer for the whole
+     gesture -- a drag crosses pane boundaries by definition. */
+  onGrab: (id: string, event: ReactPointerEvent<HTMLElement>) => void
+  refPane: (id: string, el: HTMLElement | null) => void
+}
+
+function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   /* Looked up rather than carried on the pane: a file reaches this viewer from
@@ -69,11 +80,12 @@ function Pane({ pane }: { pane: DeskPane }): JSX.Element {
       : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
   return (
     <section
+      ref={(el) => refPane(pane.id, el)}
       className="desk-pane"
       data-active={state.active === pane.id}
       onPointerDown={() => desk.setActive(pane.id)}
     >
-      <header>
+      <header onPointerDown={(event) => onGrab(pane.id, event)}>
         <DeskIcon kind={pane.kind === 'agent' || pane.kind === 'agent-record' ? 'agents' : pane.kind} />
         <b title={title}>{title}</b>
         {pane.kind === 'agent' || pane.kind === 'agent-record'
@@ -136,9 +148,206 @@ function Divider({ axis, side }: { axis: 'column' | 'row'; side?: 'left' | 'righ
   return <div className={`desk-divider ${axis} ${side || ''}`} onPointerDown={down} />
 }
 
+/* Whether the stylesheet is actually showing more than one pane. Below 840px
+   the grid collapses to the active pane alone (page.css's narrow block), and
+   there is no layout for a drag to rearrange -- a grab there lifted the
+   visible pane over a phantom grid and silently rewrote an arrangement the
+   reader could not see. Asked of the CSS's own outcome rather than of a
+   matchMedia mirror of it: the breakpoint then cannot drift from the guard,
+   and an embedding whose window metrics disagree with its layout (one was
+   met) still gets the answer the reader is looking at. */
+const twoShowing = (els: Iterable<HTMLElement>): boolean => {
+  let showing = 0
+  for (const el of els) {
+    if (getComputedStyle(el).display !== 'none' && ++showing >= 2) return true
+  }
+  return false
+}
+
+/* One drag, from grab to settle. Everything the move handler needs is closed
+   over here rather than kept in React state: the pointer moves at the frame
+   rate, and the only state a frame is allowed to touch is the drop indicator,
+   which changes when the proposal does and not when the pointer does. */
+interface DragRun {
+  id: string
+  pointerId: number
+  startX: number
+  startY: number
+  dx: number
+  dy: number
+  lifted: boolean
+  gridRect: DOMRect
+  halfGap: number
+  proposal: DeskArrangement | null
+  controller: AbortController
+}
+
+const SETTLE_MS = 220
+
+/* The slot `id` occupies under `next`, in grid coordinates. */
+function slotOf(next: DeskArrangement, id: string, splits: { column: number; left: number; right: number },
+  width: number, height: number, halfGap: number): SlotRect | null {
+  const at = next.order.indexOf(id)
+  if (at < 0) return null
+  return slotRects(next.order.length, next.duo, splits, width, height, halfGap)[at] ?? null
+}
+
 export function DeskSurface(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
   const previousColumns = useRef<0 | 1 | 2>(0)
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const paneEls = useRef(new Map<string, HTMLElement>())
+  const dragRef = useRef<DragRun | null>(null)
+  /* One pending cleanup per settling pane. Held so a re-grab inside the settle
+     window can cancel it: left to fire, the previous drop's timer stripped the
+     lift off the pane currently in hand, and the pane in flight painted UNDER
+     its siblings for the rest of the gesture. */
+  const settleTimers = useRef(new Map<string, number>())
+  const [drop, setDrop] = useState<SlotRect | null>(null)
+  const refPane = (id: string, el: HTMLElement | null): void => {
+    if (el) paneEls.current.set(id, el)
+    else paneEls.current.delete(id)
+  }
+
+  /* Land every pane, animated, after the drop (or the cancel) decided what the
+     desk now is. FLIP: the untransformed offsets are measured before the store
+     moves anything, the arrangement is applied synchronously, and each pane is
+     handed the inverse of how far it jumped, then released to glide to zero.
+     Transforms only -- a pane's size snaps to its new slot rather than being
+     scaled through the transition, because a scale would distort a pane's
+     whole body for the duration and these bodies are text. */
+  const settleDrag = (run: DragRun, next: DeskArrangement | null): void => {
+    const first = new Map<string, { left: number; top: number }>()
+    paneEls.current.forEach((el, paneId) => first.set(paneId, { left: el.offsetLeft, top: el.offsetTop }))
+    if (next) flushSync(() => desk.arrange(next.order, next.duo))
+    paneEls.current.forEach((el, paneId) => {
+      const before = first.get(paneId)
+      if (!before) return
+      const held = paneId === run.id
+      const shiftX = before.left - el.offsetLeft + (held ? run.dx : 0)
+      const shiftY = before.top - el.offsetTop + (held ? run.dy : 0)
+      if (!shiftX && !shiftY) {
+        el.classList.remove('desk-pane-lift')
+        el.style.transform = ''
+        el.style.transition = ''
+        return
+      }
+      el.style.transition = 'none'
+      el.style.transform = `translate3d(${shiftX}px, ${shiftY}px, 0)`
+      el.classList.add('desk-pane-settle')
+      requestAnimationFrame(() => {
+        el.style.transition = ''
+        el.style.transform = ''
+      })
+      window.clearTimeout(settleTimers.current.get(paneId))
+      settleTimers.current.set(paneId, window.setTimeout(() => {
+        settleTimers.current.delete(paneId)
+        el.classList.remove('desk-pane-settle', 'desk-pane-lift')
+      }, SETTLE_MS + 60))
+    })
+  }
+
+  const grab = (id: string, event: ReactPointerEvent<HTMLElement>): void => {
+    if (event.button !== 0 || dragRef.current) return
+    if ((event.target as HTMLElement).closest('button')) return
+    const held = desk.getState()
+    if (held.solo || held.panes.length < 2) return
+    if (!twoShowing(paneEls.current.values())) return
+    const grid = gridRef.current
+    const el = paneEls.current.get(id)
+    if (!grid || !el) return
+    event.preventDefault()
+    const header = event.currentTarget
+    const controller = new AbortController()
+    const run: DragRun = {
+      id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      dx: 0, dy: 0, lifted: false, gridRect: grid.getBoundingClientRect(), halfGap: 3, proposal: null, controller,
+    }
+    dragRef.current = run
+    try { header.setPointerCapture(event.pointerId) } catch { /* header torn down mid-gesture */ }
+
+    const arrangementNow = (): DeskArrangement => {
+      const now = desk.getState()
+      return { order: now.panes.map((pane) => pane.id), duo: now.duo }
+    }
+    /* The indicator always shows where the pane would LAND -- under the standing
+       proposal, or back in its own slot when there is none, which is also what a
+       drop right now would mean. */
+    const indicate = (next: DeskArrangement | null): void => {
+      setDrop(slotOf(next ?? arrangementNow(), id, desk.getState().splits,
+        run.gridRect.width, run.gridRect.height, run.halfGap))
+    }
+
+    const move = (ev: globalThis.PointerEvent): void => {
+      if (ev.pointerId !== run.pointerId) return
+      const dx = ev.clientX - run.startX
+      const dy = ev.clientY - run.startY
+      if (!run.lifted) {
+        /* A slack of a few pixels, so a click on the header is a click. */
+        if (Math.hypot(dx, dy) < 6) return
+        run.lifted = true
+        run.gridRect = grid.getBoundingClientRect()
+        /* The stylesheet narrows the gap on a small window; measured, not
+           assumed, so the indicator and the hit rects keep matching the CSS. */
+        const measured = parseFloat(getComputedStyle(grid).getPropertyValue('--desk-half-gap'))
+        run.halfGap = Number.isFinite(measured) ? measured : 3
+        /* A pane grabbed back mid-settle: its cleanup must not fire under the
+           new gesture and strip the lift off the pane in hand. */
+        window.clearTimeout(settleTimers.current.get(id))
+        settleTimers.current.delete(id)
+        el.classList.remove('desk-pane-settle')
+        grid.dataset.dragging = 'true'
+        el.classList.add('desk-pane-lift')
+        el.style.transition = 'none'
+        indicate(null)
+      }
+      run.dx = dx
+      run.dy = dy
+      el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`
+      const x = ev.clientX - run.gridRect.left
+      const y = ev.clientY - run.gridRect.top
+      const current = arrangementNow()
+      /* Hit rects from the same arithmetic the indicator draws with, not from
+         the DOM: the lifted pane is mid-transform and the others never move
+         during a drag, so the settled slots ARE the geometry in play. */
+      const slots = slotRects(current.order.length, current.duo, desk.getState().splits,
+        run.gridRect.width, run.gridRect.height, run.halfGap)
+      const rects = new Map<string, SlotRect>()
+      current.order.forEach((paneId, index) => {
+        const rect = slots[index]
+        if (rect) rects.set(paneId, rect)
+      })
+      const inGrid = x >= 0 && y >= 0 && x <= run.gridRect.width && y <= run.gridRect.height
+      const next = inGrid
+        ? dragProposal({ arrangement: current, draggedId: id, x, y,
+          grid: { width: run.gridRect.width, height: run.gridRect.height }, rects })
+        : null
+      if (JSON.stringify(next) !== JSON.stringify(run.proposal)) {
+        run.proposal = next
+        indicate(next)
+      }
+    }
+
+    const finish = (ev: globalThis.PointerEvent | null, cancelled: boolean): void => {
+      if (ev && ev.pointerId !== run.pointerId) return
+      controller.abort()
+      dragRef.current = null
+      try {
+        if (header.hasPointerCapture(run.pointerId)) header.releasePointerCapture(run.pointerId)
+      } catch { /* already released */ }
+      delete grid.dataset.dragging
+      setDrop(null)
+      if (!run.lifted) return
+      settleDrag(run, cancelled ? null : run.proposal)
+    }
+
+    window.addEventListener('pointermove', move, { signal: controller.signal })
+    window.addEventListener('pointerup', (ev) => finish(ev, false), { signal: controller.signal })
+    window.addEventListener('pointercancel', (ev) => finish(ev, true), { signal: controller.signal })
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') finish(null, true)
+    }, { signal: controller.signal })
+  }
   const host = document.getElementById('ws')
   const split = document.getElementById('split')
   const count = state.panes.length
@@ -147,7 +356,7 @@ export function DeskSurface(): JSX.Element | null {
       previousColumns.current = 0
       return
     }
-    const nextColumns = workspaceColumnCount(count) as 1 | 2
+    const nextColumns = workspaceColumnCount(count, state.duo) as 1 | 2
     const rootStyle = getComputedStyle(document.documentElement)
     const current = parseFloat(rootStyle.getPropertyValue('--wsw')) || host.getBoundingClientRect().width
     const configuredChatMin = parseFloat(rootStyle.getPropertyValue('--chat-min'))
@@ -165,7 +374,7 @@ export function DeskSurface(): JSX.Element | null {
     })
     if (Math.abs(next - current) > 0.5) document.documentElement.style.setProperty('--wsw', `${next}px`)
     previousColumns.current = nextColumns
-  }, [count, host, split, state.panes])
+  }, [count, host, split, state.panes, state.duo])
   useEffect(() => {
     if (!split || count <= 0) return
     const clamp = (): void => {
@@ -196,11 +405,20 @@ export function DeskSurface(): JSX.Element | null {
     '--desk-right-row': `${state.splits.right}%`,
   } as CSSProperties
   return createPortal(
-    <div className={`desk-grid n${shown.length}`} data-solo={Boolean(state.solo)} style={style}>
-      {shown.map((pane) => <Pane key={pane.id} pane={pane} />)}
-      {shown.length >= 3 ? <Divider axis="column" /> : null}
-      {shown.length >= 2 ? <Divider axis="row" side="left" /> : null}
+    <div ref={gridRef} className={`desk-grid n${shown.length}`} data-solo={Boolean(state.solo)}
+      data-duo={shown.length === 2 ? state.duo : undefined}
+      data-can-drag={!state.solo && shown.length >= 2 ? 'true' : undefined}
+      style={style}>
+      {shown.map((pane) => <Pane key={pane.id} pane={pane} onGrab={grab} refPane={refPane} />)}
+      {/* Two side-by-side panes share the three-pane case's seam: one column
+          split, resized by the same divider. */}
+      {shown.length >= 3 || (shown.length === 2 && state.duo === 'cols') ? <Divider axis="column" /> : null}
+      {shown.length >= 3 || (shown.length === 2 && state.duo === 'rows') ? <Divider axis="row" side="left" /> : null}
       {shown.length === 4 ? <Divider axis="row" side="right" /> : null}
+      {drop ? (
+        <div className="desk-drop"
+          style={{ transform: `translate(${drop.left}px, ${drop.top}px)`, width: drop.width, height: drop.height }} />
+      ) : null}
     </div>,
     host,
   )

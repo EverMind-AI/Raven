@@ -275,6 +275,7 @@ describe('what a replay may not erase', () => {
        reader does files the other one's frame as its own. */
     expect(deskSaved('s2')).toEqual({
       tab: 'diff',
+      duo: 'rows',
       open: [{ k: 'file', path: '/workspace/s2.ts' }],
       solo: null,
       active: 'file:/workspace/s2.ts',

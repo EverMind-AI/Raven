@@ -5,6 +5,11 @@ import type { WsChange, WsFile } from './types'
 
 export type DeskTab = 'diff' | 'deliverables' | 'agents'
 
+/* Which way a two-pane desk is cut. The counts above two have one layout each,
+   so this says nothing there; at two it is the difference between a stack and a
+   pair side by side, which the reader sets by dragging a pane to an edge. */
+export type DeskDuo = 'rows' | 'cols'
+
 export type DeskPane =
   | { id: string; kind: 'diff'; change: WsChange }
   | { id: string; kind: 'file'; file: WsFile }
@@ -33,6 +38,7 @@ export interface DeskState {
   solo: string | null
   active: string | null
   splits: DeskSplits
+  duo: DeskDuo
 }
 
 export interface DeskGeometry {

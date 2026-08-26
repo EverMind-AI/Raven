@@ -80,8 +80,12 @@ export function magnetGeometry(value: DeskGeometry): DeskGeometry {
     : loose
 }
 
-export function workspaceColumnCount(paneCount: number): 0 | 1 | 2 {
+export function workspaceColumnCount(paneCount: number, duo: 'rows' | 'cols' = 'rows'): 0 | 1 | 2 {
   if (paneCount <= 0) return 0
+  /* Two panes side by side spend width the way three panes do, not the way a
+     stack does: the workspace has to widen for them or each gets half of a
+     column that was sized for one. */
+  if (paneCount === 2 && duo === 'cols') return 2
   return paneCount >= 3 ? 2 : 1
 }
 
