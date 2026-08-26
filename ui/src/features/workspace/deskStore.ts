@@ -10,7 +10,7 @@ import * as marks from './marks'
 import * as workspace from './store'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { DeskMarks, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
+import type { DeskDuo, DeskMarks, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
 
 const DESK_OPEN_KEY = 'raven.gui.desk.open'
@@ -45,6 +45,9 @@ export interface DeskSaved {
   solo: string | null
   active: string | null
   splits: DeskSplits
+  /* Absent from a note written before the field existed, which reads back as
+     the stack every desk was until then. */
+  duo?: DeskDuo
 }
 
 /* Version 2: the `file` tab this note used to be able to name is retired, and a
@@ -122,6 +125,7 @@ function remember(): void {
     solo: state.solo,
     active: state.active,
     splits: state.splits,
+    duo: state.duo,
   })
 }
 
@@ -133,6 +137,7 @@ function initialState(): DeskState {
     solo: null,
     active: null,
     splits: { column: 50, left: 50, right: 50 },
+    duo: 'rows',
   }
 }
 
@@ -332,6 +337,19 @@ export function updateSplits(patch: Partial<DeskSplits>): void {
   commit({ splits: { ...state.splits, ...patch } })
 }
 
+/* The desk a drop leaves behind: the same panes, in the order and orientation
+   the reader chose. Refused unless `order` names exactly the panes that are up,
+   each once -- the caller is working from rects it measured a frame ago, and a
+   pane that closed mid-drag must not make the drop scramble what is left. A
+   commit, always: the drop indicator previews without touching the store, so
+   the drop is the gesture's only mutation and a reload should replay it. */
+export function arrange(order: string[], duo: DeskDuo): void {
+  const by = new Map(state.panes.map((pane) => [pane.id, pane]))
+  if (new Set(order).size !== by.size || order.some((id) => !by.has(id))) return
+  const panes = order.map((id) => by.get(id) as DeskPane)
+  commit({ panes, duo })
+}
+
 /* A stored split is a percentage the surface hands straight to a CSS
    template, so a value that is not one is not a layout to argue with. */
 const pct = (v: unknown, fallback: number): number =>
@@ -360,6 +378,7 @@ export function applyLayout(kept: DeskSaved): void {
       left: pct(kept.splits?.left, 50),
       right: pct(kept.splits?.right, 50),
     },
+    duo: kept.duo === 'cols' ? 'cols' : 'rows',
   })
 }
 

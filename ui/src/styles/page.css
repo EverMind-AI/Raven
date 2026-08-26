@@ -4118,7 +4118,19 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   position: absolute; inset: 0; display: grid; gap: var(--desk-gap); padding: 0;
   overflow: hidden; pointer-events: none; background: transparent; }
 .desk-grid.n1 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-.desk-grid.n2 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, var(--desk-left-row)) minmax(0, 1fr); }
+/* The half gap is subtracted from the percentage track the way the absolute
+   n3/n4 rules subtract it, so the seam is CENTRED on the split percentage for
+   every count -- a bare percentage track put the whole gap after it, and the
+   drop indicator (which mirrors the n3/n4 arithmetic) promised a slot 3px away
+   from the one the pane then took. */
+.desk-grid.n2 { grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, calc(var(--desk-left-row) - var(--desk-half-gap))) minmax(0, 1fr); }
+/* The same pair turned on its side, which the reader does by dragging a pane to
+   an edge. The split lives in --desk-col, the same seam the three-pane layout
+   resizes, so the divider is one control however many panes share it. */
+.desk-grid.n2[data-duo="cols"] {
+  grid-template-columns: minmax(0, calc(var(--desk-col) - var(--desk-half-gap))) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr); }
 .desk-grid.n3, .desk-grid.n4 { display: block; }
 .desk-grid.n3 .desk-pane, .desk-grid.n4 .desk-pane { position: absolute; }
 .desk-grid.n3 .desk-pane:nth-child(1), .desk-grid.n4 .desk-pane:nth-child(1) {
@@ -4147,6 +4159,27 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
 .desk-pane > header button:hover { color: var(--text); background: var(--raised); }
+/* The header is the handle once there is more than one pane to arrange. */
+.desk-grid[data-can-drag="true"] .desk-pane > header { cursor: grab; touch-action: none; user-select: none;
+  -webkit-user-select: none; }
+.desk-grid[data-dragging="true"], .desk-grid[data-dragging="true"] .desk-pane > header { cursor: grabbing; }
+/* The pane in hand: above its siblings and visibly off the surface. The
+   transform itself is inline -- it moves at the pointer's rate. */
+.desk-pane-lift { z-index: 9; box-shadow: 0 18px 44px rgba(0, 0, 0, .26), 0 2px 8px rgba(0, 0, 0, .12);
+  opacity: .94; will-change: transform; }
+/* Gliding into its slot after the drop: the inverse jump is set inline with
+   transitions off, and releasing it to zero rides this. */
+.desk-pane-settle { transition: transform .22s cubic-bezier(.2, .8, .2, 1); }
+/* Where the held pane would land. An empty rectangle, so it can move and
+   resize at full rate whatever the panes themselves hold. */
+.desk-drop { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none;
+  border: 1.5px solid color-mix(in oklab, var(--amber) 60%, transparent);
+  background: color-mix(in oklab, var(--amber) 7%, transparent); border-radius: 12px;
+  transition: transform .16s cubic-bezier(.25, .8, .25, 1), width .16s cubic-bezier(.25, .8, .25, 1),
+    height .16s cubic-bezier(.25, .8, .25, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .desk-drop, .desk-pane-settle { transition: none; }
+}
 .pane-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
   font: 11px var(--sans); }
 .pane-spacer { flex: 1; }
@@ -4228,6 +4261,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    between panes; a divider has to take them back, or the seam a reader can see
    between two panes is one they can never grab. */
 .desk-divider { position: absolute; z-index: 8; touch-action: none; pointer-events: auto; }
+/* A drag owns the pointer; a seam that kept taking it flickered resize cursors
+   across the gesture. */
+.desk-grid[data-dragging="true"] .desk-divider { pointer-events: none; }
 .desk-divider.column { top: 0; bottom: 0; left: var(--desk-col); width: 8px; margin-left: -4px; cursor: col-resize; }
 .desk-divider.row { height: 8px; margin-top: -4px; cursor: row-resize; }
 .desk-divider.row.left { left: 0; width: var(--desk-col); top: var(--desk-left-row); }
@@ -4251,6 +4287,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
     display: none; position: absolute; inset: 0; width: auto; height: auto; }
   .desk-grid .desk-pane[data-active="true"] { display: flex; }
   .desk-divider { display: none; }
+  /* One pane at a time here, so the header is not a drag handle: no grab
+     cursor promising a gesture the layout has no room for, and panning stays
+     with the browser. The grab itself refuses too (DeskSurface reads the
+     computed display), so this is the affordance half of one rule. */
+  .desk-grid[data-can-drag="true"] .desk-pane > header { cursor: default; touch-action: auto; }
 }
 /* ── knowledge bases ──────────────────────────────────────────────────
    Same card language as the memory page: a base row is a thing you open,

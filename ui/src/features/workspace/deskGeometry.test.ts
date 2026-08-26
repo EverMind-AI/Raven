@@ -57,6 +57,8 @@ describe('workspace geometry', () => {
   it('uses one column for two panes and two columns from the third pane', () => {
     expect(workspaceColumnCount(0)).toBe(0)
     expect(workspaceColumnCount(2)).toBe(1)
+    /* A pair turned sideways spends width like three panes, not like a stack. */
+    expect(workspaceColumnCount(2, 'cols')).toBe(2)
     expect(workspaceColumnCount(3)).toBe(2)
   })
 

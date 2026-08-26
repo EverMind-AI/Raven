@@ -145,3 +145,175 @@ describe('the pane of a delivered file', () => {
     expect(deliveries.byPath('/w/denied.md')?.missing).toBe(false)
   })
 })
+
+/* happy-dom lays nothing out, so the geometry the gesture reads is stubbed at
+   the one seam it crosses: the grid's rect. Slot arithmetic is pure
+   (deskDrag.test.ts); this is the wiring from a pointer to the store. */
+describe('dragging a pane by its header', () => {
+  /* The rect spy patches Element.prototype; scoped restore so no sibling suite
+     inherits an 800x600 world. */
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  const rect = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+
+  const pointer = (type: string, target: EventTarget, x: number, y: number): void => {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+    Object.defineProperty(event, 'pointerId', { value: 7 })
+    target.dispatchEvent(event)
+  }
+
+  const twoPanes = async (): Promise<void> => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskFile('/workspace/a.ts')
+      desk.openDeskFile('/workspace/b.ts')
+    })
+  }
+
+  const ids = (): string[] => desk.getState().panes.map((pane) => pane.id)
+
+  it('turns the stack sideways when a pane is dropped at the left edge', async () => {
+    await twoPanes()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const header = document.querySelectorAll('.desk-pane > header')[1] as HTMLElement
+
+    await act(async () => {
+      pointer('pointerdown', header, 400, 450)
+      pointer('pointermove', window, 100, 450)
+    })
+    /* Lifted, and the drop indicator shows the slot the drop would take. */
+    expect(document.querySelector('.desk-grid')!.getAttribute('data-dragging')).toBe('true')
+    expect(document.querySelector('.desk-drop')).toBeTruthy()
+    await act(async () => {
+      pointer('pointerup', window, 100, 450)
+    })
+
+    expect(ids()).toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
+    expect(desk.getState().duo).toBe('cols')
+    const grid = document.querySelector('.desk-grid') as HTMLElement
+    expect(grid.getAttribute('data-duo')).toBe('cols')
+    expect(grid.getAttribute('data-dragging')).toBeNull()
+    expect(document.querySelector('.desk-drop')).toBeNull()
+    /* The pair's seam is now the column split, one divider either way. */
+    expect(document.querySelector('.desk-divider.column')).toBeTruthy()
+    expect(document.querySelector('.desk-divider.row')).toBeNull()
+  })
+
+  it('trades the pair when a pane is dropped on the other one', async () => {
+    await twoPanes()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const header = document.querySelectorAll('.desk-pane > header')[0] as HTMLElement
+
+    await act(async () => {
+      pointer('pointerdown', header, 400, 150)
+      pointer('pointermove', window, 400, 450)
+      pointer('pointerup', window, 400, 450)
+    })
+
+    expect(ids()).toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
+    expect(desk.getState().duo).toBe('rows')
+  })
+
+  it('keeps a short header press as a click', async () => {
+    await twoPanes()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const header = document.querySelectorAll('.desk-pane > header')[0] as HTMLElement
+
+    await act(async () => {
+      pointer('pointerdown', header, 400, 150)
+      pointer('pointermove', window, 402, 152)
+    })
+    /* Mid-gesture, which is the only place the slack is observable: a lift that
+       happened and settled back leaves the same desk as one that never did. */
+    expect(document.querySelector('.desk-grid')!.getAttribute('data-dragging')).toBeNull()
+    expect(document.querySelector('.desk-drop')).toBeNull()
+    await act(async () => {
+      pointer('pointerup', window, 402, 152)
+    })
+
+    expect(ids()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
+  })
+
+  it('refuses the gesture where the desk shows one pane at a time', async () => {
+    /* page.css collapses the grid below 840px: only the active pane is
+       displayed and the dividers are gone. A drag there lifted the visible
+       pane over a phantom grid and silently rewrote an arrangement the reader
+       could not see -- they learned their desk was turned sideways the next
+       time they widened the window. The guard reads the CSS's own outcome
+       (computed display), which is what this stands in for: happy-dom loads
+       no stylesheet, so the collapse is expressed directly. */
+    await twoPanes()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const grid = document.querySelector('.desk-grid') as HTMLElement
+    const panes = document.querySelectorAll<HTMLElement>('.desk-pane')
+    ;(panes[0] as HTMLElement).style.display = 'none'
+    const header = document.querySelectorAll('.desk-pane > header')[1] as HTMLElement
+
+    await act(async () => {
+      pointer('pointerdown', header, 400, 450)
+      pointer('pointermove', window, 100, 450)
+      pointer('pointerup', window, 100, 450)
+    })
+
+    expect(grid.getAttribute('data-dragging')).toBeNull()
+    expect(ids()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
+    expect(desk.getState().duo).toBe('rows')
+  })
+
+  it('does not let the last drop\'s cleanup strip the lift off a re-grabbed pane', async () => {
+    /* settleDrag schedules a per-pane cleanup; grabbed again inside that
+       window, the stale timer fired mid-gesture and removed the lift -- the
+       pane in hand lost its z-index and painted UNDER the sibling it was being
+       dragged across, until yet another drag put the class back. */
+    vi.useFakeTimers()
+    try {
+      await twoPanes()
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+      const headers = (): NodeListOf<HTMLElement> => document.querySelectorAll('.desk-pane > header')
+
+      await act(async () => {
+        pointer('pointerdown', headers()[0] as HTMLElement, 400, 150)
+        pointer('pointermove', window, 400, 450)
+        pointer('pointerup', window, 400, 450)
+      })
+      /* Re-grab the same pane (now second) ~0ms after the drop, well inside
+         the settle window, and hold it lifted while the old timer comes due. */
+      await act(async () => {
+        pointer('pointerdown', headers()[1] as HTMLElement, 400, 450)
+        pointer('pointermove', window, 400, 300)
+      })
+      const held = document.querySelector('.desk-pane-lift') as HTMLElement
+      expect(held).toBeTruthy()
+      await act(async () => {
+        vi.advanceTimersByTime(1000)
+      })
+
+      expect(held.classList.contains('desk-pane-lift')).toBe(true)
+      await act(async () => {
+        pointer('pointerup', window, 400, 300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('puts everything back on Escape', async () => {
+    await twoPanes()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const header = document.querySelectorAll('.desk-pane > header')[1] as HTMLElement
+
+    await act(async () => {
+      pointer('pointerdown', header, 400, 450)
+      pointer('pointermove', window, 100, 450)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+
+    expect(ids()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
+    expect(desk.getState().duo).toBe('rows')
+    expect(document.querySelector('.desk-grid')!.getAttribute('data-dragging')).toBeNull()
+  })
+})
+
