@@ -37,6 +37,14 @@ CLIENT_CAPABILITIES: dict[str, Any] = {
     # advertisable, so omitting one is a supported subset rather than a
     # half-honoured capability.
     "elicitation": {"form": {}},
+    # Extension surface, not spec: Raven-X routes ask_user through an
+    # `ask_user_request` session update answered by `_raven/clarify_respond`
+    # rather than through elicitation, and arms that route only when the CLIENT
+    # declares it here. Declared under `_meta` so a spec-only agent cannot
+    # collide with it, and honoured by `raven/agent/acp/ask_user.py` -- a True
+    # raven did not serve would be a question put to nobody, answered by the
+    # agent's own 600s fail-safe.
+    "_meta": {"raven": {"askUser": True}},
 }
 
 METHOD_NOT_FOUND = -32601

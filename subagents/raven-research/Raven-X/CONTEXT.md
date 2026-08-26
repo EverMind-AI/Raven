@@ -122,6 +122,18 @@ circuit happens in `before_execute_tools` and `after_iteration` never runs. Stam
 `turn_end.awaiting_user`, which is a boolean beside `status` and never a fourth value for it:
 in every downstream consumer's eyes a clarify turn is a normally completed turn. Product
 surface only, and structurally unreachable from a bench arm.
+`drFlow.askUser.delivery` picks the transport: `handoff` (default, the measured behaviour)
+is the short circuit above; `tool` runs the blocking `QuestionBroker` round trip instead —
+the user answers a structured prompt (TUI / gateway; an ACP client that declared
+`_meta.raven.askUser`, via `acp/questions.py`; the interactive REPL, via
+`cli/_terminal_questions.py`), the answers return as the tool result, and the SAME turn
+researches on them, so no clarify turn exists at all: no pending, no brief, no chain debit,
+and the question text never enters the reply. Two consequences: `maxRounds` does not bound
+this transport (nothing opens a chain; the budget is one granted round trip per turn), and
+the outline half is not requested at all — it was the handoff reply's veto affordance, and
+the broker prompt carries questions only, so clause, description and schema drop it
+together whatever `askUser.outline` says. With no broker wired the gate falls back to
+the handoff; `raven agent -m` stays headless by design and always takes that fallback.
 _Avoid_: "clarification round" — that collides with the verify gate's revision round; and
 "answerless turn", which is the failure this one is deliberately distinguished from.
 
@@ -167,8 +179,15 @@ pre-override clause byte for byte). Also in `dr@3.4` two mechanisms back the cla
 without it: a per-turn **reminder** (`reportReminder`, on) that restates the template on the
 current user message and is stripped before persist, and a **shape bar**
 (`reportBounce`, off — `flow/report_shape.py`) that bounces a draft missing a section back
-once. Product surface only: every benchmark profile pins `reportStructure` off, which turns
-all three off with it. _Avoid_: "report format" for the
+once. A fourth sub-switch, `finalShape.reportDepth` (default off, unmeasured and therefore
+unlabeled — an A/B arm pins the current default plus a `-depth` suffix;
+`_DR_REPORT_STRUCTURE_CLAUSE_DEEP`), swaps in the **deep report template**: same three
+sections, `## Findings` upgraded from a findings list to a full argued report (causal
+narrative, per-datum source and as-of date, disagreements adjudicated in the open, facts
+separated from forward-looking judgments, tracking signals inside `## Limitations`,
+`###` subheadings allowed inside Findings); off restores the `dr@3.4` clause byte for
+byte. Product surface only: every benchmark profile pins `reportStructure` off, which turns
+all four off with it. _Avoid_: "report format" for the
 `<answer>...</answer>` tags — those come from `finalShape.requireMarker`, a separate knob
 that composes with this one.
 

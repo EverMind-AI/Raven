@@ -27,6 +27,7 @@
       "requireMarker": false,
       "reportStructure": false,
       "reportFormatOverride": false,
+      "reportDepth": false,
       "reportReminder": false,
       "reportBounce": false,
       "processAppendix": false

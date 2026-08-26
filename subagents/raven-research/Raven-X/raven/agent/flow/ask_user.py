@@ -1,11 +1,18 @@
 """dr@3.4-askuser: one clarify round at the turn boundary (product surface).
 
-The tool call is a **signal**; the turn boundary is the **transport**. Nothing
-here blocks on a human. ``AskUserGate.before_execute_tools`` reads the proposed
-call and returns ``short_circuit_result``, so the questions become this turn's
-reply and the user's next message arrives as an ordinary inbound. That is why the
-DR variant of the tool (``flow/ask_user_tool.py``) is non-blocking while
-``tools/ask_user.py`` still blocks for the gateway and the TUI.
+Under ``askUser.delivery="handoff"`` (default) the tool call is a **signal**; the
+turn boundary is the **transport**. Nothing blocks on a human.
+``AskUserGate.before_execute_tools`` reads the proposed call and returns
+``short_circuit_result``, so the questions become this turn's reply and the
+user's next message arrives as an ordinary inbound. That is why the DR variant of
+the tool (``flow/ask_user_tool.py``) does not block by default while
+``tools/ask_user.py`` blocks for the gateway and the TUI.
+
+``delivery="tool"`` swaps the transport, not the discipline: the gate grants the
+tool exactly one broker round trip, the questions reach the user as a structured
+prompt, and the answers return as the tool RESULT - so the same turn researches
+on them, nothing below (pending, brief, chain) is spent, and the question text
+never becomes the reply. With no broker wired the gate falls back to the handoff.
 
 Why the short circuit lands in ``before_execute_tools`` and not later: the loop
 drops the whole tool-call response there rather than persisting it, so no
@@ -628,13 +635,26 @@ class AskUserGate(AgentHook):
         max_questions: int = 3,
         max_outline_items: int = 5,
         outline: bool = True,
+        delivery: str = "handoff",
+        tool: Any | None = None,
     ) -> None:
         self._mode = mode
         self._max_rounds = max(1, max_rounds)
         self._first_iteration_only = first_iteration_only
         self._max_questions = max_questions
         self._max_outline_items = max_outline_items
-        self._outline = outline
+        # Effective, not configured: under ``delivery="tool"`` no prompt
+        # surface asks for an outline (see ``DRAskUserTool``), so seeding the
+        # state with the configured True would record a request that was
+        # never made. ``parse_ask_user_args`` still reads one if a model
+        # volunteers it, and ``has_outline`` records that separately.
+        self._outline = outline and delivery != "tool"
+        # ``delivery="tool"`` needs the registered tool instance: readiness is a
+        # runtime fact (broker late-bound by the transport, conversation_id set
+        # per turn) that only the tool can answer, and the grant it hands out is
+        # what stops a withheld call from spending a round trip on its own.
+        self._delivery = delivery
+        self._tool = tool
 
     @property
     def name(self) -> str:
@@ -651,6 +671,9 @@ class AskUserGate(AgentHook):
         state.setdefault("asked", False)
         state.setdefault("outline", self._outline)
         state.setdefault("mode", self._mode)
+        # Seeded with the CONFIGURED value; the fire path overwrites it with what
+        # actually happened, so "tool asked for, handoff delivered" stays visible.
+        state.setdefault("delivery", self._delivery)
         state.setdefault("withheld", 0)
         state.setdefault("chain_round", chain_round())
         # The two fields that make ``asked`` readable under ``mode="first_turn"``:
@@ -683,6 +706,13 @@ class AskUserGate(AgentHook):
         return False
 
     async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+        # A grant is one response's authority. Any grant still standing at an
+        # iteration boundary belonged to a call that never executed, and
+        # leaving it would let a later, ungranted call in the same turn spend
+        # it. Duck-typed like ``round_trip_ready``: tests hand the gate stubs.
+        revoke = getattr(self._tool, "revoke_round_trip", None)
+        if revoke is not None:
+            revoke()
         state = self._state(ctx)
         offered = any(
             (t.get("function") or {}).get("name") == _TOOL for t in (ctx.tools or [])
@@ -694,6 +724,20 @@ class AskUserGate(AgentHook):
             # acted and did not help (``fetch_gate.py``).
             state["tool_absent"] = True
             return HookDecision()
+
+        if state.get("asked"):
+            # The round already happened - a broker round trip keeps the turn
+            # going, so this hook runs again. Taking the tool back out is the
+            # round's designed lifecycle, not a refusal, and it stays out of
+            # ``withheld``: that column is the refusal rate, and a handoff
+            # turn (which never reaches here after asking) reports 0.
+            state["withdrawn_after_ask"] = True
+            return HookDecision(
+                modified_tools=[
+                    t for t in (ctx.tools or [])
+                    if (t.get("function") or {}).get("name") != _TOOL
+                ]
+            )
 
         reason = None
         if not is_research_turn():
@@ -745,9 +789,11 @@ class AskUserGate(AgentHook):
             max_outline_items=self._max_outline_items,
         )
         if len(proposed) > 1:
-            # Mixed with other calls. The short circuit discards the whole
-            # response by construction, so the rest cannot be kept without
-            # leaving dangling tool_calls; asking wins and the loss is counted.
+            # Mixed with other calls. Under a handoff the short circuit discards
+            # the whole response by construction, so the rest cannot be kept
+            # without leaving dangling tool_calls; asking wins and the loss is
+            # counted. Under a round trip nothing is discarded - the key then
+            # only says the ask shared its response with other calls.
             state["mixed_call"] = True
         if not payload.questions:
             # Guardrail 1: an outline alone never ends a turn. A question has a
@@ -759,10 +805,35 @@ class AskUserGate(AgentHook):
             state["outline_only_refused"] = bool(payload.outline)
             return HookDecision(notes=["ask_user: no answerable question, ignored"])
 
+        if (
+            self._delivery == "tool"
+            and getattr(self._tool, "round_trip_ready", False)
+        ):
+            # The broker round trip: the questions reach the user as a structured
+            # prompt, the answers return as the tool result, and the SAME turn
+            # researches on them - no handoff, no pending, no chain debit, and no
+            # ``clarify_requested`` marker because the turn still produces an
+            # answer. The grant is read-once in the tool, so a call the gate did
+            # not clear falls through to the undelivered fallback instead of
+            # asking on its own.
+            state.update({
+                "asked": True,
+                "delivery": "tool",
+                "n_questions": len(payload.questions),
+                "has_outline": bool(payload.outline),
+                "n_outline": len(payload.outline),
+            })
+            self._tool.grant_round_trip()
+            logger.info(
+                "ask_user: broker round trip with %d question(s)", len(payload.questions)
+            )
+            return HookDecision(notes=["ask_user: broker round trip"])
+
         payload.original_question = own_text(ctx.turn_question or "")
         payload.chain_round = chain_round() + 1
         state.update({
             "asked": True,
+            "delivery": "handoff",
             "n_questions": len(payload.questions),
             "has_outline": bool(payload.outline),
             "n_outline": len(payload.outline),

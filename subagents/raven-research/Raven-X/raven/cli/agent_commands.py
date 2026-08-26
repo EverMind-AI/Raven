@@ -171,6 +171,27 @@ async def _read_interactive_input_async() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _wire_repl_ask_user(agent_loop: Any, console: Any, progress: Any) -> None:
+    """ask_user on the REPL: the same late-bind seam the TUI and gateway use.
+
+    Called from the interactive path ONLY -- the ``-m`` one-shot stays headless
+    (it is the batch launcher), so the DR gate falls back to the handoff there.
+
+    Known contention, accepted: user turns are strictly serialized by
+    ``run_repl_loop``, but a background-origin turn (cron / sentinel / subagent
+    result) can call a non-DR ``ask_user`` while the main prompt is reading
+    stdin. The second ``PromptSession`` then fails on the shared terminal and
+    ``TerminalQuestionBroker`` fail-safes that question to its default - a
+    degraded answer, never a corrupted prompt. Not worth a lock until a real
+    background asker exists.
+    """
+    from raven.cli._terminal_questions import TerminalQuestionBroker
+
+    ask_tool = agent_loop.tools.get("ask_user")
+    if ask_tool is not None and hasattr(ask_tool, "set_broker"):
+        ask_tool.set_broker(TerminalQuestionBroker(console, suspend=progress.suspended))
+
+
 def register(app: typer.Typer) -> None:
     """Attach the ``agent`` command to ``app``."""
 
@@ -631,6 +652,7 @@ def register(app: typer.Typer) -> None:
                 )
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent_loop.subagents.set_submit(scheduler.submit)
+                _wire_repl_ask_user(agent_loop, console, _progress)
                 # Cron reminders run as CRON-origin turns through the spine
                 # scheduler, delivered by the hub -> CliOutlet (replacing the
                 # legacy bus path). readback_texts/system_events stay unset: the

@@ -28,7 +28,7 @@ class _StubHandle:
 class _Harness:
     """AcpMethods against a scripted submit."""
 
-    def __init__(self, on_submit=None, session_manager=None):
+    def __init__(self, on_submit=None, session_manager=None, question_broker=None, arm_ask_user=None):
         self.frames: list[dict] = []
         self.sessions = AcpSessions()
         self.submitted: list = []
@@ -38,6 +38,8 @@ class _Harness:
             sessions=self.sessions,
             emit=self.frames.append,
             session_manager=session_manager,
+            question_broker=question_broker,
+            arm_ask_user=arm_ask_user,
         )
 
     def _submit(self, req):
@@ -281,6 +283,27 @@ async def test_cancel_backstop_answers_a_turn_that_never_started():
     assert (await prompt)["result"] == {"stopReason": "cancelled"}
 
 
+async def test_cancel_resolves_a_pending_ask_user_question_first():
+    """A turn blocked on the broker: ``session/cancel`` fail-safes the pending
+    question to its default BEFORE cancelling the handle, so the turn's wait
+    releases whatever shape the handle's cancel takes - a bare cancel used to
+    be absorbed by the broker's fail-safe and the "cancelled" turn ran on."""
+    from raven.acp.questions import build_question_broker
+
+    broker = build_question_broker(lambda _f: None)
+    h = _Harness(question_broker=broker)
+    await h.start()
+    sid = await h.new_session()
+    prompt = asyncio.ensure_future(h.call("session/prompt", {"sessionId": sid, "prompt": _text_prompt("a")}))
+    await asyncio.sleep(0.01)
+    question = asyncio.ensure_future(broker.await_question(sid, prompt="which year?", default="unanswered"))
+    await asyncio.sleep(0.01)
+
+    await h.methods.handle({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
+    assert await question == "unanswered"
+    assert (await prompt)["result"] == {"stopReason": "cancelled"}
+
+
 async def test_cancel_for_an_unknown_session_is_silent():
     h = _Harness()
     await h.start()
@@ -422,3 +445,91 @@ async def test_load_refuses_per_session_mcp_and_requires_an_id(tmp_path):
         "code"
     ] == protocol.INVALID_PARAMS
     assert (await h.call("session/load", {}))["error"]["code"] == protocol.INVALID_PARAMS
+
+
+# -- ask_user round trip --------------------------------------------------------
+
+
+async def test_initialize_arms_ask_user_from_the_client_declaration():
+    """The methods layer knows the capability, the server knows the tool; the
+    callback is the seam between them, and it follows the record in BOTH
+    directions on a re-initialize."""
+    armed: list[bool] = []
+    h = _Harness(arm_ask_user=armed.append)
+    await h.call("initialize", {
+        "protocolVersion": 1,
+        "clientCapabilities": {"_meta": {"raven": {"askUser": True}}},
+    })
+    await h.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    assert armed == [True, False]
+
+
+async def test_the_declaration_is_read_defensively():
+    """Absent, wrong-typed, or falsy shapes all read False: a wrong True sends a
+    question to a client with no UI, silently answered by the fail-safe."""
+    from raven.acp.capabilities import ClientCapabilities
+
+    def declared(caps):
+        return ClientCapabilities.from_params({"clientCapabilities": caps}).ask_user
+
+    assert declared({"_meta": {"raven": {"askUser": True}}}) is True
+    assert declared({"_meta": {"raven": {"askUser": False}}}) is False
+    assert declared({"_meta": {"raven": "askUser"}}) is False
+    assert declared({"_meta": "raven"}) is False
+    assert declared({}) is False
+    assert declared(None) is False
+
+
+async def test_the_agent_advertises_the_extension_capability():
+    """The mirror of the client declaration: how the consuming raven knows that
+    offering its question UI is worthwhile. Under _meta so it can never collide
+    with spec surface."""
+    h = _Harness()
+    response = await h.call("initialize", {"protocolVersion": 1})
+    caps = response["result"]["agentCapabilities"]
+    assert caps["_meta"]["raven"]["askUser"] is True
+
+
+async def test_clarify_respond_resolves_a_pending_question():
+    from raven.acp.questions import CLARIFY_RESPOND_METHOD, build_question_broker
+
+    frames: list[dict] = []
+    broker = build_question_broker(frames.append)
+    h = _Harness(question_broker=broker)
+    await h.start()
+
+    question = asyncio.ensure_future(
+        broker.await_question("acp:chat1", prompt="which year?", choices=["2023", "2024"])
+    )
+    await asyncio.sleep(0)
+    request_id = frames[0]["params"]["update"]["requestId"]
+    response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": request_id, "answer": "2024"})
+    assert response["result"] == {"delivered": True}
+    assert await question == "2024"
+    # A second answer to the same handle is stale, not an error.
+    response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": request_id, "answer": "2023"})
+    assert response["result"] == {"delivered": False}
+
+
+async def test_clarify_respond_is_tolerant_of_stale_and_missing_handles():
+    from raven.acp.questions import CLARIFY_RESPOND_METHOD, build_question_broker
+
+    h = _Harness(question_broker=build_question_broker(lambda _f: None))
+    await h.start()
+    for params in ({"requestId": "gone", "answer": "x"}, {"answer": "x"}, {}):
+        response = await h.call(CLARIFY_RESPOND_METHOD, params)
+        assert response["result"] == {"delivered": False}
+
+    # And with no broker wired at all: same shape, not a crash.
+    bare = _Harness()
+    await bare.start()
+    response = await bare.call(CLARIFY_RESPOND_METHOD, {"requestId": "r", "answer": "x"})
+    assert response["result"] == {"delivered": False}
+
+
+async def test_clarify_respond_is_gated_on_initialize():
+    from raven.acp.questions import CLARIFY_RESPOND_METHOD
+
+    h = _Harness()
+    response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": "r", "answer": "x"})
+    assert response["error"]["code"] == protocol.INVALID_REQUEST

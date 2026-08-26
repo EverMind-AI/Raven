@@ -1497,7 +1497,10 @@ async def test_a_pending_question_does_not_stall_another_session() -> None:
             "session/prompt", {"sessionId": b, "prompt": [{"type": "text", "text": "hi"}]}, timeout=15.0
         )
         assert result == {"stopReason": "end_turn"}
-        assert "pong" in seen
+        # Exact, not `in`: a stub branch that loses its terminator falls through
+        # into the default full-turn path, and B's round trip still ends with
+        # "pong" in the stream -- green over a shape nobody chose.
+        assert seen == ["pong"]
         assert not prompt_a.done(), "A's pending question must survive B's round trip untouched"
     finally:
         if prompt_a is not None:
@@ -2855,6 +2858,95 @@ async def test_a_dispatched_acp_run_answers_its_agents_question(tmp_path: Path) 
     reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
     assert "using:redis" in reply
     assert seen and seen[0].startswith("a(t1): ")
+
+
+async def test_a_dispatched_acp_run_answers_a_question_sent_as_an_update(tmp_path: Path) -> None:
+    """The same thing over Raven-X's extension rather than over elicitation.
+
+    A different shape entirely: the question arrives as a `session/update`
+    notification and the answer goes back as a `_raven/clarify_respond` request
+    of raven's own, so nothing about it is the return value of the frame that
+    asked. What has to hold is the same -- the user is asked once, with the
+    choices the agent offered, and the agent gets the answer inside the turn it
+    was still holding open.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+
+    seen: list[tuple[str, list | None]] = []
+
+    class Tool:
+        async def ask(self, prompt, choices, conversation_id):
+            seen.append((prompt, choices))
+            return "EU"
+
+    start_ask_turn(Tool(), conversation_id="tui:c1")
+    cfg = stub_config("a", mode="asks_user_and_waits")
+    backend = AcpAgentBackend(
+        name="a", command=cfg.command, env=dict(cfg.env), snapshot=_snapshot("a", cfg, can_resume=False), registry=None
+    )
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
+    assert "answered:EU" in reply
+    assert seen == [("a(t1): which market?", ["EU", "US"])]
+
+
+async def test_a_question_sent_as_an_update_does_not_stall_the_read_loop(tmp_path: Path) -> None:
+    """Notifications are dispatched inline on the connection's read loop.
+
+    `asks_user_then_streams` asks and keeps talking. Answered on that loop, the
+    three chunks behind the question would wait on a human -- and on a pooled
+    connection so would every other session's. The turn completing with its
+    content is what says the answer was taken off that loop.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+
+    class Parks:
+        async def ask(self, prompt, choices, conversation_id):
+            await asyncio.sleep(3600)
+
+    start_ask_turn(Parks(), conversation_id="tui:c1")
+    cfg = stub_config("a", mode="asks_user_then_streams")
+    backend = AcpAgentBackend(
+        name="a", command=cfg.command, env=dict(cfg.env), snapshot=_snapshot("a", cfg, can_resume=False), registry=None
+    )
+    async with asyncio.timeout(30):
+        reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
+    assert "chunk0" in reply and "chunk2" in reply
+
+
+async def test_a_background_turn_answers_the_question_rather_than_ignoring_it(tmp_path: Path) -> None:
+    """No asker bound is a CRON turn: nobody to ask, and a turn still to unblock.
+
+    Dropping the frame is the tempting reading and the wrong one -- the agent is
+    holding its tool call open on a reply, so silence buys its full ten-minute
+    fail-safe. The empty answer is what its own tool renders as "the user did
+    not answer; proceed with best judgment".
+    """
+    from raven.agent.acp.asker import start_ask_turn
+
+    start_ask_turn(None, conversation_id="tui:c1")
+    cfg = stub_config("a", mode="asks_user_and_waits")
+    backend = AcpAgentBackend(
+        name="a", command=cfg.command, env=dict(cfg.env), snapshot=_snapshot("a", cfg, can_resume=False), registry=None
+    )
+    async with asyncio.timeout(30):
+        reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
+    assert "answered:none" in reply
+
+
+def test_responder_detach_is_identity_checked() -> None:
+    """Same trap as the elicitor registry: a finishing run must not tear down a later one's."""
+    from raven.agent.acp.pool import _SessionResponders
+
+    class AlwaysEqual:
+        def __eq__(self, other):
+            return True
+
+    registry = _SessionResponders("stub")
+    first, second = AlwaysEqual(), AlwaysEqual()
+    registry.attach("s", first)
+    registry.attach("s", second)
+    registry.detach("s", first)
+    assert registry.current("s") is second
 
 
 async def test_a_question_outliving_its_run_is_taken_down_with_it(tmp_path: Path) -> None:

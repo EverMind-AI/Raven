@@ -53,6 +53,13 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      advertise ``delete``, so a gated client must skip the call.
 - ``delete_fails``   - advertises ``delete`` and answers ``session/delete`` with
                      method-not-found, for the failure-log path.
+- ``asks_user_and_waits`` - notifies an ``ask_user_request`` session update and holds
+                     the prompt until raven sends ``_raven/clarify_respond``, then reports
+                     the answer. Raven-X's extension route, end to end: a notification out
+                     and a request back, rather than one request answered by its result.
+- ``asks_user_then_streams`` - notifies the same question, does not wait, and streams
+                     three chunks. Notifications are dispatched inline on raven's read
+                     loop, so this is what fails if answering one blocks it.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
                      boundary in the chunks themselves.
@@ -152,6 +159,37 @@ _AWAITING_CANCEL: list = []
 # string; this is what a peer that does not read the schema can still send.
 _UNHASHABLE_ID = [7]
 _AWAITING_MALFORMED: list = []
+# Prompts held open until raven answers an ask_user_request (asks_user_and_waits).
+_AWAITING_ASK_USER: list = []
+
+
+def ask_user(session_id: str, request_id: str, question: str, choices: list) -> None:
+    """Raven-X's extension: a question as a session update, not as a request."""
+    update(
+        session_id,
+        {
+            "sessionUpdate": "ask_user_request",
+            "requestId": request_id,
+            "question": question,
+            "choices": choices,
+        },
+    )
+
+
+def handle_clarify_respond(request_id, params) -> None:
+    """Answer the extension method, then finish whatever prompt was waiting on it."""
+    ok(request_id, {"delivered": bool(_AWAITING_ASK_USER)})
+    if not _AWAITING_ASK_USER:
+        return
+    answer = params.get("answer")
+    answer = answer if isinstance(answer, str) else ""
+    held_request, session_id = _AWAITING_ASK_USER.pop(0)
+    update(
+        session_id,
+        {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"answered:{answer or 'none'}"}},
+    )
+    ok(held_request, {"stopReason": "end_turn"})
+
 
 # Prompts held open until a steer arrives (steerable): the turn then answers the
 # steered text, so a test can tell a merged steer from a dropped one.
@@ -305,6 +343,19 @@ def handle_prompt(request_id, params) -> None:
             )
             return
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "asks_user_and_waits":
+        _AWAITING_ASK_USER.append((request_id, session_id))
+        ask_user(session_id, "q-1", "which market?", ["EU", "US"])
+        return
+    if MODE == "asks_user_then_streams":
+        ask_user(session_id, "q-1", "which market?", ["EU", "US"])
+        for i in range(3):
+            update(
+                session_id,
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"chunk{i}"}},
+            )
         ok(request_id, {"stopReason": "end_turn"})
         return
     if MODE == "elicits_then_streams":
@@ -589,6 +640,8 @@ def main() -> None:
             else:
                 print(f"stub: session/delete for {params.get('sessionId')}", file=sys.stderr, flush=True)
                 ok(request_id, {})
+        elif method == "_raven/clarify_respond":
+            handle_clarify_respond(request_id, params)
         elif method == "session/prompt":
             handle_prompt(request_id, params)
         elif method == "_raven/session/steer":

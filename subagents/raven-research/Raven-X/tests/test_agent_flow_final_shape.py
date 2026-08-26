@@ -54,7 +54,11 @@ def test_both_knobs_default_on():
     # bound that cannot be attributed. dr@3.4 adds the ``report_shape`` observer
     # that closes that gap; the knob earns its default from those readings, not
     # from this file.
-    off_by_design = {"report_bounce"}
+    # ``report_depth`` is off because it is an unmeasured prompt bundle: the
+    # deep template changes what the model reads on any arm that opts in. It
+    # earns a default flip from a bench round, not from this file; under the
+    # launch convention the label is a batch's concern, not this knob's.
+    off_by_design = {"report_bounce", "report_depth"}
     bools = {n: getattr(DRFlowFinalShapeConfig(), n)
              for n, f in DRFlowFinalShapeConfig.model_fields.items()
              if f.annotation is bool}
@@ -114,6 +118,66 @@ def test_off_state_contract_is_byte_identical_to_pre_flip():
     assert marker not in off.segment_builder._contract
     assert marker in on.segment_builder._contract
     assert pre_flip.rstrip() in off.segment_builder._contract
+
+
+def test_depth_off_is_byte_identical_to_the_shipped_template():
+    """Turning ``report_depth`` off must reproduce the dr@3.4 contract exactly.
+
+    Same escape hatch as ``require_marker`` above, and the same two layers: the
+    builder default and the config default must agree, and the config layer is
+    the one an operator flips. A cheap pin - the off branch selects the shipped
+    constant directly - while the sha-level protection stays with
+    ``test_the_dr_prompt_bytes_match_the_batch_that_measured_them``.
+    """
+    from raven.agent.flow.dr import DRModeSegmentBuilder, build_dr_flow
+
+    assert DRModeSegmentBuilder()._contract == DRModeSegmentBuilder(
+        report_depth=DRFlowFinalShapeConfig().report_depth
+    )._contract
+    off = build_dr_flow(
+        DRFlowConfig(enabled=True, final_shape={"report_depth": False}), None, 10, 1000
+    )
+    default = build_dr_flow(DRFlowConfig(enabled=True), None, 10, 1000)
+    assert off.segment_builder._contract == default.segment_builder._contract
+    assert off.segment_builder._contract == DRModeSegmentBuilder()._contract
+
+
+def test_depth_on_swaps_the_clause_without_moving_its_number():
+    """The deep template replaces the dr@3.4 clause in place: same slot handling,
+    same clause number, no residual ``{format_override}`` / ``{n}`` in any state.
+
+    The closing-sentence change ("no other headings" -> "no other ``##``
+    headings") is asserted from both sides - the deep sentence present, the
+    template sentence absent - because the two constants must never drift into
+    rendering the same closing rule.
+    """
+    from raven.agent.flow.dr import DRModeSegmentBuilder, build_dr_flow
+
+    deep = build_dr_flow(
+        DRFlowConfig(enabled=True, final_shape={"report_depth": True}), None, 10, 1000
+    ).segment_builder._contract
+    shipped = DRModeSegmentBuilder()._contract
+
+    assert "the full report that carries the answer" in deep
+    assert "Add no other `##` headings" in deep
+    assert "Add no other headings" not in deep
+    assert "Add no other headings" in shipped
+    assert "Add no other `##` headings" not in shipped
+    # Same clause number in both states: the deep clause substitutes for the
+    # template inside the same ``enumerate`` slot, after the marker clause.
+    assert "7. Write the reply as a research report" in deep
+    assert "7. Write the reply as a research report" in shipped
+    for state in (
+        deep,
+        DRModeSegmentBuilder(report_depth=True, report_format_override=False)._contract,
+    ):
+        assert "{format_override}" not in state
+        assert "{n}" not in state
+    # The override passage rides the same slot in both templates.
+    assert "takes precedence over any formatting instructions" in deep
+    assert "takes precedence over any formatting instructions" not in DRModeSegmentBuilder(
+        report_depth=True, report_format_override=False
+    )._contract
 
 
 def test_the_live_label_is_never_also_a_retired_one():

@@ -1975,6 +1975,33 @@ class DRFlowFinalShapeConfig(_Base):
     and lets a same-batch A/B run template-vs-template+override;
     ``test_the_dr_prompt_bytes_match_the_batch_that_measured_them`` pins both
     states."""
+    report_depth: bool = False
+    """The deep report template. Product surface only. Distribution change when
+    ``report_structure`` is on; inert when it is off, because the switch only
+    selects which report clause that knob appends.
+
+    On, the segment builder renders ``_DR_REPORT_STRUCTURE_CLAUSE_DEEP`` in
+    place of the dr@3.4 template: same three sections, ``## Findings`` upgraded
+    from a findings list to a full argued report (causal narrative, per-datum
+    source and as-of date, disagreements adjudicated in the open, facts
+    separated from forward-looking judgments, tracking signals inside
+    ``## Limitations``). Off, the clause is byte-identical to dr@3.4 - the same
+    escape hatch ``require_marker`` documents above.
+
+    Off by default because it is unmeasured: a bundle of prompt commitments
+    priced together. It carries no label of its own - under the launch
+    convention (see ``version``) labels advance when a batch finishes, not when
+    a distribution changes - so an A/B arm that switches it on pins the current
+    default plus a ``-depth`` suffix in its own config (the suffix convention
+    ``dr@3.4-askuser`` established; the validator names the required base
+    whenever a stale one is pinned), while examples never pin ``version`` at
+    all (the loader test enforces both). Product
+    profiles that want the deep template set ``reportDepth: true`` explicitly
+    rather than inheriting a default, for the reason stated in the class
+    docstring. When reading the A/B, judge the ``report_shape`` counters with
+    ``off_level_headings`` alongside ``well_formed``: the deep clause invites
+    ``###`` subheadings, and a stem-matched ``###`` inside Findings can mark a
+    genuinely missing section as present."""
     report_reminder: bool = True
     """dr@3.4: repeat the template as a short block on the current user message.
 
@@ -2176,6 +2203,23 @@ class DRFlowAskUserConfig(_Base):
     a question that needed no clarification pays a full round trip for nothing.
     ``when_needed`` is the byte-identical way back, and D-arm ask-rate data (see
     README) is what should decide between them."""
+    delivery: Literal["handoff", "tool"] = "handoff"
+    """How the questions reach the user once the model calls ``ask_user``.
+
+    ``handoff`` (default, the dr@3.4-askuser measured behaviour): the gate
+    short-circuits the turn, the rendered questions become the reply, and the
+    user's next message carries the answer. ``tool`` routes the call through the
+    blocking ``QuestionBroker`` round trip instead: the user answers a structured
+    prompt (TUI / gateway), the answers come back as the tool result, and the
+    SAME turn researches on them - the question text never becomes the reply, and
+    no pending / chain round is spent. On a surface with no broker wired (ACP,
+    ``raven agent -m``) the gate falls back to the handoff, so the round is never
+    silently dropped.
+
+    Byte-visible: the contract clause, the identity rewrite and the tool
+    description all change with it, so ``handoff`` is the byte-identical way back
+    to the measured prompt. Product-only either way - resolved against the same
+    two switches as the rest of this block."""
     outline: bool = True
     """Ask for an outline (sub-questions, evidence kind, deliverable) alongside
     the questions.
@@ -2198,7 +2242,12 @@ class DRFlowAskUserConfig(_Base):
     chain closes when a turn asks nothing further. Scoping it to the session
     instead would spend the budget on a conversation's first research question and
     refuse the second one - and a session holding two unrelated questions is a
-    convention this code cannot enforce, so the failure would be silent."""
+    convention this code cannot enforce, so the failure would be silent.
+
+    Handoff accounting only. ``delivery="tool"`` opens no chain - the round
+    trip writes no pending, so nothing here debits - and its budget is
+    structural instead: the gate grants one round trip per turn and withdraws
+    the tool once it is spent (``withdrawn_after_ask``)."""
     first_iteration_only: bool = True
     """Register the tool on the first iteration of a research turn only.
 

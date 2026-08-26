@@ -125,7 +125,8 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
 | `methods.py`（AcpMethods 路由） | 移植骨架，**已实现为直连 `Scheduler.submit`**（不走 dispatcher `turn.send`：那条路挂在 SubscriptionEmitter 上，与 §2.2 的 spine 选型冲突；`turn.send` 的两个真正需要的守卫——每 session 单 turn、一切出口有 stopReason——由 `AcpSessions` 与 sink 承担）。砍掉的扩展方法见 §6 决策 A |
 | `updates.py`（UpdateTranslator） | **不移植**。改写为 spine 层 `AcpOutlet` + `_make_acp_sink`（§2.2）。保留其两条不变量与 `_text_chunk` / `_tool_call` / `_usage_update` 的**映射规则**作为参照 |
 | `capabilities.py`、`config_options.py` | 移植，capability 声明按 §6 决策 A 裁剪 |
-| `questions.py`、`permissions.py`（server 侧 broker） | 暂不移植（见 §3 ask_user 决策），留 TODO |
+| `questions.py`（server 侧 broker） | **已移植**（`raven/acp/questions.py`，见 §3 修订）：`QuestionBroker` 复用 TUI 的 notification-out / request-in 形态，capability 门控 |
+| `permissions.py`（server 侧 broker） | 暂不移植（消费者自动批准一切 permission），留 TODO |
 | `replay.py`（session/load 回放） | Phase 2 移植，接 Raven-X 的 `SessionManager` + `session_resume` |
 | `server.py`（run loop：每帧一 task、EOF 时 settle-then-await 的关停） | 移植骨架，engine 构建换成 `raven/cli/tui_commands.py:316` `_build_tui_agent_loop` 的等价物 |
 
@@ -144,11 +145,17 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
   失败的 turn 仍以 `stopReason: "end_turn"` 结束，失败原因以 message content 落地
   （不自造 stopReason —— 非 `end_turn` 会被消费者标成残缺回复，见 §1）。
   配合"空 turn = 失败"，要保证一切路径（gate 短路、provider 错误、取消）最终有 chunk。
-- **ask_user / 澄清问题：不做协议级问答**。消费者自动批准一切 permission、无 elicitation，
-  阻塞式问答只会换来 codex 式的整轮 cancel（主仓 `permissions.py` 记录在案）。
-  沿用现有产品形态：DR conversation gate 把澄清问题**作为该轮回复**（`agent_message_chunk`）发出，
-  用户答案作为下一个 `session/prompt` 进同一 session —— 零改动，天然成立。
-  前提是同一 session 真的被复用，即 §6 决策 A 必须落地。
+- **ask_user / 澄清问题：协议级问答按能力协商，handoff 是永久回退**（修订：原决策为
+  "不做协议级问答"，在 `askUser.delivery = "tool"` 落地后放开）。客户端在 initialize 的
+  `clientCapabilities._meta.raven.askUser` 声明它会渲染问题 UI 时，问题以
+  `session/update`（`sessionUpdate: "ask_user_request"`）发出、客户端调 `_raven/clarify_respond`
+  作答，答案作为 tool result 回到**同一 turn**（`raven/acp/questions.py`；与 TUI 同构的
+  notification-out / request-in，不引入 agent 发起请求的应答关联管道）。
+  未声明能力、或 `askUser.delivery = "handoff"` 时，维持原产品形态：DR gate 把澄清问题
+  **作为该轮回复**（`agent_message_chunk`）发出，用户答案作为下一个 `session/prompt`
+  进同一 session。原决策记录的风险仍然成立——对没有 UI 的客户端做阻塞问答只会换来
+  codex 式的整轮 cancel，这正是能力门控存在的原因。handoff 路径的前提不变：同一
+  session 真的被复用，即 §6 决策 A 必须落地。
 - **DR mode 不需要 ACP session modes**：一进程一配置。`raven acp` 起来时按 config
   （raven-research 的 config.json `drFlow` 固定开启）装配 AgentLoop，
   与主仓 preset 哲学一致（codex 用 env 一次性定死 mode）。

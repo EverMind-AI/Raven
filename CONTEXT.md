@@ -1150,6 +1150,29 @@ _Avoid_: reading it as the same kind of thing as **Unattended Approval**. That o
 answered by raven with nobody in the loop; this one exists only to reach somebody, and
 declines when a dispatch has no reachable user.
 
+**Ask-User Round Trip** (`raven/agent/acp/ask_user.py`):
+How an ACP Subagent's question reaches the user when it does not use `elicitation/create`.
+Raven-X routes its deep-research clarify through an extension of its own: the question
+leaves as a `session/update` whose `sessionUpdate` is `ask_user_request`, and the answer
+goes back as a `_raven/clarify_respond` request of raven's own. Armed by declaration on both
+sides - the agent sends nothing unless the client declared `_meta.raven.askUser` at
+`initialize`, and unarmed its tool falls back to ending the turn on the questions, so this is
+the difference between a clarify that interrupts one turn and one that costs a whole round
+trip through the caller. Ends at the same `clarify.request` contract as **Elicitation
+Pass-Through** and shares its per-conversation lock, because both reach one question broker
+that allows a single pending question per conversation. Answered off the connection's read
+loop for a sharper reason than the request path's: notifications are dispatched inline there,
+so a question awaited on that loop stalls every other session of a pooled connection. Every
+question a run owns is answered, including the ones nobody can put to a user - a background
+turn and a finished run both reply with an empty string, which the asking side already reads
+as "the user did not answer". A session nobody owns is the one case that is routed and not
+answered - raven cannot answer for a run that is gone, and the agent falls back to its own
+timeout. The window is a frame landing after the backend's `finally` has detached the
+responder.
+_Avoid_: reading a dropped frame as a no-op. The agent blocks its tool call on the reply for
+ten minutes before falling back to the question's default, so not answering is the stall this
+exists to prevent, not an abstention.
+
 **Frame Journal** (`raven/agent/acp/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
 the run transcript, which holds the `session/update` notifications routed to one session -
