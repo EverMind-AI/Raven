@@ -43,10 +43,20 @@ DS.onboard = {
     await loadSessions();
     RavenIslands.rail.release();
     /* Home is the new-task screen, never the last session: opening straight
-       into someone else's half-finished transcript is a worse first frame
-       than an empty composer, and the rail is one click away. A draft writes
-       nothing to disk, so this costs no empty session either. */
-    startDraft();
+       into someone else's half-finished transcript is a worse first frame than
+       an empty composer, and the rail is one click away. A draft writes nothing
+       to disk, so this costs no empty session either.
+
+       A RELOAD is not a first frame, though. The reader was already in a
+       conversation and did not ask to leave it -- the page was replaced under
+       them, by a refresh or by an upgrade -- so the tab's own note is what
+       decides here, and it exists only for a tab that was already somewhere
+       (shell/resume.ts). Asked of the list rather than opened blind: a
+       conversation deleted since is a note for something that is not there any
+       more, and the new-task screen is the right answer for it. */
+    const back = RavenIslands.view.landing(sessionRows().map((s) => s.id));
+    if (back) await openLiveSession(sess(back));
+    else startDraft();
     /* First run: the same gate the TUI boots through. setup.status decides;
        the flow itself drives model.options / model.save_key / config.set --
        one server-side setup logic, two faces. Not awaited: the overlay

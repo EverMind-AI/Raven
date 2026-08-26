@@ -78,3 +78,19 @@ describe('the assembled page boot order', () => {
     expect(live).not.toContain('CRONS.length = 0')
   })
 })
+
+/* Where the live layer starts recording which conversation the tab is on.
+   An ordering rule no unit test can hold: the demo shell has already opened its
+   canned session by the time this file runs, and the line above it clears the
+   pointer again. Watching before either of those wrote `a` into the note and
+   then deleted it, so a reload never had a conversation to come back to. */
+describe('the live boot guard', () => {
+  const guard = readFileSync(new URL('../src/live/010-boot-guard.js', import.meta.url), 'utf8')
+
+  it('starts the view watch, and only after it has cleared the pointer', () => {
+    const clear = guard.indexOf('sessionSet(null)')
+    const watch = guard.indexOf('RavenIslands.view.watch()')
+    expect(clear).toBeGreaterThan(-1)
+    expect(watch).toBeGreaterThan(clear)
+  })
+})

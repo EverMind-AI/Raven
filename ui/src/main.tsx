@@ -281,6 +281,9 @@ window.RavenIslands = {
      transcript's own `dag.get` seam, which is why it is not any of theirs. */
   view: {
     resume: resume.resume,
+    landing: resume.landing,
+    /* Started by the live layer once the pointer is real; see shell/resume.ts. */
+    watch: resume.watch,
   },
   /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
      rides the same bag because the bag is simply what the legacy shell reaches

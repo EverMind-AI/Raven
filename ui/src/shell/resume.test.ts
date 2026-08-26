@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetForTests as sheetReset } from '../features/composer/sheets'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
-import { resume } from './resume'
+import { landing, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
 
@@ -345,5 +345,85 @@ describe('what a replay may not erase', () => {
 
     expect(deskSaved('s1')!.open)
       .toEqual([{ k: 'file', path: '/workspace/a.ts' }, { k: 'file', path: '/workspace/b.ts' }])
+  })
+})
+
+/* Boot opens the new-task screen rather than the last conversation, on purpose.
+   A reload is not a boot in that sense: the reader was already somewhere and the
+   page was replaced under them. The note tells the two apart -- a refreshed tab
+   has one, a tab opened fresh does not. */
+describe('where a tab lands', () => {
+  beforeEach(() => { watch() })
+
+  it('records nothing that happened before the live layer took over', () => {
+    /* The demo shell runs first on every page, live mode included, and opens
+       its canned session on the same pointer. Recording from the moment this
+       module loads meant the note said `a` on every load. */
+    sessionReset()
+    setCurrent('a')
+
+    watch()
+
+    expect(landing(['a'])).toBeNull()
+  })
+
+  it('keeps the note a previous page left, through that same noise', () => {
+    /* The whole failure, in order: a real conversation recorded, the page
+       replaced, the demo's canned session, the live boot guard clearing the
+       pointer -- and only then the live layer taking over. Watching too early
+       rewrote the note to `a` and then deleted it, so boot never saw one. */
+    setCurrent('s2')
+    sessionReset()
+    setCurrent('a')
+    setCurrent(null)
+
+    watch()
+
+    expect(landing(['s2'])).toBe('s2')
+  })
+
+  it('is nowhere for a tab that was never in a conversation', () => {
+    expect(landing(['s1', 's2'])).toBeNull()
+  })
+
+  it('is the conversation the tab was on', () => {
+    setCurrent('s2')
+
+    expect(landing(['s1', 's2'])).toBe('s2')
+  })
+
+  it('is the conversation it was on LAST, not the first it saw', () => {
+    setCurrent('s1')
+    setCurrent('s2')
+
+    expect(landing(['s1', 's2'])).toBe('s2')
+  })
+
+  it('is nowhere after the reader asks for a new task', () => {
+    /* The one case where coming back to the last conversation is wrong: they
+       said they wanted a blank one. */
+    setCurrent('s2')
+
+    setCurrent(null)
+
+    expect(landing(['s1', 's2'])).toBeNull()
+  })
+
+  it('is nowhere when that conversation has been deleted since', () => {
+    /* Opening it blind would put a toast about a session the reader never asked
+       for in front of an empty transcript. */
+    setCurrent('s2')
+
+    expect(landing(['s1'])).toBeNull()
+  })
+
+  it('survives the page being replaced', () => {
+    setCurrent('s2')
+    const note = sessionStorage.getItem('raven.gui.view.open')
+    sessionReset()
+    sessionStorage.setItem('raven.gui.view.open', note!)
+    watch()
+
+    expect(landing(['s1', 's2'])).toBe('s2')
   })
 })
