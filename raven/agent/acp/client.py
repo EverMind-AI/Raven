@@ -493,9 +493,16 @@ class AcpClient:
             logger.opt(exception=True).warning("acp agent {!r}: read loop failed: {}", self.name, exc)
         finally:
             # EOF or a dead loop means no answer is ever coming for anything
-            # still in flight. Failing them here is what stops a caller from
-            # awaiting a future nobody will resolve.
+            # still in flight -- for the callers awaiting a response, and for
+            # the tasks composing one. Failing the first is what stops a caller
+            # from awaiting a future nobody will resolve; cancelling the second
+            # stops a handler (an elicitation parked on the broker) from
+            # waiting out its whole budget on a connection that is gone.
+            # Cancelled rather than gathered: `close` gathers, but this path
+            # must not wait on a handler that ignores its cancellation.
             if not self._closed:
+                for task in list(self._answer_tasks):
+                    task.cancel()
                 # A dying child closes stdout a beat before it is reaped and
                 # before its last stderr lines are read, so composing the
                 # message immediately reports "exit None; stderr: <empty>" for

@@ -11,13 +11,16 @@ between two agents, or showing a green light for an agent that cannot run a task
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from raven.agent.acp.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint, verify_agent
 from raven.agent.acp.pool import close_pool, get_pool
@@ -1401,6 +1404,184 @@ async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
         assert seen == ["chunk0", "chunk1", "chunk2"]
     finally:
         await client.close()
+
+
+async def test_read_loop_death_cancels_in_flight_answers() -> None:
+    """EOF with an unanswered request must cancel the task answering it.
+
+    The loop's end failed pending callers but left in-flight answer tasks
+    waiting: an elicitation parked on the broker for its whole budget on a
+    connection that could never deliver the answer. ``close`` cancels them; a
+    loop that dies on its own has to as well.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp.protocol import AcpConnectionError
+
+    asked = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def handler(method: str, params: dict) -> object:
+        asked.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    client = await AcpClient.launch(
+        name="dying",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "elicits_then_dies"},
+        on_request=handler,
+    )
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        with pytest.raises(AcpConnectionError):
+            await client.request(
+                "session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}, timeout=15.0
+            )
+        # The loop's end is what fails the prompt, so by the time the call
+        # raises it has already run its teardown: with the fix the answer task
+        # is cancelled there, deterministically.
+        assert asked.is_set()
+        assert cancelled.is_set(), "the loop ended with an answer task still parked on a human"
+    finally:
+        await client.close()
+
+
+async def test_a_pending_question_does_not_stall_another_session() -> None:
+    """The two-session shape of the pooled-connection stall.
+
+    ``test_an_unanswered_request_does_not_stall_the_read_loop`` proves updates
+    still flow while *the asking* session's question waits on a human. This one
+    proves a second session completes a whole prompt round trip on the same
+    connection while that question is still pending.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+
+    asked = asyncio.Event()
+    seen: list[str] = []
+
+    async def never_answers(method: str, params: dict) -> object:
+        asked.set()
+        await asyncio.sleep(3600)
+
+    async def note(method: str, params: dict) -> None:
+        text = (((params.get("update") or {}).get("content") or {}).get("text")) or ""
+        if text:
+            seen.append(text)
+
+    client = await AcpClient.launch(
+        name="two",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "elicits_first_then_serves"},
+        on_request=never_answers,
+        on_notification=note,
+    )
+    prompt_a: asyncio.Task | None = None
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        a = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        prompt_a = asyncio.create_task(
+            client.request("session/prompt", {"sessionId": a, "prompt": [{"type": "text", "text": "hi"}]}, timeout=30.0)
+        )
+        await asyncio.wait_for(asked.wait(), timeout=5.0)
+        b = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        result = await client.request(
+            "session/prompt", {"sessionId": b, "prompt": [{"type": "text", "text": "hi"}]}, timeout=15.0
+        )
+        assert result == {"stopReason": "end_turn"}
+        assert "pong" in seen
+        assert not prompt_a.done(), "A's pending question must survive B's round trip untouched"
+    finally:
+        if prompt_a is not None:
+            prompt_a.cancel()
+            await asyncio.gather(prompt_a, return_exceptions=True)
+        await client.close()
+
+
+async def test_instance_forget_deletes_the_agents_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Forgetting an acp instance must release the session on the agent too.
+
+    The registry row was the only thing ``forget`` dropped: the agent's own
+    store kept the session -- and any work in it -- for the life of the
+    connection. Best-effort: the record is gone either way, and a dead
+    connection has nothing to tell.
+    """
+    from raven.rpc.methods import instances as instances_rpc
+
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "forgetter", "work", "stub-session-1", kind="acp")
+    monkeypatch.setattr(instances_rpc, "get_registry", lambda: registry)
+
+    cfg = stub_config("forgetter")
+    connection = await get_pool().acquire(
+        name="forgetter", command=cfg.command, env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    result = await instances_rpc.instances_forget({"session_key": "s", "agent": "forgetter", "handle": "work"})
+    assert result == {"removed": True}
+    assert "session/delete for stub-session-1" in connection.client.stderr_tail()
+
+
+@contextlib.contextmanager
+def _loguru_capture(level: str = "DEBUG") -> Iterator[list[str]]:
+    """Capture loguru output for the block, because caplog does not see it."""
+    captured: list[str] = []
+    sink_id = logger.add(lambda msg: captured.append(msg), level=level)
+    try:
+        yield captured
+    finally:
+        logger.remove(sink_id)
+
+
+async def test_forget_skips_session_delete_when_the_agent_does_not_advertise_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A method-not-found round trip on an unimplemented surface is noise.
+
+    raven-research ships without ``sessionCapabilities.delete``, so sending the
+    delete to it would only earn -32601. Forget must skip the call and say so
+    in the log; the session then rides out the connection's retirement.
+    """
+    from raven.rpc.methods import instances as instances_rpc
+
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "gated", "work", "stub-session-1", kind="acp")
+    monkeypatch.setattr(instances_rpc, "get_registry", lambda: registry)
+
+    cfg = stub_config("gated", mode="no_session_delete")
+    connection = await get_pool().acquire(name="gated", command=cfg.command, env=dict(cfg.env), ready_timeout_s=15.0)
+    with _loguru_capture() as captured:
+        result = await instances_rpc.instances_forget({"session_key": "s", "agent": "gated", "handle": "work"})
+    assert result == {"removed": True}
+    assert "session/delete" not in connection.client.stderr_tail()
+    assert any("does not advertise" in message for message in captured)
+
+
+async def test_forget_logs_when_an_advertised_session_delete_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A best-effort cleanup that silently fails is unauditable.
+
+    The delete is gated on the advertisement, so a failure here is the agent
+    not honouring its own capability -- exactly the case an operator needs to
+    see in the log.
+    """
+    from raven.rpc.methods import instances as instances_rpc
+
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "failing", "work", "stub-session-1", kind="acp")
+    monkeypatch.setattr(instances_rpc, "get_registry", lambda: registry)
+
+    cfg = stub_config("failing", mode="delete_fails")
+    connection = await get_pool().acquire(name="failing", command=cfg.command, env=dict(cfg.env), ready_timeout_s=15.0)
+    with _loguru_capture(level="WARNING") as captured:
+        result = await instances_rpc.instances_forget({"session_key": "s", "agent": "failing", "handle": "work"})
+    assert result == {"removed": True}
+    assert any("session/delete" in message and "failed" in message for message in captured)
 
 
 async def test_an_unserialisable_handler_result_does_not_vanish_unretrieved() -> None:

@@ -511,17 +511,40 @@ async def instances_forget(params: dict[str, Any]) -> dict[str, Any]:
 
     The record directories stay: they are the audit trail, and the handoff the
     main agent was given names paths inside them.
+
+    For an acp instance whose agent advertises ``sessionCapabilities.delete``
+    the agent is told to drop the session too (``session/delete``,
+    best-effort): the row and the agent's own store are two copies of the same
+    binding. What the agent does with the delete is its own implementation --
+    raven's deletes the stored conversation and cancels a running turn first --
+    so forgetting a busy instance stops its turn. The directories here stay
+    either way.
     """
     registry = get_registry()
     session_key = str(params.get("session_key") or "")
     agent = str(params.get("agent") or "")
     handle = str(params.get("handle") or "")
 
-    paired = _paired_handle(registry.list_instances(session_key), agent, handle)
+    rows = registry.list_instances(session_key)
+    row = next((r for r in rows if r.get("agent") == agent and r.get("handle") == handle), None)
+    paired = _paired_handle(rows, agent, handle)
     removed = await registry.forget(session_key, agent, handle)
     if paired is not None:
         removed = await registry.forget(session_key, agent, paired) or removed
+    if removed and row is not None and row.get("kind") == "acp" and row.get("agentId"):
+        await _delete_acp_session(agent, str(row["agentId"]))
     return {"removed": bool(removed)}
+
+
+async def _delete_acp_session(agent: str, session_id: str) -> None:
+    """Tell the agent its session is gone. Best-effort, and never a launch.
+
+    Imported here rather than at module level, so the acp pool -- and the
+    subprocess layer it drags in -- stays out of the rpc import graph.
+    """
+    from raven.agent.acp.pool import get_pool
+
+    await get_pool().delete_session(agent, session_id)
 
 
 def register_instance_methods(

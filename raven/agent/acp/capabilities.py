@@ -265,6 +265,7 @@ class _Handshake:
     can_resume: bool = False
     can_fork: bool = False
     can_load: bool = False
+    can_delete: bool = False
     prompt_modalities: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
@@ -298,9 +299,15 @@ def _read_initialize(result: Any) -> _Handshake:
         can_resume="resume" in session_caps,
         can_fork="fork" in session_caps,
         can_load=bool(caps.get("loadSession")),
+        can_delete="delete" in session_caps,
         prompt_modalities=modalities,
         auth_methods=auth_ids,
     )
+
+
+def handshake_of(result: Any) -> _Handshake:
+    """The parsed capabilities one ``initialize`` answer carries."""
+    return _read_initialize(result)
 
 
 def _read_session_models(result: Any) -> tuple[str, ...]:

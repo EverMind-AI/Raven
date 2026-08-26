@@ -33,10 +33,22 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      answer, then streams three chunks and ends the turn. Proves a
                      handler that blocks on a human does not stall delivery on the
                      same connection.
+- ``elicits_then_dies`` - asks ``elicitation/create``, then exits: the connection
+                     ends while raven is still answering. For the read-loop death
+                     path, where a pending answer task must not outlive the loop.
 - ``elicits_and_waits`` - asks ``elicitation/create`` and holds the prompt open
                      until raven answers it, then reports what was chosen. For the
                      end-to-end path: an agent's question reaching a real human and
                      the answer coming back into the same turn.
+- ``elicits_first_then_serves`` - the first session's prompt asks
+                     ``elicitation/create`` and holds; every later session streams
+                     and ends the turn. The two-session case of the pooled
+                     connection: one session's pending question must not stall
+                     another's whole round trip.
+- ``no_session_delete`` - like ``ok`` but ``sessionCapabilities`` does not
+                     advertise ``delete``, so a gated client must skip the call.
+- ``delete_fails``   - advertises ``delete`` and answers ``session/delete`` with
+                     method-not-found, for the failure-log path.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
                      boundary in the chunks themselves.
@@ -74,13 +86,17 @@ _INITIALIZED = False
 # making concurrent sessions collide in a way no real agent would.
 _SESSIONS = 0
 
+_SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
+if MODE != "no_session_delete":
+    _SESSION_CAPS["delete"] = {}
+
 CAPABILITIES = {
     "protocolVersion": 1,
     "agentInfo": {"name": "stub-agent", "version": "9.9.9"},
     "agentCapabilities": {
         "loadSession": True,
         "promptCapabilities": {"image": True},
-        "sessionCapabilities": {"fork": {}, "list": {}, "resume": {}},
+        "sessionCapabilities": _SESSION_CAPS,
     },
     "authMethods": [{"id": "stub-auth", "name": "Stub auth"}],
 }
@@ -220,6 +236,29 @@ def handle_prompt(request_id, params) -> None:
             }
         )
         return
+    if MODE == "elicits_first_then_serves":
+        if session_id == "stub-session-1":
+            _AWAITING_ELICITATION.append((request_id, session_id))
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 9002,
+                    "method": "elicitation/create",
+                    "params": {
+                        "sessionId": session_id,
+                        "mode": "form",
+                        "message": "which backend?",
+                        "requestedSchema": {
+                            "type": "object",
+                            "properties": {"backend": {"type": "string", "enum": ["redis", "memcached"]}},
+                        },
+                    },
+                }
+            )
+            return
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if MODE == "elicits_then_streams":
         # Asks and does NOT wait: the test asserts the client's read loop is
         # still delivering updates while the question is unanswered.
@@ -243,6 +282,21 @@ def handle_prompt(request_id, params) -> None:
             )
         ok(request_id, {"stopReason": "end_turn"})
         return
+    if MODE == "elicits_then_dies":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9001,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "mode": "form",
+                    "message": "which one?",
+                    "requestedSchema": {"type": "object", "properties": {"pick": {"type": "string"}}},
+                },
+            }
+        )
+        sys.exit(0)
     if MODE == "two_messages":
         # The order measured on codex-acp: a preamble in several chunks, the
         # tool calls it announced, then the answer itself.
@@ -415,6 +469,12 @@ def main() -> None:
             if params.get("sessionId") == "pruned-session":
                 err(request_id, -32001, "Session not found")
             else:
+                ok(request_id, {})
+        elif method == "session/delete":
+            if MODE == "delete_fails":
+                err(request_id, -32601, "session/delete is not implemented")
+            else:
+                print(f"stub: session/delete for {params.get('sessionId')}", file=sys.stderr, flush=True)
                 ok(request_id, {})
         elif method == "session/prompt":
             handle_prompt(request_id, params)

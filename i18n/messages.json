@@ -4916,8 +4916,8 @@
       "zh": "已完成"
     },
     "gui.ws.instance_forget_note": {
-      "en": "Drops the row. The records stay on disk.",
-      "zh": "只移除这一行,记录仍留在磁盘上。"
+      "en": "Drops the row. For an ACP instance the agent-side session is dropped too, stopping a running turn. Your records stay on disk.",
+      "zh": "移除这一行。ACP 实例的子端侧会话也会一并移除,进行中的任务将被停止。本机记录仍保留在磁盘上。"
     },
     "gui.ws.browser": {
       "en": "Browser",
