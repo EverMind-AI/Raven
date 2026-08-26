@@ -122,14 +122,19 @@ describe('the dag sheet', () => {
     expect(sheets()[0]!.querySelector('.edge.flowed')).toBeTruthy()
   })
 
-  it('swaps the one-line gist for the summary when the run finishes', () => {
-    const d = graph('r1')
+  it('says nothing beside the title until there is a tally to say', () => {
+    /* The graph's shape used to ride here while the run went -- node count,
+       depth, how many at once -- which is what the picture underneath says
+       better, and it said it on every graph the reader had ever watched. */
+    const d = graph('r1', { task_summary: 'AI news pipeline' })
     act(() => { start('a', d) })
-    expect(sheets()[0]!.querySelector('.gist')).toBeTruthy()
+    expect(sheets()[0]!.querySelector('.gist')).toBeNull()
+    expect(sheets()[0]!.querySelector('.sum')).toBeNull()
+    /* The title, and nothing else that carries words. */
+    expect(sheets()[0]!.querySelector('.hd')!.textContent).toBe('AI news pipeline')
     d.done = true
     d.summary = { completed: 2, total: 2 }
     act(() => { touch() })
-    expect(sheets()[0]!.querySelector('.gist')).toBeNull()
     expect(sheets()[0]!.querySelector('.sum')).toBeTruthy()
   })
 
@@ -354,8 +359,8 @@ describe('the dag sheet after a reload', () => {
     expect(d.run_id).toBe('r1')
     expect(d.task_summary).toBe('AI news pipeline')
     expect([...d.nodes.values()].map((n) => n.status)).toEqual(['completed', 'running'])
-    /* Still going, so the sheet comes back with its gist and its clock rather
-       than with the summary line a finished run gets. */
+    /* Still going, so the sheet comes back with its clock rather than with the
+       summary line a finished run gets. */
     expect(d.done).toBe(false)
     expect(sheets()).toHaveLength(1)
   })

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, gist, layout, layers, ordered, shape, summary, took } from './graph'
+import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, shape, summary, took } from './graph'
 
 import type { Shell } from '../../shell/bridge'
 import type { DagNode, DagRun } from './types'
@@ -155,24 +155,13 @@ describe('dag layout', () => {
 
 describe('dag sentences', () => {
   it('counts nodes and layers, and says parallel only when something is', () => {
-    const wide = gist(run([node('a'), node('b', ['a']), node('c', ['a'])]))
+    const wide = shape([node('a'), node('b', ['a']), node('c', ['a'])])
     expect(wide).toContain('gui.dag.count {"n":3,"d":2}')
     expect(wide).toContain('gui.dag.parallel {"n":2}')
     expect(wide).not.toContain('gui.dag.serial')
-    const line = gist(run([node('a'), node('b', ['a'])]))
+    const line = shape([node('a'), node('b', ['a'])])
     expect(line).toContain('gui.dag.serial')
     expect(line).not.toContain('gui.dag.parallel')
-  })
-
-  it('names each agent once, in first-seen order', () => {
-    const g = gist(
-      run([
-        node('a', [], { subagent: 'Coder' }),
-        node('b', ['a'], { subagent: 'Researcher' }),
-        node('c', ['a'], { subagent: 'Coder' }),
-      ]),
-    )
-    expect(g.endsWith('Coder · Researcher')).toBe(true)
   })
 
   it('prefers the run report total over the graph length', () => {

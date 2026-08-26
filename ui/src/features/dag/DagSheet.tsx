@@ -23,7 +23,7 @@ import { ds, t } from '../../shell/bridge'
 import { CHEVRON_DOWN, CROSS, Glyph } from '../../shell/ico'
 import { getState as subState, subscribe as subSubscribe } from '../subagents/store'
 import { DagGraph } from './DagGraph'
-import { SHEET, gist, ordered, summary } from './graph'
+import { SHEET, ordered, summary } from './graph'
 import * as store from './store'
 
 import type { DagRun } from './types'
@@ -76,7 +76,12 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
             was the title until there was a line to put here, and it said the
             same thing on every graph the reader had ever watched. */}
         <span className="ttl" title={d.task_summary || undefined}>{d.task_summary || t('gui.dag.title')}</span>
-        <div className={d.done ? 'sum' : 'gist'}>{d.done ? summary(d) : gist(d)}</div>
+        {/* The tally when there is one, and nothing before then. The graph's
+            shape used to sit here while it ran -- node count, depth, how many
+            run at once -- which is the one thing the picture below says better
+            than a sentence can, and it said it on every graph the reader had
+            ever watched. */}
+        {d.done ? <div className="sum">{summary(d)}</div> : null}
         <button className="ic tipdn" data-tip={foldLabel} aria-label={foldLabel}
           onClick={() => store.fold(sess, !d.folded)}>
           <Glyph d={CHEVRON_DOWN} cls="cv" />

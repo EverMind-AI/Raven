@@ -3711,9 +3711,6 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    sentence, and the tally beside it is the part a reader can spare. */
 .dsheet .ttl { font-weight: 600; font-size: 13px; flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The graph in one sentence, for a reader who does not want to read the graph. */
-.dsheet .gist { font-size: 12px; color: var(--muted); flex: 0 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsheet[data-fold="true"] .canvas { display: none; }
 .dsheet .canvas { margin-top: 10px; overflow-x: auto; }
 /* Centred, not left-packed. The graph is usually narrower than the sheet, and
