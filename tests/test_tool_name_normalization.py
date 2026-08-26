@@ -22,8 +22,8 @@ from typing import Any
 from unittest.mock import patch
 
 from raven.agent.loop.streaming import _finalize_tool_calls
-from raven.providers.base import normalized_tool_name
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.tool_names import normalized_tool_name, sanitary_form
 
 
 @dataclass
@@ -126,6 +126,22 @@ def test_a_name_that_is_only_whitespace_is_no_name_at_all() -> None:
     """It comes out empty, and the streaming exit drops an empty name. Passing
     it on would put a call with no name into the history."""
     assert _finalize_tool_calls([_slot("   ")]) == []
+
+
+def test_the_outbound_sanitiser_is_not_usable_on_a_received_name() -> None:
+    """Why the two directions share a spec and not a function.
+
+    `sanitary_form` is what a name goes through on the way *out*, where
+    substituting an illegal character is safe because the result is the name
+    that then gets registered. Used on a name coming *in* it invents one: a
+    leading space becomes an underscore, and an interior space silently becomes
+    the very name this repo refuses to guess at.
+    """
+    assert sanitary_form(" read_file") == "_read_file"
+    assert sanitary_form("read file") == "read_file"
+
+    assert normalized_tool_name(" read_file") == "read_file"
+    assert normalized_tool_name("read file") == "read file"
 
 
 def test_a_name_that_is_not_a_string_is_handed_back_untouched() -> None:

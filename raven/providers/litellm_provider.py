@@ -24,7 +24,6 @@ from raven.providers.base import (
     StreamDelta,
     ToolCallRequest,
     format_llm_error,
-    normalized_tool_name,
 )
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
@@ -36,6 +35,7 @@ from raven.providers.registry import (
     find_by_name,
     find_gateway,
 )
+from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import (
     flag_transport_failure,
     native_finish_reason,

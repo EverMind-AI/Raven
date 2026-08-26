@@ -232,39 +232,6 @@ class RunMeta:
     last_of_turn: bool = False
 
 
-def normalized_tool_name(raw: Any) -> Any:
-    """The registry key for a tool name an upstream sent.
-
-    Surrounding whitespace comes off and nothing else does. A registry key is
-    an identifier written in code, so no legitimate name carries any -- which
-    makes removing it a fact about the name rather than a guess about intent.
-    Interior spaces and case differences stay, and still miss: `read_file` and
-    `Read_File` can both be registered at once, so folding them would answer
-    "that tool does not exist" with a guess, and that answer is only worth
-    something while it is certain.
-
-    Asked at the parse exits rather than at the registry lookup because the
-    name outlives the lookup. It is written back into the history by
-    :meth:`ToolCallRequest.to_openai_tool_call`, where a bad one is replayed to
-    the model every turn afterwards, and it keys the failure streak, the tool
-    events and the logs -- each of which would otherwise need an allowance of
-    its own, and one of them would be missed.
-
-    A name that is not a string is handed back untouched. That is a different
-    fault with a different owner, and raising here would take down the parse of
-    a response that may be otherwise fine.
-    """
-    if not isinstance(raw, str):
-        return raw
-    name = raw.strip()
-    if name != raw:
-        # Said out loud rather than cleaned up quietly: an upstream that keeps
-        # sending these has a defect, and a silent repair is how it stays
-        # invisible to us for as long as it keeps working.
-        logger.warning("upstream sent a tool name with surrounding whitespace: {!r} -> {!r}", raw, name)
-    return name
-
-
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
