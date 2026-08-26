@@ -22,14 +22,15 @@ export interface DeskSplits {
   right: number
 }
 
-/* How much each tab held the last time the reader looked at it. What is new is
-   the difference, which is what the tab's bubble says -- one rule for all three
-   rather than a badge per tab inventing its own idea of "new".
+/* Which items in each desk tab the reader has already seen -- the identities,
+   not how many. What is new is the tab's items minus these, which is what the
+   bubble says: one rule for all three, and the only shape that can express
+   "they opened that one from the conversation, and only that one" (seen.ts).
 
-   Held in `marks.ts` and parked with the conversation, not in `DeskState`: a
-   session switch resets the desk, and a mark reset beside a list that was
+   Held in `seen.ts` and filed with the conversation, not in `DeskState`: a
+   session switch resets the desk, and a record reset beside a list that was
    restored reports the whole list as new. */
-export type DeskMarks = Record<DeskTab, number>
+export type DeskSeen = Record<DeskTab, string[]>
 
 export interface DeskState {
   tab: DeskTab

@@ -65,8 +65,12 @@ export const byPath = (path: string): DeliveryRow | null =>
     null,
   )
 
-/* What the shelf shows, so the tab's number matches its list: paths, not rows. */
-export const count = (): number => new Set(rows.map((row) => row.path)).size
+/* What the shelf shows, so the tab's number matches its list: paths, not rows.
+   The path is also each row's identity for the seen record -- one file the
+   session handed over, however many turns handed it over. */
+export const paths = (): string[] => [...new Set(rows.map((row) => row.path))]
+
+export const count = (): number => paths().length
 
 /* Parse one delivery manifest. The shape is the tool event's metadata, so a
    caller can hand over whatever it received without checking it first. */

@@ -2,15 +2,22 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as agents from '../subagents/store'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
 
+import { setCurrent } from '../../shell/session'
+
 import type { Shell } from '../../shell/bridge'
+import type { InstanceRow } from '../subagents/types'
 import type { WorkspaceSource } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+/* What `subagents.instances()` answers, which is what the launcher reads. */
+let agentRows: InstanceRow[] = []
 
 function wire(): void {
   const fakeShell: Shell = {
@@ -340,3 +347,140 @@ describe('dragging a pane by its header', () => {
   })
 })
 
+
+/* What the launcher says while the desk is down.
+ *
+ * Two channels, because the two things it has to report are not the same kind
+ * of thing: work still running is a state with no useful count, and things
+ * arrived is a count that stops when they are read. So one loops inside the
+ * glyph and the other sits on the corner and pops once. */
+describe('the collapsed launcher', () => {
+  const btn = (): HTMLElement => document.querySelector('.desk-follow-toggle') as HTMLElement
+  const count = (): string | null => btn().querySelector('.desk-count')?.textContent ?? null
+  const popped = (): boolean => btn().querySelector('.desk-count')?.hasAttribute('data-pop') ?? false
+  const deliver = async (...paths: string[]): Promise<void> => {
+    await act(async () => {
+      deliveries.record(1, manifest(paths.map((path) => ({ path, name: path.split('/').pop() }))))
+    })
+  }
+
+  beforeEach(() => {
+    agentRows = []
+    /* The agents store files its lists under the open conversation and drops an
+       answer for any other, so the harness has to be in one. */
+    setCurrent('s1')
+    window.DS = {
+      ...window.DS,
+      agents: { list: async () => [], instances: async () => agentRows },
+    } as typeof window.DS
+  })
+
+  afterEach(() => {
+    agents.reset()
+    setCurrent(null)
+  })
+
+  it('says nothing at all when there is nothing to say', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: false }) })
+
+    expect(count()).toBeNull()
+    expect(btn().hasAttribute('data-working')).toBe(false)
+    expect(btn().getAttribute('aria-label')).toBe('gui.workspace')
+  })
+
+  /* The case the count-based version could not report: collapsed on the shelf,
+     a file is delivered, and the tab the reader left in front is exactly the
+     one that was exempt from being counted. */
+  it('counts what lands while the desk is down, including on the tab it was left on', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: false, tab: 'deliverables' }) })
+
+    await deliver('/w/a.md', '/w/b.md')
+
+    expect(count()).toBe('2')
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.unseen_tab')
+  })
+
+  /* The bubble is an event, so it plays once and only upward. A number that
+     drops is the reader having just read something, and announcing that with
+     the same flourish as an arrival is the page reporting news they made. */
+  it('pops when the number grows and holds still when it shrinks', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: false, tab: 'diff' }) })
+
+    await deliver('/w/a.md', '/w/b.md')
+    expect(count()).toBe('2')
+    expect(popped()).toBe(true)
+
+    await act(async () => { desk.readItem('deliverables', '/w/a.md') })
+    expect(count()).toBe('1')
+    expect(popped()).toBe(false)
+  })
+
+  /* Still going is a state, not a count: three running and one running ask the
+     same thing of the reader, so this channel carries no number. */
+  it('breathes while a delegated run is going, and stops when it ends', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: false, tab: 'agents' }) })
+
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(btn().hasAttribute('data-working')).toBe(true)
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.agents_working')
+
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'done' }]
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(btn().hasAttribute('data-working')).toBe(false)
+    expect(btn().getAttribute('aria-label')).not.toContain('gui.ws.agents_working')
+  })
+
+  /* Both at once, which is the point of them being separate channels. */
+  it('carries both signals without either displacing the other', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: false, tab: 'diff' }) })
+
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
+    await act(async () => { await agents.refreshInstances(true) })
+    await deliver('/w/a.md')
+
+    expect(btn().hasAttribute('data-working')).toBe(true)
+    /* The delivery and the run itself: one unread thing on each of two tabs. */
+    expect(count()).toBe('2')
+    const name = btn().getAttribute('aria-label') || ''
+    expect(name).toContain('gui.ws.unseen_tab')
+    expect(name).toContain('gui.ws.agents_working')
+  })
+
+  /* The strip says it better while it is up: three numbers against three tabs
+     rather than one sum on the button that puts them away. */
+  it('leaves the counting to the tabs while the palette is up, and keeps the motion', async () => {
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await deliver('/w/a.md')
+    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(count()).toBeNull()
+    /* Nothing in the strip reports a run still going, so this one stays. */
+    expect(btn().hasAttribute('data-working')).toBe(true)
+
+    await act(async () => { desk.update({ paletteOpen: false }) })
+    expect(count()).toBe('2')
+  })
+
+  /* Nothing of the desk is over a fullscreen pane, so there is nothing there to
+     badge either. */
+  it('leaves with the rest of the desk when a pane goes fullscreen', async () => {
+    render(<DeskFollowToggle />)
+    await deliver('/w/a.md')
+    await act(async () => {
+      desk.openDeskFile('/w/b.md')
+      desk.toggleSolo('file:/w/b.md')
+    })
+
+    expect(document.querySelector('.desk-follow-toggle')).toBeNull()
+  })
+})

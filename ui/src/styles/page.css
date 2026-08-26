@@ -3990,6 +3990,28 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-follow-toggle[aria-expanded="true"] { color: var(--text); background: var(--raised); }
 .desk-follow-toggle:hover { background: var(--raised); }
 .desk-follow-toggle svg { stroke-linecap: round; stroke-linejoin: round; }
+/* What the launcher says while the desk is down, in two channels that do not
+   compete: delegated work still running, and things that arrived unread.
+
+   The first borrows the transcript's own work glyph rather than inventing a
+   second dialect for "still going" -- and it borrows it exactly, because this
+   icon already IS three dots on three lines. Same keyframes, same stagger, same
+   reduced-motion fallback as `.wkg`. Nothing travels: the button occupies the
+   same pixels for the whole cycle, which is what lets it sit in the corner of
+   the eye without reading as an alarm.
+
+   The second is the tab strip's own bubble, in the corner and out of the flow,
+   so a launcher with news is the same size as one without. It does not loop --
+   an arrival is an event, not a state -- and only pops on the way up. */
+.desk-follow-toggle[data-working] svg circle { transform-box: fill-box; transform-origin: center;
+  animation: work 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
+.desk-follow-toggle[data-working] svg circle:nth-of-type(2) { animation-delay: .18s; }
+.desk-follow-toggle[data-working] svg circle:nth-of-type(3) { animation-delay: .36s; }
+.desk-follow-toggle .desk-count[data-pop] { animation: sigin .18s cubic-bezier(.2, .9, .3, 1.3); }
+@media (prefers-reduced-motion: reduce) {
+  .desk-follow-toggle[data-working] svg circle { animation: none; opacity: .62; }
+  .desk-follow-toggle .desk-count[data-pop] { animation: none; }
+}
 :root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
 .desk-palette { position: fixed; display: flex; flex-direction: column; min-width: 250px; min-height: 250px;
   z-index: 2;

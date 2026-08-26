@@ -4,14 +4,15 @@ import { shell, t } from '../../shell/bridge'
 import { slot } from '../../shell/persist'
 import { current as currentSession } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
+import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
-import * as marks from './marks'
+import * as seen from './seen'
 import * as palette from './palette'
 import * as workspace from './store'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { DeskDuo, DeskMarks, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
+import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
@@ -126,7 +127,7 @@ function remember(): void {
 
 function initialState(): DeskState {
   return {
-    tab: 'diff',
+    tab: 'deliverables',
     paletteOpen: palette.read(currentSession()),
     panes: [],
     solo: null,
@@ -222,41 +223,74 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
   revealWorkspace()
 }
 
-/* What each tab is counting. One number per tab, read from the source that tab
-   draws from, so "how many" and "how many are new" can never disagree:
-   the changes this session made, the files it delivered, the background work it
-   started. */
-export function totals(): DeskMarks {
-  return {
-    diff: workspace.shared().changes.length,
-    deliverables: deliveries.count(),
-    agents: agents.instances().length,
-  }
+/* The tabs, in the order they are drawn, which is also the order `pickTab`
+   ranks them in. Deliverables first because a file handed over is what the
+   session produced; then the work it delegated; then what it edited on the
+   way. */
+const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
+
+/* What each tab is counting, as the identity of every item in it -- read from
+   the source that tab draws from, so "what is in it" and "what is new in it"
+   can never disagree: the changes this session made, the files it delivered,
+   the background work it started.
+
+   Each id is the key that source already uses for the item, so a door that
+   opens ONE thing can name the same thing this does: a change is its path and
+   the turn that made it, a delivery is its path, an instance is its handle
+   under its agent. */
+export function idsOf(tab: DeskTab): string[] {
+  if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
+  if (tab === 'deliverables') return deliveries.paths()
+  return agents.instances().map((it) => `${it.agent}:${it.handle}`)
 }
 
-/* What arrived since the reader last had this tab in front of them. Never
-   negative: a session switch empties every source, and a tab that shrank has
-   nothing new to report.
+/* What is in this tab that the reader has not seen.
 
-   Zero for the tab that is showing, said here rather than left to the mark
-   catching up: the mark moves in an effect, so between something landing and
+   Zero for the tab that is showing, said here rather than left to the record
+   catching up: the record moves in an effect, so between something landing and
    that effect running there is a frame where the open tab could paint a bubble
-   for what is already on screen. Not qualified by whether the palette is open,
-   because a shut palette draws no bubble at all -- the same answer serves, and
-   a condition nothing can observe is a condition no test can hold. */
+   for what is already on screen.
+
+   Qualified by `showing()`, which the count this replaced was not -- it argued
+   that a shut palette draws no bubble, so the answer could not be observed. The
+   launcher draws one now and the argument died with it: collapsed on the shelf
+   while a file was delivered, this answered 0 for the one tab the reader is
+   most likely to have left in front of them. */
 export function unseen(tab: DeskTab): number {
-  if (state.tab === tab) return 0
-  return Math.max(0, totals()[tab] - marks.of_(tab))
+  if (showing() && state.tab === tab) return 0
+  const known = seen.of_(tab)
+  return idsOf(tab).filter((id) => !known.has(id)).length
+}
+
+/* Everything the desk has to say, for the launcher: while the palette is down
+   the launcher stands in for all three tabs, so it carries their sum. */
+export const unseenAll = (): number => TABS.reduce((n, tab) => n + unseen(tab), 0)
+
+/* Whether any delegated run is still going -- the launcher's other signal, and
+   the one that is not a count: three running and one running ask the same thing
+   of the reader. Through the subagents panel's own predicate rather than a
+   second reading of `status`, because two spellings of "live" is how a row
+   comes to breathe on one screen and sit still on another. */
+export const working = (): boolean =>
+  agents.instances().some((it) => instanceState(it.status ?? undefined) === 'live')
+
+/* One item the reader opened, wherever they opened it from. The desk is not the
+   only door: a delivered file has its own card in the conversation, and so does
+   a delegated run. Opening the thing a tab counts is what makes that thing stop
+   being new, so the doors say it here rather than each tab inventing its own
+   idea of when to stop counting. */
+export function readItem(tab: DeskTab, id: string): void {
+  if (seen.mark(tab, [id])) update({})
 }
 
 /* The reader is looking at this tab, so nothing in it is new any more. Called
-   while the palette is open -- including as things land underneath it, which is
-   why it runs on every render of the open palette and not only on a switch. */
+   while the palette is showing -- including as things land underneath it, which
+   is why it runs on every render of the open palette and not only on a switch. */
 export function seeTab(tab: DeskTab): void {
-  /* `update`, not `commit`: the marks keep their own per-conversation record
-     (marks.ts), and `remember()` would republish the whole desk note from
+  /* `update`, not `commit`: the seen record keeps its own per-conversation
+     store (seen.ts), and `remember()` would republish the whole desk note from
      whatever is on screen at that instant -- during a resume, nothing. */
-  if (marks.set(tab, totals()[tab])) update({})
+  if (seen.mark(tab, idsOf(tab))) update({})
 }
 
 /* Whether the palette is on screen, which is not the same question as whether
@@ -269,12 +303,45 @@ export function seeTab(tab: DeskTab): void {
  * reader never saw. */
 export const showing = (): boolean => state.paletteOpen && !state.solo
 
+/* Which tab the desk should come up on.
+ *
+ * Not the one it was left on: the reader collapsed the desk and went back to
+ * the conversation, and what they want when they reach for it again is
+ * whatever happened while it was down. The ladder is the tab order -- news
+ * first, then anything at all, then the shelf as the answer for a conversation
+ * that has produced nothing yet.
+ *
+ * Read BEFORE `paletteOpen` flips, and that ordering is load-bearing: `unseen`
+ * exempts the tab that is showing, so deciding afterwards exempts whichever tab
+ * was remembered from its own rung. With the shelf remembered -- the common
+ * case, since it is also the fallback -- the desk still landed on the shelf and
+ * the rung it took was the fallback, so a rule that never fired looked exactly
+ * like one that always did. */
+export function pickTab(): DeskTab {
+  if (unseen('deliverables') > 0) return 'deliverables'
+  if (unseen('agents') > 0) return 'agents'
+  /* Existence, not news, and only on this rung: with nothing new anywhere, what
+     the session has been editing is the most useful thing to be looking at.
+     Above it the test is "unseen" twice, so an old delegated run does not keep
+     winning the desk from a change that just landed. */
+  if (idsOf('diff').length > 0) return 'diff'
+  return 'deliverables'
+}
+
 export function toggleDesk(): void {
   const paletteOpen = !state.paletteOpen
+  const tab = paletteOpen ? pickTab() : state.tab
   /* Filed under the conversation, so this conversation is how the reader left
      it the next time they open it (palette.ts). */
   palette.write(currentSession(), paletteOpen)
-  update({ paletteOpen })
+  /* `commit`, so the tab the ladder picked is the tab a reload comes back to.
+     With `update` the note kept whatever the reader had LEFT the desk on, and a
+     reload landed there instead of on what was in front of them -- self-
+     correcting on the next pane they opened, which is worse than either
+     answer for being intermittent. Safe from here in a way it is not from
+     `seeTab`: this is the reader's own hand on their own desk, never a
+     mark moving mid-replay. */
+  commit({ paletteOpen, tab })
 }
 
 function applyPalette(key: string | null): void {
@@ -309,8 +376,6 @@ export function claimDraft(key: string | null): void {
   applyPalette(key)
 }
 
-const TABS: readonly DeskTab[] = ['diff', 'deliverables', 'agents']
-
 /* The callers are the legacy shell's untyped `wsPick`/`showWorkspace`, which
    forward whatever view name they were given. An unknown one used to fall
    through the palette's own switch and draw the agents list, so it is stopped
@@ -322,11 +387,30 @@ export function openDeskTab(tab: DeskTab): void {
   commit({ paletteOpen: true, ...(TABS.includes(tab) ? { tab } : {}) })
 }
 
+/* Every way of opening a file lands here -- the shelf's row, the delivery card
+   in the conversation, a changed file's row there, an attachment chip, and the
+   replay a reload does -- because they all go through `workspace.showFile`. So
+   this is where a delivery stops being new, whichever of them the reader used.
+
+   The shelf only, never the diff list, and that is a decision rather than an
+   omission: what opens here is the file as it stands now, which is not the
+   change some turn made to it. Clearing a change from this would quietly retire
+   a hunk the reader never read, on the strength of them opening the file for
+   some other reason. A change is marked read where a change is actually shown
+   -- `openDeskDiff`. */
 export function openDeskFile(path: string, downloadPath?: string): void {
+  /* Only a path the shelf actually carries. This door is also every other way
+     of opening a file -- an attachment chip, a changed file's row, the replay a
+     reload does -- and a record of having "seen" a file no tab counts is a
+     record that can only grow. Safe to gate on the shelf being loaded, because
+     a card the reader can click is a card whose row the same turn event put
+     there. */
+  if (deliveries.paths().includes(path)) readItem('deliverables', path)
   addPane({ id: `file:${path}`, kind: 'file', file: workspace.makeFile(path, downloadPath) })
 }
 
 export function openDeskDiff(change: WsChange): void {
+  readItem('diff', `${change.key}:${change.turn}`)
   addPane({ id: `diff:${change.key}:${change.turn}`, kind: 'diff', change })
 }
 
@@ -349,6 +433,14 @@ export function openDeskAgent(row: InstanceRow, recordId?: string | null): void 
   const supersedes = recordId
     ? `agent-record:${recordId}`
     : (row.runId && row.nodeId ? recordIdOfNode(row.runId, row.nodeId) : null)
+  /* Reached from the panel's own list and from the conversation's card alike --
+     both come through `subagents.openInstance` -- so this is the one place that
+     has to say the reader has now seen this run.
+
+     `openDeskAgentRecord` needs no such line: a record is a spawn or a graph
+     node, and neither is in the instance list the agents tab counts, so there
+     is nothing there for opening one to clear. */
+  readItem('agents', `${row.agent}:${row.handle}`)
   addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row }, supersedes)
 }
 
@@ -446,7 +538,7 @@ export function reset(): void {
 export function _resetForTests(): void {
   palette._clearForTests()
   state = initialState()
-  marks._clearForTests()
+  seen._clearForTests()
   KEPT.clear()
   REPLAYING.clear()
   listeners.clear()
