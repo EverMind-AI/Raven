@@ -30,6 +30,11 @@ DS.knowledge = {
   },
   index: (documentId) =>
     rpc.call('knowledge.documents.index', { document_id: documentId }).then((r) => r && r.document),
+  /* Answers nothing: a document that was already gone and one this call
+     removed leave the page in the same place, and the list read that
+     follows is what the row is drawn from either way. */
+  removeDoc: (documentId) =>
+    rpc.call('knowledge.documents.delete', { document_id: documentId }).then(() => undefined),
   search: (baseIds, query) =>
     rpc.call('knowledge.search', { base_ids: baseIds, query }).then((r) => (r && r.hits) || []),
 };

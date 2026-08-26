@@ -5459,6 +5459,35 @@
       }
     },
     {
+      "name": "knowledge.documents.delete",
+      "summary": "Remove one document from its base, with its chunks and blob.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsDeleteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "removed": {
+              "type": "boolean",
+              "description": "False when there was no such document, which is not an error: two clicks on one row answer the same way."
+            }
+          },
+          "required": [
+            "removed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "knowledge.search",
       "summary": "Nearest chunks across the named bases.",
       "params": [

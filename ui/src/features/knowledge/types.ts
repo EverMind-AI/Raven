@@ -53,6 +53,10 @@ export interface KnowledgeSource {
      the file it left there. The island has no reason to know that. */
   upload(baseId: string, file: File): Promise<KbDoc>
   index(documentId: string): Promise<KbDoc>
+  /* Take one document out. The page's only way past a row that will not
+     index: without it the base around it is the smallest thing that can be
+     deleted. */
+  removeDoc(documentId: string): Promise<void>
   search(baseIds: string[], query: string): Promise<KbHit[]>
 }
 

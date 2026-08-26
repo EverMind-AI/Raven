@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 143 methods, 83 component schemas.
+// 144 methods, 83 component schemas.
 
 /* eslint-disable */
 /**
@@ -3192,6 +3192,15 @@ export interface KnowledgeDocumentsIndexParams {
 export interface KnowledgeDocumentsIndexResult {
   document: KnowledgeDocument;
 }
+export interface KnowledgeDocumentsDeleteParams {
+  document_id: string;
+}
+export interface KnowledgeDocumentsDeleteResult {
+  /**
+   * False when there was no such document, which is not an error: two clicks on one row answer the same way.
+   */
+  removed: boolean;
+}
 export interface KnowledgeSearchParams {
   base_ids: string[];
   query: string;
@@ -3349,6 +3358,7 @@ export interface RpcMethods {
   'knowledge.documents.list': { params: KnowledgeDocumentsListParams; result: KnowledgeDocumentsListResult };
   'knowledge.documents.add': { params: KnowledgeDocumentsAddParams; result: KnowledgeDocumentsAddResult };
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
+  'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
 }
 
@@ -3403,6 +3413,7 @@ export const RPC_METHODS = [
   "knowledge.bases.list",
   "knowledge.bases.rename",
   "knowledge.documents.add",
+  "knowledge.documents.delete",
   "knowledge.documents.index",
   "knowledge.documents.list",
   "knowledge.search",

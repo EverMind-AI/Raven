@@ -60,13 +60,33 @@ function Row({ base }: { base: KbBase }): JSX.Element {
   )
 }
 
-function DocRow({ doc }: { doc: KbDoc }): JSX.Element {
+function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
+  /* Only where they are the way out. A `ready` document needs neither, and two
+     buttons on every row would bury the one row that is stuck. */
+  const stuck = doc.status !== 'ready'
   return (
     <div className="kbdoc">
       <div className="nm">{doc.source}</div>
       <div className="st">
         <span className="who">{t('gui.kb.doc_' + doc.status)}</span>
         {doc.chunk_count ? <span className="mdl">{t('gui.kb.chunks', { n: doc.chunk_count })}</span> : null}
+        {stuck && (
+          <>
+            <button className="mini ghost" disabled={busy} onClick={() => void store.retry(doc)}>
+              {t('gui.kb.doc_retry')}
+            </button>
+            {/* Gated like Retry, and for a worse reason than tidiness: deleting
+                mid-index takes the record and the blob while the embed is still
+                running, and `index_document` ends by re-inserting its vectors --
+                into a collection where no record owns them. `delete_document`
+                returns early once the record is gone, so nothing can reclaim
+                them, and `search` never joins a hit back to a record, so they
+                keep coming back as results. */}
+            <button className="mini ghost" disabled={busy} onClick={() => store.removeDoc(doc)}>
+              {t('gui.kb.doc_delete')}
+            </button>
+          </>
+        )}
       </div>
       {/* The reason travels with the row: a failed document that does not say
           why sends the reader to a log they may not have. */}
@@ -151,7 +171,7 @@ function Panel({ base }: { base: KbBase }): JSX.Element {
       ) : s.docs.length ? (
         <div className="kbdocs">
           {s.docs.map((d) => (
-            <DocRow key={d.id} doc={d} />
+            <DocRow key={d.id} doc={d} busy={s.busy} />
           ))}
         </div>
       ) : (

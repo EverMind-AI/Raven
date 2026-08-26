@@ -81,6 +81,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       upload: async (_b: string, file: File) => doc({ id: 'd1', source: file.name }),
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => [],
+      removeDoc: async () => {},
       ...over,
     },
   }
@@ -572,6 +573,138 @@ describe('documents and search', () => {
     })
     expect(screen.queryByText('the answer')).toBeNull()
     expect(screen.getByText('onboarding.md')).toBeTruthy()
+  })
+
+  it('offers a way out only on a row that is stuck', async () => {
+    /* Two buttons on every row would bury the one row that needs them, and a
+       `ready` document has nowhere to go. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'done.md', status: 'ready', chunk_count: 2 }),
+        doc({ id: 'd2', source: 'stuck.md', status: 'pending' }),
+        doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    expect(screen.getAllByText('gui.kb.doc_retry').length).toBe(2)
+    expect(screen.getAllByText('gui.kb.doc_delete').length).toBe(2)
+    expect(screen.getByText('done.md').closest('.kbdoc')!.querySelector('button')).toBeNull()
+  })
+
+  it('indexes a stuck row again, and shows the answer', async () => {
+    const asked: string[] = []
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd2', source: 'stuck.md', status: 'pending' })],
+      index: async (id: string) => {
+        asked.push(id)
+        return doc({ id, source: 'stuck.md', status: 'ready', chunk_count: 4 })
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.doc_retry').click()
+    })
+    /* The same call upload makes: `index_document` re-embeds from the stored
+       blob, so an endpoint failure clears with nothing else to do. */
+    expect(asked).toEqual(['d2'])
+    expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
+    expect(screen.queryByText('gui.kb.doc_retry')).toBeNull()
+  })
+
+  it('puts a retried row back when the retry fails too', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd2', source: 'stuck.md', status: 'failed', error: 'was 400' })],
+      index: async () => {
+        throw new Error('still 400')
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.doc_retry').click()
+    })
+    /* The optimistic `indexing` was a promise the call did not keep; leaving it
+       there is a row saying it is working when nothing is. */
+    expect(screen.getByText('gui.kb.doc_failed')).toBeTruthy()
+    expect(toasts().some((m) => m.includes('still 400'))).toBe(true)
+  })
+
+  it('will not remove a document while its index is still running', async () => {
+    /* Deleting mid-index takes the record and the blob while the embed is in
+       flight, and `index_document` ends by re-inserting its vectors -- into a
+       collection where no record owns them. `delete_document` returns early
+       once the record is gone, so nothing reclaims them, and `search` never
+       joins a hit back to a record, so they keep coming back as results. */
+    const gone: string[] = []
+    let release: (d: KbDoc) => void = () => {}
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd2', source: 'stuck.md', status: 'failed' })],
+      index: () => new Promise<KbDoc>((r) => (release = r)),
+      removeDoc: async (id: string) => {
+        gone.push(id)
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.doc_retry').click()
+    })
+    const remove = screen.getByText('gui.kb.doc_delete').closest('button') as HTMLButtonElement
+    expect(remove.disabled).toBe(true)
+    await act(async () => {
+      remove.click()
+    })
+    expect(gone).toEqual([])
+    await act(async () => {
+      release(doc({ id: 'd2', source: 'stuck.md', status: 'ready', chunk_count: 1 }))
+    })
+    /* And it comes back once the index has landed and the row is settled --
+       gone here, because a ready row needs neither button. */
+    expect(screen.queryByText('gui.kb.doc_delete')).toBeNull()
+  })
+
+  it('removes a document, after asking, and re-reads what is left', async () => {
+    const gone: string[] = []
+    let listed = 0
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => {
+        listed += 1
+        return listed > 1 ? [] : [doc({ id: 'd2', source: 'stuck.md', status: 'failed' })]
+      },
+      removeDoc: async (id: string) => {
+        gone.push(id)
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.doc_delete').click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    /* Asked first: the chunks and the stored copy go with it, and an upload is
+       not always still on the reader's disk. */
+    expect(confirms.some((c) => c.includes('gui.kb.doc_delete_body'))).toBe(true)
+    expect(gone).toEqual(['d2'])
+    expect(screen.queryByText('stuck.md')).toBeNull()
   })
 
   it('tells an empty result apart from not having asked', async () => {

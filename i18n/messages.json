@@ -2747,6 +2747,18 @@
       "en": "Failed",
       "zh": "\u5931\u8d25"
     },
+    "gui.kb.doc_retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
+    "gui.kb.doc_delete": {
+      "en": "Remove",
+      "zh": "移除"
+    },
+    "gui.kb.doc_delete_body": {
+      "en": "Remove \"{name}\" from this base? Its chunks and the stored copy go with it.",
+      "zh": "把「{name}」从这个知识库移除？它的分段和存下的副本会一并删除。"
+    },
     "gui.kb.docs": {
       "en": "{n} documents",
       "zh": "{n} \u4efd\u6587\u6863"
