@@ -689,7 +689,6 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
         className={'think tog' + (seg.thinkLive ? ' live' : '') + (seg.thinkOpen ? ' open' : '')}
         hidden={!seg.thinkShown} tabIndex={0} onClick={flipThink} onKeyDown={onKeyToggle(flipThink)}>
         <span className="lb">{t(seg.thinkLive ? 'gui.think.live' : 'gui.think.label')}</span>
-        <span className="tm">{seg.thinkSecs != null && seg.thinkSecs > 0 ? `${seg.thinkSecs}s` : ''}</span>
         <Chev />
       </div>
       <div ref={cotRef} className="cot" hidden={!seg.thinkOpen}>{seg.think}</div>

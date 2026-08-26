@@ -185,6 +185,58 @@ describe('transcript island, history', () => {
     expect(name!.textContent).toBe('src/app.ts')
   })
 
+  it('starts the clock at the runtime entry that opened the turn, not the last question', () => {
+    const t0 = Date.now() - 3600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the login timeout', timestamp: iso(t0) },
+        { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 60000) },
+        { role: 'user', text: 'nightly sweep', timestamp: iso(t0 + 660000), origin: 'cron' },
+        {
+          role: 'assistant', reasoning_content: 'sweeping', reasoning_ms: 500, text: '',
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
+        { role: 'assistant', text: 'nothing to report', timestamp: iso(t0 + 720000) },
+      ])
+    })
+    /* One minute of work under a header that said eleven, because the span was
+       measured from the question ten minutes before the cron entry. */
+    const folds = Array.from(document.querySelectorAll('.tfold'))
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['1m00s'])
+  })
+
+  it('gives a delegated turn its own fold instead of rewriting the last one', () => {
+    const t0 = Date.now() - 600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'write the posts', timestamp: iso(t0) },
+        {
+          role: 'assistant', reasoning_content: 'planning', reasoning_ms: 21000, text: '',
+          tool_calls: [{ id: 'c1', name: 'read_skill', arguments: '{}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_skill', text: 'guide' },
+        { role: 'assistant', text: 'the sub-agent is running', timestamp: iso(t0 + 300000) },
+        {
+          role: 'user', text: "[Subagent 'qc' completed]", timestamp: iso(t0 + 540000),
+          delegated: { kind: 'spawn', label: 'qc', status: 'ok', run_id: 'r1' },
+        },
+        {
+          role: 'assistant', reasoning_content: 'checking the files', reasoning_ms: 500, text: '',
+          tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }],
+        },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'ok' },
+        { role: 'assistant', text: 'delivered', timestamp: iso(t0 + 560000) },
+      ])
+    })
+    /* Two turns, two folds -- and the five-minute one keeps its own clock
+       rather than wearing the twenty seconds the delivered turn took. */
+    const folds = Array.from(document.querySelectorAll('.tfold'))
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m00s', '20s'])
+    expect(folds.map((f) => f.querySelectorAll('.tfb .step').length)).toEqual([1, 1])
+    expect((folds[0] as HTMLElement).querySelector('.think .lb')?.textContent).toBe('en:gui.think.label')
+  })
+
   it('reads a stored turn as segments: ask, folded step with thought and call, answer', () => {
     const t0 = Date.now() - 60000
     act(() => {
@@ -210,7 +262,11 @@ describe('transcript island, history', () => {
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
     expect((step?.querySelector('.think') as HTMLElement).hidden).toBe(false)
-    expect(step?.querySelector('.think .tm')?.textContent).toBe('2s')
+    /* The thought row names itself and opens; how long it ran is still written
+       down on disk, it is just not a number the page puts next to the turn's
+       own clock. */
+    expect(step?.querySelector('.think .lb')?.textContent).toBe('en:gui.think.label')
+    expect(step?.querySelector('.think .tm')).toBe(null)
     expect(step?.querySelector('.cot')?.textContent).toBe('read the log first')
     /* One call, so no summary line: the row stands on its own. */
     expect((step?.querySelector('.wk > .wrow') as HTMLElement).hidden).toBe(true)

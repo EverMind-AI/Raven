@@ -726,7 +726,6 @@ export function newStep(lane: Lane): StepHandle {
   const seg: StepData = {
     v: 0, id: nextId(), kind: 'step',
     think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
-    thinkT0: 0, thinkMs: 0, thinkSecs: null,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false, failed: false,
     calls: [], wkOpen: true, wkPinned: false, merged: false,
   }
@@ -736,22 +735,18 @@ export function newStep(lane: Lane): StepHandle {
     seg.thinkShown = true
     if (!seg.thinkLive) {
       seg.thinkLive = true
-      seg.thinkT0 = Date.now()
       if (!seg.thinkPinned) seg.thinkOpen = true
     }
     poke(lane)
     bump(lane, seg)
   }
 
-  const thinkDone = (secs?: number | null): void => {
+  const thinkDone = (): void => {
     if (!seg.thinkShown) return
     if (seg.thinkLive) {
       seg.thinkLive = false
-      seg.thinkMs += Date.now() - seg.thinkT0
       if (!seg.thinkPinned) seg.thinkOpen = false
     }
-    const s = secs != null ? secs : Math.round(seg.thinkMs / 1000)
-    if (s > 0) seg.thinkSecs = s
     bump(lane, seg)
   }
 
@@ -771,7 +766,6 @@ export function newStep(lane: Lane): StepHandle {
       seg.thinkShown = true
       if (!seg.thinkLive) {
         seg.thinkLive = true
-        seg.thinkT0 = Date.now()
         if (!seg.thinkPinned) seg.thinkOpen = true
       }
       poke(lane)
@@ -840,7 +834,13 @@ export function collapse(lane: Lane, time?: string | null): void {
   let firstAt = -1
   for (let i = segs.length - 1; i >= 0; i -= 1) {
     const s = segs[i] as Seg
-    if (s.kind === 'ask') break
+    /* Where THIS turn began. A question is one opening; a delivery row is the
+       other -- a delegated result re-entering opens a turn with no question
+       typed, so a scan that only stopped at `ask` walked back over it into the
+       previous turn, folded this turn's work into that turn's fold and wrote
+       this turn's clock onto it. The reader then saw one fold whose header
+       said 20s over a thought inside it that said 21s. */
+    if (s.kind === 'ask' || s.kind === 'sdlv') break
     if (s.kind === 'fold') { fold = s; break }
     if (s.kind === 'step') { loose.unshift(s); firstAt = i }
   }
@@ -893,14 +893,10 @@ const isThoughtOnly = (s: StepData): boolean =>
   s.hasThink && !s.hasSay && !s.hasQA && !s.failed && !s.calls.length
 
 /* One row for the run, holding every thought in it -- nothing the reader
-   watched arrive is thrown away, it is just no longer one row per attempt. The
-   clock is the sum, which is what the turn actually spent thinking. */
+   watched arrive is thrown away, it is just no longer one row per attempt. */
 function mergeThoughts(lane: Lane, group: StepData[]): void {
   const head = group[0] as StepData
   head.think = group.map((s) => s.think).filter((x) => x.trim()).join('\n\n')
-  head.thinkMs = group.reduce((sum, s) => sum + s.thinkMs, 0)
-  const secs = group.reduce((sum, s) => sum + (s.thinkSecs || 0), 0)
-  head.thinkSecs = secs > 0 ? secs : null
   group.slice(1).forEach((s) => replaceStep(lane, s, null))
   bump(lane, head)
   bumpList(lane)
@@ -946,7 +942,6 @@ function mergeRun(lane: Lane, group: StepData[]): void {
   const holder: StepData = {
     v: 0, id: nextId(), kind: 'step',
     think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
-    thinkT0: 0, thinkMs: 0, thinkSecs: null,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false,
     failed: calls.some((c) => !c.ok),
     calls, wkOpen: false, wkPinned: false, merged: true,
@@ -1190,6 +1185,14 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
         })
       } else {
         foldClose(msOf(m.timestamp))
+        /* Where the cron reminder's own turn starts. The delegated branch above
+           moves the clock's anchor and this one did not, which nothing showed
+           while both turns shared one fold -- the span was wrong but it was
+           wrong on a header nobody could attribute. Now that the turn has a
+           fold of its own, that header reads as ITS duration, so it has to be
+           measured from here. `turnNo` stays put: the workspace-turn
+           bookkeeping belongs to the delegated shape, as the note above says. */
+        turnAt = msOf(m.timestamp)
         delivered(lane, { label: String(m.origin || ''), isDag: false, err: false, open: () => {} })
       }
       return
@@ -1230,7 +1233,7 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
         toolRun.seg.hasThink = true
         toolRun.seg.think = thought
         toolRun.reveal()
-        toolRun.thinkDone(m.reasoning_ms != null ? Math.round(m.reasoning_ms / 1000) : 0)
+        toolRun.thinkDone()
       }
       if (!text) return
       if (isFinal[i]) {
