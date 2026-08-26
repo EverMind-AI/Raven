@@ -13,8 +13,9 @@ DS.transcript = {
 
 function renderHistory(messages) {
   /* Opening a stored conversation IS content: the new-task flag comes down
-     before the island paints. */
-  const ch = document.querySelector('.chat');
-  if (ch) delete ch.dataset.fresh;
+     before the island paints. Already down if the switch went through
+     resetView; still needed for the reconnect replay, which repaints a
+     conversation without leaving it. */
+  unpitch();
   RavenIslands.transcript.history(messages);
 }
