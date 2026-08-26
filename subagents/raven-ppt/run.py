@@ -165,10 +165,10 @@ def inherit_llm(config: dict, host: dict) -> str:
     return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
-def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
-    """What a dispatching agent declared, as a fenced JSON object: its materials
-    and its template. ``([], None)`` when it declared nothing, which leaves the
-    prose scan below as the only reader.
+def inputs_from_prompt(text: str) -> list[str]:
+    """What a dispatching agent declared, as a fenced JSON object: its
+    materials. ``[]`` when it declared nothing, which leaves the prose scan
+    below as the only reader.
 
     The sub-agent contract carries one content channel, the task text, and prose
     is not a reliable one. A path in prose is delimited by whitespace, so
@@ -178,9 +178,11 @@ def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
     silence ``stage`` refuses to allow for a file it cannot copy. A quoted string
     has neither problem.
 
-    It is also the only way the launcher learns which file is the *template*.
-    Named in prose, that is a sentence only the model downstream can read, and a
-    model that misreads it builds the deck in the wrong file.
+    A declared ``template`` path is refused rather than ignored: the template
+    channel was removed from the launcher, and a deck delivered without the
+    house file the caller named would read as if it had been used. A non-path
+    value under that key (a style name in an unrelated JSON block) is not a
+    path declaration and is left alone.
     """
     for block in _INPUTS_FENCE.findall(text):
         try:
@@ -189,11 +191,16 @@ def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
             continue
         if not isinstance(declared, dict) or not declared.keys() & {"materials", "template"}:
             continue
-        listed = declared.get("materials")
-        materials = [item for item in listed if isinstance(item, str)] if isinstance(listed, list) else []
         template = declared.get("template")
-        return materials, template if isinstance(template, str) and template else None
-    return [], None
+        if isinstance(template, str) and template.startswith("/"):
+            raise SystemExit(
+                "error: the template channel was removed from the launcher. The "
+                "deck is built in the file the run publishes; drop the template "
+                "declaration and name materials only."
+            )
+        listed = declared.get("materials")
+        return [item for item in listed if isinstance(item, str)] if isinstance(listed, list) else []
+    return []
 
 
 def materials_from_prompt(text: str) -> list[str]:
@@ -248,9 +255,9 @@ def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[
     A file that cannot be copied stops the run rather than being skipped. Two
     reasons: a deck built from part of its material is wrong in a way nothing
     downstream can see, and an uncaught copy error would put a Python traceback
-    on stderr -- which the caller reads as this agent's reply. ``--material``
-    reaches here without passing the prompt scan's ``is_file`` test, so this is
-    the only place those paths are checked at all.
+    on stderr -- which the caller reads as this agent's reply. A file named in
+    the declared block reaches here without passing the prompt scan's
+    ``is_file`` test, so this is the only place those paths are checked at all.
 
     A second source with the same basename is suffixed rather than allowed to
     overwrite the first. That collision loses material exactly as silently as a
@@ -280,6 +287,30 @@ def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[
             ) from None
         staged.append((source, target))
     return root, mats, out_dir, staged
+
+
+def material_section(staged: list[tuple[str, Path]], mats: Path) -> str:
+    """The prompt block that tells the agent what material it holds.
+
+    The deck author runs with or without material, so the block names only
+    what exists: with nothing staged there is no listing and no pointer at an
+    empty ``materials/`` directory, and the prompt says the deck is built from
+    the model's own account instead. Paths the task names that resolve to
+    nothing are passed through untouched; the agent reads the task text itself.
+    """
+    if staged:
+        listing = "\n".join(
+            f"- {Path(source).name} (from {source}) -> {target}"
+            for source, target in staged
+        )
+        return (
+            f"\n\n# Material staged for this run\n{listing}"
+            f"\nUse only files under {mats} as factual source material."
+        )
+    return (
+        "\n\nNo source material was staged for this run: every fact in the deck "
+        "is yours, and what you cannot verify is a guess. Present it as one."
+    )
 
 
 def render_config(source: Path) -> Path:
@@ -465,8 +496,6 @@ def main() -> int:
     ap.add_argument("--task", help="Deck-building prompt")
     ap.add_argument("--prompt-file", help="File holding the prompt (alternative to --task)")
     ap.add_argument("--job", required=True, help="Job name; also the job directory name")
-    ap.add_argument("--material", action="append", default=[], help="Source document; repeatable")
-    ap.add_argument("--template", default=None, help="Deck template (.pptx); the deck is built in it")
     ap.add_argument("--session", help="Enable multi-turn: reuse this key across runs")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     # An hour killed a run that had written all twenty pages and was on its last
@@ -497,49 +526,21 @@ def main() -> int:
             f"  cd {CHECKOUT} && uv sync --extra ppt"
         )
 
-    declared, declared_template = inputs_from_prompt(task)
-    template_source = args.template or declared_template
-    # The template is staged with the rest because the workspace fence is what the
-    # agent reads through; it is only told apart afterwards, by source path.
+    declared = inputs_from_prompt(task)
     materials = unique_sources(
-        list(args.material)
-        + declared
-        + ([template_source] if template_source else [])
+        declared
         + materials_from_prompt(task)
     )
-    if not materials:
-        raise SystemExit(
-            "error: no source material. Pass --material, declare one in a fenced "
-            '{"materials": [...]} block, or name existing absolute paths to the '
-            "source documents in the task text."
-        )
-
     root, mats, out_dir, staged = stage(args.job, materials)
-    template_target = None
-    if template_source:
-        wanted = os.path.realpath(template_source)
-        template_target = next(
-            (target for source, target in staged if os.path.realpath(source) == wanted), None
-        )
 
     global _LOG_FILE, _VERBOSE
     _VERBOSE = args.verbose
     _LOG_FILE = root / "launcher.log"
 
-    task += "\n\n# Material staged for this run\n" + "\n".join(
-        f"- {Path(source).name} (from {source}) -> {target}"
-        + ("  [template]" if target == template_target else "")
-        for source, target in staged
-    ) + (
-        f"\nUse only files under {mats} as factual source material. "
-        f"Compile the deck under {out_dir}/ and end your final reply with the "
+    task += material_section(staged, mats) + (
+        f" Compile the deck under {out_dir}/ and end your final reply with the "
         "MEDIA line naming it."
     )
-    if template_target is not None:
-        task += (
-            f"\nBuild this deck in {template_target}. It is the template, not source "
-            "material: bind it first, and do not quote it as evidence."
-        )
 
     rendered = render_config(Path(args.config).resolve())
     argv = [

@@ -109,8 +109,13 @@ same agent-agnostic installer the other three subagents use, byte for byte.
    `{prompt_file}` and `{agent_id}` and nothing else, so a dispatching agent has
    no argv slot for source documents. `run.py` reads absolute paths out of the
    task text, keeps the ones that exist and look like documents, and copies them
-   into the job's `materials/`. Naming no resolvable file is refused rather than
-   run: a deck built from nothing is the failure this agent exists to avoid.
+   into the job's `materials/`. A task that names nothing resolvable is not
+   refused: the run proceeds without material, and the prompt tells the agent it
+   holds none, so what it cannot verify is presented as a guess. Paths and URLs
+   in the task are not inspected beyond that: whatever does not resolve is
+   passed through untouched, and the agent reads the task text itself. A file
+   declared in the fenced block still cannot be skipped: a copy that fails stops
+   the run.
 2. **The copies are what the prompt names.** The workspace is the job directory,
    with `materials/` and `out/` inside it, and the staged listing points at the
    copies rather than the originals. The workspace is not fenced:
@@ -134,6 +139,8 @@ same agent-agnostic installer the other three subagents use, byte for byte.
 
 Spawn `Raven-PPT` with the job in prose, and **state the absolute path of every
 source document in the task text** - that is the only way material reaches it.
+Material is optional: name none and the deck is authored from the model's
+knowledge, with the prompt making it present what it cannot verify as a guess.
 Say how many pages you want and the output filename.
 
 By hand:
@@ -144,9 +151,8 @@ python3 run.py --verbose --job my-deck --task "Build a 16-page deck from /abs/pa
 python3 run.py --verbose --job my-deck --prompt-file task.md
 ```
 
-`--material` passes a file explicitly rather than through the prose. `--session`
-makes a run resumable; the launcher passes `cli:<agent_id>` when the gateway
-spawns it, so a reused instance handle continues one deck.
+`--session` makes a run resumable; the launcher passes `cli:<agent_id>` when the
+gateway spawns it, so a reused instance handle continues one deck.
 
 ## Install
 
@@ -320,8 +326,8 @@ Three things that would have been permission problems and are not:
 - **A file the launcher cannot read stops the run, with a sentence.** It used to
   raise, and an uncaught `OSError` here is worse than it looks: the caller reads
   this process's stderr as the agent's reply, so the traceback would have been
-  delivered as the answer. `--material` is the path that needs it, since those
-  arguments skip the prompt scan's `is_file` test.
+  delivered as the answer. A file from the declared block is the path that needs
+  it, since those names skip the prompt scan's `is_file` test.
 - **A present-but-unexecutable venv is reported as such.** `subagents/install.sh`
   uses `[ -x ]` and the onboarding step reads executability too; testing only for
   existence here would let the installer call this folder ready while the
