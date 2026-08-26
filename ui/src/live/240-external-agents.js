@@ -144,6 +144,14 @@ DS.xa = {
    sheet stays the map rather than becoming the territory. */
 function dagOpenNode(runId, n) {
   RavenIslands.subagents.openDagNode(runId, n);
+  /* The open above already raised the node's own window, and in desk mode that
+     window IS the view -- so there is no panel tab left to pick. Picking one
+     anyway routed through `openDeskTab`, whose whole job is to open the
+     palette, so every node opened from the trail's card or from the sheet
+     popped the little desk open beside the window the reader had asked for.
+     The lines below are the pre-desk panel, where selecting the agents view
+     was how the instance got on screen at all. */
+  if (document.documentElement.classList.contains('desk-ready')) return;
   if (!wsOpen) setWs(true);
   wsPick('agents');
   drawWs();
@@ -171,14 +179,26 @@ DS.transcript.dagRun = (runId) => rpc.call('dag.get', { run_id: runId, session_k
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */
 DS.transcript.openSpawn = (agent, label) => {
-  setWs(true, 'agents');
+  /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
+     mode that is the whole answer. The panel's agents view is only needed where
+     there are no windows. */
+  if (!document.documentElement.classList.contains('desk-ready')) setWs(true, 'agents');
   const match = () => RavenIslands.subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))
     && (!agent || (x.agent || 'raven') === (agent || 'raven')));
   const attempt = (n) => {
     const it = match();
     if (it) { RavenIslands.subagents.openRow(it); return; }
-    if (n >= 4) return;
+    if (n >= 4) {
+      /* Nothing was found, so nothing was opened -- and a click that opens
+         nothing reads as broken. `refresh` keeps the drawn list on a failed
+         read rather than emptying it, so a gateway hiccup or a label the
+         registry spells differently lands here, and the reader is left with a
+         list they can search by hand. Only on this branch: the palette beside
+         a window the reader did get is the thing this whole change removes. */
+      RavenIslands.workspace.openDeskTab('agents');
+      return;
+    }
     RavenIslands.subagents.refresh(true);
     setTimeout(() => attempt(n + 1), 700);
   };

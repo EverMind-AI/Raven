@@ -137,21 +137,11 @@ export function layers(nodes: DagNode[]): number[] {
    from disk should not crash on a mismatch. */
 export const ordered = (d: DagRun): DagNode[] => d.order.map((id) => d.nodes.get(id)).filter(Boolean) as DagNode[]
 
-/* One sentence for a reader who does not want to read a graph: how much work,
-   how deep, who is doing it, and whether anything actually runs side by side. */
-export function gist(d: DagRun): string {
-  const nodes = ordered(d)
-  const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
-  const bits = [shape(nodes)]
-  if (agents.length) bits.push(agents.join(' · '))
-  return bits.join(' · ')
-}
-
 /* How much work, how deep, and whether anything actually runs side by side --
-   the three facts that tell a chain from a fan-out. Split out of `gist` because
-   the transcript's own row says exactly this and nothing about agents: with the
-   agent names appended it no longer fit on one line, and the count of agents is
-   almost always one. */
+   the three facts that tell a chain from a fan-out. The transcript's card says
+   this in its `scale` field, where a reader who wants it can look; the sheet
+   above the composer draws the graph itself and said it in words as well, on
+   every run, which is the one thing the picture says better. */
 export function shape(nodes: DagNode[]): string {
   const per = layers(nodes)
   const widest = Math.max(...per, 1)
