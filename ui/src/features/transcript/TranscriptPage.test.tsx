@@ -518,7 +518,7 @@ const fenced = (body: string, nonce = 'ab12cd34'): string =>
 /* What a spawn injects: framing the model was given, with the result fenced
    inside it. */
 const spawnInjection = (label: string, result: string): string =>
-  `[Subagent '${label}' completed successfully]\n\nTask: look it up\n\nResult:\n`
+  `[Subagent '${label}' returned]\n\nTask: look it up\n\nResult:\n`
   + `${fenced(result)}\n\nSummarize this naturally for the user. Keep it brief.`
 
 /* The two open verbs are NOT in the default source: an existing test covers

@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Render a DAG node's prompt template into concrete prompt text."""
+"""Render a DAG node's prompt template into concrete prompt text.
+
+The template is the dispatching model's own words and stays verbatim; every
+value substituted *into* it -- a file's contents, another node's output -- is
+fenced as untrusted data first. A node output is sub-agent-authored and a
+referenced file may hold anything a run fetched, so neither is an instruction
+this prompt is entitled to carry. The ``_path`` forms inject no content and
+are left alone, as are literal inputs: the author typed those here.
+"""
 
 from typing import Any
+
+from raven.security.trust import wrap_untrusted
 
 from ._capabilities import AgentCapabilities
 from ._errors import DagValidationError
@@ -218,11 +228,11 @@ async def _resolve(
     if ph.kind in ("output", "output_path"):
         resolved = _output_path(ph.name, output_paths, backend, runs_root, session_nodes, ph.raw)
         if ph.kind == "output":
-            return await _read(backend, resolved, cwd, what=ph.raw)
+            return wrap_untrusted(await _read(backend, resolved, cwd, what=ph.raw), source="subagent")
         return await _require_exists(backend, resolved, ph.raw)
     if ph.kind == "ref":
         check_confined(ph.name, what="ref", roots=roots)
-        return await _read(backend, ph.name, cwd, runs_root, what=ph.raw)
+        return wrap_untrusted(await _read(backend, ph.name, cwd, runs_root, what=ph.raw), source="file")
     # ph.kind == "ref_path"
     check_confined(ph.name, what="ref_path", roots=roots)
     return await _require_exists(backend, _abspath(backend, ph.name, cwd, runs_root), ph.raw)
@@ -272,10 +282,11 @@ async def _input_value(
     spec = node.inputs.get(key)
     if isinstance(spec, dict) and "file" in spec:
         check_confined(str(spec["file"]), what="input file", roots=roots)
-        return await _read(backend, str(spec["file"]), cwd, runs_root, what=f"input '{key}'")
+        text = await _read(backend, str(spec["file"]), cwd, runs_root, what=f"input '{key}'")
+        return wrap_untrusted(text, source="file")
     if isinstance(spec, dict) and "node" in spec:
         resolved = _output_path(str(spec["node"]), output_paths, backend, runs_root, session_nodes, f"input '{key}'")
-        return await _read(backend, resolved, cwd, what=f"input '{key}'")
+        return wrap_untrusted(await _read(backend, resolved, cwd, what=f"input '{key}'"), source="subagent")
     return str(spec)
 
 

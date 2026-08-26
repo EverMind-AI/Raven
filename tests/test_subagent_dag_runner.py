@@ -1814,7 +1814,7 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
 
     assert second.summary["completed"] == 1
     prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
-    assert "earlier: OUT[plan]:draft it" in prompt
+    assert "OUT[plan]:draft it" in prompt
 
 
 async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
@@ -2002,7 +2002,7 @@ async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> Non
 
     assert second.summary["completed"] == 1
     prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
-    assert "text=OUT[plan]:draft it" in prompt
+    assert "OUT[plan]:draft it" in prompt
     assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
 
 
@@ -2033,7 +2033,7 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
 
     assert second.summary["completed"] == 1
     prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
-    assert "text=OUT[plan]:draft it" in prompt
+    assert "OUT[plan]:draft it" in prompt
     assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
 
 
@@ -2341,7 +2341,7 @@ async def test_a_node_input_takes_another_runs_output() -> None:
         "/hist/mas_dag",
     )
     prompt = backend.files[f"/hist/mas_dag/{result.run_id}/build.prompt.md"].decode()
-    assert "text=OUT[plan]:draft it" in prompt
+    assert "OUT[plan]:draft it" in prompt
     assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
 
 
@@ -2998,9 +2998,9 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         **common,
     )
     prompt = (root / second.run_id / "consumer.prompt.md").read_text(encoding="utf-8")
-    assert "text=OUT[seed]:make it" in prompt
+    assert prompt.count("OUT[seed]:make it") == 2
     assert f"path={root / first.run_id / 'seed.out.md'}" in prompt
-    assert "input=OUT[seed]:make it" in prompt
+    assert prompt.count("[BEGIN UNTRUSTED subagent") == 2
 
     # The index on disk carries both runs, with the outcome that makes 'seed'
     # readable at all.
