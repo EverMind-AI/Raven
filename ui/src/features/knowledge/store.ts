@@ -120,7 +120,10 @@ export function remove(base: KbBase): void {
 }
 
 export async function open_(id: string): Promise<void> {
-  set({ openId: id, docs: [] })
+  /* A query typed in the base being left must not spend a request, nor land
+     its hits in the base being opened. */
+  cancelSearch()
+  set({ openId: id, docs: [], query: '', hits: null })
   try {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
@@ -132,6 +135,7 @@ export async function open_(id: string): Promise<void> {
 }
 
 export function back(): void {
+  cancelSearch()
   set({ openId: null, docs: [], query: '', hits: null })
 }
 
@@ -157,20 +161,66 @@ export async function upload(file: File): Promise<void> {
   }
 }
 
-export async function search(query: string): Promise<void> {
+/* One embedding request per keystroke is what the plain handler cost: every
+   character ran `knowledge.search`, which embeds the query through the
+   configured endpoint -- billed, unthrottled, and on a client whose timeout is
+   measured in minutes. Typing a two-word question spent seventeen of them.
+   Debounced like the skill hub's query, which had the same problem. */
+const SEARCH_DEBOUNCE_MS = 250
+let debounce: ReturnType<typeof setTimeout> | null = null
+
+/* Monotonic, and checked before an answer is kept. The debounce alone does not
+   fix the ordering: the requests that do go out race, and the guard on `openId`
+   passes for every one of them, so a slow prefix landing last used to paint its
+   hits under the text the reader had already finished typing. */
+let seq = 0
+
+function cancelSearch(): void {
+  if (debounce) clearTimeout(debounce)
+  debounce = null
+  /* Bumped, not just cleared: a request already in flight has to be disowned
+     too, or it repaints a panel the reader has left or emptied. */
+  seq += 1
+}
+
+async function run(baseId: string, text: string, mine: number): Promise<void> {
+  try {
+    const hits = await source().search([baseId], text)
+    if (state.openId === baseId && mine === seq) set({ hits })
+  } catch (e) {
+    if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
+  }
+}
+
+/* What the box calls on every keystroke. */
+export function search(query: string): void {
   const baseId = state.openId
   const text = query.trim()
   set({ query })
+  cancelSearch()
   if (!baseId || !text) {
     set({ hits: null })
     return
   }
-  try {
-    const hits = await source().search([baseId], text)
-    if (state.openId === baseId) set({ hits })
-  } catch (e) {
-    if (state.openId === baseId) toast((e as Error)?.message || String(e))
+  const mine = seq
+  debounce = setTimeout(() => {
+    debounce = null
+    void run(baseId, text, mine)
+  }, SEARCH_DEBOUNCE_MS)
+}
+
+/* The same search without the wait, for a caller that already knows the reader
+   is done typing. Mirrors `searchNow` on the skill hub's store. */
+export async function searchNow(query: string): Promise<void> {
+  const baseId = state.openId
+  const text = query.trim()
+  set({ query })
+  cancelSearch()
+  if (!baseId || !text) {
+    set({ hits: null })
+    return
   }
+  await run(baseId, text, seq)
 }
 
 export function open(): void {
@@ -191,4 +241,7 @@ export function redraw(): void {
 export function _resetForTests(): void {
   state = EMPTY
   listeners.clear()
+  /* The timer and the token too: a test that types without waiting out the
+     debounce would otherwise fire into the next test's source. */
+  cancelSearch()
 }
