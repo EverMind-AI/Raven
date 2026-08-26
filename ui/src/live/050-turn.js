@@ -95,6 +95,13 @@ function onEvent(ev) {
     /* The server named the session. Replaces whatever the row shows without
        comparing: the event is emitted only when the title actually changed. */
     settleNaming(p.session_id, p.title);
+  } else if (ev.type === 'session.naming_ended') {
+    /* No title is coming after all: the model answered without calling the
+       naming tool, the call outran its budget, this code raised, or a person
+       named the session while it ran. `namingEnded` decides what that means for
+       the row -- the last of those is not settled onto the opening line. The
+       timer is only a backstop for a server that says neither of these. */
+    namingEnded(p.session_id, p.reason);
   } else if (ev.type === 'notice') {
     killStatus();
     /* Seals the open step first: this ends the turn, so the streamed prose
@@ -275,10 +282,14 @@ function finishTurn(usage) {
    the truncated first line here and then rewrite it a second later, and no
    client-side cap is left to disagree with the server's.
 
-   The grace period outlives the server's own timeout on that call
-   (`session_title.timeout_seconds`, 8s by default). A placeholder waiting on an
-   answer that is not coming is the one state a reader cannot leave by waiting,
-   so it gives up on its own.
+   The server now says when naming ends without a title
+   (`session.naming_ended`), so the ordinary quiet endings settle as fast as a
+   success does. This timer is the backstop for the case no message covers -- a
+   server too old to send either event, or a connection that drops mid-turn --
+   and it outlives the server's own timeout on the call
+   (`session_title.timeout_seconds`, 8s by default) so it cannot fire while an
+   answer is still legitimately on its way. A placeholder waiting on something
+   that is not coming is the one state a reader cannot leave by waiting.
 
    It gives up onto the opening line held here, NOT onto the stored title: the
    session's auto-name is written by `SessionManager.save`, which runs at turn
@@ -351,6 +362,36 @@ function namingDeclined(id) {
   const pending = namingTimers.get(id);
   if (!pending) return;
   settleNaming(id, pending.fallback || '');
+}
+
+/* A name arrived from a person while the model was still writing one, so the
+   session is already better named than anything we hold. End the wait WITHOUT
+   the captured opening line: settling on it here overwrote the name that had
+   just been typed with the message it was typed over, for as long as the page
+   stayed open.
+
+   The stored title is read rather than assumed, because the rename may have
+   been typed in another client -- this row would still be showing the default
+   and clearing the placeholder alone would leave it there. If that read fails,
+   keep whatever the row has; it is at worst the default, and never the wrong
+   name. */
+async function namingSuperseded(id) {
+  if (!namingTimers.get(id)) return;
+  let title = '';
+  try {
+    const r = await rpc.call('session.title', { session_id: id });
+    title = (r && r.title) || '';
+  } catch { /* keep what the row shows */ }
+  settleNaming(id, title);
+}
+
+/* One place to decide what a `session.naming_ended` reason means for the row,
+   so the dispatcher carries no policy and this is reachable from a test. Three
+   of the four reasons mean "nothing better than the opening line exists"; the
+   fourth means the opposite. */
+function namingEnded(id, reason) {
+  if (reason === 'renamed') return namingSuperseded(id);
+  return namingDeclined(id);
 }
 
 function beginNaming(text) {

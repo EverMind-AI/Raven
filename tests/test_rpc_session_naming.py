@@ -97,6 +97,9 @@ async def test_a_greeting_is_not_worth_a_model_call(tmp_path: Path) -> None:
     assert _start(mgr, provider, emitter, text="hi") is None
 
     assert provider.calls == 0
+    # Nothing at all: a guard that refuses before the namer starts has nobody
+    # waiting on it either -- `turn.send` already answered `naming: false`. The
+    # naming_ended event is for a call that ran and came back with no title.
     assert emitter.events == []
 
 
@@ -123,6 +126,9 @@ async def test_a_session_with_history_is_not_the_one_being_opened(tmp_path: Path
     assert _start(mgr, provider, emitter) is None
 
     assert provider.calls == 0
+    # Nothing at all: a guard that refuses before the namer starts has nobody
+    # waiting on it either -- `turn.send` already answered `naming: false`. The
+    # naming_ended event is for a call that ran and came back with no title.
     assert emitter.events == []
 
 
@@ -154,7 +160,9 @@ async def test_a_rename_typed_while_the_call_ran_wins(tmp_path: Path) -> None:
 
     assert provider.calls == 1
     assert mgr.get_or_create("tui:name01").metadata["title"] == "Release checklist"
-    assert emitter.events == []
+    # The call ran and came back with nothing to publish, so the client holding
+    # a placeholder is told rather than left to time out.
+    assert [(e["type"], e["payload"]["reason"]) for _, e in emitter.events] == [("session.naming_ended", "renamed")]
 
 
 @pytest.mark.asyncio
@@ -170,7 +178,9 @@ async def test_a_call_that_outruns_the_timeout_leaves_the_fallback_standing(tmp_
     assert task is not None
     await task
 
-    assert emitter.events == []
+    # The call ran and came back with nothing to publish, so the client holding
+    # a placeholder is told rather than left to time out.
+    assert [(e["type"], e["payload"]["reason"]) for _, e in emitter.events] == [("session.naming_ended", "timeout")]
     assert mgr.get_or_create("tui:name02").metadata.get("title") is None
 
 
@@ -199,7 +209,9 @@ async def test_an_answer_that_ignored_the_budget_publishes_nothing(tmp_path: Pat
     assert task is not None
     await task
 
-    assert emitter.events == []
+    # The call ran and came back with nothing to publish, so the client holding
+    # a placeholder is told rather than left to time out.
+    assert [(e["type"], e["payload"]["reason"]) for _, e in emitter.events] == [("session.naming_ended", "no_title")]
     assert mgr.get_or_create("tui:name01").metadata.get("title") is None
 
 
@@ -216,7 +228,9 @@ async def test_a_provider_that_raises_is_not_a_failed_turn(tmp_path: Path) -> No
     assert task is not None
     await task
 
-    assert emitter.events == []
+    # The call ran and came back with nothing to publish, so the client holding
+    # a placeholder is told rather than left to time out.
+    assert [(e["type"], e["payload"]["reason"]) for _, e in emitter.events] == [("session.naming_ended", "no_title")]
 
 
 @pytest.mark.parametrize(
@@ -269,4 +283,233 @@ async def test_a_refused_opening_never_reaches_the_model(tmp_path: Path) -> None
 
     assert task is None
     assert provider.calls == 0
+    # Nothing at all: a guard that refuses before the namer starts has nobody
+    # waiting on it either -- `turn.send` already answered `naming: false`. The
+    # naming_ended event is for a call that ran and came back with no title.
     assert emitter.events == []
+
+
+class _Silent:
+    """A provider that answers without ever calling the naming tool.
+
+    Observed live against the configured model: a short opening gets a prose
+    reply about a third of the time, in roughly a second. That is the common
+    quiet ending, not the timeout.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_with_retry(self, **kwargs: object) -> object:
+        self.calls += 1
+
+        class _R:
+            tool_calls: list = []
+            content = "Sure, I can help with that."
+
+        return _R()
+
+
+class _Raiser:
+    async def chat_with_retry(self, **kwargs: object) -> object:
+        raise RuntimeError("provider is down")
+
+
+class _Slow:
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+
+    async def chat_with_retry(self, **kwargs: object) -> object:
+        await asyncio.sleep(self.delay)
+        raise AssertionError("the timeout should have fired first")
+
+
+def _ended_reasons(emitter: _Emitter) -> list[str]:
+    return [e["payload"]["reason"] for _, e in emitter.events if e["type"] == "session.naming_ended"]
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_never_calls_the_tool_says_so(tmp_path: Path) -> None:
+    """The quiet ending that actually happens, and the reason the event exists."""
+    mgr = SessionManager(tmp_path)
+    provider, emitter = _Silent(), _Emitter()
+
+    task = _start(mgr, provider, emitter, session_key="tui:no-title")
+    assert task is not None
+    await task
+
+    assert provider.calls == 1
+    assert _ended_reasons(emitter) == ["no_title"]
+    assert [e["type"] for _, e in emitter.events] == ["session.naming_ended"]
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_raises_arrives_as_no_title(tmp_path: Path) -> None:
+    """Not 'error', and the reason matters for whoever reads the event.
+
+    `generate_title` catches the provider call's exception itself and answers
+    None, so by the time the seam sees it there is nothing left to tell it apart
+    from a model that simply did not call the tool. The cause is in the debug
+    line `generate_title` writes; the enum does not claim a distinction the code
+    cannot make.
+    """
+    mgr = SessionManager(tmp_path)
+    emitter = _Emitter()
+
+    task = _start(mgr, _Raiser(), emitter, session_key="tui:err")
+    assert task is not None
+    await task
+
+    assert _ended_reasons(emitter) == ["no_title"]
+
+
+@pytest.mark.asyncio
+async def test_a_broken_naming_seam_arrives_as_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """What 'error' is actually for: this code raising, not the model failing.
+
+    Rare, and worth an event anyway -- a client is holding a placeholder, and a
+    bug here should not also cost it the full grace period.
+    """
+
+    async def _explode(*a: object, **k: object) -> str:
+        raise RuntimeError("naming seam is broken")
+
+    monkeypatch.setattr("raven.rpc.session_naming.generate_title", _explode)
+    mgr = SessionManager(tmp_path)
+    emitter = _Emitter()
+
+    task = _start(mgr, _Provider(), emitter, session_key="tui:seam")
+    assert task is not None
+    await task
+
+    assert _ended_reasons(emitter) == ["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_outruns_its_budget_says_so(tmp_path: Path) -> None:
+    mgr = SessionManager(tmp_path)
+    emitter = _Emitter()
+
+    task = _start(mgr, _Slow(5.0), emitter, session_key="tui:slow", timeout_seconds=0.05)
+    assert task is not None
+    await task
+
+    assert _ended_reasons(emitter) == ["timeout"]
+
+
+@pytest.mark.asyncio
+async def test_a_success_sends_titled_and_nothing_else(tmp_path: Path) -> None:
+    """Exactly one of the two events follows a namer that started.
+
+    Both would leave a client settling twice, and `session.naming_ended` after a
+    title would settle it onto the opening line -- overwriting the name that had
+    just arrived.
+    """
+    mgr = SessionManager(tmp_path)
+    emitter = _Emitter()
+
+    task = _start(mgr, _Provider("Cut a release"), emitter, session_key="tui:ok")
+    assert task is not None
+    await task
+
+    assert [e["type"] for _, e in emitter.events] == ["session.titled"]
+
+
+def test_the_reason_set_is_closed_and_matches_the_contract() -> None:
+    """The model's Literal and the schema's enum have to be the same set.
+
+    A client is generated from the schema, so a reason the server can send but
+    the schema does not list is one the client rejects -- and the drift test
+    compares field types, not enum members, so nothing else here would notice.
+    Loosening the Literal to `str` passes every other test in this file.
+    """
+    import json
+    from pathlib import Path as _Path
+    from typing import get_args, get_type_hints
+
+    from raven.rpc.models import SessionNamingEndedPayload
+
+    declared = set(get_args(get_type_hints(SessionNamingEndedPayload)["reason"]))
+    assert declared, "reason must stay a closed Literal, not a bare str"
+
+    schema_path = _Path(__file__).resolve().parents[1] / "rpc-schema" / "openrpc.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    event = schema["components"]["schemas"]["SessionNamingEndedEvent"]
+    published = set(event["properties"]["payload"]["properties"]["reason"]["enum"])
+
+    assert declared == published
+
+    # And every one of them is a reason the code can actually produce, so the
+    # contract does not advertise a state no reader will ever see. Parsed rather
+    # than grepped: the first version looked for the literal `_ended("renamed")`
+    # and broke the moment that call became a conditional expression, which is a
+    # test failing on formatting instead of on meaning.
+    import ast
+
+    module = ast.parse(
+        (_Path(__file__).resolve().parents[1] / "raven" / "rpc" / "session_naming.py").read_text(encoding="utf-8")
+    )
+    emitted: set[str] = set()
+    for node in ast.walk(module):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_ended"):
+            continue
+        for arg in node.args:
+            for part in (arg.body, arg.orelse) if isinstance(arg, ast.IfExp) else (arg,):
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    emitted.add(part.value)
+
+    assert emitted == declared, f"published {sorted(declared)} but emit {sorted(emitted)}"
+
+
+# Both prior states, because the check has two halves and each one alone lets a
+# different case through: with no title at all, "not title_auto" is true and
+# would call it a rename; with the mechanical title on it, "has a title" is true
+# and would do the same.
+@pytest.mark.parametrize("seed_auto_title", [False, True])
+@pytest.mark.asyncio
+async def test_a_title_too_long_to_store_is_not_reported_as_a_rename(tmp_path: Path, seed_auto_title: bool) -> None:
+    """`set_generated_title` refuses for two unrelated reasons, and the client
+    acts on the difference: 'renamed' tells it the row already holds a better
+    name and must not be settled onto the opening line. A title that came back
+    unstorably long is nobody's rename, and calling it one would make the client
+    keep a name that does not exist.
+
+    Unreachable while `budget` stays under TITLE_STORAGE_MAX, since
+    `clean_model_title` clamps to it -- which is exactly why it needs a test
+    rather than a comment: a config raising `budget` past 200 is the only way in.
+    """
+    from raven.session.manager import TITLE_STORAGE_MAX
+
+    mgr = SessionManager(tmp_path)
+    emitter = _Emitter()
+    over = "x" * (TITLE_STORAGE_MAX + 10)
+    key = f"tui:toolong-{seed_auto_title}"
+    if seed_auto_title:
+        # The realistic state by the time an answer lands: `SessionManager.save`
+        # writes the mechanical title at turn end.
+        seeded = mgr.get_or_create(key)
+        seeded.metadata["title"] = "please cut a release"
+        seeded.metadata["title_auto"] = True
+
+    task = _start(mgr, _Provider(over), emitter, session_key=key, budget=TITLE_STORAGE_MAX + 50)
+    assert task is not None
+    await task
+
+    assert _ended_reasons(emitter) == ["no_title"]
+    # Whatever it had stands; the unstorable answer is dropped either way.
+    expected = "please cut a release" if seed_auto_title else None
+    assert mgr.get_or_create(key).metadata.get("title") == expected
+
+
+@pytest.mark.asyncio
+async def test_a_rename_typed_mid_call_is_reported_as_a_rename(tmp_path: Path) -> None:
+    """The other half of the pair above, so the two cannot collapse into one."""
+    mgr = SessionManager(tmp_path)
+    provider, emitter = _Provider(delay=0.05), _Emitter()
+
+    task = _start(mgr, provider, emitter, session_key="tui:byhand")
+    assert task is not None
+    mgr.get_or_create("tui:byhand").set_title("Release checklist")
+    await task
+
+    assert _ended_reasons(emitter) == ["renamed"]

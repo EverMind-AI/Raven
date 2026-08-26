@@ -52,7 +52,7 @@ function harness({ rows, current, titleCall }) {
     'sessionDraw',
     'plainTitle',
     'rpc',
-    `${namingBlock()}\nreturn { beginNaming, settleNaming, namingDeclined };`,
+    `${namingBlock()}\nreturn { beginNaming, settleNaming, namingDeclined, namingEnded };`,
   )
   const api = install(
     document,
@@ -268,5 +268,126 @@ describe('the wiring between turn.send and the placeholder', () => {
       expect(site).toMatch(/naming === false/)
       expect(site).not.toMatch(/!\w*\.naming|naming\s*==\s*false/)
     }
+  })
+})
+
+describe('the naming_ended event', () => {
+  /* Same source-contract caveat as the block above: this locks the dispatcher
+     branch, and the behaviour it calls into is covered by the namingDeclined
+     tests. */
+  it('is dispatched, and hands the reason to the one place that decides', () => {
+    /* Locks that the dispatcher reaches the handler and carries the reason with
+       it -- a branch that dropped the reason would settle every ending onto the
+       opening line, which is the bug this pair of tests exists for. What the
+       handler then does is covered behaviourally below, not here. */
+    const at = live.indexOf("ev.type === 'session.naming_ended'")
+    expect(at).toBeGreaterThan(-1)
+    /* Wide enough to clear the branch's comment: a window that stops inside it
+       fails on prose length rather than on the code. */
+    const branch = live.slice(at, at + 900)
+    expect(branch).toContain('namingEnded(')
+    expect(branch).toMatch(/namingEnded\(\s*p\.session_id\s*,\s*p\.reason\s*\)/)
+  })
+
+  it('sits alongside session.titled rather than replacing it', () => {
+    /* Exactly one of the two follows a namer that started; dropping the titled
+       branch while adding this one would settle every session onto its opening
+       line and never show a generated name at all. */
+    expect(live).toContain("ev.type === 'session.titled'")
+    const titled = live.indexOf("ev.type === 'session.titled'")
+    expect(live.slice(titled, titled + 260)).toContain('settleNaming')
+  })
+
+  it('still keeps the timer as a backstop', () => {
+    /* An old server sends neither event, and a dropped connection sends
+       nothing at all. Removing the timer once the event exists would put those
+       readers back on a placeholder that never ends. */
+    expect(live).toContain('NAMING_GRACE_MS')
+    expect(live).toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{\s*namingGaveUp\(id\);?\s*\}/)
+  })
+})
+
+describe('what a naming_ended reason means for the row', () => {
+  /* Behaviour, not source text. The three source-contract cases above passed
+     with a real bug present -- `renamed` went through namingDeclined and
+     replaced the name the person had just typed with the message they typed it
+     over -- so the reason handling is exercised here instead of matched. */
+
+  it('keeps a name typed mid-wait, and does not fall back to the opening line', async () => {
+    vi.useFakeTimers()
+    try {
+      const rows = [{ id: 's1', title: 'gui.new_task' }]
+      const h = harness({ rows, current: 's1', titleCall: async () => ({ title: 'Release checklist' }) })
+      h.beginNaming('please cut a desktop release with the new signing key')
+
+      // the person renames while the model is still writing; the server took it
+      rows[0].title = 'Release checklist'
+
+      await h.namingEnded('s1', 'renamed')
+
+      expect(rows[0].title).toBe('Release checklist')
+      expect(rows[0].naming).toBe(false)
+      expect(h.heading.textContent).toBe('Release checklist')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('takes the stored name when the rename happened in another client', async () => {
+    /* This row never saw the rename, so clearing the placeholder alone would
+       leave it on the default name until something else refreshed the list. */
+    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const h = harness({ rows, current: 's1', titleCall: async () => ({ title: 'Named elsewhere' }) })
+    h.beginNaming('please cut a desktop release')
+
+    await h.namingEnded('s1', 'renamed')
+
+    expect(rows[0].title).toBe('Named elsewhere')
+  })
+
+  it('keeps what the row has when the stored read fails, never the opening line', async () => {
+    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const h = harness({
+      rows,
+      current: 's1',
+      titleCall: async () => {
+        throw new Error('not connected')
+      },
+    })
+    // A wait is open on this row even though it is named: the rename landed
+    // after beginNaming, which is the race the server reports.
+    rows[0].title = 'gui.new_task'
+    h.beginNaming('please cut a desktop release')
+    rows[0].title = 'Release checklist'
+
+    await h.namingEnded('s1', 'renamed')
+
+    expect(rows[0].title).toBe('Release checklist')
+    expect(rows[0].naming).toBe(false)
+  })
+
+  it('settles the other three reasons onto the opening line', async () => {
+    for (const reason of ['timeout', 'no_title', 'error']) {
+      const rows = [{ id: 's1', title: 'gui.new_task' }]
+      const h = harness({ rows, current: 's1', titleCall: async () => ({}) })
+      h.beginNaming('please cut a desktop release')
+
+      await h.namingEnded('s1', reason)
+
+      expect(rows[0].title, reason).toBe('please cut a desktop release')
+      expect(rows[0].naming, reason).toBe(false)
+    }
+  })
+
+  it('does nothing for a session that never started waiting', async () => {
+    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const h = harness({ rows, current: 's1', titleCall: async () => ({ title: 'from the server' }) })
+
+    await h.namingEnded('s1', 'renamed')
+    await h.namingEnded('s1', 'timeout')
+
+    expect(rows[0].title).toBe('Release checklist')
+    expect(rows[0].naming).toBeUndefined()
   })
 })

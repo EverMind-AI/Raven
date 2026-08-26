@@ -63,7 +63,8 @@ export type TurnEvent =
   | DagRunCompletedEvent
   | CronMissedEvent
   | MediaEvent
-  | SessionTitledEvent;
+  | SessionTitledEvent
+  | SessionNamingEndedEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1349,6 +1350,19 @@ export interface SessionTitledEvent {
   payload: {
     session_id: string;
     title: string;
+  };
+}
+/**
+ * The naming call for this session finished without publishing a title. The other half of `session.titled`: exactly one of the two follows a turn whose `turn.send` reported `naming: true`, so a client parking a placeholder where the title goes can stop waiting on either instead of waiting out a grace period. `reason` is for the log and the bug report rather than for the reader -- 'timeout' the call outran its budget, 'no_title' it came back with nothing usable (the model answered without calling the naming tool, or the provider failed and generate_title swallowed it, logging the cause at debug), 'error' the naming code itself raised, 'renamed' a person named the session while the call ran.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionNamingEndedEvent".
+ */
+export interface SessionNamingEndedEvent {
+  type: 'session.naming_ended';
+  payload: {
+    session_id: string;
+    reason: 'timeout' | 'error' | 'no_title' | 'renamed';
   };
 }
 /**
