@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/6c6f585a-21b6-4e7b-9187-acffe59d0c10)
+![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -17,16 +17,23 @@
 
 # Raven
 
-Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
-**The Self-Improving Agent Harness**，并内置可选 Deep Research，用于多来源深度研究。
+Raven 是今天即可运行的开源 **自我进化 Agent Harness**。它将终端执行、本地 Tracing、长期记忆、Skills、评测与可复用工作流整合进同一套系统，面向长程 AI 任务持续学习与改进。
 
-Raven 会持续迭代支撑 Agent 的 harness：tools、skills、memory、code execution
-runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持久存在的用户
-记忆、Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，
-并把可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
+## The Harness of Harnesses
 
-**Update：** Raven 新增 Deep Research。运行 `raven deep-research enable` 后，
-Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来源 research tool。
+随着 AI Agent 从单一任务走向长程、多领域协作，依赖人工设计一个不断膨胀的 harness 已经难以持续扩展；而与特定模型和领域深度绑定的单一 harness，也无法覆盖通用智能所需的全部能力。
+
+**Raven** 同时代表这一工作的更广阔研究与生态方向，其核心定义是 **The Harness of Harnesses**。它旨在自动构建和提升适配特定模型与领域的 Agent Harness，并将不同 Harness 的异构执行能力汇聚为统一的 **全领域协作网络（All-Domain Collaboration Network）**。
+
+| **可信** | **可延续** | **可进化** |
+| --- | --- | --- |
+| 能力由真实、可验证的表现决定，而非自我声明。 | 经过验证的结果、任务状态与长期记忆能够跨执行者延续。 | 每次真实执行都会改进能力档案、Skills、调度与整个协作网络。 |
+
+Raven 不再把模型与 harness 视为静态组合，而是通过持续的 **评测 → 执行 → 验证 → 记忆 → 反馈** 闭环，发现、编排并优化每项任务所需的能力。经过验证的工作会沉淀为可复用经验，使 Agent 个体与更广泛的能力网络共同进化。
+
+Raven 的评测覆盖 **22 个 Agent 基准任务**，从任务质量、成本与关键机制收益等维度进行验证。报告结果显示，其在性能与效率上相较现有 Agent 系统实现了全面提升，并进一步推进了 **质量—成本帕累托前沿**。
+
+> Raven 既指本仓库中可运行的开源 harness，也指上述更广阔的 Multi-Agent 研究与生态方向。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
