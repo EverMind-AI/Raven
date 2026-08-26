@@ -710,6 +710,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.hub.auto_use': 'Skills are picked up by Raven on demand; per-skill toggling is not supported yet',
     'gui.hub.empty_filter': 'No skill under this filter.',
     'gui.hub.empty_installed': 'No skills installed yet - browse the market.',
+    'gui.hub.empty_installed_off':
+      'Could not read what is installed - the connection dropped. It fills in once the page reconnects.',
     'gui.hub.err': 'Market request failed: {err}',
     'gui.hub.flags': 'quality flags: {flags}',
     'gui.hub.hero': 'Skill market',
@@ -953,6 +955,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.plug.ct_mcp': 'MCP server',
     'gui.plug.ct_skill': 'Skill',
     'gui.plug.empty_installed': 'No plugins yet - start from the market',
+    'gui.plug.empty_installed_off':
+      'Could not read what is installed - the connection dropped. It fills in once the page reconnects.',
     'gui.plug.from_market': 'From the market',
     'gui.plug.grp_builtin': 'Built-in',
     'gui.plug.grp_market': 'From the market',
@@ -1962,6 +1966,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.hub.auto_use': '技能由 Raven 按需自动使用，暂不支持单独停用',
     'gui.hub.empty_filter': '这个筛选下没有技能。',
     'gui.hub.empty_installed': '还没有安装技能，去市场逛逛。',
+    'gui.hub.empty_installed_off': '没能读到已安装的内容 —— 连接断开了。页面重新连上后会自动补齐。',
     'gui.hub.err': '市场读取失败：{err}',
     'gui.hub.flags': '质量标记：{flags}',
     'gui.hub.hero': '技能市场',
@@ -2204,6 +2209,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.plug.ct_mcp': 'MCP 服务器',
     'gui.plug.ct_skill': '技能',
     'gui.plug.empty_installed': '还没有插件，从市场开始',
+    'gui.plug.empty_installed_off': '没能读到已安装的内容 —— 连接断开了。页面重新连上后会自动补齐。',
     'gui.plug.from_market': '来自市场',
     'gui.plug.grp_builtin': '内置',
     'gui.plug.grp_market': '来自市场',

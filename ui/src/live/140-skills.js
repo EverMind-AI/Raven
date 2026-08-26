@@ -28,4 +28,9 @@ DS.skills = {
       throw { handled: true };
     }),
   installed: () => skillsLive,
+  /* Whether the one boot-time read actually landed. Without it an empty
+     list means both "nothing is installed" and "the read never happened",
+     and the page has to draw the same nothing for a working install and a
+     broken socket. */
+  loaded: () => extLoaded,
 };

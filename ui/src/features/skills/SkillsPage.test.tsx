@@ -157,6 +157,19 @@ describe('skills island', () => {
     expect(await screen.findByText('gui.hub.empty_installed')).toBeTruthy()
   })
 
+  it('says the read failed, not that nothing is installed, when the source never loaded', async () => {
+    /* The two states look identical on the wire -- both are an empty array --
+       and only the source knows which it is. A socket that was down at boot
+       used to render "nothing installed" over a machine with thirty skills. */
+    install([], { loaded: () => false })
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+    expect(await screen.findByText('gui.hub.empty_installed_off')).toBeTruthy()
+    expect(screen.queryByText('gui.hub.empty_installed')).toBeNull()
+  })
+
   it('opens a card into the shared drawer and fills it from the detail call', async () => {
     install([hubItem()])
     await mount()

@@ -14,6 +14,11 @@ DS.onboard = {
 };
 
 (async () => {
+  /* Ahead of the connect, because the failure path below never reaches
+     `loadLang`: the notice that explains a page which cannot connect has to
+     be in the reader's language, and the only copy available offline is the
+     one the last successful boot remembered. */
+  langRestore();
   /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page
      yet that could have come from a gateway which then went away. The rejoin

@@ -171,6 +171,27 @@ describe('plugins island', () => {
     expect(await screen.findByText('gui.filter.all')).toBeTruthy()
   })
 
+  it('separates "nothing installed" from "the read never landed"', async () => {
+    /* Both are an empty rows array; only the source can tell them apart. A
+       socket down at boot filled the page with the wrong one. */
+    install([], [], { loaded: () => false })
+    await mount()
+    act(() => {
+      store.toggleView()
+    })
+    expect(await screen.findByText('gui.plug.empty_installed_off')).toBeTruthy()
+    expect(screen.queryByText('gui.plug.empty_installed')).toBeNull()
+  })
+
+  it('keeps the ordinary empty note when the source does not answer loaded', async () => {
+    install([], [])
+    await mount()
+    act(() => {
+      store.toggleView()
+    })
+    expect(await screen.findByText('gui.plug.empty_installed')).toBeTruthy()
+  })
+
   /* The island sets its own state and then tells the chrome, because the tab
      title, hero and installed button live outside any root it owns. Nothing
      asserted the second half. */

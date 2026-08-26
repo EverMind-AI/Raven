@@ -40,6 +40,23 @@ rpc.onReconnect = async () => {
   } else if (current) {
     subscribe(current);
   }
+  /* The installed skills, plugins and tools are read once at boot into
+     module state and served from there, so a socket that was down when boot
+     ran leaves all three empty for the life of the tab -- an empty page
+     rather than a failed one. Re-read them here: the session reload above
+     already treats a reconnect as "refetch what the gap invalidated", and
+     these are the only surfaces whose data never asks again on its own. */
+  /* Repainted, not just re-read: the island renders on its own `set`, which
+     refilling the module state does not call, so the extensions page would
+     keep showing the offline note after the reconnect it tells the reader to
+     wait for. `drawCaps` is the entry for both tabs (153-plugins.js wraps
+     it), guarded the way `redrawAll` guards it -- the page may not be up. */
+  loadExt()
+    .then(() => {
+      drawCapsBadge();
+      try { drawCaps(); } catch { /* extensions page not built yet */ }
+    })
+    .catch(() => {});
 };
 
 /* A pending new task is a draft, not a session: nothing is written to disk

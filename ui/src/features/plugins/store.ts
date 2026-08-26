@@ -96,6 +96,13 @@ const msg = (e: unknown): string => ((e as Error | null)?.message ?? String(e)) 
 const isHandled = (e: unknown): boolean => Boolean(e && (e as { handled?: boolean }).handled)
 
 export const rows = (): InstalledRow[] => source().rows()
+
+/* See the skills store: an empty list means two different things and only
+   the source knows which. */
+export const rowsLoaded = (): boolean => {
+  const src = source()
+  return src.loaded ? src.loaded() : true
+}
 export const mcpRows = (): InstalledRow[] => rows().filter((p) => p.m)
 export const pyRows = (): InstalledRow[] => rows().filter((p) => !p.m)
 

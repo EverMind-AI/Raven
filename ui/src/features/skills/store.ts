@@ -70,6 +70,14 @@ export const source = (): SkillsSource => ds<SkillsSource>('skills')
 export const view = (): SkillsState['view'] => state.view
 export const installedRows = (): InstalledSkill[] => source().installed()
 
+/* True unless the source says its one read never landed. Defaulting to true
+   keeps a source that does not answer -- the fixtures -- on the ordinary
+   empty copy, which is the truth there. */
+export const installedLoaded = (): boolean => {
+  const src = source()
+  return src.loaded ? src.loaded() : true
+}
+
 const errText = (e: unknown): string => {
   const err = e as { data?: { detail?: string }; message?: string } | null
   return (err && err.data && err.data.detail) || (err && err.message) || String(e)

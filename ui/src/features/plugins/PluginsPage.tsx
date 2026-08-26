@@ -229,7 +229,9 @@ function Installed({ s }: { s: store.PlugState }): JSX.Element {
         ))}
       </Section>
       {!py.length && !mcps.length && (
-        <div className="empty-note">{t('gui.plug.empty_installed')}</div>
+        <div className="empty-note">
+          {t(store.rowsLoaded() ? 'gui.plug.empty_installed' : 'gui.plug.empty_installed_off')}
+        </div>
       )}
     </>
   )

@@ -71,4 +71,7 @@ export interface SkillsSource {
   install(id: string): Promise<unknown>
   remove(name: string): Promise<unknown>
   installed(): InstalledSkill[]
+  /* Whether `installed()` has ever been filled. Optional so a source that
+     cannot be empty-by-failure -- the fixtures -- need not answer it. */
+  loaded?(): boolean
 }
