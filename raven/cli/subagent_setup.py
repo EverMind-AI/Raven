@@ -30,12 +30,20 @@ one and asks nothing. The reuse is keyed on `providers.openrouter` specifically 
 a key sitting in `custom` belongs to whatever private gateway that section points
 at, and spending it against openrouter.ai would read as a bad credential rather
 than as the configuration mistake it is.
+
+One write remains the step's job: removing config rows that shadow a folder's
+manifest (leftovers of the registration this step no longer performs). A stale
+row outranks the discovered one, so pruning it is how an upgrade reaches the
+roster; the prune backs the list up first and is skipped entirely in
+non-interactive runs, like everything else here.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -52,6 +60,8 @@ from raven.agent.subagent.vendored_agents import (
     subagents_root,
     venv_ready,
 )
+from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
+from raven.config.update_subagents import remove_agent
 
 
 class SubagentFolder(NamedTuple):
@@ -182,6 +192,138 @@ def write_key(folder: SubagentFolder, key: str) -> None:
     env_path.chmod(0o600)
 
 
+def _write_private_json(path: Path, data: Any) -> None:
+    """Write ``data`` to ``path``, private from the first byte.
+
+    The backup can hold an openai row's api key, so the file must never exist
+    world-readable, not even for the length of a ``write_text`` + ``chmod``
+    pair. ``O_CREAT`` sets the mode only when it creates, and the path can
+    pre-exist (two runs in one second), so the ``fchmod`` is what makes the
+    mode true either way.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(data, stream, indent=2, ensure_ascii=False)
+
+
+def _prune_shadowing_rows(
+    folders: list[SubagentFolder],
+    root: Path,
+    console: Any,
+    q: Any,
+    warnings: list[str],
+    *,
+    config_path: Path | None = None,
+) -> int:
+    """Delete the config rows that shadow a folder's manifest; return how many.
+
+    A row an older ``install.py`` wrote outranks the discovered row of the
+    folder it names, so a manifest a ``git pull`` updated never reaches the
+    roster. The rule is the name: any configured row sharing a folder
+    manifest's name is deleted, whether or not its content still matches -
+    it outranks the discovered row either way. That same-name key is also how
+    a user edits a vendored agent, so nothing is deleted unasked: the rows
+    are listed, a disabled row is flagged (removing it would re-enable the
+    agent), and a decline keeps everything. The full list is backed up
+    first (the same fail-safe as ``subagents/install.sh --prune-stale``): a
+    backup that cannot be written stops the prune.
+    """
+    path = config_path or get_config_path()
+    if not path.exists():
+        return 0
+    try:
+        raw = read_raw_or_raise(path)
+    except ConfigReadError as exc:
+        warnings.append(f"sub-agents: config could not be read ({exc}); shadowing rows left alone")
+        return 0
+    stored = raw.get("subagents") or {}
+    # All three spellings, for the same reason install.sh reads them: a backup
+    # taken from the wrong one would be an empty list on a config that has
+    # already migrated.
+    rows = stored.get("agents") or stored.get("thirdParty") or stored.get("third_party") or []
+    shadowed = {folder.name for folder in folders}
+    colliding = [row for row in rows if isinstance(row, dict) and row.get("name") in shadowed]
+    if not colliding:
+        return 0
+
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.cli.onboard_commands import _QMARK, _t
+
+    console.print(
+        _t(
+            "  These config rows shadow a folder's manifest and would be removed:",
+            "  以下配置行遮蔽了对应 folder 的 manifest,将被删除:",
+        )
+    )
+    for row in colliding:
+        flag = (
+            _t(
+                "  [! enabled=false - removing it would re-enable this agent]",
+                "  [! enabled=false - 删除该行会让这个 agent 重新启用]",
+            )
+            if row.get("enabled") is False
+            else ""
+        )
+        console.print(f"    {row.get('name')}{flag}")
+    if not q.confirm(
+        _t(
+            f"  Remove these {len(colliding)} sub-agent row(s)? The previous list is backed up first.",
+            f"  删除这 {len(colliding)} 条子代理配置行吗?会先备份之前的列表。",
+        ),
+        default=True,
+        qmark=_QMARK,
+        style=RAVEN_STYLE,
+    ).ask():
+        console.print(
+            _t(
+                "  [dim]Kept - a stored row still outranks its folder's manifest.[/dim]",
+                "  [dim]已保留 - 存储行仍会盖过对应 folder 的 manifest。[/dim]",
+            )
+        )
+        return 0
+
+    backup = root / f"subagents-backup-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    try:
+        _write_private_json(backup, rows)
+    except OSError as exc:
+        warnings.append(
+            f"sub-agents: not removing {len(colliding)} shadowing row(s): cannot write the backup at {backup} ({exc})"
+        )
+        return 0
+    # Announced before the deletions rather than with the tally after them: a
+    # removal that fails partway leaves the config half-pruned, and the one
+    # thing the reader needs then is the path to the backup.
+    console.print(
+        _t(
+            f"  Backed up the previous list ({len(rows)} rows) to {backup} (private - it may hold an api key).",
+            f"  已备份之前的列表({len(rows)} 条)到 {backup}(私密文件,可能含 api key)。",
+        )
+    )
+
+    removed = 0
+    for row in colliding:
+        name = row["name"]
+        try:
+            if remove_agent(name, config_path=path):
+                removed += 1
+        except Exception as exc:  # noqa: BLE001 - a write that cannot land is a warning, not a wizard crash
+            # remove_agent validates the surviving rows before writing, so a
+            # config the schema rejects fails the whole removal with nothing
+            # written -- report which row was being pruned and leave the rest.
+            warnings.append(
+                f"sub-agents: removing {name} failed ({exc}); the remaining shadowing rows were left in place"
+            )
+            return removed
+    console.print(
+        _t(
+            f"  Removed {removed} shadowing sub-agent row(s); the folders' manifests now own the roster - restart raven to pick them up.",
+            f"  已删除 {removed} 条遮蔽子代理的旧配置;现在由各 folder 的 manifest 决定 roster - 重启 raven 后生效。",
+        )
+    )
+    return removed
+
+
 def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[str]) -> bool:
     """Offer to build this folder's venv now. True once it is built.
 
@@ -306,6 +448,7 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
         )
 
     q = _require_questionary()
+    _prune_shadowing_rows(folders, root, console, q, warnings)
     set_up = 0
     for folder in folders:
         console.print(f"\n[bold]{folder.name}[/bold] [dim]{folder.description[:100]}[/dim]")

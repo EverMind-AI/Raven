@@ -110,6 +110,28 @@ class _Choice:
         self.value = value
 
 
+class _AlwaysConfirm:
+    """Answers every confirm with the one scripted answer."""
+
+    def __init__(self, answer: bool) -> None:
+        self._answer = answer
+        self.asked: list[str] = []
+
+    def confirm(self, message: str, **_kwargs: Any) -> Any:
+        self.asked.append(message)
+        return _Answer(self._answer)
+
+
+class _RecordingConsole:
+    """Collects every line the step prints, for output-shape assertions."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def print(self, *args: Any, **_kwargs: Any) -> None:
+        self.lines.append(" ".join(str(arg) for arg in args))
+
+
 # --------------------------------------------------------------------------- discovery
 
 
@@ -226,6 +248,249 @@ def test_write_key_creates_from_the_template_and_locks_it_down(tmp_path: Path) -
 # See tests/test_subagent_vendored_agents.py for what replaced it.
 
 
+# --------------------------------------------------------------------------- pruning stale config rows
+#
+# A config row written by an older install.py outranks the manifest of the
+# folder it names, so a manifest a git pull updated never reaches the roster.
+# The step below deletes such rows (backing the list up first), leaving the
+# folders to vendored discovery.
+
+
+def _stale_config(path: Path, rows: list[dict[str, Any]]) -> Path:
+    """Write a host config carrying ``rows`` under ``subagents.agents``."""
+    (path / "config.json").write_text(json.dumps({"subagents": {"agents": rows}}), encoding="utf-8")
+    return path / "config.json"
+
+
+def test_prune_removes_rows_that_shadow_folder_manifests(tmp_path: Path) -> None:
+    # A row whose name matches a folder's manifest is deleted even when its
+    # content matches: it still outranks the discovered row.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(
+        tmp_path,
+        [
+            {"name": "research-helper", "kind": "cli", "command": "echo hi"},
+            {"name": "Raven-Research", "kind": "cli", "enabled": True},
+        ],
+    )
+    folders = subagent_setup.discover(tmp_path)
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders,
+        tmp_path,
+        SimpleNamespace(print=lambda *_a, **_k: None),
+        _AlwaysConfirm(True),
+        warnings,
+        config_path=config,
+    )
+
+    assert removed == 1
+    assert warnings == []
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["research-helper"]
+    backups = list(tmp_path.glob("subagents-backup-*.json"))
+    assert len(backups) == 1
+    backup = json.loads(backups[0].read_text(encoding="utf-8"))
+    assert [row["name"] for row in backup] == ["research-helper", "Raven-Research"]
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+
+
+def test_prune_is_a_no_op_without_colliding_rows(tmp_path: Path) -> None:
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "research-helper", "kind": "cli", "command": "echo hi"}])
+    folders = subagent_setup.discover(tmp_path)
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders,
+        tmp_path,
+        SimpleNamespace(print=lambda *_a, **_k: None),
+        _AlwaysConfirm(True),
+        warnings,
+        config_path=config,
+    )
+
+    assert removed == 0
+    assert warnings == []
+    assert list(tmp_path.glob("subagents-backup-*.json")) == []
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["research-helper"]
+
+
+def test_prune_leaves_the_config_untouched_when_the_backup_cannot_be_written(
+    tmp_path: Path,
+) -> None:
+    # A backup that cannot land must stop the prune: a half-deleted list with
+    # no backup is exactly what the backup exists to prevent.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
+    folders = subagent_setup.discover(tmp_path)
+    not_a_directory = tmp_path / "not-a-dir"
+    not_a_directory.write_text("x", encoding="utf-8")
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders,
+        not_a_directory,
+        SimpleNamespace(print=lambda *_a, **_k: None),
+        _AlwaysConfirm(True),
+        warnings,
+        config_path=config,
+    )
+
+    assert removed == 0
+    assert warnings and "backup" in warnings[0]
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["Raven-Research"]
+
+
+def test_backup_is_created_private_and_truncated(tmp_path: Path) -> None:
+    # The list can hold an openai row's api key, so the file must be private
+    # from the first byte -- and a pre-existing file of the same name (two runs
+    # in one second) must be truncated and re-chmodded, not reused.
+    backup = tmp_path / "backup.json"
+    backup.write_text("stale", encoding="utf-8")
+    backup.chmod(0o644)
+
+    subagent_setup._write_private_json(backup, [{"name": "fresh"}])
+
+    assert json.loads(backup.read_text(encoding="utf-8")) == [{"name": "fresh"}]
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
+def test_prune_stops_short_of_crashing_when_a_survivor_fails_validation(
+    tmp_path: Path,
+) -> None:
+    # remove_agent validates the surviving rows before writing, and a config
+    # the schema rejects must surface as a warning, not take the wizard down.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(
+        tmp_path,
+        [
+            {"name": "Raven-Research", "kind": "cli", "command": "run.py"},
+            {"name": "twin", "kind": "cli", "command": "a"},
+            {"name": "twin", "kind": "cli", "command": "b"},
+        ],
+    )
+    folders = subagent_setup.discover(tmp_path)
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders,
+        tmp_path,
+        SimpleNamespace(print=lambda *_a, **_k: None),
+        _AlwaysConfirm(True),
+        warnings,
+        config_path=config,
+    )
+
+    assert removed == 0
+    assert warnings and "twin" in warnings[0] and "Raven-Research" in warnings[0]
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["Raven-Research", "twin", "twin"]
+    assert len(list(tmp_path.glob("subagents-backup-*.json"))) == 1
+
+
+def test_prune_asks_first_and_keeps_everything_when_declined(tmp_path: Path) -> None:
+    # A same-name config row is also how a user edits a vendored agent, so the
+    # deletion must not run unasked; a decline keeps the rows and writes nothing.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
+    folders = subagent_setup.discover(tmp_path)
+    q = _AlwaysConfirm(False)
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders, tmp_path, SimpleNamespace(print=lambda *_a, **_k: None), q, warnings, config_path=config
+    )
+
+    assert removed == 0
+    assert q.asked, "the prune asked before deleting"
+    assert warnings == []
+    assert list(tmp_path.glob("subagents-backup-*.json")) == []
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["Raven-Research"]
+
+
+def test_prune_flags_a_disabled_row_in_the_confirm_listing(tmp_path: Path) -> None:
+    # Deleting an enabled=false row flips behaviour (the agent comes back), so
+    # the listing must say so before the user answers the confirm.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": False}])
+    folders = subagent_setup.discover(tmp_path)
+    console = _RecordingConsole()
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders, tmp_path, console, _AlwaysConfirm(True), warnings, config_path=config
+    )
+
+    assert removed == 1
+    flagged = [line for line in console.lines if "enabled=false" in line and "Raven-Research" in line]
+    assert flagged, console.lines
+
+
+def test_prune_reports_an_unreadable_config(tmp_path: Path) -> None:
+    # read_raw_or_raise raises ConfigReadError on a malformed file, and the
+    # wizard must carry on with a warning rather than crash in step 5.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = tmp_path / "config.json"
+    config.write_text("{not json", encoding="utf-8")
+    folders = subagent_setup.discover(tmp_path)
+    warnings: list[str] = []
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders,
+        tmp_path,
+        SimpleNamespace(print=lambda *_a, **_k: None),
+        _AlwaysConfirm(True),
+        warnings,
+        config_path=config,
+    )
+
+    assert removed == 0
+    assert warnings and "sub-agents" in warnings[0]
+
+
+def test_prune_summary_goes_through_the_wizard_language(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every line in this step renders one language per _LANG; the summary must
+    # not be the one line that prints both at once.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
+    folders = subagent_setup.discover(tmp_path)
+    console = _RecordingConsole()
+    rendered: list[tuple[str, str]] = []
+    monkeypatch.setattr(onboard_commands, "_t", lambda en, zh: rendered.append((en, zh)) or "RENDERED")
+
+    removed = subagent_setup._prune_shadowing_rows(
+        folders, tmp_path, console, _AlwaysConfirm(True), [], config_path=config
+    )
+
+    assert removed == 1
+    assert any("Removed 1 shadowing" in en for en, _ in rendered)
+    assert any("Backed up the previous list" in en for en, _ in rendered)
+    assert console.lines[-1] == "RENDERED"
+
+
+def test_configure_non_interactive_prunes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The unattended skip covers the prune too: a write the caller never
+    # saw offered is not something a non-interactive run should perform.
+    _folder(tmp_path, "raven-research", display="Raven-Research")
+    config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: config)
+    monkeypatch.setattr(
+        onboard_commands, "_require_questionary", lambda: pytest.fail("prompted in non-interactive mode")
+    )
+    warnings: list[str] = []
+
+    assert subagent_setup.configure_subagents(non_interactive=True, warnings=warnings) == 0
+
+    remaining = json.loads(config.read_text(encoding="utf-8"))["subagents"]["agents"]
+    assert [row["name"] for row in remaining] == ["Raven-Research"]
+
+
 # --------------------------------------------------------------------------- the step
 
 
@@ -253,6 +518,8 @@ def test_configure_skips_a_folder_that_is_not_built(tmp_path: Path, monkeypatch:
     # fails the moment it is picked.
     _folder(tmp_path, "raven-code", venv=False)
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     scripted = _ScriptedSelect([])
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     assert subagent_setup.configure_subagents(warnings=[]) == 0, "an unbuilt folder is not a ready agent"
@@ -262,6 +529,8 @@ def test_configure_skips_a_folder_that_is_not_built(tmp_path: Path, monkeypatch:
 def test_configure_inherit_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "inherit")])
@@ -274,6 +543,8 @@ def test_configure_inherit_writes_no_key(tmp_path: Path, monkeypatch: pytest.Mon
 def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "own")])
@@ -290,6 +561,8 @@ def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_configure_skip_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "skip")])
@@ -307,6 +580,8 @@ def test_configure_falls_back_to_this_ravens_llm_on_a_bad_key(tmp_path: Path, mo
     # and the fallback must not leave the bad key on disk.
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "own"), ("What now", "inherit")])
