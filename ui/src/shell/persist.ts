@@ -36,6 +36,26 @@ interface Box<T> {
   s: Record<string, Entry<T>>
 }
 
+/* A slot holding one value rather than one per conversation: which
+   conversation was open is a fact about the tab, not about any of them. Written
+   through the same box so the version, the storage guard and the tab scoping
+   are stated once. */
+export interface Only<T> {
+  read(): T | null
+  write(value: T): void
+  clear(): void
+}
+
+export function only<T>(name: string, version: number): Only<T> {
+  const s = slot<T>(name, version, 1)
+  const KEY = '_'
+  return {
+    read: () => s.read(KEY),
+    write: (value) => s.write(KEY, value),
+    clear: () => s.forget(KEY),
+  }
+}
+
 export interface Slot<T> {
   read(key: string): T | null
   write(key: string, value: T): void

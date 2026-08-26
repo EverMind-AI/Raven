@@ -3,7 +3,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { slot } from './persist'
+import { only, slot } from './persist'
 
 interface Note {
   run: string
@@ -149,5 +149,44 @@ describe('view slot', () => {
     slot<Note>('probe', 1).write('s1', { run: 'a' })
 
     expect(slot<Note>('other', 1).read('s1')).toBeNull()
+  })
+})
+
+describe('one-value slot', () => {
+  it('keeps a single value across a reload of the tab', () => {
+    only<{ id: string }>('probe', 1).write({ id: 's1' })
+
+    expect(only<{ id: string }>('probe', 1).read()).toEqual({ id: 's1' })
+  })
+
+  it('replaces rather than accumulates', () => {
+    const v = only<{ id: string }>('probe', 1)
+    v.write({ id: 's1' })
+    v.write({ id: 's2' })
+
+    expect(v.read()).toEqual({ id: 's2' })
+    expect(sessionStorage.getItem(KEY)).not.toContain('s1')
+  })
+
+  it('is empty once cleared', () => {
+    const v = only<{ id: string }>('probe', 1)
+    v.write({ id: 's1' })
+
+    v.clear()
+
+    expect(v.read()).toBeNull()
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('drops what a bumped version wrote', () => {
+    only<{ id: string }>('probe', 1).write({ id: 's1' })
+
+    expect(only<{ id: string }>('probe', 2).read()).toBeNull()
+  })
+
+  it('is per tab, like everything else in here', () => {
+    only<{ id: string }>('probe', 1).write({ id: 's1' })
+
+    expect(localStorage.getItem(KEY)).toBeNull()
   })
 })

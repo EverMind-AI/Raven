@@ -40,3 +40,8 @@ DS.sessions = {
 };
 RavenIslands.rail.hold();
 sessionSet(null);
+/* From here on the pointer is the live layer's, so what it says can be recorded
+   for the next reload. Started after the line above on purpose: the demo shell
+   has already opened its canned session on this page, and both that and the
+   clear above are fixture noise the note must not carry (see shell/resume.ts). */
+RavenIslands.view.watch();
