@@ -54,14 +54,14 @@ def _spec(name="weekly-feedback", **over):
     return PlaybookSpec(**base)
 
 
-def _runtime(tmp_path, specs, dag_tool=None, disabled_source=None):
+def _runtime(tmp_path, specs, dag_tool=None, disabled_source=None, disabled=()):
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
     for spec in specs:
         store.save(spec)
     executor = PlaybookExecutor(
         dag_tool=dag_tool or FakeDagTool(),
     )
-    return PlaybookRuntime(store=store, executor=executor, disabled_source=disabled_source)
+    return PlaybookRuntime(store=store, executor=executor, disabled=disabled, disabled_source=disabled_source)
 
 
 @pytest.fixture
@@ -179,6 +179,42 @@ def test_switching_one_off_takes_effect_without_a_restart(tmp_path):
     deny.clear()
 
     assert runtime.names() == ["weekly-scan"]
+
+
+def test_enable_takes_effect_without_a_restart_too(tmp_path):
+    """The direction the first version of this fix left broken.
+
+    A snapshot of `playbooks.disabled` was passed in beside the live source and
+    the two were unioned, so every name disabled at start stayed disabled
+    whatever the file later said: `disable` applied on the next call and `enable`
+    waited for the next process. The previous tests missed it because their
+    helper never supplied `disabled=` -- this one does, the way the loop used to.
+    """
+    live = {"weekly-scan"}
+    runtime = _runtime(
+        tmp_path,
+        [_spec(name="weekly-scan")],
+        disabled=["weekly-scan"],
+        disabled_source=lambda: frozenset(live),
+    )
+
+    assert runtime.names() == []
+
+    live.clear()
+
+    assert runtime.names() == ["weekly-scan"], "a name disabled at start must still be enableable"
+
+
+def test_a_source_that_cannot_be_read_keeps_the_list_the_loop_started_with(tmp_path):
+    """The conservative direction: a torn config file must not start offering the
+    model something the user switched off."""
+
+    def _explode() -> frozenset[str]:
+        raise OSError("config is mid-write")
+
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], disabled=["weekly-scan"], disabled_source=_explode)
+
+    assert runtime.names() == []
 
 
 def test_a_playbook_written_mid_conversation_is_adopted_without_a_restart(tmp_path):

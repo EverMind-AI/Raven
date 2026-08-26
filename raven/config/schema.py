@@ -1550,15 +1550,15 @@ class PlaybookConfig(Base):
     same tool table it decides everything else from, so nothing runs ahead of the
     turn and no gate call is spent on a message that mentions a trigger word.
 
-    On by default. What that costs is measurable and fixed: ``create_playbook``
-    registers whenever the feature is on, and ``load_playbook`` registers a
-    second definition only when the library has something to offer -- together
-    the two add about 848 tokens per request (``available_history`` on a 200k
-    window moves from 130.0k to 129.2k), and nothing else -- no pre-turn work,
-    no LLM call, no matching. The builtin layer ships empty, so a fresh install
-    carries only the creation entry and withholds the loader until the user
-    layer holds a playbook; the 848-token figure above is the populated shape.
-    Turn it off with ``playbooks.enabled: false``.
+    On by default. What that costs is measurable and fixed: both entries
+    register whenever the feature is on -- together about 848 tokens per request
+    on a populated library (``available_history`` on a 200k window moves from
+    130.0k to 129.2k), and nothing else: no pre-turn work, no LLM call, no
+    matching. The builtin layer ships empty, and the loader registers over an
+    empty library too, describing itself in one sentence as having nothing
+    installed -- it used to be withheld until the user layer held a playbook,
+    which withheld it from the session that created the first one. Turn it off
+    with ``playbooks.enabled: false``.
     """
 
     enabled: bool = True

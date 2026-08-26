@@ -96,7 +96,14 @@ class LoadPlaybookTool(Tool):
                     # per-turn ranking did not surface is still one the user can
                     # name out loud, and an enum that omitted it would make it
                     # unreachable rather than merely undescribed.
-                    "enum": self._runtime.names() or None,
+                    #
+                    # Absent rather than null when there is nothing to offer. An
+                    # empty library was unreachable while this tool was withheld
+                    # over one, so `or None` was too; it is the fresh-install
+                    # state now, and `"enum": null` is not a JSON Schema -- it
+                    # also makes every call raise, because `Tool._validate` tests
+                    # `val not in schema["enum"]` on the key being present.
+                    **({"enum": names} if (names := self._runtime.names()) else {}),
                 },
                 "params": {
                     "type": "object",

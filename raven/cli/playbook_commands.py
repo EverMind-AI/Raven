@@ -199,7 +199,6 @@ def playbook_create(
 
     from raven.agent.subagent.registry import AgentRegistry
     from raven.cli._helpers import make_provider
-    from raven.config.update import set_playbook_disabled
     from raven.playbook import PlaybookGenerator, live_inventory
 
     registry = AgentRegistry()
@@ -217,13 +216,15 @@ def playbook_create(
     generated = asyncio.run(generator.generate("\n\n".join(pieces)))
     spec = generated.spec.model_copy(update={"name": name})
     path = store.save(spec, notes=generated.notes)
-    set_playbook_disabled(name, True)
-    console.print(f"[green]Created[/green] {escape(str(path))} (disabled until you review it)")
+    console.print(f"[green]Created[/green] {escape(str(path))}")
     if generated.notes:
         console.print("Open questions for your review:")
         for note in generated.notes:
             console.print(f"  - {escape(note)}")
-    console.print(f"Review the file, then: raven playbook enable {name}")
+    # Not switched off on arrival, matching the tool entry: the deny list is
+    # read live now, so writing the name onto it here would make a playbook the
+    # user just created immediately invisible to a running agent.
+    console.print(f"Usable now. Review the file, and `raven playbook disable {name}` if you want it held back.")
 
 
 @playbook_app.command("enable")

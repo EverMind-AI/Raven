@@ -69,9 +69,14 @@ class PlaybookRuntime:
         #: Where the deny list is read from, asked on every access rather than
         #: captured here. A switch that was captured needed a restart to take
         #: effect, which is not something a user can be expected to know about a
-        #: preference they just changed. ``disabled`` stays for the callers that
-        #: have a fixed list and no config file (the CLI's explicit run, tests);
-        #: the two are unioned, so neither surface can lose its entries.
+        #: preference they just changed. ``disabled`` is the fallback for a caller
+        #: that has a fixed list and no file to read (the CLI's explicit run,
+        #: tests) and is used only when no source is wired -- deliberately *not*
+        #: unioned with it. Unioning a snapshot of the same key is what makes the
+        #: switch one-way: every name disabled at start stays disabled whatever
+        #: the file later says, so ``disable`` applies live and ``enable`` waits
+        #: for a restart. ``_withheld_tool_names`` in the agent loop carries the
+        #: same warning for the same reason.
         #:
         #: The list is config (``playbooks.disabled``), not file content, so a
         #: hand-written directory participates the moment it exists. A disabled
@@ -107,13 +112,18 @@ class PlaybookRuntime:
         )
 
     def disabled(self) -> frozenset[str]:
-        """The names not on offer right now, read rather than remembered."""
+        """The names not on offer right now, read rather than remembered.
+
+        The source wins outright where there is one. A read that fails falls back
+        to the fixed list, which is the conservative direction: a torn config file
+        should not silently offer the model something the user switched off.
+        """
         if self._disabled_source is None:
             return self._fixed_disabled
         try:
-            return self._fixed_disabled | self._disabled_source()
+            return self._disabled_source()
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its library
-            logger.warning("playbooks: could not read the disabled list; offering everything else")
+            logger.warning("playbooks: could not read the disabled list; keeping the list this loop started with")
             return self._fixed_disabled
 
     def _reindex(self) -> None:

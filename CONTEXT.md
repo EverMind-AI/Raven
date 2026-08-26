@@ -720,7 +720,8 @@ has no write path, and ships empty — the layer is what lets a release carry a
 playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
 `playbooks.dir`) is
 where both creation entries — `raven playbook create` and the `create_playbook`
-tool — land their product, disabled for review; a user directory reusing a
+tool — land their product, usable on arrival (`playbooks.disabled` holds one
+back, and is read live); a user directory reusing a
 builtin's name shadows it, with a load warning. A generator's open questions and
 assumptions go into the body (its `## Open questions` section) for a human to
 read; whether a playbook is offered on this machine is config (the
