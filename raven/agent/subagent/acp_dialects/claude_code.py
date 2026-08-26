@@ -40,6 +40,21 @@ def _unfence(text: str) -> str:
     return match.group("body") if match else text
 
 
+# What the adapter stamps on the free-text half of an `AskUserQuestion`, naming
+# the property it belongs to. Measured on the wire, not documented.
+_CUSTOM_ANSWER_META = "_askUserQuestionCustomAnswer"
+
+
+def _custom_answer_for(field: Any) -> str | None:
+    """The question a property declares itself the free-text half of, if it does.
+
+    The marker sits on the sibling rather than on the question, so the pairing
+    is stated by the half a reader would otherwise have to guess about.
+    """
+    named = _dict(_dict(field.meta).get(_CUSTOM_ANSWER_META)).get("questionId")
+    return named if isinstance(named, str) and named else None
+
+
 class ClaudeCodeDialect(AcpDialect):
     key = "claude-agent-acp"
     plan_tool_name = "TodoWrite"
@@ -56,6 +71,51 @@ class ClaudeCodeDialect(AcpDialect):
         if isinstance(raw, str) and raw.strip():
             return ToolResult(text=raw, ok=ok)
         return ToolResult(text=_unfence("".join(content_texts(update.get("content")))), ok=ok)
+
+    def pair_fields(self, fields: list[Any]) -> list[Any]:
+        """Fold a free-text sibling into its question: choices plus an "Other" box.
+
+        The adapter renders each `AskUserQuestion` as an enum property plus an
+        optional free-text sibling, mirroring the CLI's per-question "Other" box.
+        Asked separately they are two prompts for what the user experiences as one
+        question -- and the clarify sheet already offers exactly this shape.
+
+        Which sibling belongs to which question is read from the adapter's own
+        marker where it is stamped, and only from the `<name>_custom` spelling
+        where nothing in the request is marked. The spelling alone also matches an
+        independent free-text property that merely shares a prefix, and folding
+        that one loses a question the schema did ask: it is never put to the user,
+        and its answer surfaces only if the enum half happens to be answered
+        off-enum. Against a marked request an unmarked lookalike is the adapter
+        saying it is not a pair, which is worth more than the guess.
+        """
+        by_name = {f.name: f for f in fields}
+        marked = [(q, f) for f in fields if (q := _custom_answer_for(f)) and q in by_name]
+        pairs = marked or [(f.name, by_name[f"{f.name}_custom"]) for f in fields if f"{f.name}_custom" in by_name]
+
+        # Every fold is decided before the list is rebuilt. Deciding one while
+        # walking the properties in order cannot see a sibling written ahead of
+        # its own question, and that one survives as a question of its own --
+        # the same thing asked twice, with the free-text box as a bare prompt.
+        folded: set[str] = set()
+        paired: set[str] = set()
+        for question_name, custom in pairs:
+            question = by_name[question_name]
+            # A property takes part in at most one pairing, on either side, so no
+            # fold can drop a property another fold still points at.
+            if question_name in paired or custom.name in paired:
+                continue
+            if not question.options or custom.type != "string" or custom.options:
+                continue
+            if custom.required:
+                # Folding keeps only the survivor's `required`, so a demanded
+                # sibling would go missing from an accepted form. Asking twice
+                # is the lesser cost of the two.
+                continue
+            question.custom_name = custom.name
+            paired.update((question_name, custom.name))
+            folded.add(custom.name)
+        return [f for f in fields if f.name not in folded]
 
 
 __all__ = ["ClaudeCodeDialect"]

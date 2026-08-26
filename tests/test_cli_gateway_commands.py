@@ -617,6 +617,43 @@ def test_lone_question_carries_no_progress_prefix() -> None:
 
 
 @pytest.mark.asyncio
+async def test_only_a_question_is_rendered_to_the_channel() -> None:
+    """This sink is the question broker's whole surface on a chat channel, so
+    every frame the broker emits arrives here -- including ``clarify.closed``,
+    which has no question in it. Rendering that put an empty message in the
+    user's chat every time a question timed out or its turn was cancelled.
+    """
+    from raven.cli.gateway_commands import _deliver_question_to_channel
+
+    class _Hub:
+        def __init__(self) -> None:
+            self.sent: list = []
+
+        async def dispatch(self, msg) -> None:
+            self.sent.append(msg)
+
+    source = object()
+    sources = {"c1": source}
+
+    closed = _Hub()
+    await _deliver_question_to_channel(
+        {"method": "clarify.closed", "params": {"conversation_id": "c1", "request_id": "q1"}},
+        sources=sources,
+        hub=closed,
+    )
+    assert closed.sent == [], "a close notification was rendered as a chat message"
+
+    # The positive half, so a guard that refused everything could not pass.
+    asked = _Hub()
+    await _deliver_question_to_channel(
+        {"method": "clarify.request", "params": {"conversation_id": "c1", "question": "Which?"}},
+        sources=sources,
+        hub=asked,
+    )
+    assert [m.content for m in asked.sent] == ["Which?"]
+
+
+@pytest.mark.asyncio
 async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> None:
     """Swallowing the drop left the broker waiting out its whole budget on a
     question nobody would ever see."""
@@ -624,4 +661,8 @@ async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> N
     from raven.rpc.question_broker import QuestionUndeliverableError
 
     with pytest.raises(QuestionUndeliverableError):
-        await _deliver_question_to_channel({"params": {"conversation_id": "gone"}}, sources={}, hub=None)
+        # Carries the method because the sink now renders only a question; the
+        # frame this asserts about has always been one.
+        await _deliver_question_to_channel(
+            {"method": "clarify.request", "params": {"conversation_id": "gone"}}, sources={}, hub=None
+        )

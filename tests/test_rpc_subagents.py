@@ -95,6 +95,31 @@ async def test_list_groups_a_cli_entry_by_the_probe(config_path: Path, monkeypat
     assert by_name["Coder"]["probe_status"] in {"missing", "unknown"}
 
 
+async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
+    config_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # An acp row reaches "ready" only from a recorded capability snapshot, and a
+    # preset never gets one: `_test_acp` records only for `source == "config"`.
+    # Grouping acp on "ready" therefore pinned every acp preset to NOT INSTALLED,
+    # where the overlay makes an unconfigured row view-only -- so the one action
+    # that could have freed it was the one action unavailable there.
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "hermes"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: str(bindir))
+    result = await subagents_list({})
+    by_name = {row["name"]: row for row in result["rows"]}
+    assert by_name["hermes"]["probe_status"] == "attention"
+    assert by_name["hermes"]["group"] == "installed"
+    # Not an unconditional "installed": this one's executable really is absent,
+    # which is the only thing NOT INSTALLED is meant to say.
+    assert by_name["openclaw"]["probe_status"] == "missing"
+    assert by_name["openclaw"]["group"] == "uninstalled"
+
+
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
     config_path: Path,
 ) -> None:

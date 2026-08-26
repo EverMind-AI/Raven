@@ -1360,6 +1360,102 @@ async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None
         await client.close()
 
 
+async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
+    """A handler that never returns must not stop `session/update` delivery.
+
+    Inline-awaited request handling made one pending question freeze every
+    session on a pooled connection, which read as "two sub-agents at once
+    hangs" with nothing pointing at the question.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+
+    seen: list[str] = []
+    blocked = asyncio.Event()
+
+    async def never_answers(method: str, params: dict) -> object:
+        blocked.set()
+        await asyncio.sleep(3600)
+
+    async def note(method: str, params: dict) -> None:
+        text = (((params.get("update") or {}).get("content") or {}).get("text")) or ""
+        if text:
+            seen.append(text)
+
+    client = await AcpClient.launch(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "elicits_then_streams"},
+        on_request=never_answers,
+        on_notification=note,
+    )
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        await client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            timeout=15.0,
+        )
+        assert blocked.is_set()
+        assert seen == ["chunk0", "chunk1", "chunk2"]
+    finally:
+        await client.close()
+
+
+async def test_an_unserialisable_handler_result_does_not_vanish_unretrieved() -> None:
+    """A handler result `json.dumps` rejects must not be lost as an unretrieved task.
+
+    `_answer_request` runs on a task `_dispatch` spawns and nothing ever awaits;
+    before this fix, `_send_quietly` swallowed only `AcpConnectionError`, so a
+    result `protocol.encode` cannot serialise raised straight past it and out of
+    the task, leaving the request unanswered with the only trace being a "Task
+    exception was never retrieved" warning whenever CPython happened to collect
+    it. The handler below hooks its own task from the inside -- it *is* that
+    task's body, one frame up -- so the outcome is a normal assertion instead of
+    whatever happens to be running when the collector fires.
+    """
+    from raven.agent.acp import protocol
+    from raven.agent.acp.client import AcpClient
+
+    class _NotJsonSerialisable:
+        def __repr__(self) -> str:
+            return "<not json serialisable>"
+
+    leaked: list[BaseException] = []
+
+    async def returns_unserialisable(method: str, params: dict) -> object:
+        task = asyncio.current_task()
+        assert task is not None
+
+        def record(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception() is not None:
+                leaked.append(t.exception())
+
+        task.add_done_callback(record)
+        return {"outcome": _NotJsonSerialisable()}
+
+    client = await AcpClient.launch(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "asks"},
+        on_request=returns_unserialisable,
+    )
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15.0)
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+        await client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            timeout=15.0,
+        )
+        await asyncio.sleep(0)  # let the answer task's own done-callback run
+    finally:
+        await client.close()
+
+    assert leaked == [], f"a handler result json.dumps rejected escaped as an unretrieved task exception: {leaked}"
+
+
 # ---------------------------------------------------------------------------
 # the live republish has to reach the run it belongs to, and only that one
 # ---------------------------------------------------------------------------
@@ -2364,3 +2460,227 @@ async def test_a_backfilled_subject_overwrites_a_colliding_raw_input_key() -> No
     assert call.name == "imageGeneration"
     assert call.subject == "/w/bike.png"
     assert json.loads(call.arguments_json())["path"] == "/w/bike.png"
+
+
+# ---- routing an elicitation to the run that owns it -------------------------
+
+
+async def test_an_elicitation_reaches_the_elicitor_of_its_own_session() -> None:
+    """A pooled connection carries several runs; sessionId is what separates them."""
+    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp.pool import _SessionElicitors
+
+    class Spy:
+        def __init__(self, tag):
+            self.tag, self.seen = tag, []
+
+        async def elicit(self, params):
+            self.seen.append(params)
+            return {"action": "accept", "content": {"who": self.tag}}
+
+    registry = _SessionElicitors("stub")
+    a, b = Spy("a"), Spy("b")
+    registry.attach("s-a", a)
+    registry.attach("s-b", b)
+    handle = request_dispatcher("stub", elicitors=registry)
+
+    got = await handle("elicitation/create", {"sessionId": "s-b", "mode": "form", "message": "m"})
+    assert got == {"action": "accept", "content": {"who": "b"}}
+    assert a.seen == []
+
+
+async def test_an_elicitation_for_an_unknown_session_declines() -> None:
+    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp.pool import _SessionElicitors
+
+    handle = request_dispatcher("stub", elicitors=_SessionElicitors("stub"))
+    got = await handle("elicitation/create", {"sessionId": "gone", "mode": "form", "message": "m"})
+    assert got == {"action": "decline"}
+
+
+async def test_a_request_scoped_elicitation_declines_rather_than_erroring() -> None:
+    """`-32601` on a declared capability is a lie the agent cannot act on."""
+    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp.pool import _SessionElicitors
+
+    handle = request_dispatcher("stub", elicitors=_SessionElicitors("stub"))
+    got = await handle("elicitation/create", {"requestId": "r1", "mode": "form", "message": "m"})
+    assert got == {"action": "decline"}
+
+
+async def test_an_elicitor_that_raises_still_answers() -> None:
+    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp.pool import _SessionElicitors
+
+    class Boom:
+        async def elicit(self, params):
+            raise RuntimeError("nope")
+
+    registry = _SessionElicitors("stub")
+    registry.attach("s", Boom())
+    handle = request_dispatcher("stub", elicitors=registry)
+    assert await handle("elicitation/create", {"sessionId": "s", "mode": "form", "message": "m"}) == {
+        "action": "decline"
+    }
+
+
+async def test_the_dispatcher_still_approves_permissions_and_refuses_the_rest() -> None:
+    from raven.agent.acp.client import UNHANDLED
+    from raven.agent.acp.permissions import request_dispatcher
+
+    handle = request_dispatcher("stub")
+    approved = await handle("session/request_permission", {"options": [{"optionId": "a", "kind": "allow_always"}]})
+    assert approved == {"outcome": {"outcome": "selected", "optionId": "a"}}
+    assert await handle("fs/read_text_file", {"path": "/etc/hostname"}) is UNHANDLED
+
+
+async def test_an_elicitation_declines_when_the_dispatcher_has_no_registry() -> None:
+    """No registry at all must still decline rather than raise or claim UNHANDLED."""
+    from raven.agent.acp.permissions import request_dispatcher
+
+    handle = request_dispatcher("stub")
+    got = await handle("elicitation/create", {"sessionId": "s", "mode": "form", "message": "m"})
+    assert got == {"action": "decline"}
+
+
+def test_elicitor_detach_is_identity_checked() -> None:
+    """An unconditional pop lets a finishing run unserve a later one, and ``==`` must not substitute for ``is``."""
+    from raven.agent.acp.pool import _SessionElicitors
+
+    class AlwaysEqual:
+        """Equal to everything, so identity and equality diverge for these two."""
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    registry = _SessionElicitors("stub")
+    first, second = AlwaysEqual(), AlwaysEqual()
+    registry.attach("s", first)
+    registry.attach("s", second)
+    registry.detach("s", first)
+    assert registry.current("s") is second
+
+
+# ---- asking the user through a real turn ------------------------------------
+
+
+async def test_a_dispatched_acp_run_answers_its_agents_question(tmp_path: Path) -> None:
+    """End to end: the agent asks mid-turn, the user answers, the agent uses it."""
+    from raven.agent.acp.asker import start_ask_turn
+
+    seen: list[str] = []
+
+    class Tool:
+        async def ask(self, prompt, choices, conversation_id):
+            seen.append(prompt)
+            return "redis"
+
+    start_ask_turn(Tool(), conversation_id="tui:c1")
+    cfg = stub_config("a", mode="elicits_and_waits")
+    backend = AcpAgentBackend(
+        name="a", command=cfg.command, env=dict(cfg.env), snapshot=_snapshot("a", cfg, can_resume=False), registry=None
+    )
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
+    assert "using:redis" in reply
+    assert seen and seen[0].startswith("a(t1): ")
+
+
+async def test_a_question_outliving_its_run_is_taken_down_with_it(tmp_path: Path) -> None:
+    """An agent may end its turn with a question of its own still unanswered.
+
+    `elicits_then_streams` is that shape. Detaching the elicitor does not reach
+    the pending one: it runs on a task of the connection's, and the pooled
+    connection stays open, so `AcpClient.close` never cancels it either. Left
+    alone it holds the conversation's form lock for `LOCK_WAIT_SECONDS` and
+    keeps a sheet up that answers into a run that is gone.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp.elicitor import Elicitor
+
+    asked: list[str] = []
+
+    class Parks:
+        async def ask(self, prompt, choices, conversation_id):
+            asked.append(prompt)
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                return ""
+
+    start_ask_turn(Parks(), conversation_id="tui:c1")
+    cfg = stub_config("a", mode="elicits_then_streams")
+    backend = AcpAgentBackend(
+        name="a", command=cfg.command, env=dict(cfg.env), snapshot=_snapshot("a", cfg, can_resume=False), registry=None
+    )
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, session_key="s", executor=None)
+    assert reply
+    # Pins the ordering this case needs: the question was put while the turn was
+    # still running. Were it put after the turn ended, the lock below would be
+    # free for a reason that has nothing to do with the teardown.
+    assert len(asked) == 1 and asked[0].startswith("a(t1): "), asked
+
+    class Answers:
+        async def ask(self, prompt, choices, conversation_id):
+            return "x"
+
+    start_ask_turn(Answers(), conversation_id="tui:c1")
+    got = await asyncio.wait_for(
+        Elicitor("b", "h").elicit(
+            {
+                "sessionId": "s2",
+                "mode": "form",
+                "message": "m",
+                "requestedSchema": {"type": "object", "properties": {"p": {"type": "string"}}},
+            }
+        ),
+        1.0,
+    )
+    assert got == {"action": "accept", "content": {"p": "x"}}
+
+
+async def test_a_second_run_on_a_pooled_connection_asks_its_own_turns_user(tmp_path: Path) -> None:
+    """The regression that would put one user's question in front of another user.
+
+    The pool keeps a connection for the life of the process, and its read loop
+    task -- created by whichever turn launched it -- carries a *copy* of that
+    turn's ContextVars. So an asker read on the read loop is forever the first
+    turn's asker, whatever a later turn bound. No pool close between the two
+    runs here on purpose: closing it is what hides this.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+
+    class Tool:
+        def __init__(self) -> None:
+            self.seen: list[tuple[str, str]] = []
+
+        async def ask(self, prompt, choices, conversation_id):
+            self.seen.append((prompt, conversation_id))
+            return "redis"
+
+    cfg = stub_config("a", mode="elicits_and_waits")
+
+    def backend() -> AcpAgentBackend:
+        return AcpAgentBackend(
+            name="a",
+            command=cfg.command,
+            env=dict(cfg.env),
+            snapshot=_snapshot("a", cfg, can_resume=False),
+            registry=None,
+        )
+
+    first, second = Tool(), Tool()
+    start_ask_turn(first, conversation_id="tui:c1")
+    reply = await backend().run("hi", task_id="t1", workspace=tmp_path, session_key="s1", executor=None)
+    assert "using:redis" in reply
+    pid = get_pool()._connections["a"].client._proc.pid
+
+    start_ask_turn(second, conversation_id="tui:c2")
+    reply = await backend().run("hi", task_id="t2", workspace=tmp_path, session_key="s2", executor=None)
+    assert "using:redis" in reply
+    # One inherited read loop is the whole premise: a relaunch in between would
+    # hand the second run a loop born in its own context and prove nothing.
+    assert get_pool()._connections["a"].client._proc.pid == pid
+
+    assert [c for _, c in first.seen] == ["tui:c1"]
+    assert [c for _, c in second.seen] == ["tui:c2"]
+    assert second.seen[0][0].startswith("a(t2): ")

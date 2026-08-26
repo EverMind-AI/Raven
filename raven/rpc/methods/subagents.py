@@ -6,9 +6,11 @@ the persisted test verdicts all already exist and are shared with the web RPC
 let the two surfaces disagree about what "installed" means or which fields a
 write is allowed to touch.
 
-The install group is computed here rather than in the client because the web UI
-computes it client-side in `ui-webui/frontend/src/pages/subagent/catalog.ts`; a
-third copy in the TUI is how the rule drifts.
+The install group is computed here rather than in the client because a client
+that computes it is how the rule drifts: `ui-webui`'s catalog carries a copy of
+its own, and a third in the TUI would be one more. For `kind == "acp"` the rule
+is whether the executable is on the login shell's PATH, which is the same
+question `ui/`'s agent rows gate on (`probe_status === "missing"`).
 """
 
 from __future__ import annotations
@@ -86,6 +88,17 @@ def _group(cfg: Any, probe_status: str) -> str:
         return "builtin"
     if getattr(cfg, "kind", None) == "openai":
         return "installed" if (getattr(cfg, "api_key", "") or "").strip() else "uninstalled"
+    if getattr(cfg, "kind", None) == "acp":
+        # An acp row reaches "ready" only from a recorded capability snapshot, and
+        # ``_test_acp`` records one only for a configured entry: a preset is a
+        # template, so testing one deliberately writes nothing. Keying acp on
+        # "ready" therefore pinned every acp preset to uninstalled for good, and
+        # the overlay's uninstalled section is view-only for an unconfigured row --
+        # the Test that was the only way out was unreachable from the only place
+        # the row appeared. "attention" already means the executable was found, so
+        # the row belongs with the ones a user can act on, and the caveat it
+        # carries stays on the row in ``probe_detail``.
+        return "uninstalled" if probe_status in ("missing", "unknown") else "installed"
     return "installed" if probe_status == "ready" else "uninstalled"
 
 

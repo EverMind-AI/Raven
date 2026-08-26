@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.acp.capabilities import CapabilitySnapshot
+from raven.agent.acp.elicitor import Elicitor
 from raven.agent.acp.permissions import PERMISSION_METHOD
 from raven.agent.acp.pool import get_pool
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
@@ -563,11 +564,16 @@ class AcpAgentBackend:
             # From the live handshake, not the stored snapshot: this is the
             # process actually answering, and a snapshot can be stale.
             collector = _TurnCollector(sink, dialect_for(connection.initialize))
+            # Built here, in the turn's context, for the reason `_TurnCollector`
+            # documents: the read loop's ContextVars predate this run, and the
+            # asker is bound per turn.
+            elicitor = Elicitor(self.name, handle, dialect_for(connection.initialize))
             # Held across the whole turn, not just the send: see
             # `_Connection.session_lock` for why two prompts cannot share one
             # session id.
             async with connection.session_lock(session_id):
                 connection.router.attach(session_id, collector)
+                connection.elicitors.attach(session_id, elicitor)
                 try:
                     result = await client.request(
                         "session/prompt",
@@ -597,6 +603,15 @@ class AcpAgentBackend:
                     raise
                 finally:
                     connection.router.detach(session_id, collector)
+                    connection.elicitors.detach(session_id, elicitor)
+                    # Detaching stops only the *next* request from routing here.
+                    # One already put to the user waits on a task of the
+                    # connection's, which no part of this teardown reaches --
+                    # the pooled connection stays open, so `AcpClient.close`
+                    # never cancels it either. Left standing it holds this
+                    # conversation's form lock and keeps a sheet up that answers
+                    # into a run that is gone.
+                    elicitor.cancel()
 
             stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
             text = collector.text

@@ -61,3 +61,13 @@ rpc.notify['clarify.request'] = (p) => {
     if (live.st) live.st.hasQA = true;
   });
 };
+
+/* The question is over and nobody answered it: it timed out, its turn was
+   interrupted, or a later question replaced it. Only the server knows -- a sheet
+   cannot tell "still waiting" from "waited out" -- so until it said so the sheet
+   stayed up offering an answer that had nowhere to go. The turn resumes for the
+   same reason it resumes on an answer: it is no longer blocked on the reader. */
+rpc.notify['clarify.closed'] = (p) => {
+  notifyTurn(p.conversation_id || sessionCurrent(), { type: 'resume' });
+  clarifyClose(p.request_id);
+};

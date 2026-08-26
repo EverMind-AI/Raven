@@ -578,6 +578,11 @@ export type GatewayEvent =
       type: 'clarify.request'
     }
   | {
+      payload: { conversation_id: string; request_id: string }
+      session_id?: string
+      type: 'clarify.closed'
+    }
+  | {
       payload: {
         approval_id: string
         command: string

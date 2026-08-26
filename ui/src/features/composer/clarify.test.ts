@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { open as approveOpen } from './approve'
-import { open } from './clarify'
+import { close, open } from './clarify'
 import { _resetForTests, forget, sync } from './sheets'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
@@ -74,6 +74,49 @@ describe('the clarify sheet', () => {
     sync()
     expect(sheets().length).toBe(1)
     expect(sheets()[0]!.dataset.sess).toBe('b')
+  })
+
+  it('takes the sheet down when the server says the question died', () => {
+    /* A question the reader never answers is failed safe to its default on the
+       server, and until it said so the sheet stayed up offering an answer
+       nothing was waiting for any more. */
+    const said: string[] = []
+    open({ question: 'q', request_id: 'q1' }, (a) => said.push(a))
+    expect(sheets().length).toBe(1)
+
+    close('q1')
+
+    expect(sheets()).toEqual([])
+    expect(said).toEqual([])
+  })
+
+  it('ignores a close for a question that is no longer the one on screen', () => {
+    /* The server fail-safes a superseded question to its default, and that
+       close can land after the next question is already up. */
+    open({ question: 'q1', request_id: 'q1' }, () => {})
+    open({ question: 'q2', request_id: 'q2' }, () => {})
+
+    close('q1')
+
+    expect(sheets().length).toBe(1)
+  })
+
+  it('takes down a question raised in a conversation the reader left', () => {
+    /* The rack keeps a sheet per conversation, so two questions coexist: the
+       one on screen and one raised for a turn the reader stepped away from.
+       That second one is what this whole close exists for -- a sub-agent asks
+       after the turn that spawned it has replied -- so a close naming it has to
+       find it even though it is not the newest. */
+    open({ question: 'qA', request_id: 'qA', conversation_id: 'a' }, () => {})
+    open({ question: 'qB', request_id: 'qB', conversation_id: 'b' }, () => {})
+    setCurrent('a')
+    sync()
+    expect(sheets().length).toBe(1)
+
+    close('qA')
+    sync()
+
+    expect(sheets()).toEqual([])
   })
 
   it('answers with the chosen option and takes the sheet down', () => {

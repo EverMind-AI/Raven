@@ -124,6 +124,64 @@ async def test_timeout_failsafe_to_default() -> None:
     assert broker.pending_req(CID) is None
 
 
+def _of_method(frames: list[dict], method: str) -> list[dict]:
+    return [f for f in frames if f.get("method") == method]
+
+
+async def _wait_for_method(frames: list[dict], method: str, timeout: float = 1.0) -> dict:
+    """The first frame of ``method``. The close notification is sent on its own
+    task, so it lands a tick after ``await_question`` has already returned."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not _of_method(frames, method):
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"no {method} frame within {timeout}s: {[f.get('method') for f in frames]}")
+        await asyncio.sleep(0.005)
+    return _of_method(frames, method)[0]
+
+
+async def test_timeout_closes_the_question_on_the_surface() -> None:
+    # Without this the surface keeps a sheet nobody can answer: the frontend
+    # only clears `clarify` when the user answers, so a backend fail-safe has to
+    # say so. Mirrors `approval.closed`.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    assert await broker.await_question(CID, prompt="?", default="fallback", timeout_s=0.05) == "fallback"
+    request = _of_method(frames, "clarify.request")[0]
+    closed = await _wait_for_method(frames, "clarify.closed")
+    assert closed["params"]["request_id"] == request["params"]["request_id"]
+    assert closed["params"]["conversation_id"] == CID
+
+
+async def test_an_answered_question_is_not_closed() -> None:
+    # The surface already dropped its own sheet when it sent the answer, so a
+    # close here would be noise -- and would race a later question's request.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
+    await _wait_for_frame(frames)
+    broker.reply(CID, "answer")
+
+    assert await task == "answer"
+    assert _of_method(frames, "clarify.closed") == []
+
+
+async def test_a_cancelled_question_closes_the_surface() -> None:
+    # An interrupted turn is the other way a question dies unanswered, and it is
+    # why `resetFlowOverlays` used to drop the sheet. It no longer does, so the
+    # close has to survive the cancellation that caused it.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
+    await _wait_for_frame(frames)
+    task.cancel()
+
+    assert await task == "d"
+    await _wait_for_method(frames, "clarify.closed")
+
+
 async def test_cancel_all_failsafe() -> None:
     frames, send_frame = _frame_collector()
     broker = QuestionBroker(send_frame)

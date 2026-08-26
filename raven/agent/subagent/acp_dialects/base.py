@@ -274,5 +274,9 @@ class AcpDialect:
         """
         return bool(_dict(update.get("rawInput"))) or bool(_first_location(update))
 
+    def pair_fields(self, fields: list[Any]) -> list[Any]:
+        """Merge properties an adapter emits as one question. The spec pairs none."""
+        return fields
+
 
 __all__ = ["AcpDialect", "ToolCall", "ToolResult", "content_texts"]

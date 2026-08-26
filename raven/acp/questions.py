@@ -39,7 +39,7 @@ from loguru import logger
 
 from raven.acp import protocol, redact
 from raven.acp.capabilities import ClientCapabilities
-from raven.acp.outbound import DEFAULT_REQUEST_TIMEOUT_S, OutboundRequests
+from raven.acp.outbound import OutboundRequests
 from raven.acp.updates import UpdateTranslator
 
 # The field name the elicitation form asks for and the answer is read back from.
@@ -48,6 +48,17 @@ ANSWER_FIELD = "answer"
 
 # The notification the runtime emits when ``ask_user`` fires.
 CLARIFY_METHOD = "clarify.request"
+
+# How long to wait for a person, as opposed to for a program.
+# ``DEFAULT_REQUEST_TIMEOUT_S`` (300s) is the budget for a protocol round trip,
+# and both routes here put a question in front of a human instead. The client
+# holds an ask_user question open for its own budget -- 600s, the ask_user tool's
+# default and the question broker's -- so giving up first means the answer a
+# person is still typing lands in a request this side has already abandoned, and
+# the turn has already moved on to its next question. The headroom over 600s
+# covers the client's own dispatch, and it stays finite because an outbound call
+# that never resolves is a turn that never ends.
+HUMAN_ANSWER_TIMEOUT_S = 900.0
 
 
 class AcpQuestions:
@@ -66,7 +77,7 @@ class AcpQuestions:
         translator: UpdateTranslator,
         emit: Any,
         broker: Any = None,
-        timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S,
+        timeout_s: float = HUMAN_ANSWER_TIMEOUT_S,
     ) -> None:
         self._outbound = outbound
         self._translator = translator

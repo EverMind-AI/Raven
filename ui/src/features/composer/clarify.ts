@@ -22,6 +22,10 @@ import { composing, dockLift } from './store'
 export interface ClarifyRequest {
   question?: string
   choices?: string[]
+  /* The server's handle for this question, which is what a later
+     `clarify.closed` names. Optional only for a frame that predates the
+     field -- such a sheet simply cannot be closed from the server. */
+  request_id?: string
   /* The conversation the server is asking on behalf of, which is not always the
      one on screen: a question can arrive for a turn the reader stepped away
      from. Its own answer beats "wherever the reader happens to be", and the
@@ -38,8 +42,29 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   return n
 }
 
+/* The questions on screen, by the id a `clarify.closed` names. Several at once
+   rather than one: `open` sweeps the class only inside the conversation the
+   sheet is filed under, so a question raised for a conversation the reader
+   stepped away from stands beside the one they are looking at -- which is the
+   case this close exists for, since a sub-agent asks after the turn that
+   spawned it has already replied. */
+const live = new Map<string, HTMLElement>()
+
+/* Take the sheet down because the server says the question can no longer be
+   answered -- it timed out, its turn was interrupted, or it was superseded.
+   Reports nothing back: the server already fell back to the question's default,
+   and answering now would be a second answer to a settled question.
+
+   Matched on the request id, because that fail-safe can land after the next
+   question is already up. */
+export function close(requestId: string): void {
+  const sheet = live.get(requestId)
+  if (sheet) sheetRemove(sheet)
+}
+
 export function open(req: ClarifyRequest, answered: (text: string) => void): void {
   const owner = req.conversation_id || session()
+  const id = req.request_id
   dropClass('csheet', owner)
 
   const sheet = el('div', 'csheet')
@@ -133,7 +158,12 @@ export function open(req: ClarifyRequest, answered: (text: string) => void): voi
   sheetAdd(sheet, owner, () => {
     document.removeEventListener('keydown', onKey, true)
     if (ro) ro.disconnect()
+    /* Identity-checked: a question re-asked under the id of one still on
+       screen replaces this entry, and by the time this takedown runs the entry
+       is the sheet that replaced it. */
+    if (id && live.get(id) === sheet) live.delete(id)
   })
+  if (id) live.set(id, sheet)
   if (ro) ro.observe(sheet)
   /* Only the question on screen takes the caret. The guard reads as intent
      rather than as the mechanism: measured in Chromium, `focus()` on an input

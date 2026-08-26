@@ -1078,6 +1078,25 @@ Distinct from what raven still refuses: `fs/read_text_file` and its siblings are
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
 
+**Elicitation Pass-Through** (`raven/agent/acp/elicitor.py`):
+How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
+as only that: `url` elicitation is for out-of-band credential and payment collection, so
+advertising it would let a sub-agent send the reader to an address of its own choosing. The
+requested schema is decomposed into one question per property, each put through the same
+`clarify.request` contract as `ask_user` - so a surface that already answers a question needs
+nothing new - and the answers are reassembled into one `accept`; a required property nobody
+answered declines the whole form rather than handing back content its schema rejects. Routed
+by `sessionId` to the run that asked and answered off the connection's read loop, so one
+pending question does not stall the other sessions of a pooled connection. A whole form holds
+a per-conversation lock, because the question broker allows one pending question per
+conversation and fail-safes an overlapping one to its default - which here would read as a
+skip nobody ever saw. The lifetime is the backend's, since a sub-agent asks after the turn
+that spawned it has replied: `clarify.closed` retracts a question that can no longer be
+answered, and a run that ends cancels the elicitor it attached.
+_Avoid_: reading it as the same kind of thing as **Unattended Approval**. That one is
+answered by raven with nobody in the loop; this one exists only to reach somebody, and
+declines when a dispatch has no reachable user.
+
 **Frame Journal** (`raven/agent/acp/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
 the run transcript, which holds the `session/update` notifications routed to one session -
