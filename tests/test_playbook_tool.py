@@ -217,21 +217,151 @@ def test_a_source_that_cannot_be_read_keeps_the_list_the_loop_started_with(tmp_p
     assert runtime.names() == []
 
 
-def test_a_playbook_written_mid_conversation_is_adopted_without_a_restart(tmp_path):
-    """The library was read once at construction, so a playbook created in a
-    conversation was invisible to the tool whose job is to load it until the
-    next process. Loading the one file that changed rather than rescanning: the
-    caller knows the name, and a rescan would parse every other file to learn
-    nothing."""
+def test_a_directory_written_by_anything_becomes_visible(tmp_path):
+    """The library is the directory's answer, not the creating tool's.
+
+    A hand-written directory, a `git pull`, an edit -- none of them can call
+    `adopt`, and the library used to be read once at construction, so all of
+    them waited for the next process. The read is cheap because it pays for what
+    changed: digests over the files, and a parse only where the bytes moved.
+    """
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+
+    assert runtime.names() == ["weekly-scan"]
+
+    store.save(_spec(name="hand-written"))
+
+    assert runtime.names() == ["hand-written", "weekly-scan"]
+
+
+def test_an_edit_to_a_playbook_already_loaded_is_picked_up(tmp_path):
+    """The name set is unchanged, so a check that only listed names would miss
+    this -- which is why the fingerprints are over content."""
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    assert "weekly user-feedback analysis" in runtime.listing()[0][1]
+
+    edited = _spec(name="weekly-scan")
+    store.save(edited.model_copy(update={"description": "Rewritten by hand."}), overwrite=True)
+
+    assert "Rewritten by hand." in runtime.listing()[0][1]
+
+
+def test_a_playbook_that_leaves_the_directory_leaves_the_library(tmp_path):
+    """Otherwise the model keeps being offered a name whose file is gone, and
+    finds out by calling it."""
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    assert runtime.names() == ["weekly-scan"]
+
+    (tmp_path / "weekly-scan" / "playbook.md").unlink()
+
+    assert runtime.names() == []
+
+
+def test_a_playbook_naming_an_agent_that_does_not_exist_is_not_offered(tmp_path):
+    """The gate this library actually has.
+
+    Writing to the directory cannot be made hard -- `write_file` is a general
+    capability and it is an ordinary directory -- so what a gate can do is make
+    what lands there checked and visible. `store.load` does the schema and
+    nothing else, so a graph naming an agent that is not on the table used to
+    load fine and be offered, and the turn that called it found out.
+    """
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    runtime._executor.set_roster({"Raven": "the generalist"})
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+
+    # A name the store's own migration will not rewrite: `data-raven` in `_spec`
+    # is a retired builtin and gets repointed at `Raven`, which the roster has.
+    store.save(
+        _spec(
+            name="hand-written",
+            nodes=[
+                NodeSpec(
+                    id="pull",
+                    subagent="no-such-agent",
+                    node_summary="pull the week's feedback",
+                    prompt_template="pull ${params.week_of}",
+                )
+            ],
+        )
+    )
+
+    assert "hand-written" not in runtime.names()
+    # And the one that was already loaded is unaffected: this refuses a file, not
+    # the library.
+    assert runtime.names() == ["weekly-scan"]
+
+
+def test_a_field_left_for_the_caller_is_not_read_as_a_defect(tmp_path):
+    """The collision the gate hit on its first run, as a test.
+
+    `validate_structure` answers two questions at once -- is this sound, is it
+    complete -- and a field an author deliberately left blank makes it
+    incomplete without making it unsound: `load_playbook` asks for those values
+    by name and the run proceeds. Refusing them at the door would refuse the
+    hand-written shape this refresh exists to make visible.
+    """
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    runtime._executor.set_roster({"Raven": "the generalist"})
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+
+    store.save(
+        _spec(
+            name="left-blank",
+            nodes=[NodeSpec(id="pull", subagent="Raven", node_summary="pull it", prompt_template="")],
+        )
+    )
+
+    assert "left-blank" in runtime.names()
+    assert "left for you" in dict(runtime.listing())["left-blank"]
+
+
+def test_a_library_nobody_touched_is_not_reparsed(tmp_path):
+    """The performance invariant, pinned because nothing else would notice it
+    going away. The refresh runs before every read, so a version that parsed the
+    library each time would be correct and quietly expensive -- and the cost is
+    36x, measured: reading fifty files is about 1.4ms, parsing them 21ms."""
+    runtime = _runtime(tmp_path, [_spec(name=f"pb-{i}") for i in range(5)])
+    store = runtime._store
+    calls: list[str] = []
+    original = store.load
+
+    def _counted(name: str):
+        calls.append(name)
+        return original(name)
+
+    store.load = _counted  # type: ignore[method-assign]
+
+    runtime.names()
+    runtime.listing()
+    runtime.names()
+
+    assert calls == [], f"an untouched library was parsed: {calls}"
+
+    (tmp_path / "pb-2" / "playbook.md").write_text(
+        (tmp_path / "pb-2" / "playbook.md").read_text(encoding="utf-8").replace("analysis", "analysis (edited)"),
+        encoding="utf-8",
+    )
+    runtime.names()
+
+    assert calls == ["pb-2"], f"only the changed file should be parsed, got {calls}"
+
+
+def test_adopt_does_not_wait_for_the_next_read(tmp_path):
+    """What `adopt` is still for. The refresh above happens on the next read;
+    the tool that just wrote a file hands it over directly, so the reply it is
+    about to send can say the playbook is usable without that being a guess."""
     runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
     store.save(_spec(name="monthly-scan"))
 
-    assert runtime.names() == ["weekly-scan"]
-
     assert runtime.adopt("monthly-scan") is True
 
-    assert runtime.names() == ["monthly-scan", "weekly-scan"]
+    # Read off the loaded library rather than through `names()`, which would
+    # refresh and pass whether or not `adopt` did anything.
+    assert "monthly-scan" in runtime._specs
 
 
 def test_adopting_a_name_that_was_never_written_is_reported_not_raised(tmp_path):

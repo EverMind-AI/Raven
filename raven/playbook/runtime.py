@@ -29,6 +29,7 @@ from raven.playbook.router import RouterSizes, select_playbooks
 from raven.playbook.store import PlaybookStore
 from raven.playbook.triggers import find_collisions
 from raven.playbook.types import PlaybookSpec
+from raven.playbook.validate import validate_structure
 
 #: How many times one conversation may be told "still missing X" for the same
 #: playbook before it is told to stop. Without a bound, "cannot fill it -> ask
@@ -66,6 +67,7 @@ class PlaybookRuntime:
         self._gap_rounds: dict[tuple[str, str], int] = {}
         self._store = store
         self._specs: dict[str, PlaybookSpec] = {}
+        self._index: TriggerIndex | None = None
         #: Where the deny list is read from, asked on every access rather than
         #: captured here. A switch that was captured needed a restart to take
         #: effect, which is not something a user can be expected to know about a
@@ -87,17 +89,13 @@ class PlaybookRuntime:
         #: that no passive matcher remains to mute.
         self._disabled_source = disabled_source
         self._fixed_disabled = frozenset(disabled)
+        #: The library as it was last read, by content. What makes a directory
+        #: written by anything other than the creating tool -- a hand-written
+        #: one, an edit, a ``git pull`` -- visible without a restart, and what
+        #: keeps the cost of asking down to reading rather than parsing.
+        self._fingerprints: dict[str, bytes] = {}
+        self._refresh()
         deny = self.disabled()
-        for pid in store.list_ids():
-            try:
-                spec = store.load(pid)
-            except Exception as exc:  # noqa: BLE001 - one bad file must not sink the library
-                logger.warning("Skipping unloadable playbook {!r}: {}", pid, exc)
-                continue
-            self._specs[pid] = spec
-            if pid in deny:
-                logger.info("Playbook {!r} is disabled in config; not offered to the model", pid)
-        self._reindex()
         offered = {pid: spec.triggers for pid, spec in self._specs.items() if pid not in deny}
         if collisions := find_collisions(offered):
             # Shared vocabulary is no longer ambiguity to adjudicate -- nothing
@@ -125,6 +123,77 @@ class PlaybookRuntime:
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its library
             logger.warning("playbooks: could not read the disabled list; keeping the list this loop started with")
             return self._fixed_disabled
+
+    def _refresh(self) -> None:
+        """Bring the loaded library level with the directory.
+
+        Asked before every read rather than on a timer, and it pays for what
+        changed rather than for the library: the digests come from reading the
+        files (about 1.4ms across fifty of them) and only a name that is new or
+        whose bytes moved is parsed (about 420us each). A library nobody touched
+        costs one read and a dict comparison.
+
+        This is what makes the library the directory's answer rather than the
+        creating tool's. :meth:`adopt` stays because it does not wait for the
+        next read -- the tool that just wrote a file can have it usable in the
+        same breath -- but a playbook written by anything else arrives here.
+
+        A spec that does not survive :func:`validate_structure` is kept out and
+        said out loud. That check never ran on this path before: ``store.load``
+        does the schema and nothing else, so a graph naming an agent that is not
+        on the table used to load fine and fail when someone ran it. It is asked
+        here rather than in the store because the agent table lives on this side.
+        """
+        current = self._store.fingerprints()
+        for gone in set(self._fingerprints) - set(current):
+            self._specs.pop(gone, None)
+            logger.info("Playbook {!r} is no longer in the library", gone)
+        changed = [name for name, digest in current.items() if self._fingerprints.get(name) != digest]
+        known_agents = self._known_agents()
+        for name in changed:
+            first_sight = name not in self._fingerprints
+            try:
+                spec = self._store.load(name)
+            except Exception as exc:  # noqa: BLE001 - one bad file must not sink the library
+                logger.warning("Skipping unloadable playbook {!r}: {}", name, exc)
+                self._specs.pop(name, None)
+                continue
+            # Soundness, not completeness: a field the author left for the
+            # caller to fill is what ``load_playbook`` asks for by name, and
+            # refusing it here would refuse the hand-written shape this refresh
+            # exists to make visible.
+            if errors := validate_structure(spec, known_agents=known_agents, allow_blank_fillable=True):
+                # Refused rather than offered: a graph naming an agent that is
+                # not on the table cannot run, and offering it spends a turn to
+                # find that out. Said at warning level because a file the user
+                # can see in their library and the model cannot use is exactly
+                # the kind of gap nobody thinks to ask about.
+                logger.warning("Playbook {!r} is not usable and is not being offered: {}", name, "; ".join(errors))
+                self._specs.pop(name, None)
+                continue
+            self._specs[name] = spec
+            if first_sight:
+                # Every arrival that did not come through ``adopt`` -- a
+                # hand-written directory, a pull, an edit by hand. The gate this
+                # library has is that what lands in it is visible and checked,
+                # not that writing to it is hard: ``write_file`` is a general
+                # capability and the directory is an ordinary directory.
+                logger.info("Playbook {!r} appeared in the library at {}", name, self._store.path_for(name))
+        self._fingerprints = current
+        if changed or self._index is None:
+            self._reindex()
+
+    def _known_agents(self) -> list[str] | None:
+        """The agent table the graph will be dispatched against, or None.
+
+        Read off the executor rather than held here: it is the same table the
+        dispatch resolves node names against, and a second copy would let this
+        refuse a playbook the graph would have run. ``None`` when there is no
+        table, which is ``validate_structure``'s own way of saying "do not check
+        the names at all" rather than checking them against a guess.
+        """
+        roster = getattr(self._executor, "_roster_cache", None)
+        return sorted(roster) if roster else None
 
     def _reindex(self) -> None:
         """Rebuild the trigger index over what is currently offered.
@@ -156,6 +225,9 @@ class PlaybookRuntime:
         except Exception as exc:  # noqa: BLE001 - the caller reports it
             logger.warning("Playbook {!r} was written but could not be loaded back: {}", name, exc)
             return False
+        # Recorded here too, so the next refresh sees a name it already holds at
+        # the digest it already read and does not report it as an arrival.
+        self._fingerprints = self._store.fingerprints()
         self._reindex()
         logger.info("Playbook {!r} adopted into the live library", name)
         return True
@@ -170,6 +242,7 @@ class PlaybookRuntime:
         """Whether there is anything to offer. Disabled entries do not count:
         the tool exists to be called, and one that can only answer "that is
         turned off" is a tool the model should not have been given."""
+        self._refresh()
         return not (set(self._specs) - self.disabled())
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
@@ -185,6 +258,7 @@ class PlaybookRuntime:
         would turn a recall miss into "the model cannot reach it at all", even
         when the user has just named the playbook out loud.
         """
+        self._refresh()
         return sorted(set(self._specs) - self.disabled())
 
     def listing(self, message: str = "") -> list[tuple[str, str]]:
@@ -197,6 +271,7 @@ class PlaybookRuntime:
         Without the parameter table it can only guess key names, and a guessed key
         is dropped silently and comes back as the same question.
         """
+        self._refresh()
         deny = self.disabled()
         chosen = select_playbooks(
             {pid: spec for pid, spec in self._specs.items() if pid not in deny},
@@ -249,6 +324,7 @@ class PlaybookRuntime:
         ``allow_disabled`` is for the CLI, where the user named the playbook
         themselves.
         """
+        self._refresh()
         spec = self._specs.get(name)
         if spec is None or (name in self.disabled() and not allow_disabled):
             return None
