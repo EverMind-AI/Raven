@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1127,6 +1128,93 @@ async def test_the_inputs_parameter_is_advertised(tmp_path: Path) -> None:
 
     assert "inputs" in tool.parameters["properties"]
     assert "inputs" not in tool.parameters["required"]
+
+
+class _PromptRecordingBackend:
+    """Answers with a fixed string and keeps the prompt it was handed."""
+
+    def __init__(self, answer: str, seen: list[str]) -> None:
+        self._answer = answer
+        self._seen = seen
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self._seen.append(task)
+        return self._answer
+
+
+async def test_one_spawns_output_reaches_the_next_through_the_real_dispatch_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seam the other tests here leave open.
+
+    The spawn-tool tests drive a stub manager and the announcement tests call
+    ``_announce_result`` directly, so nothing covered the path that actually
+    failed in the incident: tool -> manager -> record -> announcement, twice,
+    with the second call reading the first one's record. Only the sub-agent
+    backend and the sandbox executor are stubbed.
+    """
+    from raven.agent.tools.spawn import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    report = "EverMind memory benchmark results\nLoCoMo: 93.05\n"
+    seen: list[str] = []
+    submitted: list[Any] = []
+
+    home = tmp_path / "home"
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[
+            ThirdPartyCliSubagentConfig(name=name, command="cat {agent_id}", resume_command="cat --resume {agent_id}")
+            for name in ("Researcher", "DeckMaker")
+        ],
+    )
+    mgr.set_submit(submitted.append)
+    mgr.registry._backends["Researcher"] = _PromptRecordingBackend(report, seen)
+    mgr.registry._backends["DeckMaker"] = _PromptRecordingBackend("deck built", seen)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+
+    async def announced() -> str:
+        for _ in range(400):
+            await asyncio.sleep(0.01)
+            if submitted:
+                return submitted.pop().text
+        raise AssertionError("no announcement arrived")
+
+    await tool.execute(task_summary="Research the scores", task="Find them.", subagent="Researcher")
+    research = await announced()
+
+    # The record path is the handoff's only address, so the announcement has to
+    # carry one that resolves -- this is what the model reads it from.
+    record = re.search(r"Record: (\S+)", research)
+    assert record is not None
+    out_md = Path(record.group(1)) / "out.md"
+    assert out_md.read_text(encoding="utf-8") == report
+
+    await tool.execute(
+        task_summary="Build the deck",
+        task="Make 15 slides.",
+        subagent="DeckMaker",
+        inputs={"research_report": {"file": str(out_md)}},
+    )
+    deck = await announced()
+
+    handed = seen[-1]
+    assert "LoCoMo: 93.05" in handed
+    assert "[BEGIN UNTRUSTED file" in handed
+    assert handed.endswith("Make 15 slides.")
+    # The file was handed over to keep it out of this context; the announcement
+    # must not read it back in.
+    assert "LoCoMo: 93.05" not in deck
+    assert "Task: Make 15 slides." in deck
+    assert "completed successfully" not in research
+    assert "completed successfully" not in deck
 
 
 class _ToolThenAnswerProvider(LLMProvider):
