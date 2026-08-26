@@ -28,6 +28,7 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
+from raven.agent.subagent.activity import persisted_output
 from raven.agent.subagent_history import add_turn_to_instance_log, make_call_id
 from raven.utils.helpers import safe_path_segment
 
@@ -154,8 +155,11 @@ class DirectChatRecord:
         try:
             if not self.dir.is_dir():
                 return
-            if output is not None:
-                (self.dir / "out.md").write_text(output, encoding="utf-8")
+            # The whole answer rather than the capped value handed back, for the
+            # reason ``SpawnRecord.finish`` writes it that way: this directory is
+            # the only evidence a direct turn happened.
+            if (whole := persisted_output(activity, output)) is not None:
+                (self.dir / "out.md").write_text(whole, encoding="utf-8")
             if error is not None:
                 (self.dir / "error.md").write_text(error, encoding="utf-8")
             meta = self._read_meta()

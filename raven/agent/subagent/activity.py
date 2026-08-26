@@ -100,6 +100,19 @@ class RunActivity:
     # raising for a refusal. Not persisted: a live handle, not a fact about the
     # run, which is why it is absent from ``as_meta``.
     steer: Callable[[str], Awaitable[str]] | None = None
+    # The run's answer *before* the reply cap cut it, when the cap did cut it.
+    # `None` means nothing was discarded and what the backend returned is the
+    # whole answer -- so a reader must never treat this as "the output", only as
+    # "the output the caller is not being handed".
+    #
+    # Here rather than on the return value for the reason this module exists at
+    # all: the cap is applied at the process boundary, several frames below
+    # whoever owns the record, and widening `SubagentBackend.run` to carry it
+    # would break every implementation for a field most cannot fill.
+    full_output: str | None = None
+    # The truncation as meta.json states it -- set together with `full_output`
+    # and empty whenever it is, so one test answers "was anything dropped".
+    truncation: dict[str, Any] = field(default_factory=dict)
 
     @property
     def tokens(self) -> int | None:
@@ -128,6 +141,8 @@ class RunActivity:
             meta["step_counts"] = self.step_counts
         if self.frames:
             meta["acp_frames"] = self.frames
+        if self.truncation:
+            meta.update(self.truncation)
         return meta
 
 
@@ -324,6 +339,57 @@ def append_closing(text: str) -> None:
         activity.closing = f"{activity.closing}{text}"
 
 
+def note_output_truncation(full: str, *, returned: int, reason: str) -> None:
+    """Record that the reply handed back was capped, and keep the whole of it.
+
+    Published by whichever backend applied the cap. Two facts, not one: the
+    counters make the loss *legible* (a reader of meta.json can say how much
+    went), and ``full_output`` makes it *recoverable* -- the record writer takes
+    the answer from here, so ``out.md`` holds what the sub-agent actually said
+    rather than the head of it the caller's context could afford.
+
+    Which is the whole point. The cap exists to protect a context window; a
+    record is not a context window, and writing the capped value to both was
+    what made the advertised recovery artifact a copy of the thing it was meant
+    to recover from.
+    """
+    activity = _current.get()
+    if activity is None or not isinstance(full, str):
+        return
+    kept = max(0, int(returned))
+    activity.full_output = full
+    activity.truncation = {
+        "output_truncated": True,
+        "output_chars_total": len(full),
+        "output_chars_returned": kept,
+        "output_chars_discarded": max(0, len(full) - kept),
+        "output_truncation_reason": reason,
+    }
+
+
+def persisted_output(activity: Any, delivered: str | None) -> str | None:
+    """What a record should write as this run's output, given what was delivered.
+
+    The whole answer when the reply cap cut one, and ``delivered`` untouched
+    otherwise -- including when nothing published an activity at all, which is
+    every direct call, probe, and test.
+
+    Typed loosely for the reason ``SpawnRecord.finish`` is: this is called by
+    the record writers, which take their activity as an opaque bag of counters
+    and should not have to import this module's dataclass to pass one through.
+
+    ``delivered is None`` (a failed or cancelled turn) stays ``None``: there is
+    no output row to write, and a truncation published before the failure
+    describes an answer that never became the turn's result.
+    """
+    if delivered is None:
+        return None
+    if not getattr(activity, "truncation", None):
+        return delivered
+    whole = getattr(activity, "full_output", None)
+    return whole if isinstance(whole, str) and len(whole) > len(delivered) else delivered
+
+
 def note_transcript(messages: list[dict[str, Any]] | None) -> None:
     """Record the run's own transcript, for the lane that can actually see one.
 
@@ -345,9 +411,11 @@ __all__ = [
     "note_closing",
     "note_console",
     "note_frames",
+    "note_output_truncation",
     "note_steps",
     "note_thoughts",
     "note_tool_call",
     "note_transcript",
     "note_usage",
+    "persisted_output",
 ]

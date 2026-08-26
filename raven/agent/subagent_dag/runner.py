@@ -743,7 +743,11 @@ async def _run_node(
                         )
                     finally:
                         node_activity[node.id] = did.as_meta()
-            await store.write_text(output_path, result or "")
+            # The whole answer when the reply cap cut one: the in-context copy of
+            # a terminal output is capped again on the way out (see
+            # `_terminal_outputs`), and this file is what the reader, the next
+            # node's placeholder, and the record all resolve to.
+            await store.write_text(output_path, activity.persisted_output(did, result) or "")
             node_output = result
             status[node.id] = "completed"
             output_paths[node.id] = output_path

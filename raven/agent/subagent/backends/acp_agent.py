@@ -42,7 +42,7 @@ from raven.agent.acp.protocol import STEER_METHOD, AcpError, AcpRemoteError
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends import turn_rows
-from raven.agent.subagent.backends.base import bounded_delta
+from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_events,
@@ -761,14 +761,17 @@ class AcpAgentBackend:
         the case the notice is for. This line is raven's own and fixed-length.
         """
         if stop_reason in ("end_turn", None):
-            return text[: self.max_output_chars]
+            return await clamp_output(text, self.max_output_chars, agent=self.name, sink=sink)
         span.error(f"turn ended early (stopReason={stop_reason})")
         logger.warning("acp agent {!r}: turn ended with stopReason={!r}; reply is partial", self.name, stop_reason)
         notice = f"\n\n[raven] {self.name} stopped before finishing (stopReason={stop_reason}); reply is partial."
         activity.append_closing(notice)
         if sink is not None:
             await sink(notice)
-        return text[: max(0, self.max_output_chars - len(notice))] + notice
+        # Both lines can be owed at once -- a turn that was cut short can still
+        # have said more than the cap allows -- and `clamp_output` budgets this
+        # one first for the same reason it was budgeted first here.
+        return await clamp_output(text, self.max_output_chars, agent=self.name, reserved=notice, sink=sink)
 
     async def _open_session(self, client: Any, *, cwd: str, skey: str, handle: str, budget: float) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""

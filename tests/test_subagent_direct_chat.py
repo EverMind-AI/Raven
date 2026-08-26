@@ -1686,3 +1686,22 @@ async def test_a_chat_with_no_declared_identity_schedules_no_memory_record(tmp_p
 
     assert manager._record_tasks == set()
     assert calls == []
+
+
+async def test_a_capped_direct_turn_records_the_whole_reply(tmp_path, monkeypatch):
+    """The direct lane's record is the only evidence its turn happened, so the
+    reply cap must not be what that evidence holds."""
+    from raven.agent.subagent.backends.base import clamp_output
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+
+    async def fake_run(task, *, task_id, workspace, executor, **kwargs):
+        return await clamp_output("w" * 400, 200, agent="raven")
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", fake_run)
+
+    reply, meta = await manager.chat(session_key="s1", agent="raven", handle="notes", text="hi")
+
+    assert "[raven] Output truncated" in reply
+    assert (meta.directory / "out.md").read_text(encoding="utf-8") == "w" * 400
+    assert json.loads((meta.directory / "meta.json").read_text(encoding="utf-8"))["output_chars_total"] == 400

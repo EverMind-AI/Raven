@@ -37,6 +37,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.subagent.activity import persisted_output
 from raven.utils.helpers import safe_path_segment
 
 _HISTORY_DIRNAME = "subagents"
@@ -233,8 +234,11 @@ class SpawnRecord:
         try:
             if not self.dir.is_dir():
                 return
-            if output is not None:
-                (self.dir / "out.md").write_text(output, encoding="utf-8")
+            # The whole answer, not the capped value the caller was handed: this
+            # directory is what the spawn tool advertises as the record of the
+            # call, and a copy of the truncation is no recovery path at all.
+            if (whole := persisted_output(activity, output)) is not None:
+                (self.dir / "out.md").write_text(whole, encoding="utf-8")
             if error is not None:
                 (self.dir / "error.md").write_text(error, encoding="utf-8")
             meta = self._read_meta()

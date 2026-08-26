@@ -14,6 +14,7 @@ import pytest
 from raven.agent import workdir
 from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
+from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent_dag import DagValidationError, parse_dag_spec
 from raven.agent.subagent_dag._store import read_session_nodes
@@ -3956,3 +3957,44 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
     assert session_id == f"trace:Coder:{result.run_id}:inspect"
     assert turn[0]["content"] == "read it"
     assert turn[-1]["content"] == "no readme"
+
+
+async def test_a_capped_node_reply_still_lands_whole_in_its_output_file() -> None:
+    """``.out.md`` is what the reader, the next node's placeholder and the record
+    all resolve to, so the reply cap must not reach it.
+
+    The cap belongs at the boundary that has a context window to protect -- which
+    is why the terminal outputs handed back to the main agent are capped again on
+    the way out, and this file is not.
+    """
+
+    class _Verbose:
+        """A backend that caps its reply the way the real ones do."""
+
+        async def run(self, task: str, *, task_id: str, workspace, executor, **_: Any) -> str:
+            return await clamp_output("y" * 400, 200, agent="verbose")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "v", "node_summary": "say a lot", "prompt_template": "go"}],
+        }
+    )
+    backend = _InMemBackend()
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"v": _Verbose()}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+    )
+
+    entry = next(e for e in result.files if e["node"] == "a")
+    assert backend.files[entry["output_file"]].decode() == "y" * 400
+    # Not a claim that anything was capped here -- 400 is far under the DAG's own
+    # 128000 terminal limit. What it pins is that the main agent now receives the
+    # whole answer where it used to receive the node backend's capped 200.
+    assert len(result.terminal_outputs[0]["text"]) == 400
+    manifest = json.loads(backend.files[posixpath.join(posixpath.dirname(entry["output_file"]), "manifest.json")])
+    assert manifest["a"]["output_truncated"] is True
+    assert manifest["a"]["output_chars_total"] == 400
