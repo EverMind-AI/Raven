@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/118d2bba-342f-4435-b446-2edafc33a38c)
+![RavenX banner](https://github.com/user-attachments/assets/67523656-1750-4890-8871-fe0cdfb1dda4)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -17,9 +17,23 @@
 
 # Raven
 
-Raven 是面向终端与长程任务的 **The Self-Improving Agent Harness**。它不再把模型与 harness 视为静态组合，而是将每次真实执行纳入“执行—追踪—记忆—评测—反馈”的持续闭环。
+Raven 是今天即可运行的开源 **自我进化 Agent Harness**。它将终端执行、本地 Tracing、长期记忆、Skills、评测与可复用工作流整合进同一套系统，面向长程 AI 任务持续学习与改进。
 
-Raven 构建于 [EverOS](https://github.com/EverMind-AI/EverOS) 之上，让用户记忆、Agent 经验与世界知识跨会话延续。每次运行都可以持续改进模型周围的 tools、skills、context、policies 与 workflows，让经过验证的工作沉淀为可复用的 Agent Templates 和 digital workers。
+## RavenX：The Harness of Harnesses
+
+随着 AI Agent 从单一任务走向长程、多领域协作，依赖人工设计一个不断膨胀的 harness 已经难以持续扩展；而与特定模型和领域深度绑定的单一 harness，也无法覆盖通用智能所需的全部能力。
+
+**RavenX** 是这一工作的更广阔研究与生态方向，其核心定义是 **The Harness of Harnesses**。它旨在自动构建和提升适配特定模型与领域的 Agent Harness，并将不同 Harness 的异构执行能力汇聚为统一的 **全领域协作网络（All-Domain Collaboration Network）**。
+
+| **可信** | **可延续** | **可进化** |
+| --- | --- | --- |
+| 能力由真实、可验证的表现决定，而非自我声明。 | 经过验证的结果、任务状态与长期记忆能够跨执行者延续。 | 每次真实执行都会改进能力档案、Skills、调度与整个协作网络。 |
+
+RavenX 不再把模型与 harness 视为静态组合，而是通过持续的 **评测 → 执行 → 验证 → 记忆 → 反馈** 闭环，发现、编排并优化每项任务所需的能力。经过验证的工作会沉淀为可复用经验，使 Agent 个体与更广泛的能力网络共同进化。
+
+RavenX 的评测覆盖 **22 个 Agent 基准任务**，从任务质量、成本与关键机制收益等维度进行验证。报告结果显示，其在性能与效率上相较现有 Agent 系统实现了全面提升，并进一步推进了 **质量—成本帕累托前沿**。
+
+> **当前产品：** Raven 是本仓库中可运行的开源 harness。**长期方向：** RavenX 是上述 Multi-Agent 研究与生态愿景。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
