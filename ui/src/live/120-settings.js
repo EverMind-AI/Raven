@@ -161,6 +161,7 @@ async function langPickLive(next, { persist } = {}) {
   if (!persist) return;
   try {
     await rpc.call('config.set', { key: 'language', value: next });
+    langRemember(next);
   } catch (e) {
     /* Put it back rather than leaving the page in a language the gateway does
        not agree with -- the same key drives the TUI and the agent's replies. */
@@ -211,11 +212,32 @@ function redrawAll() {
   if (!draft && sessionCurrent() && !turn.busy()) sessionOpen(sess(sessionCurrent()));
 }
 
+/* The language the gateway last agreed to, kept where a page that cannot
+   reach it can still read it. `loadLang` runs only after `rpc.connect()`
+   succeeds, so on a failed connect nothing sets the language at all -- and
+   the sign-in notice, the one message that explains the empty page, arrives
+   in English on a Chinese install. Wrapped like the look settings, because
+   private mode throws on access rather than answering null. */
+const LANG_KEY = 'raven.gui.lang';
+
+function langRemember(v) {
+  try { localStorage.setItem(LANG_KEY, v); } catch { /* private mode */ }
+}
+
+/* Applied before the socket is up. Whatever `loadLang` resolves afterwards
+   wins, so a language changed elsewhere still lands on this boot. */
+function langRestore() {
+  try {
+    const v = localStorage.getItem(LANG_KEY);
+    if (v === 'en' || v === 'zh') langSet(v);
+  } catch { /* private mode */ }
+}
+
 async function loadLang() {
   try {
     const r = await rpc.call('config.get', { keys: ['language'] });
     const v = r && r.config && r.config.language;
-    if (v === 'en' || v === 'zh') { langSet(v); redrawAll(); }
+    if (v === 'en' || v === 'zh') { langSet(v); langRemember(v); redrawAll(); }
   } catch { /* stay on the built-in default */ }
 }
 

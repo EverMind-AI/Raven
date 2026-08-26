@@ -235,6 +235,7 @@ function SkillMarket({ s }: { s: SkillsState }): JSX.Element {
 
 function SkillInstalled(): JSX.Element {
   const rows = store.installedRows()
+  const loaded = store.installedLoaded()
   return (
     <>
       <div className="pmback">
@@ -244,7 +245,9 @@ function SkillInstalled(): JSX.Element {
         <b>{t('gui.plug.installed_title')}</b>
       </div>
       {rows.length === 0 ? (
-        <div className="empty-note">{t('gui.hub.empty_installed')}</div>
+        <div className="empty-note">
+          {t(loaded ? 'gui.hub.empty_installed' : 'gui.hub.empty_installed_off')}
+        </div>
       ) : (
         <div className="hubgrid">
           {rows.map((c) => (

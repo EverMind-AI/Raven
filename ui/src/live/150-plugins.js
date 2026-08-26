@@ -66,6 +66,8 @@ DS.plugins = {
     await loadExt();
   },
   rows: () => pluginsLive,
+  /* See DS.skills.loaded: the same one boot-time read feeds both. */
+  loaded: () => extLoaded,
   reload: () => loadExt(),
 };
 

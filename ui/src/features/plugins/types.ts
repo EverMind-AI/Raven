@@ -89,5 +89,7 @@ export interface PluginsSource {
   auth(name: string): Promise<McpSnapshot | null>
   manual(name: string, address: string): Promise<unknown>
   rows(): InstalledRow[]
+  /* See SkillsSource.loaded: one boot-time read fills both. */
+  loaded?(): boolean
   reload(): Promise<unknown>
 }
