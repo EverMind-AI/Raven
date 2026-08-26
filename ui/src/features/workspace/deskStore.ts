@@ -387,7 +387,12 @@ export function updateSplits(patch: Partial<DeskSplits>): void {
    the drop is the gesture's only mutation and a reload should replay it. */
 export function arrange(order: string[], duo: DeskDuo): void {
   const by = new Map(state.panes.map((pane) => [pane.id, pane]))
-  if (new Set(order).size !== by.size || order.some((id) => !by.has(id))) return
+  /* Counted as a list, not only as a set. `['a', 'b', 'b']` names two distinct
+     panes, both of them up, and passed a set-size test while committing three
+     entries with one pane object in it twice -- two windows sharing a pane's
+     state, and a React key repeated. */
+  if (order.length !== by.size || new Set(order).size !== order.length) return
+  if (order.some((id) => !by.has(id))) return
   const panes = order.map((id) => by.get(id) as DeskPane)
   commit({ panes, duo })
 }
