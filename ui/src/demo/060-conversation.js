@@ -38,10 +38,20 @@ DS.banner ??= {
 
 function pitch() {
   /* The empty state is the composer itself, moved to the visual centre --
-     no mark, no facts, no title. ask()/renderHistory lift the flag the
-     moment real content lands. */
+     no mark, no facts, no title. unpitch() lifts the flag again. */
   const c = document.querySelector('.chat');
   if (c) c.dataset.fresh = '1';
+}
+
+/* Leaving the empty state. Its own element, because the flag drives a whole
+   layout -- the wordmark, the crew, a centred composer 81px above where the
+   dock sits, and an opaque card instead of the glass one -- so every path out
+   of it has to lift the flag at the same moment, and there are four of them
+   (content arriving, a stored conversation replaying, and either kind of
+   switch through resetView). */
+function unpitch() {
+  const c = document.querySelector('.chat');
+  if (c) delete c.dataset.fresh;
 }
 
 /* The composer appends an "[attachments]" note plus "- path" bullets for the
@@ -64,8 +74,7 @@ function splitAtts(text) {
 }
 
 function ask(text, when) {
-  const ch = document.querySelector('.chat');
-  if (ch) delete ch.dataset.fresh;
+  unpitch();
   RavenIslands.transcript.setStuck(true);
   /* The bubble, its attachment chips and its footer are the island's. */
   RavenIslands.transcript.ask(text, when);

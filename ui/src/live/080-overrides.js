@@ -2,15 +2,26 @@
 async function subscribe(sessionKey) {
   // One subscription per session per socket: re-opening a session reuses its
   // stream, so a parked turn's events and the visible ones never double up.
-  if (subBySession[sessionKey]) { live.subId = subBySession[sessionKey]; return; }
+  if (subBySession[sessionKey]) { claimStream(sessionKey); return; }
   try {
     const r = await rpc.call('turn.subscribe', { session_key: sessionKey });
-    live.subId = r.subscription_id;
     subBySession[sessionKey] = r.subscription_id;
     subSession[r.subscription_id] = sessionKey;
+    claimStream(sessionKey);
   } catch (e) {
     toast(`订阅失败：${e.message || e}`);
   }
+}
+
+/* `live.subId` is one thing: the subscription whose events paint the visible
+   stage. So only the conversation actually on screen may hold it -- turn.subscribe
+   is a round trip, and the reader can leave before it answers. Claiming it
+   anyway routed a background session's stream onto the open one's transcript;
+   the events belong in that session's parked buffer instead (see
+   rpc.notify.event). */
+function claimStream(sessionKey) {
+  if (sessionKey !== sessionCurrent()) return;
+  live.subId = subBySession[sessionKey] || null;
 }
 
 rpc.onReconnect = async () => {
@@ -63,17 +74,32 @@ rpc.onReconnect = async () => {
    until the first message, so the rail does not fill with empty sessions. */
 let draft = false;
 
+/* Which switch the visible page belongs to. `session.resume` is a round trip,
+   and a reader who clicks a second session -- or the new-task button -- while
+   it is in flight leaves the answer with nowhere to land: the stage it was
+   cleared for now holds somebody else's conversation. Every switch takes the
+   next ticket, and an answer whose ticket has been spent is dropped rather
+   than painted, which is lossless because a re-open reads the same transcript
+   back off disk. */
+let viewGen = 0;
+
 function resetView() {
   stop_(); turn.dispatch({ type: 'idle' }); queueClear();
   resetTurnState();
   wsReset();
   setWs(false);
+  /* The empty state ends when the reader leaves it, not when its replacement
+     finishes arriving: holding it across the round trip left the wordmark and
+     the centred composer sitting over an empty stage, and dropped them 81px the
+     moment the transcript landed. startDraft pitches again right after. */
+  unpitch();
   $('#stage').innerHTML = '';
   $('#flash').textContent = '';
   drawMeter(); goState(); drawBanner();
 }
 
 function startDraft() {
+  viewGen += 1;
   parkTurn();
   // The old session's stream must stop routing to the visible stage the
   // moment we leave it -- its events belong to the parked buffer now.
@@ -86,6 +112,8 @@ function startDraft() {
 }
 
 async function openLiveSession(s) {
+  viewGen += 1;
+  const gen = viewGen;
   parkTurn();
   // Same as startDraft: while session.resume is in flight the old session
   // may still be streaming, and a stale live.subId would paint its events
@@ -98,27 +126,30 @@ async function openLiveSession(s) {
   const row = sess(s.id);
   if (row && row.status === 'done') row.status = null;
   markNewCurrent();
-  stop_(); turn.dispatch({ type: 'idle' }); queueClear();
-  resetTurnState();
-  wsReset();
-  setWs(false);
+  resetView();
   $('#title').textContent = plainTitle(s.title);
-  $('#stage').innerHTML = '';
-  $('#flash').textContent = '';
-  drawMeter(); goState(); drawBanner();
   // A parked turn restores in place of a disk reload: the transcript on disk
   // does not have the still-streaming content, the parked DOM does.
   const pk = parkedTurns.get(s.id);
   if (pk) {
     parkedTurns.delete(s.id);
     sessionSet(s.id);
-    live.subId = subBySession[s.id] || null;
     restoreTurn(pk);
-    if (!live.subId) await subscribe(s.id);
+    /* Unconditional, where this used to claim the recorded subscription itself
+       and fall back to subscribing when there was none: `subscribe` already
+       does exactly that, and one path through it is what keeps the claim rule
+       in a single place. Nothing follows the await, so the extra microtask on
+       the reuse case changes no ordering. */
+    await subscribe(s.id);
     return;
   }
   try {
     const r = await rpc.call('session.resume', { session_id: s.id, session_key: s.id });
+    /* Somebody else's page now. Everything below writes what the reader is
+       looking at -- the pointer, the rail selection, the context ring, the
+       transcript, the panes -- so a spent ticket has to stop here rather than
+       repaint over the switch that overtook it. */
+    if (gen !== viewGen) return;
     if (r.session_id && r.session_id !== s.id) s.id = r.session_id;
     sessionSet(s.id);
     /* resume hands back the canonical id, so the row rendered from the listed
@@ -149,6 +180,10 @@ async function openLiveSession(s) {
        archived. Not awaited: the shelf fills when it answers. */
     RavenIslands.workspace.loadDeliveries(s.id);
     await subscribe(s.id);
+    /* Checked again on this side of the subscribe: the round trip is one more
+       place a reader can leave from, and a replayed file window opens on
+       whichever desk is on screen. */
+    if (gen !== viewGen) return;
     /* Last, and only on this path. The reader may be arriving here after a
        reload -- or after an upgrade replaced the page under them -- in which
        case the graph they were watching and the windows they had open are
@@ -159,6 +194,9 @@ async function openLiveSession(s) {
        the transcript is already up. */
     RavenIslands.view.resume(s.id);
   } catch (e) {
+    /* Same for the failure: a session the reader has already left must not
+       empty their stage, and must not raise a toast about a page nobody is on. */
+    if (gen !== viewGen) return;
     pitch();
     toast(`打开会话失败：${e.message || e}`);
   }
