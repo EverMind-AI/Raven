@@ -35,10 +35,20 @@ class CreatePlaybookTool(Tool):
         generator: "PlaybookGenerator",
         store: "PlaybookStore",
         set_disabled: Callable[[str, bool], bool],
+        *,
+        adopt: Callable[[str], bool] | None = None,
     ) -> None:
         self._generator = generator
         self._store = store
+        #: Kept although creation no longer switches anything off: the tool holds
+        #: the only write path that could need to, and a caller that wires one
+        #: half of the pair and not the other is the shape this signature exists
+        #: to refuse.
         self._set_disabled = set_disabled
+        #: Hands the written playbook to the live library. Optional because the
+        #: CLI's creation entry has no runtime to hand it to -- the next process
+        #: reads the file anyway.
+        self._adopt = adopt
 
     @property
     def name(self) -> str:
@@ -52,9 +62,9 @@ class CreatePlaybookTool(Tool):
             "this as a playbook', 'make this repeatable'. Describe the whole procedure from "
             "the conversation: the steps and their order, which results feed which steps, the "
             "parameters that change per run, and the words someone would use when they want "
-            "this done (those make it easier to find later, they do not run it). The playbook "
-            "is stored disabled for the user's review; tell them where it landed and that it "
-            "becomes available on 'enable <name>'."
+            "this done (those make it easier to find later, they do not run it). It is usable "
+            "as soon as it is written -- tell them where it landed and what it will do, and do "
+            "not run it unless they ask."
         )
 
     @property
@@ -109,12 +119,25 @@ class CreatePlaybookTool(Tool):
             return f"Error: playbook generation failed: {exc}"
         spec = generated.spec.model_copy(update={"name": name})
         path = self._store.save(spec, notes=generated.notes)
-        self._set_disabled(name, True)
+        # Enabled on arrival. It used to be written onto the deny list for the
+        # user to review, which read as caution and behaved as a dead end: the
+        # only way back off that list was a CLI command, and the runtime had read
+        # the list once at start, so even running it did nothing until the next
+        # process. Disabling is still a real need and `raven playbook disable`
+        # still serves it -- it is just not the state a fresh playbook starts in.
+        adopted = self._adopt(name) if self._adopt is not None else True
         notes = "".join(f"\n- {n}" for n in generated.notes)
         review = f"\nOpen questions for the user's review:{notes}" if notes else ""
+        if not adopted:
+            # Written but unreadable: say which half happened, because "created"
+            # alone would send the caller to load a name that cannot resolve.
+            return (
+                f"Created playbook {name!r} at {path}, but it could not be loaded back, so it is "
+                f"not available in this conversation. Ask the user to check the file.{review}"
+            )
         return (
-            f"Created playbook {name!r} at {path}. It starts disabled: nobody is offered it "
-            f"until the user reviews the file and enables it (say the word, or "
-            f"`raven playbook enable {name}`). It can already be run by hand with "
-            f"`raven playbook run {name}`.{review}"
+            f"Created playbook {name!r} at {path}, and it is available now -- `load_playbook` "
+            f"can run it in this conversation, or `raven playbook run {name}` from a shell. "
+            f"Tell the user where it landed and what it does; do not run it unless they "
+            f"ask.{review}"
         )

@@ -1378,19 +1378,31 @@ class AgentLoop:
         except Exception:
             logger.opt(exception=True).warning("Playbook runtime failed to build; feature disabled")
             return
-        # The only entry into the library. Registered whenever it has something
-        # to offer -- it is how a playbook gets used at all now, not a back door
-        # for the cases a matcher missed.
-        if not self._playbooks.empty:
-            from raven.agent.tools.load_playbook import LoadPlaybookTool
+        # The only entry into the library, and registered even when the library
+        # is empty. Withholding it until something was in there made the first
+        # creation of a session unreachable: `create_playbook` writes one, and
+        # the tool that loads it did not exist until the next process. Its
+        # description says so itself when there is nothing installed, which
+        # costs a sentence.
+        from raven.agent.tools.load_playbook import LoadPlaybookTool
 
-            self.tools.register(LoadPlaybookTool(self._playbooks))
+        self.tools.register(LoadPlaybookTool(self._playbooks))
         # Creation registers whenever the feature is on -- an empty library is
         # exactly when capturing the first workflow matters.
         from raven.agent.tools.create_playbook import CreatePlaybookTool
         from raven.config.update import set_playbook_disabled
 
-        self.tools.register(CreatePlaybookTool(self._playbook_generator, self._playbook_store, set_playbook_disabled))
+        self.tools.register(
+            CreatePlaybookTool(
+                self._playbook_generator,
+                self._playbook_store,
+                set_playbook_disabled,
+                # So a playbook created mid conversation is loadable in the same
+                # conversation: the library is read once at construction, and
+                # nothing else would tell it that a file appeared.
+                adopt=self._playbooks.adopt,
+            )
+        )
 
     def _build_playbook_runtime(self, cfg: "PlaybookConfig"):
         """Assemble the playbook funnel from pieces this loop already owns.
@@ -1454,9 +1466,20 @@ class AgentLoop:
         return PlaybookRuntime(
             store=store,
             executor=executor,
+            # Both: the config snapshot this loop was built with, and the file as
+            # it stands now. A run with no config file on disk (an eval harness,
+            # a test) would otherwise lose its deny list entirely, and a switch
+            # flipped after start would otherwise need a restart to be seen.
             disabled=cfg.disabled,
+            disabled_source=self._disabled_playbook_names,
             router=RouterSizes(top_k=cfg.router.top_k, over_fetch_factor=cfg.router.over_fetch_factor),
         )
+
+    def _disabled_playbook_names(self) -> frozenset[str]:
+        """The playbook deny list as it stands on disk, for the runtime to ask."""
+        from raven.config.live import disabled_playbook_names
+
+        return disabled_playbook_names(self._live_config)
 
     async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
         """The graph-level ``confirm`` gate's route to a human.
