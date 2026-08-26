@@ -30,7 +30,23 @@ _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
 _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
 
 
-def validate_structure(spec: PlaybookSpec, *, known_agents: Iterable[str] | None = None) -> list[str]:
+def _fillable_fields() -> frozenset[str]:
+    """The node fields an author may leave for the caller to write.
+
+    Imported here rather than at module scope: ``executor`` imports this module,
+    so naming it the other way round at import time is a cycle.
+    """
+    from raven.playbook.executor import FILLABLE_REQUIRED
+
+    return frozenset(FILLABLE_REQUIRED)
+
+
+def validate_structure(
+    spec: PlaybookSpec,
+    *,
+    known_agents: Iterable[str] | None = None,
+    allow_blank_fillable: bool = False,
+) -> list[str]:
     """Rules 3-10 for one spec. Empty list means pass.
 
     ``known_agents`` comes from the agent table, and ``None`` means the caller has
@@ -43,6 +59,14 @@ def validate_structure(spec: PlaybookSpec, *, known_agents: Iterable[str] | None
     Every caller in the tree does have a table (the package's built-in rows are
     seeds, so it is never empty), so ``None`` is for a caller written later that
     does not -- it is not a path anything takes today.
+
+    ``allow_blank_fillable`` separates two questions this used to answer as one:
+    is the spec sound, and is it complete. A field an author deliberately left
+    for the caller (``executor.FILLABLE_REQUIRED``) makes it incomplete and not
+    unsound -- ``load_playbook`` asks for those values by name and the run
+    proceeds. A caller checking a file on the way *into* the library wants the
+    first question; the generator, which is producing a spec that has to run as
+    written, wants both, so it keeps the default.
     """
     errors: list[str] = []
     param_names = set(spec.params)
@@ -51,7 +75,9 @@ def validate_structure(spec: PlaybookSpec, *, known_agents: Iterable[str] | None
             if ref not in param_names:
                 errors.append(f"prompts: ${{params.{ref}}} names no declared param")
         return errors
-    return errors + validate_graph_nodes(spec.nodes or [], param_names, known_agents=known_agents)
+    return errors + validate_graph_nodes(
+        spec.nodes or [], param_names, known_agents=known_agents, allow_blank_fillable=allow_blank_fillable
+    )
 
 
 def validate_graph_nodes(
@@ -60,9 +86,17 @@ def validate_graph_nodes(
     *,
     known_agents: Iterable[str] | None = None,
     stateful_agents: Iterable[str] | None = None,
+    allow_blank_fillable: bool = False,
 ) -> list[str]:
     """Graph rules over a node list — a spec's own or a prompt-mode composed
     one (rule 11: same checks, same chain, no escape hatch).
+
+    ``allow_blank_fillable`` asks whether the graph is *sound* rather than
+    whether it is *complete*: a field an author deliberately left for the caller
+    (``executor.FILLABLE_REQUIRED``) is one ``load_playbook`` asks for by name,
+    so a check on the way into the library must not read it as a defect. A
+    blank ``subagent`` also stops the agent-name check, since there is no name
+    to check yet.
 
     ``known_agents`` / ``stateful_agents`` are ``None`` when no agent table was
     reachable, and the checks that need one are then skipped rather than run
@@ -76,11 +110,13 @@ def validate_graph_nodes(
         errors.append(f"duplicate node ids: {dupes}")
     known_ids = set(ids)
 
+    fillable = _fillable_fields() if allow_blank_fillable else frozenset()
     for node in nodes:
         blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
-        if blank:
-            errors.append(f"node {node.id!r}: missing {sorted(blank)} -- a node cannot run without them")
-        if agents is not None and node.subagent not in agents:
+        reportable = [f for f in blank if f not in fillable]
+        if reportable:
+            errors.append(f"node {node.id!r}: missing {sorted(reportable)} -- a node cannot run without them")
+        if agents is not None and "subagent" not in blank and node.subagent not in agents:
             errors.append(f"node {node.id!r}: agent {node.subagent!r} is not registered (known: {sorted(agents)})")
         for dep in node.depends_on:
             if dep not in known_ids:
