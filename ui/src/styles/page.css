@@ -4338,7 +4338,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbrow:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
 .kbrow .nm { font-size: 13.5px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; padding-right: 64px; }
-.kbrow .st, .kbhd .st { display: flex; gap: 8px; align-items: center; }
+.kbrow .st, .kbhd .st, .kbhit .st { display: flex; gap: 8px; align-items: center; }
 .kbrow .ds { font-size: 12.5px; color: var(--muted); line-height: 1.65;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* Parked in the corner rather than in the flow: deleting is the one thing on
@@ -4348,7 +4348,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The document count and the model: mono, because both are read as values.
    The chip is the count -- the model recedes, since it matters only when it
    disagrees with the one configured now. */
-.kbrow .who, .kbdoc .who {
+.kbrow .who, .kbdoc .who, .kbhit .who {
   font-family: var(--mono); font-size: 10.5px; color: var(--muted);
   background: var(--raised); border-radius: 5px; padding: 1px 6px; flex: none;
 }

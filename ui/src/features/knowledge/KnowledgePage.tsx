@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
+import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
 import type { KbBase, KbDoc, KbHit } from './types'
@@ -74,13 +75,21 @@ function DocRow({ doc }: { doc: KbDoc }): JSX.Element {
   )
 }
 
-function Hit({ hit }: { hit: KbHit }): JSX.Element {
+/* The document a hit came from, when the panel still holds the rows. A base
+   with one document does not need it; a base with twenty answers "found
+   where?" with a score and nothing else without it. */
+function sourceOf(docs: KbDoc[], id: string): string | undefined {
+  return docs.find((d) => d.id === id)?.source
+}
+
+function Hit({ hit, from }: { hit: KbHit; from?: string }): JSX.Element {
   return (
     <div className="kbhit">
       {/* Two decimals: a similarity is for ranking by eye, and more digits
           invite reading precision that is not there. */}
       <div className="st">
         <span className="mdl">{hit.score.toFixed(2)}</span>
+        {from ? <span className="who">{t('gui.kb.from_doc', { name: from })}</span> : null}
       </div>
       <div className="ds">{hit.text}</div>
     </div>
@@ -118,14 +127,20 @@ function Panel({ base }: { base: KbBase }): JSX.Element {
           className="kbask"
           value={s.query}
           placeholder={t('gui.kb.ask')}
-          onChange={(e) => void store.search(e.currentTarget.value)}
+          onChange={(e) => store.search(e.currentTarget.value)}
+          /* Enter means "done typing": it skips the wait rather than adding a
+             request, since it cancels the pending one first. The skill hub
+             search box does the same. */
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void store.searchNow(e.currentTarget.value)
+          }}
         />
       </div>
       {s.hits !== null ? (
         s.hits.length ? (
           <div className="kbhits">
             {s.hits.map((h, i) => (
-              <Hit key={`${h.document_id}:${i}`} hit={h} />
+              <Hit key={`${h.document_id}:${i}`} hit={h} from={sourceOf(s.docs, h.document_id)} />
             ))}
           </div>
         ) : (
@@ -162,9 +177,25 @@ export function KnowledgeApp(): JSX.Element {
   }
   if (!s.loaded) return <div className="empty-note" />
   if (s.status && !s.status.configured) {
+    /* Naming the state is not enough: the endpoint is set in a section of
+       the settings dialog, and a reader told only that one is missing has to
+       go looking. Through the settings store rather than a new shell verb:
+       the island owns both halves already, and the ratchet in
+       ui/scripts/count-shared-globals.mjs exists to stop an island asking
+       the legacy layer for what it can reach directly. */
     return (
       <div className="empty-note">
         <div className="ttl">{t('gui.kb.unconfigured')}</div>
+        <div className="ds">{t('gui.kb.unconfigured_where')}</div>
+        <button
+          className="mini"
+          onClick={() => {
+            setSettingsTab('memory')
+            void openSettings()
+          }}
+        >
+          {t('gui.kb.unconfigured_go')}
+        </button>
       </div>
     )
   }

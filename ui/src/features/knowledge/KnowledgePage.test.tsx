@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { KnowledgeApp } from './KnowledgePage'
@@ -25,6 +25,7 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
    window.RavenShell (T returns its key, so tests assert catalogue keys rather
    than translations) and a fixture source on window.DS.knowledge. */
 const pages: (string | null)[] = []
+const opened: number[] = []
 
 /* What the toast module actually does: append into the page's standing host.
    Asserting on the DOM keeps this test honest about where the text ends up. */
@@ -65,6 +66,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       fn()
     },
     showPage: (id: string | null) => pages.push(id),
+    openSet: () => opened.push(1),
     closeDetail: () => {},
   } as unknown as Shell
   window.RavenShell = fakeShell
@@ -96,12 +98,165 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   pages.length = 0
+  opened.length = 0
   toastHost().replaceChildren()
   confirms.length = 0
   delete (window as { DS?: unknown }).DS
 })
 
 describe('the knowledge page', () => {
+  it('sends an unconfigured reader to the section that configures it', async () => {
+    /* The status alone named a state and stopped. The endpoint is set in a
+       settings section, and a reader told only its name has to go hunting.
+       Asserted through `window.sTab`, which is what the settings store's
+       `setTab` writes and its `open` reads back before lifting the dialog. */
+    source({ status: async () => ({ configured: false, model: '' }) })
+    /* `open()` refreshes from the settings source; a stub keeps the click from
+       rejecting into an unhandled promise. */
+    ;(window.DS as Record<string, unknown>).settings = { load: async () => ({}) }
+    window.sTab = 'usage'
+    await mount()
+    expect(screen.getByText('gui.kb.unconfigured')).toBeTruthy()
+    expect(screen.getByText('gui.kb.unconfigured_where')).toBeTruthy()
+    await act(async () => {
+      screen.getByText('gui.kb.unconfigured_go').click()
+    })
+    expect(window.sTab).toBe('memory')
+    /* And the dialog is actually opened. `sTab` alone passes with the open
+       call deleted, which is a button that aims a dialog nobody raises. */
+    expect(opened.length).toBe(1)
+  })
+
+  it('says which document a hit came from', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
+        doc({ id: 'd2', source: 'policy.md', status: 'ready' }),
+      ],
+      search: async () => [{ score: 0.7, document_id: 'd2', text: 'the answer' }],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      await store.searchNow('what')
+    })
+    /* The score alone cannot answer "found where?" once a base holds more than
+       one document, and the id rides on every hit already. */
+    expect(screen.getByText('gui.kb.from_doc {"name":"policy.md"}')).toBeTruthy()
+  })
+
+  it('keeps the newest answer when an older one lands after it', async () => {
+    /* Both requests are for the same base, so the openId guard passes for each:
+       without a request token the slower prefix repainted the panel under the
+       text the reader had finished typing. */
+    const gates: Array<(h: Array<{ score: number; document_id: string; text: string }>) => void> = []
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: () => new Promise((r) => gates.push(r as never)),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    const first = store.searchNow('quarterly r')
+    const second = store.searchNow('quarterly revenue')
+    await act(async () => {
+      /* The newest answers first, the stale one second -- the order that broke it. */
+      gates[1]!([{ score: 0.9, document_id: 'd1', text: 'the newest answer' }])
+      await second
+      gates[0]!([{ score: 0.4, document_id: 'd1', text: 'the stale answer' }])
+      await first
+    })
+    expect(screen.getByText('the newest answer')).toBeTruthy()
+    expect(screen.queryByText('the stale answer')).toBeNull()
+  })
+
+  it('clears the hits through the debounced path when the box is emptied', async () => {
+    /* The four cases above moved onto `searchNow`, which left `search`'s own
+       empty-query branch with no cover: stale hits sitting over the document
+       list after the reader clears the field would ship green. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'handbook.md', status: 'ready' })],
+      search: async () => [{ score: 0.8, document_id: 'd1', text: 'the answer' }],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      await store.searchNow('what')
+    })
+    expect(screen.getByText('the answer')).toBeTruthy()
+    await act(async () => {
+      store.search('')
+    })
+    expect(screen.queryByText('the answer')).toBeNull()
+    expect(screen.getByText('handbook.md')).toBeTruthy()
+  })
+
+  it('answers Enter without waiting out the debounce', async () => {
+    let calls = 0
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => {
+        calls += 1
+        return [{ score: 0.5, document_id: 'd1', text: 'straight away' }]
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    /* Driven through the DOM, not the store: what is being pinned is the box
+       being wired to `searchNow`, and a test that calls the store directly
+       passes with the handler deleted. */
+    const box = document.querySelector('input.kbask') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'quarterly' } })
+    })
+    expect(calls).toBe(0)
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+    expect(screen.getByText('straight away')).toBeTruthy()
+    /* One request, not two: Enter cancels the keystroke's pending timer rather
+       than racing it. */
+    expect(calls).toBe(1)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400))
+    })
+    expect(calls).toBe(1)
+  })
+
+  it('spends one request for a burst of keystrokes, not one each', async () => {
+    let calls = 0
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => {
+        calls += 1
+        return []
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    for (const q of ['q', 'qu', 'qua', 'quar']) store.search(q)
+    expect(calls).toBe(0)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400))
+    })
+    /* Four keystrokes, one embedding request. */
+    expect(calls).toBe(1)
+  })
+
   it('lists the bases with their document counts', async () => {
     source({ bases: async () => [base({ id: 'b1', name: 'handbook', documents: 3 })] })
     await mount()
@@ -407,13 +562,13 @@ describe('documents and search', () => {
       await store.open_('b1')
     })
     await act(async () => {
-      await store.search('what')
+      await store.searchNow('what')
     })
     expect(screen.getByText('the answer')).toBeTruthy()
     /* Two decimals: a similarity is for ranking by eye. */
     expect(screen.getByText('0.81')).toBeTruthy()
     await act(async () => {
-      await store.search('  ')
+      await store.searchNow('  ')
     })
     expect(screen.queryByText('the answer')).toBeNull()
     expect(screen.getByText('onboarding.md')).toBeTruthy()
@@ -426,7 +581,7 @@ describe('documents and search', () => {
       await store.open_('b1')
     })
     await act(async () => {
-      await store.search('nothing here')
+      await store.searchNow('nothing here')
     })
     expect(screen.getByText('gui.kb.no_hits')).toBeTruthy()
   })
@@ -441,7 +596,7 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    const slow = store.search('what')
+    const slow = store.searchNow('what')
     await act(async () => {
       store.back()
     })

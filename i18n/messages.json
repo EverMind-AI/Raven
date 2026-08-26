@@ -2679,6 +2679,14 @@
       "en": "No embedding endpoint is configured, so no base can be created yet.",
       "zh": "\u8fd8\u6ca1\u6709\u914d\u7f6e embedding \u7aef\u70b9\uff0c\u73b0\u5728\u5efa\u4e0d\u4e86\u77e5\u8bc6\u5e93\u3002"
     },
+    "gui.kb.unconfigured_where": {
+      "en": "A base is built with an embedding model. Set one under Settings - Memory and personalisation, in the EverOS models group.",
+      "zh": "知识库要用 embedding 模型来建。在「设置 → 记忆与个性化」的 EverOS 模型里配一个。"
+    },
+    "gui.kb.unconfigured_go": {
+      "en": "Set it up",
+      "zh": "去配置"
+    },
     "gui.kb.new": {
       "en": "New base",
       "zh": "\u65b0\u5efa"
@@ -2718,6 +2726,10 @@
     "gui.kb.chunks": {
       "en": "{n} chunks",
       "zh": "{n} \u4e2a\u5206\u6bb5"
+    },
+    "gui.kb.from_doc": {
+      "en": "from {name}",
+      "zh": "来自 {name}"
     },
     "gui.kb.doc_pending": {
       "en": "Queued",
