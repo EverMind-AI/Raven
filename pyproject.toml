@@ -323,6 +323,22 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
+    # Four workers, here rather than in each caller's command line, because the
+    # invocation that matters most -- the `tests` job -- lives on the orphan
+    # `ci` branch, and `addopts` is the one place that reaches every caller at
+    # once. Measured on one tree, same 11936 tests both ways: 10m11s at -n 0
+    # against 2m14s here, and coverage 80.1055% against 80.1022% -- two lines
+    # out of 57670, so the coverage gate reads the same numbers. Those two are
+    # the BrokenPipeError arm in subagent/backends/cli_agent.py, which is a race
+    # with the child's exit rather than anything the workers changed: a second
+    # comparison on an older tree moved the same arm, and moved one in
+    # builtin_agents.py the other way.
+    # A fixed 4 rather than `auto`: inside a container `os.cpu_count()` reports
+    # the host's cores, not the job's, so `auto` is a number nobody chose --
+    # bounded memory and predictable behaviour beat a guess, and on a 2-core
+    # runner four CPU-bound workers cost only context switching.
+    "-n",
+    "4",
     "-m",
     "not integration and not e2e",
 ]
@@ -378,5 +394,6 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
 ]
