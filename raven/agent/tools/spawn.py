@@ -2,16 +2,86 @@
 
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
+from raven.agent.subagent_dag._errors import DagValidationError
+from raven.agent.subagent_dag._paths import RUNS_PREFIX, check_confined
 from raven.agent.tools.base import Tool
+from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
     from raven.agent.subagent import SubagentManager
     from raven.agent.subagent.backends import AgentMeta
+
+
+_INPUTS_HEADING = (
+    "Inputs handed to you with this task. They are the material to work from; if one is "
+    "missing or empty, say so in your answer rather than inventing what it would have said."
+)
+
+
+class SpawnInputError(ValueError):
+    """An ``inputs`` entry cannot be turned into material for the sub-agent."""
+
+
+def _block(key: str, source: Path | None, text: str) -> str:
+    read_from = f" (read from {source})" if source is not None else ""
+    return f"--- input '{key}'{read_from} ---\n{text}\n--- end input '{key}' ---"
+
+
+def _read_input_file(key: str, path: str, roots: tuple[str, ...]) -> str:
+    """Read one ``{"file": ...}`` input, confined to the roots a dispatch may reach.
+
+    The contents are fenced as untrusted data: the likeliest file here is an
+    earlier spawn's ``out.md``, which is sub-agent-authored, and any other one
+    may hold whatever a run fetched. The same rule a DAG node's references
+    follow -- the caller's own ``task`` is the instruction, injected material is
+    data.
+
+    The ``@runs/`` form is refused rather than resolved: it addresses a DAG run
+    history, and a spawn has none, so resolving it would land on a directory
+    that never exists and report a missing file instead of a wrong reference.
+    """
+    if path.startswith(RUNS_PREFIX):
+        raise SpawnInputError(
+            f"input {key!r} path {path!r} names a DAG run history, which a spawn does not have -- "
+            "give the file's own path, such as the out.md in an earlier call's `Record:` directory"
+        )
+    try:
+        check_confined(path, what=f"input '{key}' file", roots=roots)
+    except DagValidationError as exc:
+        raise SpawnInputError(str(exc)) from exc
+    resolved = Path(path) if Path(path).is_absolute() else Path(roots[0]) / path
+    try:
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise SpawnInputError(f"input {key!r} file {path!r} could not be read: {exc.strerror or exc}") from exc
+    return _block(key, resolved, wrap_untrusted(text, source="file"))
+
+
+def _resolve_input(key: str, spec: Any, roots: tuple[str, ...]) -> str:
+    if isinstance(spec, dict):
+        if "file" not in spec:
+            raise SpawnInputError(f'input {key!r} must be a string or {{"file": <path>}}')
+        return _read_input_file(key, str(spec["file"]), roots)
+    return _block(key, None, str(spec))
+
+
+def _with_inputs(task: str, inputs: Any, roots: tuple[str, ...]) -> str:
+    """Place the resolved ``inputs`` before ``task``.
+
+    Resolved here rather than handed to the backend as paths: a sub-agent the
+    roster tags ``[no-local-files]`` has no way to open one, and a spawn's whole
+    prompt is the single string the backend receives.
+    """
+    if not isinstance(inputs, dict):
+        raise SpawnInputError("`inputs` must be an object keyed by input name")
+    blocks = [_resolve_input(key, spec, roots) for key, spec in inputs.items()]
+    return "\n\n".join([_INPUTS_HEADING, *blocks, task])
 
 
 @dataclass(frozen=True)
@@ -114,9 +184,10 @@ class SpawnTool(Tool):
             # directory it does not know the use of.
             base += (
                 " The result names a `Record:` directory holding this call's prompt and output. "
-                "It may also hold `memory.json` -- what the sub-agent concluded for itself, "
-                "rather than the answer it gave you -- written after the call, so absence is "
-                "normal."
+                "Its `out.md` is what to pass as a later call's `inputs` to hand this run's work "
+                "to the next sub-agent. It may also hold `memory.json` -- what the sub-agent "
+                "concluded for itself, rather than the answer it gave you -- written after the "
+                "call, so absence is normal."
             )
         return base
 
@@ -135,6 +206,18 @@ class SpawnTool(Tool):
             "task": {
                 "type": "string",
                 "description": "The task for the subagent to complete",
+            },
+            "inputs": {
+                "type": "object",
+                "description": (
+                    "Optional: the material this task works from, per key -- a literal string, or "
+                    '{"file": <path>} for a file. Each one is read now and placed before `task`, so a '
+                    "sub-agent that cannot open local files still receives the contents. This is how "
+                    "one sub-agent's work reaches the next: hand over the out.md in the earlier call's "
+                    "`Record:` directory instead of retyping its result into `task`. Paths resolve "
+                    "inside the session working directory and this conversation's sub-agent history; "
+                    "anything else is refused and nothing is dispatched."
+                ),
             },
         }
         agents = self._agents()
@@ -207,6 +290,7 @@ class SpawnTool(Tool):
         task: str,
         subagent: str | None = None,
         instance: str | None = None,
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         """Spawn a subagent to execute the given task.
@@ -222,6 +306,20 @@ class SpawnTool(Tool):
         subagent = subagent or kwargs.pop("agent", None)
         if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
+        org = self._cur()
+        # Before the handle is minted and before anything is dispatched: an input
+        # the caller named and this call could not read is the one case where
+        # running anyway produces exactly the failure this parameter exists to
+        # stop -- a sub-agent working from material that never arrived. The roots
+        # are resolved only when there is something to resolve against them:
+        # deriving them reaches for the session directory.
+        authored_task: str | None = None
+        if inputs:
+            try:
+                rendered = _with_inputs(task, inputs, self._manager.reference_roots(org.session_key))
+            except SpawnInputError as exc:
+                return f"Error: {exc}"
+            authored_task, task = task, rendered
         # Minted rather than left empty so every run of a resumable sub-agent is
         # addressable afterwards. Filling the field the model would have filled
         # is what keeps the rest of the dispatch path unchanged.
@@ -230,7 +328,6 @@ class SpawnTool(Tool):
             from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 
             instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
-        org = self._cur()
         # Cleared before the call rather than only on the stateless path: an earlier
         # stateful call whose metadata went uncollected (no tool-event sink on this
         # channel) must not have its handle popped and reported as this call's own,
@@ -246,6 +343,7 @@ class SpawnTool(Tool):
             instance=instance,
             instance_auto=minted,
             workspace=workdir.current(),
+            authored_task=authored_task,
         )
         # Published only once the manager has taken the spawn. A refusal (delegation
         # paused, hourly cap) comes back as the result rather than as an exception,

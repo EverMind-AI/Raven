@@ -372,7 +372,46 @@ async def test_render_output_and_inputs() -> None:
     )
     node = spec.nodes[0]
     rendered = await render_prompt(node, backend=be, cwd="/w", output_paths={"a": out_path})
-    assert "up=RESULT_A" in rendered
+    assert "RESULT_A" in rendered
+    assert f"path={out_path}" in rendered
+    assert "lit=LITERAL" in rendered
+
+
+async def test_injected_content_is_fenced_but_the_template_is_not() -> None:
+    """A node output is sub-agent-authored and a referenced file may hold
+    anything a run fetched; neither is an instruction this prompt may carry.
+    The template's own words, a literal input and the ``_path`` forms are the
+    author's and stay verbatim."""
+    be = _FakeBackend()
+    out_path = "/hist/mas_dag/run/a.out.md"
+    be.files[out_path] = b"RESULT_A"
+    be.files["/w/notes.md"] = b"FILE_BODY"
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "fence what is injected, not what was authored",
+            "nodes": [
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "prompt_template": (
+                        "AUTHORED up={{ a.output }} ref={{ ref:notes.md }} fin={{ inputs.f }} "
+                        "path={{ a.output_path }} lit={{ inputs.k }}"
+                    ),
+                    "depends_on": ["a"],
+                    "inputs": {"k": "LITERAL", "f": {"file": "notes.md"}},
+                }
+            ],
+        }
+    )
+    rendered = await render_prompt(spec.nodes[0], backend=be, cwd="/w", output_paths={"a": out_path})
+
+    assert "[BEGIN UNTRUSTED subagent" in rendered
+    # Once for the bare ref, once for the file input: both inject contents.
+    assert rendered.count("[BEGIN UNTRUSTED file") == 2
+    assert "RESULT_A" in rendered
+    assert rendered.count("FILE_BODY") == 2
+    assert "AUTHORED" in rendered
     assert f"path={out_path}" in rendered
     assert "lit=LITERAL" in rendered
 
@@ -617,7 +656,7 @@ async def test_render_reaches_an_earlier_run_through_the_runs_prefix() -> None:
     node = _one_node("text={{ ref:@runs/r1/plan.out.md }} path={{ ref_path:@runs/r1/plan.out.md }}")
     rendered = await render_prompt(node, backend=be, cwd="/w", output_paths={}, runs_root="/hist/mas_dag")
 
-    assert "text=EARLIER" in rendered
+    assert "EARLIER" in rendered
     assert "path=/hist/mas_dag/r1/plan.out.md" in rendered
 
 

@@ -30,7 +30,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
-from raven.agent.subagent_history import SpawnRecord
+from raven.agent.subagent_history import SpawnRecord, session_history_root
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
     EverosIdentity,
@@ -516,8 +516,15 @@ class SubagentManager:
         instance: str | None = None,
         instance_auto: bool = False,
         workspace: Path | None = None,
+        authored_task: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
+
+        ``authored_task`` is the task as the dispatching model wrote it, given
+        when ``task`` is a rendering of it that a caller resolved file inputs
+        into. The sub-agent and the record get the rendering; the announcement
+        quotes this instead, so a file handed over precisely to keep it out of
+        the main agent's context is not read back into it on completion.
 
         ``workspace`` must be captured here, at spawn time, rather than read
         later inside the background task: the sub-agent outlives the calling
@@ -568,6 +575,7 @@ class SubagentManager:
             "instance_auto": instance_auto,
             "handle": handle,
             "workspace": effective_workspace,
+            "authored_task": authored_task,
         }
         instance_key = (quota_key, agent, handle)
 
@@ -920,6 +928,26 @@ class SubagentManager:
             self._fallback_sessions = SessionManager(Path(self.workspace))
         return self._fallback_sessions.session_dir(session_key)
 
+    def reference_roots(self, session_key: str) -> tuple[str, ...]:
+        """Directories a dispatch's file references may resolve into.
+
+        The turn's working directory and this conversation's sub-agent history,
+        the same pair a DAG node's references are confined to. The second is
+        what lets one spawn be handed an earlier spawn's recorded output: the
+        records sit under it, and no working directory can be aimed there.
+
+        That second root is omitted rather than derived when no resolver was
+        injected and no ``sessions/`` exists yet, matching what the DAG tool
+        avoids for the same reason: building the fallback ``SessionManager`` to
+        find out would create the directory, and a reference this call is about
+        to refuse must not leave one behind. With no history there is nothing
+        under it for a reference to name either.
+        """
+        roots = [str(workdir.current() or self.workspace)]
+        if self.session_dir is not None or (Path(self.workspace) / "sessions").is_dir():
+            roots.append(str(session_history_root(self._session_dir(session_key))))
+        return tuple(roots)
+
     async def _run_subagent_inner(
         self,
         task_id: str,
@@ -1136,7 +1164,11 @@ class SubagentManager:
         enqueue a heartbeat SystemEvent here — that would process the same
         fact twice (double LLM cost, risk of double-notifying the user).
         """
-        status_text = "completed successfully" if status == "ok" else "failed"
+        # "ok" says the backend returned, not that the work was carried out: the
+        # cli backend derives it from a zero exit status alone, and nothing here
+        # reads the result text. Calling that success framed a run that had said
+        # it could not do the task as a completed one.
+        status_text = "returned" if status == "ok" else "failed"
 
         # The subagent's result is attacker-influenceable (it may have fetched
         # web pages / read files), so fence it as untrusted before it re-enters
@@ -1152,14 +1184,15 @@ class SubagentManager:
             else ""
         )
         record_line = f"\n\nRecord: {record_dir}" if record_dir else ""
+        asked = origin.get("authored_task") or task
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
-Task: {task}
+Task: {asked}
 {handle_line}
 Result:
 {fenced_result}{record_line}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
+Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
 
         assert self._submit is not None
         mark = {"kind": "spawn", "label": task_summary, "status": status}
