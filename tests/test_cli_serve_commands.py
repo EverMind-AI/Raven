@@ -154,9 +154,24 @@ def opened(monkeypatch) -> list[str]:
 
 @pytest.fixture
 def started(monkeypatch) -> list[int]:
-    """Every gateway `web` started, which most of these must not do."""
+    """Every in-process serve stack these commands built.
+
+    Right for `raven serve`, which IS that stack, and wrong for `raven web`: that
+    engine is the one with no ChannelManager, so a `web` that reaches for it is a
+    page whose entrances cannot start an adapter. Kept apart from the foreground
+    launch below for exactly that reason -- one shared spy would let that
+    regression through.
+    """
     ports: list[int] = []
     monkeypatch.setattr(serve_commands, "_run", lambda port, open_browser: ports.append(port))
+    return ports
+
+
+@pytest.fixture
+def foregrounded(monkeypatch) -> list[int]:
+    """Every engine `web --foreground` launched as its own process."""
+    ports: list[int] = []
+    monkeypatch.setattr(serve_commands, "_run_foreground", lambda port: ports.append(port))
     return ports
 
 
@@ -275,7 +290,14 @@ class TestTheCommand:
         assert started == [] and supervised == [], "it started a second gateway instead of attaching"
 
     def test_nothing_to_attach_to_leaves_a_resident_gateway(
-        self, home: Path, a_built_page, opened: list[str], started: list[int], supervised: list[int], monkeypatch
+        self,
+        home: Path,
+        a_built_page,
+        opened: list[str],
+        started: list[int],
+        foregrounded: list[int],
+        supervised: list[int],
+        monkeypatch,
     ) -> None:
         """The page outlives the terminal that opened it, so the engine behind it
         must too: `web` leaves a supervised gateway rather than holding the
@@ -286,21 +308,35 @@ class TestTheCommand:
         serve_commands._web(port=18999)
 
         assert supervised == [18999]
-        assert started == [], "it held the terminal instead of leaving a resident gateway"
+        assert started == [] and foregrounded == [], "it held the terminal instead of leaving a resident gateway"
         assert opened == ["http://127.0.0.1:18999/auth#z"]
 
     def test_foreground_holds_the_terminal_and_supervises_nothing(
-        self, home: Path, a_built_page, opened: list[str], started: list[int], supervised: list[int], monkeypatch
+        self,
+        home: Path,
+        a_built_page,
+        opened: list[str],
+        started: list[int],
+        foregrounded: list[int],
+        supervised: list[int],
+        monkeypatch,
     ) -> None:
         """The point of --foreground is Ctrl-C meaning what it says, which a
-        supervisor would undo by restarting what you just stopped."""
+        supervisor would undo by restarting what you just stopped.
+
+        And it launches the same child the supervisor does. Building the
+        standalone stack in this process left --foreground on the one engine with
+        no ChannelManager -- the inert entrances page -- with the fix applying
+        only to the detached path, which is not the one anybody debugging uses.
+        """
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
 
         serve_commands._web(port=18999, foreground=True)
 
-        assert started == [18999]
+        assert foregrounded == [18999]
+        assert started == [], "it built a serve stack in this process instead of launching the engine"
         assert supervised == []
-        assert opened == [], "the gateway it starts opens the browser itself"
+        assert opened == [], "the engine it starts opens the browser itself"
 
     def test_it_waits_for_a_supervisor_that_is_between_restarts(
         self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch
@@ -500,7 +536,146 @@ class TestTheSupervisor:
         argv = serve_commands._gateway_argv(18999)
 
         assert argv[:3] == [sys.executable, "-m", "raven"]
+
+    def test_it_supervises_the_engine_that_has_the_channel_adapters(self) -> None:
+        """`serve` builds no ChannelManager, so a page behind it can never start an
+        adapter: no sign-in code is ever minted and every enabled entrance reads
+        "state unknown" for good. The gateway is the process that runs them, and it
+        serves the page on its own loop, so it is what the page's supervisor runs.
+
+        The port travels as ``--page-port``: the gateway's own ``--port`` is its
+        health endpoint, and passing the tab's port there would leave the page
+        wherever config happened to put it.
+        """
+        argv = self.argv_with_lock(None, 18999)
+
+        assert argv[3] == "gateway"
+        assert "--page-port" in argv
+        assert argv[argv.index("--page-port") + 1] == "18999"
+        assert "serve" not in argv
+
+    def argv_with_lock(self, holder: object, port: int, monkeypatch=None) -> list[str]:
+        """The page child chosen while `holder` answers for the gateway lock."""
+        from unittest.mock import patch
+
+        with patch.object(serve_commands, "_gateway_holds_the_lock", lambda: holder is not None):
+            return serve_commands._gateway_argv(port)
+
+    def test_the_foreground_run_launches_that_same_child(self, monkeypatch, home: Path, opened: list[str]) -> None:
+        """And it keeps foreground semantics while doing it: the child's output is
+        this terminal's, so stdio is inherited rather than piped, and the browser
+        is opened once the child has bound a port and written it down."""
+        import subprocess
+
+        launched: list[dict] = []
+
+        class _Child:
+            returncode = 0
+
+            def wait(self) -> int:
+                return 0
+
+        def _fake_popen(argv, **kwargs):
+            launched.append({"argv": argv, "kwargs": kwargs})
+            return _Child()
+
+        monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
+        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
+
+        serve_commands._run_foreground(18999)
+
+        assert [c["argv"] for c in launched] == [["engine", "18999"]]
+        # Inherited, not captured: piping it would send the engine's own output
+        # somewhere nobody is reading, which is the whole point of --foreground.
+        assert "stdout" not in launched[0]["kwargs"] and "stderr" not in launched[0]["kwargs"]
+        assert opened == ["http://127.0.0.1:18999/auth#z"]
+
+    def test_the_wait_ends_when_the_foreground_child_dies(self, home: Path, monkeypatch) -> None:
+        """The child can fail before it writes serve.json -- a lost lock race, a
+        config it cannot load, an import that fails. Watching `web.json` cannot
+        see that: nothing supervises a foreground run, so the wait sat out its
+        whole 150s ceiling with the error already on screen.
+        """
+        import time
+
+        monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
+
+        began = time.monotonic()
+        url = serve_commands._await_attach(timeout_s=30.0, gone=lambda: True)
+        took = time.monotonic() - began
+
+        assert url is None
+        assert took < 2.0, f"it waited {took:.1f}s on a child that was already gone"
+
+    def test_the_foreground_run_propagates_a_child_that_failed_at_once(
+        self, home: Path, monkeypatch, opened: list[str]
+    ) -> None:
+        """What the reader gets for it: the exit code, now rather than in two and
+        a half minutes, and no claim that the engine did not come up on top of
+        the child's own error."""
+        import subprocess
+        import time
+
+        class _DeadChild:
+            returncode = 3
+
+            def poll(self) -> int:
+                return 3
+
+            def wait(self) -> int:
+                return 3
+
+        said: list[str] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _DeadChild())
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
+        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
+        monkeypatch.setattr(serve_commands.typer, "echo", lambda message="", **_k: said.append(str(message)))
+
+        began = time.monotonic()
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._run_foreground(18999)
+        took = time.monotonic() - began
+
+        assert exit_info.value.exit_code == 3
+        assert took < 2.0, f"it waited {took:.1f}s on a child that had already exited"
+        assert opened == []
+        # The child has already said why on this same terminal. Adding "the
+        # engine did not come up" over its traceback is this function guessing
+        # out loud about something it can see the answer to.
+        assert not [line for line in said if "did not come up" in line], said
+
+    def test_it_falls_back_to_serve_where_a_gateway_already_holds_the_lock(self) -> None:
+        """`gateway.page.enabled = false` is a supported way to run: channels in
+        the gateway, page separate. A second gateway cannot start there -- it
+        exits on the lock -- and a supervisor would spend its whole crash budget
+        finding that out, leaving no page at all. Standalone serve is the only
+        child that CAN run, and it is not a downgrade: the page reaches the
+        incumbent's adapters over `channels.live_probe`, which finds it through
+        that same lock.
+        """
+        argv = self.argv_with_lock(object(), 18999)
+
         assert argv[3] == "serve"
+        assert argv[argv.index("--port") + 1] == "18999"
+        assert "gateway" not in argv
+
+    def test_a_lock_it_cannot_read_is_treated_as_held(self, monkeypatch) -> None:
+        """The two mistakes are not equal. Guessing "free" when it is held opens
+        no page at all; guessing "held" when it is free opens the page on an
+        engine without channels, which is where this surface already was and is
+        one `raven gateway` away from right.
+        """
+        from raven.cli import _gateway_lock
+
+        def _explode(now: float) -> None:
+            raise OSError("lock unreadable")
+
+        monkeypatch.setattr(_gateway_lock, "read_status", _explode)
+
+        assert serve_commands._gateway_holds_the_lock() is True
 
 
 class TestStopping:

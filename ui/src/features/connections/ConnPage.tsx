@@ -135,26 +135,57 @@ function GatewayBar({ rows }: { rows: ConnChannel[] }): JSX.Element | null {
    group heading says the entrance was handed to Raven; this says how far that
    actually got. A live one needs no badge: the group and the green dot have
    said it. */
-function StateBadge({ c }: { c: ConnChannel }): JSX.Element | null {
+/* Why an entrance is not in service, when something actually went wrong.
+ *
+ * Only a thing gone wrong earns a reason. An adapter that is up and waiting on a
+ * code is not wrong and not a state to advertise -- it is a step of signing in,
+ * which happens inside the card the reader has open, and printing "waiting for a
+ * scan" on the row was the third state this page is supposed not to have. An
+ * entrance that started and stopped, or has nothing running it, is a different
+ * matter: that is why it is not in service, and the row is where the reader
+ * looks for it.
+ *
+ * "State unknown" is the honest answer when nobody could be asked, and the wrong
+ * one when we know why nobody answered: with no host running there is no
+ * adapter, and naming that is the difference between a reader who thinks their
+ * entrance is broken and one who knows nothing is running it. */
+function reasonOf(c: ConnChannel): string | null {
   const live = connState(c)
-  if (live === 'live') return null
-  const key = live === 'down' ? 'tag_down' : live === 'unpaired' ? 'tag_unpaired' : 'tag_unknown'
-  return <span className={live === 'down' ? 'kd bad' : 'kd warn'}>{t('gui.conn.' + key)}</span>
+  if (live === 'live' || live === 'unpaired' || live === 'off') return null
+  if (live === 'down') return 'tag_down'
+  return store.getState().host === false ? 'tag_nohost' : 'tag_unknown'
 }
 
-/* Three groups, because there are three answers to "is this entrance mine yet".
+/* The row's one badge. A reason where there is one, and otherwise what it costs
+   to get in -- which stays true of an entrance whose adapter is up and waiting
+   on a code, and used to leave that row's badge slot empty because the choice
+   was keyed on the config flag instead of on what is actually the matter. */
+function RowBadge({ c }: { c: ConnChannel }): JSX.Element | null {
+  if (connState(c) === 'live') return null
+  const reason = reasonOf(c)
+  if (reason) return <span className={reason === 'tag_down' ? 'kd bad' : 'kd warn'}>{t('gui.conn.' + reason)}</span>
+  return <CostBadge c={c} />
+}
+
+/* Two groups, because there are two answers to "is this entrance mine yet".
  *
  * Grouping by the config switch made pressing the button the whole of joining:
  * an entrance moved to "in service" before a code had been scanned, before a
  * credential had been tried, and would have sat there just the same with a
  * made-up token in it. The switch is a decision; being in service is a fact,
- * and only the live adapter can report it. So the flag now buys a place in
- * "connecting", and the entrance earns "in service" by receiving. */
+ * and only the live adapter can report it.
+ *
+ * Two answers, not three. A "connecting" group in between was a state nobody
+ * can act on: an entrance is either receiving or it is not, and everything the
+ * switch touched on the way -- written, started, waiting on a code nobody
+ * scanned -- is still not receiving. The reader pressing a button and being
+ * shown a third heading for it was the flag being read out loud one heading
+ * further along. What the middle group was for -- why this one is not in service
+ * yet -- is the row's badge, which needs no group of its own. */
 function ConnList({ rows }: { rows: ConnChannel[] }): JSX.Element {
   const s = store.getState()
   const on = rows.filter((c) => connState(c) === 'live')
-  const pending = rows.filter((c) => c.on && connState(c) !== 'live')
-  const off = rows.filter((c) => !c.on).sort((a, b) => costOf(a) - costOf(b))
+  const off = rows.filter((c) => connState(c) !== 'live').sort((a, b) => costOf(a) - costOf(b))
   const list = (items: ConnChannel[]): JSX.Element => (
     <div className="sulist">
       {items.map((c) => (
@@ -176,11 +207,6 @@ function ConnList({ rows }: { rows: ConnChannel[] }): JSX.Element {
           {list(on)}
         </SetupGroup>
       ) : null}
-      {pending.length ? (
-        <SetupGroup label={t('gui.conn.g_pending')} count={pending.length}>
-          {list(pending)}
-        </SetupGroup>
-      ) : null}
       {off.length ? (
         <SetupGroup label={t('gui.conn.g_off')} count={off.length}>
           {list(off)}
@@ -193,23 +219,39 @@ function ConnList({ rows }: { rows: ConnChannel[] }): JSX.Element {
 /* One row, one verb, and the same pair the agents page offers: connect or
    disconnect. It used to be a switch on one side and two different way-in labels
    on the other, which named the mechanism (a flag, an enable) instead of the
-   errand. Connect opens the card, because what an entrance needs next is a form
-   or a code; disconnect is the write itself, since there is nothing to ask. */
+   errand.
+ *
+ * Connect opens the card. It briefly did the write itself, so that a press was
+ * an attempt rather than a form -- but an entrance is joined by scanning a code
+ * or by handing over a credential, and both of those live in the card, so a
+ * press that starts them from out here can only ever be half of the errand. One
+ * door, and everything that decides anything is behind it. */
 function ConnRow({ c, sel }: { c: ConnChannel; sel: boolean }): JSX.Element {
   const cn = chanName(c)
   const open = (): void => store.openDialog(c)
-  const act = c.on ? (
-    /* No confirm: this only takes the entrance out of service. The credentials
-       stay in config and connect puts it back, so a dialog would be asking
-       permission for a switch. */
-    <button className="mini ghost" aria-label={cn} onClick={() => store.toggle(c)}>
-      {t('gui.conn.disconnect')}
-    </button>
-  ) : (
-    <button className="mini" aria-label={cn} onClick={open}>
-      {t('gui.conn.connect')}
-    </button>
-  )
+  /* Is there something to disconnect FROM? Keyed on the adapter, like the
+     groups: offering to disconnect an entrance whose adapter never came up
+     named the config flag as a connection, in the one control that is supposed
+     to say what the row is. Clearing a flag that got nowhere is still possible,
+     from the card, where there is room to say what it does. */
+  /* Keyed on receiving, like the groups: there are two states, so there are two
+     verbs, and "disconnect" belongs to the one that is actually in service.
+     Offering it on an entrance whose adapter never came up named the config flag
+     as a connection; clearing that flag is in the card, which has room to say
+     what it does. */
+  const act =
+    connState(c) === 'live' ? (
+      /* No confirm: this only takes the entrance out of service. The credentials
+         stay in config and connect puts it back, so a dialog would be asking
+         permission for a switch. */
+      <button className="mini ghost" aria-label={cn} onClick={() => store.toggle(c)}>
+        {t('gui.conn.disconnect')}
+      </button>
+    ) : (
+      <button className="mini" aria-label={cn} onClick={open}>
+        {t('gui.conn.connect')}
+      </button>
+    )
   return (
     <SetupRow
       name={cn}
@@ -218,7 +260,7 @@ function ConnRow({ c, sel }: { c: ConnChannel; sel: boolean }): JSX.Element {
       state={{ cls: stateOf(c).cls, text: '' }}
       /* In service: why it is not receiving yet, or nothing. Not in service:
          what it costs to get in. */
-      tags={c.on ? <StateBadge c={c} /> : <CostBadge c={c} />}
+      tags={<RowBadge c={c} />}
       act={act}
       sel={sel}
       onOpen={open}
@@ -239,10 +281,11 @@ function ConnDialog({ c }: { c: ConnChannel }): JSX.Element | null {
     const first = body?.querySelector('input')
     if (first) first.focus()
     else if ((c.missing || []).length > 0) (body?.querySelector('button') as HTMLElement | null)?.focus()
-    /* Click-away. The card is modal: the scrim covers the page and takes the
-       press, so a click outside closes this card and does not also operate what
-       it was covering -- pressing the rail behind an open card must not
-       navigate, and pressing another row's disconnect must not disconnect it.
+    /* Click-away. The card is modal, and modal means one thing: a press outside
+       it closes it and reaches nothing. Not the rail behind it, not another
+       row's disconnect, and not that row's own card either -- handing the card
+       over to whatever the press landed on was still the press acting on
+       something it could not see, which is the thing being ruled out.
      *
      * Listened for on the document rather than on the scrim, because the press
      * that closes the card may also land on the page's own chrome above the
@@ -303,6 +346,17 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
   const inputs = useRef(new Map<string, HTMLInputElement>()).current
   const [advOpen, setAdvOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const required = (c.fields || []).filter((f) => f.required)
+  /* Is there anything to try? A credential the schema requires and nobody has
+     supplied cannot be sent, and pressing connect with an empty box wrote
+     nothing, started nothing and left the reader looking at a card that had not
+     changed -- the press was the only feedback and it meant nothing. So the verb
+     is unavailable until every required box has something in it, from config or
+     from this card. Recomputed on input because the boxes are uncontrolled: a
+     value the reader typed is only in the DOM. */
+  const filled = (): boolean =>
+    required.every((f) => f.set || (inputs.get(f.key)?.value ?? '').trim() !== '')
+  const [ready, setReady] = useState(filled)
   /* Whether this card has handed its credentials over yet. Only after that does
      the state line have anything to report, and only then does the foot say
      "trying" rather than "connect". */
@@ -333,7 +387,10 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
           type={f.secret ? 'password' : 'text'}
           autoComplete="off"
           placeholder={f.set ? t('gui.conn.field_set') : ''}
-          onInput={() => setDirty(true)}
+          onInput={() => {
+            setDirty(true)
+            setReady(filled())
+          }}
           ref={(el) => {
             if (el) inputs.set(f.key, el)
             else inputs.delete(f.key)
@@ -342,7 +399,6 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
       </Field>
     )
   }
-  const required = (c.fields || []).filter((f) => f.required)
   const optional = (c.fields || []).filter((f) => !f.required)
   const apply = APPLY[c.id]
   const groups = groupFields(c, required)
@@ -420,7 +476,17 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
               ? t('gui.conn.foot_need', { n: String((c.missing || []).length) })
               : t('gui.conn.foot_clean')}
         </span>
-        <button className="mini key" onClick={save}>
+        {/* Clearing the switch, for the entrance whose row no longer offers it:
+            a row shows "disconnect" only where an adapter is up, so an entrance
+            switched on that never started would otherwise have no way back to
+            off. Here, beside the form, "disconnect" has the card around it to
+            say what is being switched. */}
+        {c.on ? (
+          <button className="mini ghost" onClick={() => void store.apply(c, {}, false)}>
+            {t('gui.conn.disconnect')}
+          </button>
+        ) : null}
+        <button className="mini key" disabled={!ready} onClick={save}>
           {/* Keyed on receiving, not on the flag: a card whose credentials were
               written and refused would otherwise offer to "save" them again. */}
           {t(live ? 'gui.agent.save' : sent ? 'gui.conn.retry' : 'gui.conn.connect')}
@@ -472,8 +538,14 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
      the reader who just turned the entry on is owed the same sentence either
      way: there is no code yet, and reopening the app is what produces one.
      Testing for an explicit no left that reader looking at a step that had
-     gone quiet -- the dead end this wizard exists to remove. */
-  const stalled = !!c.on && c.running !== true
+     gone quiet -- the dead end this wizard exists to remove.
+   *
+   * And it is owed BEFORE the press, not only after it, wherever we already
+   * know nothing is running: pressing connect with no host mints no code, so a
+   * card that waits for the press to mention that spends the reader's press to
+   * tell them something it knew all along. */
+  const host = store.getState().host
+  const stalled = c.running !== true && (!!c.on || host === false)
   const s1 = c.on ? 'done' : 'idle'
   const s2 = paired ? 'done' : up ? 'now' : 'idle'
   const s3 = paired ? 'now' : 'idle'
@@ -496,8 +568,20 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
           paired ? t('gui.conn.w2_done') : t('gui.conn.w2'),
           /* The panel only polls where a code can exist, and unmounting it is
              what stops the poll -- so it lives inside the step that is
-             current, not above the wizard. */
-          s2 === 'now' ? <QrPanel c={c} /> : stalled ? t('gui.conn.w2_blocked') : null,
+             current, not above the wizard.
+           *
+           * Two ways for there to be no code, and one sentence for both was
+           * wrong in the more common one: "Raven is not running" printed over a
+           * page the gateway itself was serving. Only a KNOWN host shifts the
+           * blame to the adapter -- something is running it, so it started and
+           * gave up, and that is the case worth trying again. Not knowing keeps
+           * the old advice, because "open the app" is still the useful thing to
+           * say to a reader whose gateway may well be down. */
+          s2 === 'now' ? (
+            <QrPanel c={c} />
+          ) : stalled ? (
+            t(host === true ? 'gui.conn.w2_down' : 'gui.conn.w2_blocked')
+          ) : null,
         )}
         {step('3', s3, t('gui.conn.w3'))}
       </div>
@@ -516,9 +600,20 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
             {t('gui.conn.w_done')}
           </button>
         ) : (
-          <button className="mini ghost" onClick={() => void store.apply(c, {}, false)}>
-            {t('gui.conn.disconnect')}
-          </button>
+          <>
+            <button className="mini ghost" onClick={() => void store.apply(c, {}, false)}>
+              {t('gui.conn.disconnect')}
+            </button>
+            {/* On and not up: the entrance gave up, or nothing started it. The
+                row's connect is the retry, and this card is covering it -- so
+                the card carries one, or the only way to try again is to close
+                this and find the row underneath. */}
+            {!up ? (
+              <button className="mini key" onClick={() => void store.apply(c, {}, true)}>
+                {t('gui.conn.w_retry')}
+              </button>
+            ) : null}
+          </>
         )}
       </div>
     </>

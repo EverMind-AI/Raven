@@ -208,3 +208,36 @@ async def _read_until(ws, matches, timeout: float = 5.0) -> dict:
                 return frame
 
     return await asyncio.wait_for(_read(), timeout)
+
+
+async def test_a_relaunch_reclaims_the_exact_port_the_tab_is_on(home: Path, monkeypatch) -> None:
+    """The page mount follows the same strict-port policy standalone serve does.
+
+    A relaunch under an open browser tab -- the web supervisor's retry, or
+    ``system.upgrade`` -- sets RAVEN_SERVE_PORT_STRICT because the tab is pointed
+    at a port, and probing forward to the next free one strands it. Now that
+    `raven web` supervises this mount rather than standalone serve, reading that
+    flag in only one of the two places would strand the very page the restart was
+    for.
+    """
+    import raven.rpc.transports.ws as ws_module
+    from raven.cli import _gateway_page
+
+    asked: list[bool] = []
+
+    async def fake_pick(preferred: int, *, strict: bool = False, wait_s: float = 20.0) -> int:
+        asked.append(strict)
+        raise OSError("not binding anything in this test")
+
+    monkeypatch.setattr(ws_module, "pick_port", fake_pick)
+    monkeypatch.setenv("RAVEN_SERVE_PORT_STRICT", "1")
+    loop = _FakeLoop(_FakeCron())
+    with pytest.raises(OSError):
+        await _gateway_page.mount_page(loop, 18931)
+    assert asked == [True], "the mount probed forward under a tab it had to come back to"
+
+    asked.clear()
+    monkeypatch.delenv("RAVEN_SERVE_PORT_STRICT")
+    with pytest.raises(OSError):
+        await _gateway_page.mount_page(loop, 18931)
+    assert asked == [False], "an ordinary start should still probe forward"

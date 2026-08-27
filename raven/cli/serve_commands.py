@@ -15,7 +15,14 @@ by the running process, so the token never reaches the page.
 A page in a browser tab outlives the terminal that opened it, so the engine
 behind it has to as well: `web` leaves a resident gateway (detached, its own
 session, logging to ``web.log``) under a supervisor that brings it back if it
-dies. A page whose engine is gone is worse than one that never opened -- the tab
+dies. That child is `raven gateway` wherever it can be: it serves this same page
+on its own loop (``_gateway_page.mount_page``) and, unlike standalone `serve`,
+also runs the IM channel adapters -- so what the entrances page offers is
+reachable from the page instead of being a switch nothing acts on. Where a
+gateway already holds the instance lock (channels there, page separate --
+``gateway.page.enabled = false``), the child is `serve` instead, since a second
+gateway cannot start at all; the page then reaches those adapters over
+``channels.live_probe``. A page whose engine is gone is worse than one that never opened -- the tab
 is still there, still looks live, and every send fails. `raven web --stop` is how
 you end it, and `--foreground` is the old behaviour for someone debugging.
 
@@ -32,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import webbrowser
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional
@@ -47,6 +55,20 @@ SERVED_PAGE_SURFACE = "page"
 Not "web": that name belongs to ``raven/web_rpc``, a different front end on its
 own channel, and two different things under one label is worse than no label.
 """
+
+
+def port_strict() -> bool:
+    """Whether this launch must reclaim its exact port rather than probe forward.
+
+    Set by the two callers that relaunch under an open browser tab -- the web
+    supervisor's second attempt onwards, and ``system.upgrade`` -- because a tab
+    is pointed at a port and coming back on another one strands it as surely as
+    not coming back at all. Read here rather than at each site so the page mount
+    inside the gateway and standalone `raven serve` cannot disagree about it.
+    """
+    import os
+
+    return os.environ.get("RAVEN_SERVE_PORT_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def resolve_ui_dist() -> Optional[Path]:
@@ -308,7 +330,6 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
 
 
 async def _serve_main(port: int, open_browser: bool) -> None:
-    import os
 
     from aiohttp import web
     from loguru import logger
@@ -331,8 +352,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # A relaunch after `system.upgrade` must reclaim the exact port the open
     # browser is pointed at, so it asks for strict mode rather than letting the
     # probe wander to the next free port.
-    strict = os.environ.get("RAVEN_SERVE_PORT_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
-    bound_port = await pick_port(port, strict=strict)
+    bound_port = await pick_port(port, strict=port_strict())
     gateway.port = bound_port
 
     # The OAuth redirect deliberately does NOT follow this port. It is baked
@@ -570,7 +590,10 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
 # rather than merely absent for the third. `web` therefore leaves a supervisor
 # behind instead of holding the terminal itself:
 #
-#     raven web  ->  detached `raven web --supervise`  ->  `raven serve` (child)
+#     raven web  ->  detached `raven web --supervise`  ->  `raven gateway` (child)
+#
+# ...or `raven serve` as the child where a gateway already holds the lock; see
+# `_gateway_argv`, which decides that per launch.
 #
 # The supervisor exists for one reason a plain detached gateway cannot cover: a
 # gateway that dies takes the page with it while the page still looks live, and
@@ -655,8 +678,50 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _gateway_holds_the_lock() -> bool:
+    """Whether a `raven gateway` is already running for this instance.
+
+    Unreadable reads as yes, which is the safer way round: taken for no when the
+    answer is yes, the page child tries for a lock it cannot have and never opens
+    a page at all, while taken for yes when the answer is no the page opens on an
+    engine without channels -- which is exactly where this surface was before,
+    and something a person can put right with one `raven gateway`.
+    """
+    import time
+
+    try:
+        from raven.cli._gateway_lock import read_status
+
+        return read_status(time.time()) is not None
+    except Exception:
+        return True
+
+
 def _gateway_argv(port: int) -> list[str]:
-    """The command the supervisor runs and re-runs.
+    """The command that serves the page, and what the supervisor re-runs.
+
+    ``gateway`` rather than ``serve`` where it can be. Both serve the page -- the
+    gateway hosts it on its own loop (see ``_gateway_page.mount_page``) -- but
+    only the gateway runs the IM channel adapters, and standalone `raven serve`
+    builds no ``ChannelManager`` at all. Left on ``serve``, everything the
+    entrances page offers was unreachable from the page: no adapter to start, so
+    no sign-in code could ever be minted, and every enabled entrance read "state
+    unknown" forever.
+
+    ``--page-port`` pins the page to the port the open tab is on and mounts it
+    even where ``gateway.page.enabled`` was turned off, since a process started
+    for the page's sake with no page is doing nothing anybody asked for.
+
+    Where a gateway already holds the lock, ``serve`` is the only thing that CAN
+    run: a second gateway exits on the lock, and a supervisor would spend its
+    crash budget discovering that. ``gateway.page.enabled = false`` is a
+    supported way to run -- channels in the gateway, page separate -- and in it
+    the page reaches the adapters over ``channels.live_probe``, which finds the
+    incumbent through the same lock. So this is not a downgrade: it is the shape
+    that configuration asked for.
+
+    Re-read on every launch rather than decided once, so a child that lost a race
+    for the lock comes back the other way instead of retrying into the same wall.
 
     Through ``-m raven`` rather than ``sys.argv[0]``: the console script may have
     been invoked by a name that is a shim, a symlink or a relative path that only
@@ -666,7 +731,9 @@ def _gateway_argv(port: int) -> list[str]:
     """
     import sys
 
-    return [sys.executable, "-m", "raven", "serve", "--port", str(port)]
+    if _gateway_holds_the_lock():
+        return [sys.executable, "-m", "raven", "serve", "--port", str(port)]
+    return [sys.executable, "-m", "raven", "gateway", "--page-port", str(port)]
 
 
 def _spawn_supervisor(port: int) -> None:
@@ -787,7 +854,7 @@ def _supervise(port: int) -> None:
             if fast_failures >= _CRASH_LOOP_GIVE_UP:
                 print(
                     f"raven web: the gateway failed {fast_failures} times without staying up "
-                    f"(last exit {code}); giving up. Run `raven serve` to see why.",
+                    f"(last exit {code}); giving up. Run `raven gateway` to see why.",
                     flush=True,
                 )
                 return
@@ -869,18 +936,29 @@ _ATTACH_SLOW_NOTICE_S = 8.0
 """When to admit out loud that this is taking a while."""
 
 
-def _await_attach(timeout_s: float = _ATTACH_PATIENCE_S) -> Optional[str]:
+def _await_attach(
+    timeout_s: float = _ATTACH_PATIENCE_S,
+    *,
+    gone: Optional[Callable[[], bool]] = None,
+) -> Optional[str]:
     """Poll until the freshly started gateway answers, then mint an auth URL.
 
     Polls the recorded state each time rather than reading it once: the port is
     not known until the gateway has bound one and written it down, and on a
     contended port that is not the port that was asked for.
 
-    The wait is abandoned early if the supervisor dies: nothing is coming, and
-    a process that already exited will not start a gateway by being waited on.
-    That check only arms once the supervisor has been seen alive -- it records
-    its own pid after it starts, so reading its absence too early would abandon
-    the wait on a supervisor that simply has not written itself down yet.
+    The wait is abandoned as soon as whatever was supposed to bring the page up
+    is known to be gone: nothing is coming, and a process that already exited
+    will not start a gateway by being waited on. Two callers, two ways to know:
+
+    - supervised: ``web.json``, and only once the supervisor has been SEEN alive.
+      It records its own pid after it starts, so reading its absence too early
+      would abandon the wait on a supervisor that simply has not written itself
+      down yet.
+    - foreground (``gone``): the child's own exit. There is no supervisor state
+      to watch there, so without this the wait sat out its full ceiling on a
+      child that had already died -- two minutes and a half of a terminal that
+      had printed the error and then said nothing.
     """
     import time
 
@@ -897,7 +975,10 @@ def _await_attach(timeout_s: float = _ATTACH_PATIENCE_S) -> Optional[str]:
                 raise
             if url is not None:
                 return url
-        if _read_web_state() is not None:
+        if gone is not None:
+            if gone():
+                return None
+        elif _read_web_state() is not None:
             seen_supervisor = True
         elif seen_supervisor:
             return None
@@ -939,7 +1020,13 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
     if foreground:
         # No supervisor and no detachment: the point of --foreground is to see
         # the gateway's own output and to have Ctrl-C mean what it says.
-        _run(port, open_browser=True)
+        #
+        # Through the same child the supervisor runs, not an in-process serve.
+        # Building the standalone stack here left --foreground on the one engine
+        # that has no ChannelManager, so the page it opened was the inert
+        # entrances page this change exists to fix -- with the fix applying only
+        # to the detached path, which is not the one anybody debugging uses.
+        _run_foreground(port)
         return
 
     # A supervisor with no gateway answering means the gateway is between
@@ -957,6 +1044,44 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         raise typer.Exit(1)
     typer.echo(f"raven is running at {url.split('/auth#')[0]} (stop it with `raven web --stop`)")
     _open(url)
+
+
+def _run_foreground(port: int) -> None:
+    """Hold the terminal while the page's own child engine runs.
+
+    Foreground semantics are the child's, and they survive being a child: its
+    output is this terminal's (stdio is inherited, not piped), and Ctrl-C reaches
+    it because it shares this process group. What this function adds is the
+    browser, opened once the child has bound a port and written it down -- the
+    same wait `raven web` does for a supervised one.
+    """
+    import subprocess
+
+    _refuse_incomplete_install()
+    try:
+        proc = subprocess.Popen(_gateway_argv(port))  # noqa: S603 - see _gateway_argv
+    except OSError as exc:
+        typer.echo(f"could not start the engine: {exc}")
+        raise typer.Exit(1) from None
+    try:
+        # Watches the child, because there is no supervisor state to watch: a
+        # child that dies before writing serve.json -- a lost lock race, a config
+        # it cannot load, an import that fails -- otherwise left this wait to sit
+        # out its whole ceiling with the error already on screen.
+        url = _await_attach(gone=lambda: proc.poll() is not None)
+        if url is None and proc.poll() is None:
+            typer.echo("the engine did not come up")
+        elif url is not None:
+            _open(url)
+        proc.wait()
+    except KeyboardInterrupt:
+        # The signal already reached the child; waiting is how this process
+        # outlives it long enough to not orphan it.
+        with suppress(KeyboardInterrupt):
+            proc.wait()
+        typer.echo("raven web stopped")
+    if proc.returncode:
+        raise typer.Exit(proc.returncode)
 
 
 def _open(url: str) -> None:

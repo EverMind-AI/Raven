@@ -46,6 +46,11 @@ DS.conn = {
     }
     return CHANNELS;
   },
+  /* Read off the same status call, which carries the gateway lock's answer.
+     The page needs it to tell "this entrance is not receiving" from "nothing
+     here could be": with no host, pressing connect starts no adapter and mints
+     no code, and the card should say so before the press rather than after. */
+  hostRunning: () => gatewayRunningLive,
   /* The write the old code hid behind an Object.defineProperty accessor on
      `c.on`: optimistic flip, then the setting, then the toast -- and on
      failure the flip is taken back and the rejection marked handled so the

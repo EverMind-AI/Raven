@@ -5363,13 +5363,17 @@
       "en": "Raven App is not running - open it and the code appears here",
       "zh": "Raven 后台没在运行 · 打开 Raven App 就会启动并出现二维码"
     },
+    "gui.conn.w2_down": {
+      "en": "It started and then stopped - a code nobody scanned expires. Try again.",
+      "zh": "入口启动过又停了 —— 没人扫的码会过期。可以重试。"
+    },
+    "gui.conn.w_retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
     "gui.agent.stale_to": {
       "en": "the preset now uses {to}",
       "zh": "预设现在走 {to}"
-    },
-    "gui.conn.tag_unpaired": {
-      "en": "waiting for a scan",
-      "zh": "待扫码"
     },
     "gui.conn.tag_down": {
       "en": "not started",
@@ -5379,9 +5383,9 @@
       "en": "state unknown",
       "zh": "状态未知"
     },
-    "gui.conn.g_pending": {
-      "en": "Connecting",
-      "zh": "接入中"
+    "gui.conn.tag_nohost": {
+      "en": "nothing is running it",
+      "zh": "后台未运行"
     },
     "gui.conn.retry": {
       "en": "Try again",

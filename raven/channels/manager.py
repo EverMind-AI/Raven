@@ -155,7 +155,14 @@ class ChannelManager:
         tasks = []
         for name, channel in self.channels.items():
             logger.info("Starting {} channel...", name)
-            tasks.append(asyncio.create_task(self._start_channel(name, channel)))
+            task = asyncio.create_task(self._start_channel(name, channel))
+            # Recorded like a hot start's, so `start_one` can tell an adapter
+            # that is coming up from one whose start has finished and left it
+            # not running. Without this the launch path was invisible here and
+            # the two states looked identical.
+            self._tasks[name] = task
+            task.add_done_callback(lambda _t, n=name: self._tasks.pop(n, None))
+            tasks.append(task)
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -187,8 +194,21 @@ class ChannelManager:
         the snapshot this gateway launched with, and in it the channel is still
         off.
         """
-        if name in self.channels:
-            return "already"
+        # An adapter in the table is not the same as an adapter that works. A
+        # scan login nobody completed ends with the object still here and
+        # `is_running` false -- weixin gives up after the code expires three
+        # times -- and answering "already" to that made "connect" on a stopped
+        # entrance a no-op for the life of the process: the one press that could
+        # fix it was the one press that did nothing. A start still in flight is a
+        # different thing and keeps its "already": the launch path is a task per
+        # channel that only returns when the adapter stops, so a page write
+        # arriving mid-launch must not tear down what is coming up.
+        existing = self.channels.get(name)
+        if existing is not None:
+            task = self._tasks.get(name)
+            if (task is not None and not task.done()) or getattr(existing, "is_running", False):
+                return "already"
+            await self.stop_one(name)
         from raven.channels.registry import discover_specs
         from raven.config.loader import load_config
 
