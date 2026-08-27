@@ -147,6 +147,32 @@ async def test_settings_usage(workspace: Path, tmp_path: Path, monkeypatch: pyte
     _check("settings.usage", await settings_usage({"days": 1}))
 
 
+async def test_settings_usage_reads_what_the_default_tracker_writes(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writer/reader pairing, driven end to end.
+
+    It regressed once: ``install_from_config``'s callers pointed UsageTracker
+    at ``workspace/.token_wise`` while this reader scans ``RAVEN_HOME/telemetry``,
+    so default-on usage tracking wrote rows the settings page reported as
+    ``calls=0``. The pairing holds only while both sides resolve through the
+    same default, which is what writing through one and reading through the
+    other checks.
+    """
+    from raven.rpc.methods.console import settings_usage
+    from raven.token_wise.base import UsageSnapshot
+    from raven.token_wise.usage_tracker import UsageTracker
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    tracker = UsageTracker()
+    await tracker.after_llm_call({}, UsageSnapshot(model="stub/model", input_tokens=10, output_tokens=2))
+
+    out = await settings_usage({"days": 1})
+    _check("settings.usage", out)
+    assert out["llm"]["total"]["calls"] == 1, "a row written by the default tracker is visible to the reader"
+    assert [m["model"] for m in out["llm"]["models"]] == ["stub/model"]
+
+
 async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from raven.config import update_everos
     from raven.rpc.methods import console

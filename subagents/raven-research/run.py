@@ -66,7 +66,7 @@ def env_value(name: str) -> str | None:
 # environment - its config loader does no variable substitution - so a rendered
 # file is the only way to get them in.
 SECRET_SLOTS = {
-    "RESEARCH_API_KEY": ("providers", "custom", "apiKey"),
+    "RESEARCH_API_KEY": ("providers", "openrouter", "apiKey"),
     "RESEARCH_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
     "RESEARCH_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
 }

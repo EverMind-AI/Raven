@@ -724,3 +724,61 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
         manager_mod.build_executor = original_build
 
     assert served == ["started-with"], "the spawn ran on the model its conversation had when it asked"
+
+
+@pytest.mark.asyncio
+async def test_a_switched_turns_provider_stops_auto_marking_when_the_optimizer_runs(tmp_path) -> None:
+    """CacheOptimizer's budget must bind the provider of every turn it runs on.
+
+    The construction site can only configure the provider it was handed. A
+    session switched mid-conversation runs on a pool-built provider that site
+    never saw, and if nothing turns that provider's automatic marking off, the
+    request carries the strategy's breakpoints plus the provider's own --
+    reproduced on a live wire as 2 sent under ``maxCacheBreakpoints=1``. So the
+    loop applies the switch to whichever provider the running turn's binding
+    resolved, before it sends.
+    """
+    from raven.providers.base import LLMProvider
+    from raven.providers.binding import use_binding
+    from raven.token_wise.cache_optimizer import CacheOptimizer
+    from raven.token_wise.registry import StrategyRegistry
+
+    class _SendingProvider(LLMProvider):
+        """Has the switch, like every provider that actually sends."""
+
+        def __init__(self, model: str) -> None:
+            super().__init__(api_key="test")
+            self._model = model
+            self.disable_auto_cache_control = False
+
+        async def chat(self, messages, tools=None, model=None, **kwargs):
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return self._model
+
+    def _agent(provider: LLMProvider, registry: StrategyRegistry) -> AgentLoop:
+        return AgentLoop(
+            provider=provider,
+            workspace=tmp_path,
+            model=provider.get_default_model(),
+            max_iterations=2,
+            strategies=registry,
+        )
+
+    with_optimizer = StrategyRegistry([CacheOptimizer(supports_caching=lambda _model: False)])
+
+    built_with = _SendingProvider("boot/model")
+    switched_to = _SendingProvider("switched/model")
+    loop = _agent(built_with, with_optimizer)
+    with use_binding(ModelBinding(switched_to, "switched/model")):
+        await loop._process_message(_req("tui:a"), session_key="tui:a")
+    assert switched_to.disable_auto_cache_control is True, "the sender this turn ran on was configured"
+
+    # Without the optimizer nothing else places breakpoints, so the provider's
+    # own marking is all the caching there is -- it must stay on.
+    plain = _SendingProvider("switched/model")
+    loop2 = _agent(_SendingProvider("boot/model"), StrategyRegistry([]))
+    with use_binding(ModelBinding(plain, "switched/model")):
+        await loop2._process_message(_req("tui:b"), session_key="tui:b")
+    assert plain.disable_auto_cache_control is False, "no optimizer, no reason to suppress the provider"

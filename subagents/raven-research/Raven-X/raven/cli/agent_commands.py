@@ -389,7 +389,7 @@ def register(app: typer.Typer) -> None:
         strategies = install_from_config(
             ec_config.token_wise,
             telemetry_dir=config.workspace_path / ".token_wise",
-            supports_caching=getattr(provider, "supports_prompt_caching", None),
+            supports_caching=provider.supports_prompt_caching,
         )
         if strategies.get("cache_optimizer") is not None and hasattr(
             provider, "disable_auto_cache_control"

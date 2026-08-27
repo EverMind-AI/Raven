@@ -1,13 +1,13 @@
 {
   "providers": {
-    "custom": {
+    "openrouter": {
       "apiBase": "https://openrouter.ai/api/v1"
     }
   },
   "agents": {
     "defaults": {
       "model": "openai/gpt-5.6-sol-pro",
-      "provider": "custom",
+      "provider": "openrouter",
       "reasoningEffort": "high",
       "maxToolIterations": 150,
       "maxTokens": 16384,
@@ -73,7 +73,7 @@
     },
     "askUser": {
       "enabled": true,
-      "mode": "first_turn",
+      "mode": "when_needed",
       "delivery": "tool"
     },
     "conversation": {

@@ -85,9 +85,9 @@ nothing to do with whose key is paying. The optional Serper and Jina keys fall
 back the same way, each on its own.
 
 The host's provider block is copied wholesale rather than matched by name. A
-provider called `custom` here and one called `custom` there can be two different
-endpoints, so picking by name would point this agent at a gateway its model is
-not served on - which reads as a bad answer, not as an error.
+section of the same name here and there can address two different endpoints, so
+picking by name would point this agent at a gateway its model is not served on -
+which reads as a bad answer, not as an error.
 
 Inheriting is a fallback, not an equivalence: a measurement taken on the pinned
 model does not carry over to whatever the host happens to run. The launcher
@@ -299,7 +299,7 @@ costs us nothing.
 | **Flow hooks are scoped to the turn** (dr@3.4) | Ours: `fetchFloor` and `verify` are both on here, and they now measure against this turn's base rather than the whole conversation. Multi-turn is on (`conversation.enabled`), which is exactly the shape this fixes |
 | The closing-tag bar is waived for out-of-band reasoning | **Does not reach us**: `thinkClosingTagRequired` is already `false` here. Worth knowing why it landed, though - a channel-separated stack returns reasoning in `reasoning_content`, leaving `content` answer-only, and the bar then erased every complete answer, 4 of 4 live-web turns |
 | `DRFlowConfig.context_window_tokens`, a DR-arm-only window override | New, unset here, and upstream verified it changes no behaviour while unset. It exists so a DR arm's window can be moved without dragging the flow-off anchor with it |
-| The provider package is realigned to upstream `5edcda9` - wire ids, auth, endpoints, rates, prompt cache, truncation - and a models.dev snapshot (MIT) is bundled | **Bypassed here**: our `custom` provider names an explicit `apiBase`, so the rewritten wire ids and the bundled registry are not on our path. The loaded provider entry does gain `endpoints` and `endpointStrategy: sticky`, both defaulted |
+| The provider package is realigned to upstream `5edcda9` - wire ids, auth, endpoints, rates, prompt cache, truncation - and a models.dev snapshot (MIT) is bundled | **On our path**: the provider is declared `openrouter`, the section the endpoint actually is, so requests go out under the gateway wire id (`openrouter/openai/gpt-5.6-sol-pro`) and the bundled registry answers for them. Declaring it `custom` instead used to bypass all of that, and cost more than the wire id: `custom` reads as a self-hosted inference server, which switched on the orphan-`</think>` normalisation and let a report mentioning that tag lose everything before it. The loaded provider entry also gains `endpoints` and `endpointStrategy: sticky`, both defaulted |
 | Native runtimes are stopped instead of segfaulting at exit | Removes a false signal rather than changing a contract. A live watchfiles runtime used to segfault interpreter finalization on its own - exit 139, 3 of 3 runs with `raven` never imported - masking the command's real exit code. `run.py` decides success by finding a persisted answer, not by exit code, so it was never fooled; a human reading the log was |
 
 ### What `dr@3.3` changed for us
@@ -420,11 +420,15 @@ paid for a research turn.
 
 ## Asking first
 
-`drFlow.askUser` is on here with `mode: "first_turn"`, which means **turn one always
-asks**: the agent puts its clarifying questions before any search, and the research it
-then does is aimed at the question it was told rather than the one it guessed.
-`when_needed` reverts to asking only when the model judges it necessary, and is
-byte-identical to the pre-mode clause.
+`drFlow.askUser` is on here with `mode: "when_needed"`, which means the agent asks
+**only when it judges the question undecidable without an answer** - on any turn,
+including the first. This is the byte-identical pre-mode clause; `first_turn`, the
+schema default, is the other setting, and it mandates a clarify round on turn one of
+every conversation. The trade is stated in the schema and it decided this: a mandated
+round removes the threshold a question is supposed to clear, so the failure mode is
+filler ("how deep would you like?") that teaches callers to ignore the round including
+the time it matters, and every conversation pays a round trip whether or not it needed
+one.
 
 `delivery: "tool"` is set, which asks for the broker round trip - questions out and
 answers back inside one turn - rather than the `handoff` that ends the turn on the
@@ -469,8 +473,10 @@ marker rather than by asking the conversation gate. That is deliberate and it
 is load-bearing: a clarify answer ("the EU market, 2024") reads exactly like
 the shapes the gate is told mean `research=false`, so consulting the gate there
 dropped the tools from the schema and answered a never-researched question from
-memory, with nothing in the record saying so. Under `mode: "first_turn"` that
-is not an edge case - turn one always asks, so turn two is always this turn.
+memory, with nothing in the record saying so. Under `mode: "when_needed"` this
+turn is occasional rather than guaranteed, which makes the classification matter
+more, not less: a path taken on most conversations gets noticed when it breaks,
+and one taken on a few does not.
 
 ## Calling it
 
@@ -661,12 +667,14 @@ caller gets wrong. Statefulness is the one that has to be stated outright: a
 caller who believes the agent is stateless restates the whole question every
 turn, which is a research turn every turn and throws away the feature.
 
-Since `askUser` went on, the description also has to say that **the first reply is
-normally questions, not the report.** With `mode: "first_turn"` that is not an
-occasional shape, it is every first call, and the two ways a caller gets it wrong
-are both silent: relay the questions as the deliverable, or answer them by
-restating the whole question, which starts a fresh round of questions instead of
-the research. Neither reads as an error anywhere.
+Since `askUser` went on, the description also has to say that **a reply can be
+questions rather than the report.** Under `mode: "when_needed"` that is an
+occasional shape rather than every first call, which makes it easier to miss and
+no less costly: the two ways a caller gets it wrong are both silent - relay the
+questions as the deliverable, or answer them by restating the whole question,
+which starts a fresh round instead of the research. Neither reads as an error
+anywhere, and a caller that never met the shape in testing is the one who meets
+it in production.
 
 There is a name clash worth knowing: our config already has a `Researcher`
 (kind `openai`, MiroThinker deep-research over an HTTP endpoint). This entry is a

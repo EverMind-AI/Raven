@@ -343,11 +343,18 @@ def register(app: typer.Typer) -> None:
         deliverables = _build_deliverable_store(config)
 
         # Create agent with cron service
+        from raven.cli._token_wise_stack import caching_probe, install_from_config
         from raven.providers.pool import ProviderPool
+
+        strategies = install_from_config(
+            ec_config.token_wise,
+            supports_caching=caching_probe(provider),
+        )
 
         agent = AgentLoop(
             provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
+            strategies=strategies,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,
             model=config.agents.defaults.model,

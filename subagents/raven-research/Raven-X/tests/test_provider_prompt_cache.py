@@ -568,3 +568,130 @@ def test_the_refusal_verdict_survives_a_provider_that_swallows_the_exception():
     assert LLMProvider.classify_error(None, "Error calling LLM: 400 context_length_exceeded").refuses_prompt_cache is (
         False
     )
+
+
+# --- The probe the construction sites hand to the strategies ---
+
+
+def test_every_provider_answers_the_question_the_strategies_ask_it():
+    """The name the callers ask for has to be the name the providers answer to.
+
+    It was not: the clients spelled it ``_supports_cache_control`` and nothing
+    anywhere defined ``supports_prompt_caching``, which is the name all three
+    ``AgentLoop`` construction sites read off the provider. Every one of them
+    resolved to None and ``CacheOptimizer`` fell back to the id-only lookup for
+    the whole life of the field -- silently, because the fallback answers.
+
+    Asserted as agreement with the private answer rather than as ``hasattr``: a
+    method that exists and answers on its own is the second copy this file has
+    been preventing since the first three disagreed.
+    """
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.endpoints import ResolvedEndpoint
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    cases = [
+        ("openrouter", "openrouter/anthropic/claude-fable-5", True),
+        ("openrouter", "openrouter/google/gemini-3.5-flash", False),
+        ("custom", "anthropic/claude-fable-5", False),
+        ("anthropic", "anthropic/claude-fable-5", True),
+    ]
+    for provider_name, model, expected in cases:
+        client = LiteLLMProvider(api_key="k", default_model=model, provider_name=provider_name)
+        assert client.supports_prompt_caching(model) is expected, model
+        assert client.supports_prompt_caching(model) is client._supports_cache_control(model), model
+
+        rotor = EndpointRotorProvider(
+            [ResolvedEndpoint(label="a", api_key="k", api_base=None, extra_headers=None)],
+            lambda _ep, _n=provider_name, _m=model: LiteLLMProvider(api_key="k", default_model=_m, provider_name=_n),
+            default_model=model,
+        )
+        assert rotor.supports_prompt_caching(model) is expected, f"rotor lost the answer for {model}"
+
+
+def test_no_construction_site_reads_the_probe_through_a_default():
+    """The failure mode was an argument that was always None, and the wiring test
+    that guards these sites is source-level -- it asserts the kwarg is *present*,
+    which ``getattr(provider, "...", None)`` satisfies while passing nothing.
+
+    So the shape itself is what has to be excluded: read the attribute directly
+    and a rename fails loudly at the first turn instead of degrading to the
+    id-only answer for good.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "raven" / "cli"
+    readers, offenders = set(), []
+    for path in sorted(root.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "supports_prompt_caching" not in source:
+            continue
+        readers.add(path.name)
+        if 'getattr(provider, "supports_prompt_caching"' in source:
+            offenders.append(path.name)
+
+    # Positive half: an empty sweep passes the negative assertion too, and a
+    # renamed probe would empty it silently. Subset, not equality -- the module
+    # that declares the parameter names it in its docstring and is not a site.
+    sites = {"acp_commands.py", "agent_commands.py", "gateway_commands.py"}
+    assert sites <= readers, f"construction sites that stopped asking: {sorted(sites - readers)}"
+    assert not offenders, "read provider.supports_prompt_caching directly:\n" + "\n".join(offenders)
+
+
+def test_the_injected_probe_overrules_an_id_that_names_the_wrong_wire():
+    """Why the probe is worth resolving at all.
+
+    ``anthropic/claude-fable-5`` pointed at an OpenAI-shaped endpoint is a shape
+    the config matcher produces on purpose. The id-only fallback reads it as
+    Anthropic's wire and marks the request; the client then strips every
+    breakpoint back off. Both answers are safe -- neither doubles a bill -- but
+    only the injected one stops the strategy doing the work at all.
+    """
+    import asyncio
+
+    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.token_wise.cache_optimizer import CacheOptimizer
+
+    model = "anthropic/claude-fable-5"
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    client = LiteLLMProvider(api_key="k", default_model=model, provider_name="custom")
+
+    id_only, _, _ = asyncio.run(CacheOptimizer().before_llm_call(list(messages), None, model))
+    assert "cache_control" in str(id_only), "premise: the id alone reads as Anthropic's wire"
+
+    injected, _, _ = asyncio.run(
+        CacheOptimizer(supports_caching=client.supports_prompt_caching).before_llm_call(list(messages), None, model)
+    )
+    assert "cache_control" not in str(injected)
+
+
+def test_the_rotor_does_not_swallow_the_auto_marking_switch():
+    """CacheOptimizer's breakpoint budget is only a budget if nothing else marks.
+
+    ``acp_commands`` sets ``disable_auto_cache_control`` on whatever
+    ``make_provider`` handed back once the strategy is installed. A section with
+    more than one endpoint gets a rotor, and a rotor that only holds the flag
+    leaves every inner -- the objects that build the requests -- still marking a
+    system block on top of the strategy's. Measured on the sibling trunk before
+    this fix: at ``maxCacheBreakpoints: 1`` the request carried 2.
+
+    ``hasattr`` at the call site cannot catch it: the attribute exists on
+    ``LiteLLMProvider`` instances and not on the rotor, so the guard reads False
+    and the assignment is skipped without a word.
+    """
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.endpoints import ResolvedEndpoint
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    def inner():
+        return LiteLLMProvider(api_key="k", default_model="m", provider_name="openrouter")
+
+    assert inner().disable_auto_cache_control is False, "premise: the inner starts un-suppressed"
+
+    rotor = EndpointRotorProvider(
+        [ResolvedEndpoint(label="a", api_key="k", api_base=None, extra_headers=None)],
+        lambda _ep: inner(),
+        default_model="m",
+    )
+    rotor.disable_auto_cache_control = True
+    assert all(i.disable_auto_cache_control for i in rotor._inners)

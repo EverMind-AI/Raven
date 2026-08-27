@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from raven.config.raven import TokenWiseConfig
+
 
 @pytest.fixture
 def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -26,7 +28,7 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     # Stub config objects
     config = MagicMock()
-    config.workspace_path = str(tmp_path)
+    config.workspace_path = tmp_path
     config.agents.defaults.model = "stub-model"
     config.agents.defaults.max_tool_iterations = 5
     config.agents.defaults.context_window_tokens = 65_536
@@ -49,6 +51,10 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
+    # A real one, not a MagicMock attribute: the loop's TokenWise stack reads
+    # this config's numbers (a breakpoint budget it compares against 1), and a
+    # mock answers every comparison with a TypeError.
+    ec_config.token_wise = TokenWiseConfig()
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
         lambda: ec_config,

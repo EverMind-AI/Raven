@@ -864,6 +864,21 @@ class LLMProvider(ABC):
         """
         return False
 
+    def supports_prompt_caching(self, model: str) -> bool:
+        """Whether a request this provider sends for ``model`` may carry
+        ``cache_control`` breakpoints.
+
+        The public form of the question ``providers.prompt_cache`` answers, so a
+        token strategy can put it to the object that will actually send the
+        request instead of guessing from the id -- an id names a vendor, not the
+        wire it travels on, and only the provider knows the second.
+
+        Default False: the base class knows no dialect, and a provider that can
+        carry the field says so. Answering from the model id here would put the
+        guess back into the one place that has the wire in hand.
+        """
+        return False
+
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
         self,
