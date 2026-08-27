@@ -36,6 +36,46 @@ describe('the rail row CSS contract', () => {
     expect(t.indexOf('min-height: 1.65em')).toBeLessThan(t.indexOf('min-height: 1lh'))
   })
 
+  it('takes the stamp away only when the actions come up to replace it', () => {
+    /* The two halves of one gesture, and they used to answer to different
+       conditions. A row is a div[role=button][tabindex=0], so CLICKING a
+       session leaves the ROW focused -- `.sess:focus-within` hid the stamp
+       there, while the actions, which answer to focus inside `.quick`, stayed
+       away. The session you had just opened was the one row in the rail
+       carrying no time, with 48px of nothing where it had been.
+
+       Read off the stylesheet because this is a cascade fact: jsdom does no
+       layout and computes no :focus-within, so the component test cannot see
+       it, and a real browser only shows it while something holds focus. */
+    const hideStamp = css.split('\n').filter((l) => /^\.sess.*\.w \{ display: none/.test(l));
+    expect(hideStamp).toHaveLength(1);
+    expect(hideStamp[0]).not.toContain('.sess:focus-within');
+    expect(hideStamp[0]).toContain('.sess:has(.quick:focus-within) .w');
+    /* The room made for them moves on the same condition, or the title reflows
+       without the buttons arriving. */
+    const padTitle = css.split('\n').filter((l) => /^\.sess.*\.t \{ padding-right: 48px/.test(l));
+    expect(padTitle).toHaveLength(1);
+    expect(padTitle[0]).not.toContain('.sess:focus-within');
+    expect(padTitle[0]).toContain('.sess:has(.quick:focus-within) .t');
+    /* And that condition is the one that raises them. */
+    const raise = css.split('\n').find((l) => l.startsWith('.sess:hover .quick,'));
+    expect(raise).toBeTruthy();
+    expect(raise).toContain('.sess .quick:focus-within');
+  });
+
+  it('leaves the group label where the caret used to put it', () => {
+    /* The caret now follows the label (features/rail/RailPage.tsx), so the row's
+       own left padding carries the indent the glyph used to occupy -- and the
+       empty-group note lines up with the label rather than with the caret it no
+       longer sits behind. Equality is the assertion: either one drifting alone
+       is the bug. */
+    const grpPad = /\n\.list \.grp \{[^}]*padding: 13px 4px 5px (\d+)px/.exec(css);
+    expect(grpPad).toBeTruthy();
+    const emptyPad = /\n\.grp-empty \{[^}]*padding: 3px 10px 5px (\d+)px/.exec(css);
+    expect(emptyPad).toBeTruthy();
+    expect(grpPad[1]).toBe(emptyPad[1]);
+  });
+
   it('sizes the naming placeholder in pixels, once, for every row', () => {
     /* A percentage resolves against the title slot, and the slot's width
        depends on the neighbouring timestamp -- "yesterday" and a full date gave
