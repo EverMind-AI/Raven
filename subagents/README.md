@@ -261,6 +261,30 @@ $(sed -n '1s/^#!//p' "$(command -v raven)") -c \
 
 The folder itself can stay - an unregistered folder is inert.
 
+## When this trunk fixes something these trees also have
+
+Two guards, opposite directions, and both are needed.
+
+`scripts/check_vendored_subagents.py` records a tree hash per fork, so a change
+nobody meant to make -- an upstream merge whose rename detection lands a delta
+inside a fork -- fails instead of shipping. `subagents/TREE_HASHES` is rewritten
+with `--update`, in the same commit as the deliberate upgrade.
+
+`scripts/check_vendored_invariants.py` is the other direction: a fork that is
+merely *behind*. There is no diff to read for that -- these are third-party trees
+with no shared history and thousands of legitimately divergent lines, and a fork
+is sometimes *ahead* of this trunk rather than behind it -- so nothing here tries
+to answer "is it in sync". Each named fix gets a registry entry instead, and CI
+asserts every fork still holds it. Fixing something in this trunk that these
+trees also have means adding an entry; the next upstream zip that reverts the fix
+fails the check rather than reaching a user.
+
+Apply an invariant inside a fork in the fork's own idiom -- **never by copying
+this trunk's file over it**. `raven-research` gates its `web_search` on the key
+*or* a configured corpus endpoint, because this trunk's gate alone would withdraw
+the tool from every contained benchmark run. A fix that is genuinely wrong for a
+fork goes in that invariant's `exempt`, with the reason.
+
 ## Adding a new folder
 
 `.gitignore` excludes `subagents/*` and names each tracked folder, because a

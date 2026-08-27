@@ -133,6 +133,9 @@ def test_a_corpus_contained_subagent_registry_has_no_subprocess_tool():
         provider=_P(),
         workspace=Path("/tmp/ws"),
         parent_tool_names=lambda: ["web_search", "web_fetch", "read_file"],
+        # Uncontained, so web_search needs a key to be registered at all; the
+        # fence being tested here is the parent surface, not configuredness.
+        brave_api_key="test-key",
     )
     names = sorted(fenced._build_subagent_tools(None).names())
     assert names == ["read_file", "web_fetch", "web_search"], names

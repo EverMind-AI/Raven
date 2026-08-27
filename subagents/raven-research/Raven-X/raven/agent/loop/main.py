@@ -1072,15 +1072,28 @@ class AgentLoop:
         )
         search_kwargs = self._dr_flow.web_search_kwargs if self._dr_flow is not None else {}
         fetch_kwargs = self._dr_flow.web_fetch_kwargs if self._dr_flow is not None else {}
-        self.tools.register(
-            WebSearchTool(
-                api_key=self.brave_api_key,
-                proxy=self.web_proxy,
-                corpus_endpoint=self.web_corpus_endpoint,
-                containment=self.benchmark_containment,
-                **search_kwargs,
-            )
+        # A tool that cannot run must never be advertised: the model reaches for it,
+        # the call fails, and the error text -- naming a config file and an env var --
+        # is relayed to whoever is on the other end of the channel. Ask the tool
+        # rather than the config, because it resolves the key at call time from
+        # either source.
+        # The corpus endpoint is the second source: with one configured this
+        # agent searches a fixed corpus and needs no Serper key at all, so
+        # gating on the key alone would withdraw web_search from every
+        # contained benchmark run.
+        web_search = WebSearchTool(
+            api_key=self.brave_api_key,
+            proxy=self.web_proxy,
+            corpus_endpoint=self.web_corpus_endpoint,
+            containment=self.benchmark_containment,
+            **search_kwargs,
         )
+        if web_search.api_key or web_search.corpus_endpoint:
+            self.tools.register(web_search)
+        else:
+            logger.info(
+                "web_search not registered: no Serper API key and no web corpus endpoint"
+            )
         self.tools.register(
             WebFetchTool(
                 api_key=self.jina_api_key,

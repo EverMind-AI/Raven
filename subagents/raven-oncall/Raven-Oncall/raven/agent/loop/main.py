@@ -703,7 +703,16 @@ class AgentLoop:
                 executor=self._executor,
             )
         )
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        # A tool that cannot run must never be advertised: the model reaches for it,
+        # the call fails, and the error text -- naming a config file and an env var --
+        # is relayed to whoever is on the other end of the channel. Ask the tool
+        # rather than the config, because it resolves the key at call time from
+        # either source.
+        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        if web_search.api_key:
+            self.tools.register(web_search)
+        else:
+            logger.info("web_search not registered: no Serper API key configured")
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
