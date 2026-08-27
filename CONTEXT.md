@@ -1110,7 +1110,7 @@ fingerprint of the fields that decide how it launches (`command`, `cwd`, `env`,
 `readyTimeoutMs`; deliberately not `name` / `enabled`, which change nothing about what an
 agent can do). A snapshot whose fingerprint no longer matches is **stale**, not absent: its
 *capabilities* are still used, because dropping them defaults the agent to stateless - which
-costs it resume, its Instance Chip, and its place among the targets the spawn schema's
+costs it resume, its standing Live Agents Strip row, and its place among the targets the spawn schema's
 `instance` parameter accepts (the parameter itself is always offered, since the default
 sub-agent is resumable whatever the roster holds) - while
 its *verdict* is not, because a green light for a command that has since been edited is a

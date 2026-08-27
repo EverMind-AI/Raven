@@ -2,15 +2,17 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// Guard for the double-Esc clear: the armed window has to show its offer on the
-// composer's top border, and it must not steal a row from the input while it is
-// idle (an unarmed rule and an armed one are the same height).
+// Guard for the composer's top border: the double-Esc clear has to show its
+// offer at the right end, the direct-chat target prefix and the pending-handoff
+// counter at the left, and none of it may steal a row from the input while idle
+// (a bare rule and a decorated one are the same height).
 
 import { renderSync } from '@hermes/ink'
 import React from 'react'
 import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
+import type { DirectTargetRef } from '../app/directChatStore.js'
 import type {
   AppLayoutActions,
   AppLayoutComposerProps,
@@ -21,6 +23,7 @@ import type {
 import type { EscapeState } from '../app/useInputHandlers.js'
 import type { Msg } from '../types.js'
 
+import { patchDirectChat, resetDirectChat } from '../app/directChatStore.js'
 import { GatewayProvider } from '../app/gatewayContext.js'
 import { resetOverlayState } from '../app/overlayStore.js'
 import { resetTurnState } from '../app/turnStore.js'
@@ -95,11 +98,16 @@ const props: AppLayoutProps = {
   }
 }
 
-const renderFrame = async (escClearArmed: boolean): Promise<string[]> => {
+const renderFrame = async (
+  escClearArmed: boolean,
+  direct: { active?: DirectTargetRef | null; cols?: number } = {}
+): Promise<string[]> => {
   resetUiState()
   resetOverlayState()
   resetTurnState()
+  resetDirectChat()
   patchUiState({ escClearArmed, status: 'ready' })
+  patchDirectChat({ active: direct.active ?? null })
 
   const stdout = new PassThrough()
   const stdin = new PassThrough()
@@ -115,7 +123,7 @@ const renderFrame = async (escClearArmed: boolean): Promise<string[]> => {
 
   const instance = renderSync(
     <GatewayProvider value={gwServices}>
-      <AppLayout {...props} />
+      <AppLayout {...props} composer={{ ...composer, cols: direct.cols ?? composer.cols }} />
     </GatewayProvider>,
     {
       patchConsole: false,
@@ -175,5 +183,44 @@ describe('esc-clear hint', () => {
     const promptRow = (lines: string[]) => lines.findIndex(line => line.includes('a typed line'))
 
     expect(promptRow(armed)).toBe(promptRow(bare))
+  })
+})
+
+describe('composer border target name', () => {
+  const active = { agent: 'Raven-Code', handle: 'h1' }
+
+  it('names the direct-chat target at the right end of the border', async () => {
+    const lines = await renderFrame(false, { active })
+    const row = lines.findIndex(line => line.includes('Raven-Code/h1'))
+
+    expect(row).toBeGreaterThan(-1)
+    expect(lines[row]).toMatch(/─+ Raven-Code\/h1 ─$/)
+  })
+
+  it('leaves the border bare on the main conversation', async () => {
+    const lines = await renderFrame(false)
+
+    expect(lines.some(line => line.includes('Raven-Code/h1'))).toBe(false)
+  })
+
+  it('keeps the target name and the esc hint on one row', async () => {
+    const lines = await renderFrame(true, { active })
+
+    expect(lines.some(line => /─+ esc again to clear ─ Raven-Code\/h1 ─$/.test(line))).toBe(true)
+  })
+
+  it('sheds the target name before the hint when the rule is narrow', async () => {
+    const lines = await renderFrame(true, { active, cols: 30 })
+
+    expect(lines.some(line => line.includes(HINT))).toBe(true)
+    expect(lines.some(line => line.includes('Raven-Code/h1'))).toBe(false)
+  })
+
+  it('keeps the prompt row in place whether or not the target name is up', async () => {
+    const named = await renderFrame(false, { active })
+    const bare = await renderFrame(false)
+    const promptRow = (lines: string[]) => lines.findIndex(line => line.includes('a typed line'))
+
+    expect(promptRow(named)).toBe(promptRow(bare))
   })
 })

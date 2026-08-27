@@ -113,6 +113,51 @@ export const rememberInstance = (row: InstanceRow) => {
 export const isDirectTarget = (a: DirectTargetRef | null, b: DirectTargetRef | null) =>
   a !== null && b !== null && a.agent === b.agent && a.handle === b.handle
 
+/**
+ * The direct-chat switch order: main (null) first, then this session's
+ * addressable instances by when each first appeared.
+ *
+ * `createdAtMs` rather than `updatedAtMs`, which bumps on every status change --
+ * with several instances answering at once the order would resort under the
+ * user, so one arrow press stopped landing on the same instance twice. Only
+ * `resumable` rows are offered, since switching into a non-stateful agent's
+ * instance opens a chat the backend refuses -- except the row already active,
+ * which stays in the cycle whatever its flag says: the conversation on screen
+ * must always be a way out of itself, and a just-created instance's refresh
+ * may not have landed yet.
+ */
+export const orderedTargets = (
+  rows: readonly InstanceRow[],
+  active: DirectTargetRef | null
+): (DirectTargetRef | null)[] => [
+  null,
+  ...rows
+    .filter(
+      r =>
+        r.kind !== 'dag-node' &&
+        (r.resumable === true || isDirectTarget(active, { agent: r.agent, handle: r.handle }))
+    )
+    .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))
+    .map(r => ({ agent: r.agent, handle: r.handle }))
+]
+
+/** The target before / after `active`, wrapping at both ends. An active target
+ * not in the list cycles from main, which is always `targets[0]`. */
+export const cycleTarget = (
+  targets: readonly (DirectTargetRef | null)[],
+  active: DirectTargetRef | null,
+  step: -1 | 1
+): DirectTargetRef | null => {
+  if (targets.length === 0) {
+    return null
+  }
+
+  const at = targets.findIndex(t => (t === null ? active === null : isDirectTarget(active, t)))
+  const from = at === -1 ? 0 : at
+
+  return targets[(from + step + targets.length) % targets.length] ?? null
+}
+
 export const setDirectTranscript = (key: string, msgs: Msg[]) => {
   const transcripts = new Map($directChat.get().transcripts)
   transcripts.set(key, msgs)

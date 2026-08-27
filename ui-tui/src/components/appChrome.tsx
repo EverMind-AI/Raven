@@ -23,6 +23,7 @@ import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { buildSubagentTree, treeTotals } from '../lib/subagentTree.js'
 import { clipToWidth, clipToWidthFromEnd, fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot } from '../lib/viewportStore.js'
+import { Spinner } from './thinking.js'
 
 const FACE_TICK_MS = 2500
 const HEART_COLORS = ['#ff5fa2', '#ff4d6d']
@@ -43,6 +44,13 @@ const SPINNER_TICK_MS = 100
 interface IndicatorRender {
   frame: string
   intervalMs: number
+  // When true, FaceTicker draws the same braille spinner a running
+  // reasoning row carries in front of the glyph.  The glyph itself only
+  // turns every few seconds for `kaomoji`/`emoji`, which reads as a
+  // frozen row between rotations; the spinner is what says "still
+  // working".  `ascii`/`unicode` already animate at spinner cadence, so
+  // a second one in front would just be motion twice.
+  showSpinner: boolean
   // When false, FaceTicker hides the rotating verb and just shows the
   // glyph + duration.  Lets `unicode` stay minimal while the other
   // styles keep the verb-rotation flavour users associate with the
@@ -52,7 +60,12 @@ interface IndicatorRender {
 
 const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string): IndicatorRender => {
   if (style === 'kaomoji') {
-    return { frame: FACES[tick % FACES.length] ?? '', intervalMs: FACE_TICK_MS, showVerb: true }
+    return {
+      frame: FACES[tick % FACES.length] ?? '',
+      intervalMs: FACE_TICK_MS,
+      showSpinner: true,
+      showVerb: true
+    }
   }
 
   if (style === 'emoji') {
@@ -61,6 +74,7 @@ const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string)
     return {
       frame: frames[tick % frames.length] ?? `${brandMark} `,
       intervalMs: SPINNER_TICK_MS * 6,
+      showSpinner: true,
       showVerb: true
     }
   }
@@ -69,6 +83,7 @@ const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string)
     return {
       frame: ASCII_FRAMES[tick % ASCII_FRAMES.length] ?? '|',
       intervalMs: SPINNER_TICK_MS,
+      showSpinner: false,
       showVerb: true
     }
   }
@@ -80,7 +95,12 @@ const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string)
   const spinner = unicodeSpinners.braille
   const frame = spinner.frames[tick % spinner.frames.length] ?? '⠋'
 
-  return { frame, intervalMs: Math.max(SPINNER_TICK_MS, spinner.interval), showVerb: false }
+  return {
+    frame,
+    intervalMs: Math.max(SPINNER_TICK_MS, spinner.interval),
+    showSpinner: false,
+    showVerb: false
+  }
 }
 
 export function FaceTicker({ color, startedAt }: { color: string; startedAt?: null | number }) {
@@ -95,7 +115,7 @@ export function FaceTicker({ color, startedAt }: { color: string; startedAt?: nu
   // for verb-less styles like `unicode`) without leaving the previous
   // timer dangling.
   const brandMark = ui.theme.brand.icon
-  const { intervalMs, showVerb } = renderIndicator(style, 0, brandMark)
+  const { intervalMs, showSpinner, showVerb } = renderIndicator(style, 0, brandMark)
 
   useEffect(() => {
     const glyph = setInterval(() => setTick(n => n + 1), intervalMs)
@@ -125,6 +145,11 @@ export function FaceTicker({ color, startedAt }: { color: string; startedAt?: nu
 
   return (
     <Text color={color}>
+      {showSpinner ? (
+        <Text>
+          <Spinner color={color} variant="think" />{' '}
+        </Text>
+      ) : null}
       {frame}
       {verbSegment}
       {durationSegment}

@@ -1725,6 +1725,38 @@ async def test_spawn_emits_a_pending_status(monkeypatch) -> None:
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
 
 
+async def test_spawn_status_frames_carry_the_dispatching_tool_call(monkeypatch) -> None:
+    """A frame naming its tool call is what lets a client pin the run onto the
+    row that made it, the same way dag.run_started names its call. A spawn
+    dispatched without one -- an older caller -- emits frames without the key
+    rather than an empty string."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    events: list[dict[str, Any]] = []
+
+    async def _sink(session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+    release = asyncio.Event()
+
+    async def _stub_inner(*a: Any, **k: Any) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _stub_inner)
+
+    await mgr.spawn(task="do a thing", session_key="tui:s1", tool_call_id="call-9")
+    await mgr.spawn(task="another thing", session_key="tui:s1")
+    await _settle(lambda: len(_status_events(events)) == 2)
+
+    with_call, without_call = _status_events(events)
+    assert with_call["tool_call_id"] == "call-9"
+    assert "tool_call_id" not in without_call
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
 async def test_run_emits_running_then_completed_with_the_record_id(monkeypatch, tmp_path) -> None:
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
     events: list[dict[str, Any]] = []

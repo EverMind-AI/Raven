@@ -124,7 +124,9 @@ design), read-only, and redraws it while the run works.
 **Live Agents** (`ui-tui/src/app/liveAgentsStore.ts`):
 The session's delegated runs — spawns and dag nodes — folded from `subagent.status` and
 `dag.*` events, reconciled against `subagent.list` on the boundaries events cannot cover
-(cold start, reconnect, a missed terminal frame). Deliberately not turn-scoped: a
+(cold start, reconnect, a missed terminal frame) — including runs already over, seeded as
+settled rows so the Agents Overlay keeps the whole record after a resume; the strip never
+draws a settled row, however it arrived. Deliberately not turn-scoped: a
 background spawn outlives the turn that made it, and `$turnState.subagents` is cleared at
 every turn end. Cleared when the session on screen changes, since that is what the runs
 belong to. Feeds the Status Bar's ⚡ HUD, the Live Agents Strip, and the Agents Overlay's
@@ -145,18 +147,34 @@ _Avoid_: the `DagRunSummary` of `domain/dagRun.ts` — that is the count block o
 `dag.run_completed` frame carried, for the DAG Panel.
 
 **Live Agents Strip** (`ui-tui/src/components/liveAgentsStrip.tsx`):
-What the session has delegated, under the status rule, in two layers. A **graph line** per
+What the session has delegated, under the status rule — top to bottom: the `Raven`
+way-back row, the flat instance rows, the loose spawns, then the graphs, whole and
+last. A **graph line** per
 Live DAG Run — `dag <goal> - x/y done - n running - n queued - n failed - elapsed`, zero
 counts dropped — carries the run's whole tally and *stays* once the run is over, its
-elapsed time frozen at its own end. Under each, an **agent line** per active node of that
-graph, then the loose spawns: running or queued only, with a ticking elapsed time, and each
-one leaves as it settles. Clicking an agent line opens the Agents Overlay straight into
-that run's detail (`agentsFocusId`, consumed once), where its transcript streams as it
-works; clicking a graph line opens the overlay itself, a graph being no single transcript.
-Hidden entirely only when the session has delegated nothing at all.
-_Avoid_: reading it as a history of everything delegated — the graph lines are capped at
-the newest few and the agent layer holds only what is in flight; the full record is the
-Agents Overlay's business.
+elapsed time frozen at its own end, with an **agent line** under it per active node of that
+graph. Then the **instance rows**: one per addressable instance (`/new-instance`, a
+stateful spawn's handle), standing while the instance is resumable — running (`●`, ticking
+elapsed) or idle (`○`) — ordered by when each first appeared and never resorted; a live
+spawn that answers to an instance is merged into that one row, and a stateful DAG node's
+instance row is suppressed while its node line is up, returning idle *under its graph's
+line* once the node settles — who fanned an instance out stays visible after the run, not
+just during it (idle rows capped per graph). After a resume the live store re-seeds only
+graphs still working, so a finished graph's header is rebuilt from the instance rows' own
+`runId`/`runTitle` — same line, no tally — and the grouping survives.
+Clicking an instance row switches Direct Chat to it, the `Raven` row leading the strip is
+the way back to the main conversation, and Ctrl+Left / Ctrl+Right cycles main
+plus these same instances; which one is *active* is said at the right end of the composer's
+top border (`agent/handle`), never by the strip. The loose spawns — running or queued only,
+with a ticking elapsed time, each one leaving as it settles — sit between the flat
+instances and the graphs. A non-instance agent line opens the Agents Overlay straight into that run's
+detail on click (`agentsFocusId`, consumed once), where its transcript streams as it works;
+a graph line opens the overlay itself, a graph being no single transcript. Hidden entirely
+only when the session has delegated nothing at all.
+_Avoid_: reading it as a history of everything delegated — the graph lines and idle
+instance rows are capped at the newest few and the live layer holds only what is in
+flight; the full record is the Agents Overlay's business. Also "chip" — the chips row that
+once sat above the composer is gone; an instance's standing presence is its strip row.
 
 **Subagents Overlay**:
 The overlay for configuring third-party sub-agents - listing them by whether they can
@@ -177,7 +195,10 @@ and writes nothing.
 
 **Direct Chat** (`ui-tui/src/app/directChatStore.ts`):
 The mode in which the chat view is taken over by one sub-agent instance's own
-conversation: same composer, that instance's transcript, Esc to return. Tracked in
+conversation: same composer, that instance's transcript, Esc to return. Entered with
+`/new-instance`, by clicking an instance row on the Live Agents Strip, or with Ctrl+Left /
+Ctrl+Right, which cycles main plus the resumable instances by first appearance; while one
+is active the composer's top border names it at its right end (`agent/handle`). Tracked in
 `directChatStore`'s `active` field; `null` means the main Raven conversation. A direct-chat
 turn is `turn.send` with a `target`, and is never written to the session transcript - the
 main agent learns of it only through the Handoff Block. Its events are routed by their own
@@ -200,22 +221,6 @@ with no argument; `/new-instance <agent>` skips it and creates directly. Distinc
 Subagents Overlay, which configures *which* sub-agents exist rather than instantiating one.
 _Avoid_: "add agent" - nothing is added to the roster; an agent that already exists gets
 another instance.
-
-**Instance Chip** (`ui-tui/src/components/instanceChips.tsx`):
-One entry in the ordered list of sub-agent instances this session has used, drawn as
-`[label]` in one row above the composer (`InstanceChips`; a running instance carries a
-bullet, the active one is painted in `accent` and bold, a click switches to it), and the unit
-Shift+Left / Shift+Right cycles through to switch Direct Chat. The row is for the instances a
-person can talk to (`/new-instance`, a stateful spawn's handle); a dag run is shown on the
-Live Agents Strip instead. The first chip is always the way back to the main agent, and it
-and the active one are the two a width fit never truncates away. Ordered by when each instance first
-appeared and never resorted, so one press keeps landing on the same instance while several
-answer at once. Drawn from the instance registry, re-read after any event that could have
-moved it; a *failed* re-read leaves the list as it was rather than emptying it, since a quiet
-rpc reports "the call failed" and "there is nothing" the same way. Where the instances are
-*seen* is the Agents Overlay and the Live Agents Strip.
-_Avoid_: "agent chip" - a chip is one *instance* of an agent, and one agent can have
-several.
 
 **DAG Panel** (`ui-tui/src/components/dagPanel.tsx`):
 One `run_subagent_dag` run as a framed card in the transcript: a header naming
@@ -266,6 +271,24 @@ not truncate a child that overflows a fixed height, it squeezes the column --
 dropping scattered lines and painting the last over the footer -- so `fitTraceTail`
 cuts a too-tall message down from its head and marks the cut with a leading `…`.
 _Avoid_: "detail panel", "node output".
+
+**Spawn Panel** (`ui-tui/src/components/spawnPanel.tsx`):
+The bordered panel a `spawn` call renders as -- the DAG Panel minus the graph, since a
+spawn is a single run with no topology to draw. A header naming the call (`spawn` and the
+run's label; a spinner and the wall-clock elapsed while it runs, the status word once it
+settles), then a Trace box holding the tail of the run's conversation trace, drawn dense
+by the transcript's own renderer over `subagent.context` reads and bottom-aligned so
+slack reads as "history above" rather than a hole before the footer. The
+`agent@instance` handle, message count and record id sit on one line above the box, and
+one footer line under it carries everything the box owes the reader -- the
+earlier-message count, the fold toggle, and `/agents` as the way to the full trace. The
+box is open by default while the run works and folds once it settles; a click anywhere on
+the panel toggles it, and the reader's toggle wins over both defaults
+(`lib/spawnOpen.ts`). The Work Segment holding the call suppresses its transcript row,
+exactly as for a dag call. Fed by `subagent.status` frames carrying `tool_call_id` during
+the turn (pinned onto `tool.spawn`) or, on resume, rebuilt from the row's `spawn_task_id`
+through one `subagent.list` read.
+_Avoid_: "spawn card", "delegated row" -- the row is what this replaced.
 
 **Ordinal** (`DagPanel`, `/dag`):
 The short number (`1..N`) printed inside each graph box and at the head of the

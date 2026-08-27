@@ -318,7 +318,11 @@ async def instances_create(
     if handoff is not None:
         handoff.record_created(session_key, created)
 
-    return {"instance": row}
+    # Marked like the listing is: the client keeps drawing this one row until
+    # its next `subagents.instances` refresh, and a row without `resumable`
+    # falls off every surface that filters on it the moment it stops being the
+    # active conversation.
+    return {"instance": _mark_resumable([row], manager)[0]}
 
 
 async def instances_history(
@@ -379,6 +383,11 @@ async def instances_history(
         if turns and turns[-1].get("role") == "user":
             turns.pop()
         turns.extend(_live_turns(live, len(turns)))
+    elif turns and turns[-1].get("role") == "user":
+        # The mirror of the pop above: a trailing prompt with no reply and
+        # nothing in flight is a turn that died with its session. Marked, so a
+        # reader can say so instead of leaving the question hanging.
+        turns[-1] = {**turns[-1], "interrupted": True}
     return {"turns": turns}
 
 

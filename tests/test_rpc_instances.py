@@ -307,6 +307,22 @@ def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -
     (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
+def _dead_dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
+    """A run killed mid-flight: graph.json only, no manifest, and an output
+    file only for the nodes that finished before the gateway died."""
+    from raven.agent.subagent_history import dag_root
+
+    run = dag_root(session_dir) / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    graph: dict[str, Any] = {"task_summary": "t", "nodes": []}
+    for node_id, spec in nodes.items():
+        (run / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
+        if "out" in spec:
+            (run / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
+        graph["nodes"].append({"id": node_id, "subagent": spec["agent"], "instance": spec.get("instance")})
+    (run / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+
+
 async def _history(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
@@ -363,6 +379,38 @@ async def test_history_matches_a_dag_node_by_its_declared_instance(tmp_path: Pat
     )
 
     assert [t["content"] for t in await _history(session_dir, "Coder", "notes")] == ["ask", "answer"]
+
+
+async def test_history_reads_a_run_that_died_unfinalized_off_its_graph(tmp_path: Path) -> None:
+    """The manifest is written at finalize, so a run killed mid-flight has only
+    its graph.json -- reading nothing left every node of a dead run invisible,
+    the finished ones included."""
+    session_dir = tmp_path / "sessions" / "s1"
+    _dead_dag_run(
+        session_dir,
+        "run-1",
+        {
+            "research": {"agent": "Research", "instance": "gem", "prompt": "dig in"},
+            "code": {"agent": "Coder", "instance": "site", "prompt": "build it", "out": "built"},
+        },
+    )
+
+    finished = await _history(session_dir, "Coder", "site")
+    assert [t["content"] for t in finished] == ["build it", "built"]
+    assert all("interrupted" not in t for t in finished)
+
+
+async def test_a_trailing_prompt_with_nothing_in_flight_is_marked_interrupted(tmp_path: Path) -> None:
+    """The mirror of the live-splice pop: a prompt with no reply and nothing
+    running is a turn that died with its session, and the view says so instead
+    of leaving the question hanging."""
+    session_dir = tmp_path / "sessions" / "s1"
+    _dead_dag_run(session_dir, "run-1", {"research": {"agent": "Research", "instance": "gem", "prompt": "dig in"}})
+
+    turns = await _history(session_dir, "Research", "gem")
+
+    assert [(t["role"], t["content"]) for t in turns] == [("user", "dig in")]
+    assert turns[-1]["interrupted"] is True
 
 
 async def test_history_orders_every_source_by_when_it_started(tmp_path: Path) -> None:
@@ -875,6 +923,10 @@ async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Pat
     assert row["status"] == "idle"
     assert row["sessionKey"] == "s1"
     assert row["handle"].startswith("raven-")
+    # Marked like the listing marks it: the client draws this one row until its
+    # next refresh, and a row without `resumable` falls off every surface that
+    # filters on it once it stops being the active conversation.
+    assert row["resumable"] is True
 
 
 async def test_a_created_instance_is_listed_for_that_session(tmp_path: Path) -> None:

@@ -17,13 +17,12 @@ import type {
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
 import { openAgentsOverlay } from '../components/agentsOverlay.js'
-import { chipsForWidth, cycleTarget } from '../components/instanceChips.js'
 import { ESC_CLEAR_WINDOW_MS, TYPING_IDLE_MS } from '../config/timing.js'
 import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
-import { enterDirect, getDirectChat, leaveDirect } from './directChatStore.js'
+import { cycleTarget, enterDirect, getDirectChat, leaveDirect, orderedTargets } from './directChatStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
@@ -526,17 +525,18 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       return openAgentsOverlay()
     }
 
-    // Cycle the chip strip. Left/Right are otherwise the input cursor's, so
-    // these are the Ctrl chords, and only while at least one instance exists.
+    // Cycle the direct-chat target. Left/Right are otherwise the input
+    // cursor's, so these are the Ctrl chords, and only while another target
+    // exists to land on.
     if (key.ctrl && (key.leftArrow || key.rightArrow)) {
       const direct = getDirectChat()
+      // Every resumable instance, not just the rows the strip has room to
+      // draw: keyboard reach must not depend on how tall or wide the terminal
+      // happens to be.
+      const targets = orderedTargets(direct.instances, direct.active)
 
-      if (direct.instances.length > 0) {
-        // Unbounded width on purpose: cycling walks every instance, including
-        // the ones truncated off the visible strip. Keyboard reach must not
-        // depend on how wide the terminal happens to be.
-        const { chips } = chipsForWidth(direct.instances, direct.active, Number.MAX_SAFE_INTEGER)
-        const next = cycleTarget(chips, key.rightArrow ? 1 : -1)
+      if (targets.length > 1) {
+        const next = cycleTarget(targets, direct.active, key.rightArrow ? 1 : -1)
 
         return next === null ? leaveDirect() : enterDirect(next.agent, next.handle)
       }

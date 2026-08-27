@@ -7,6 +7,7 @@ import { atom } from 'nanostores'
 import { useSyncExternalStore } from 'react'
 
 import type { DagRunState } from '../domain/dagRun.js'
+import type { SpawnRunState } from '../domain/spawnRun.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import { isTodoDone } from '../lib/liveProgress.js'
@@ -21,6 +22,7 @@ const buildTurnState = (): TurnState => ({
   reasoningActive: false,
   reasoningStreaming: false,
   reasoningTokens: 0,
+  spawnRuns: [],
   streamPendingTools: [],
   streamSegments: [],
   streaming: '',
@@ -92,6 +94,11 @@ export interface TurnState {
   reasoningActive: boolean
   reasoningStreaming: boolean
   reasoningTokens: number
+  // In-flight spawn runs, keyed by task id in dispatch order -- the single-run
+  // counterpart of `dagRuns`, folded from `subagent.status` frames that carry a
+  // `tool_call_id`. Frames without one belong to no row of this turn and stay
+  // on `$liveAgents` alone.
+  spawnRuns: SpawnRunState[]
   streamPendingTools: string[]
   streamSegments: Msg[]
   streaming: string

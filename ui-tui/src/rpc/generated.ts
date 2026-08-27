@@ -205,6 +205,10 @@ export interface TranscriptMessage {
    * The run a run_subagent_dag call started, so a resumed transcript can fetch its graph through dag.get. Absent on every other tool, and on a graph that was rejected before it ran.
    */
   dag_run_id?: string;
+  /**
+   * The task id a spawn call's result names, so a resumed transcript can find the run's record through subagent.list. Absent on every other tool, and on a spawn that was refused before it ran.
+   */
+  spawn_task_id?: string;
   timestamp?: string;
   reasoning_content?: string;
   /**
@@ -962,6 +966,10 @@ export interface DirectTurn {
    * Set on a user row that was a steer: words merged into a turn already running, not the prompt that opened one. A reader draws it inside the turn rather than as a new one.
    */
   steer?: boolean;
+  /**
+   * Set on a trailing user row whose turn died with its session: nothing is running now and no reply ever landed. A reader marks the question as interrupted rather than leaving it hanging.
+   */
+  interrupted?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1418,6 +1426,10 @@ export interface SubagentStatusEvent {
      * The spawn record id subagent.context reads. Known from 'running' onward; a 'pending' run has not opened its record yet, so there is nothing to read.
      */
     call_id?: string;
+    /**
+     * The spawn tool call that dispatched this run, when the host correlates the two. What lets a client pin the run onto the tool row that made it, the same way dag.run_started names its call.
+     */
+    tool_call_id?: string;
     /**
      * The addressable handle, when the caller named or minted one.
      */

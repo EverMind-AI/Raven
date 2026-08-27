@@ -97,6 +97,14 @@ describe('toolsSummary', () => {
       'delegated 4 subagents'
     )
   })
+
+  it('strips a summary that leads with the tool name, which the verb already says', () => {
+    // Some transports write context as "web_fetch: <url>"; kept, the row read
+    // "fetched web_fetch: <url>".
+    expect(toolParts(tool('web_fetch', 'web_fetch: https://example.com/a')).detail).toBe('example.com/a')
+    // A bare echo of the name has nothing left after the strip and stays.
+    expect(toolParts(tool('web_fetch', 'web_fetch:')).detail).toBe('web_fetch:')
+  })
 })
 
 describe('result preview rows', () => {

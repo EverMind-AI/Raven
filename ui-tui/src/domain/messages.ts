@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { DagGetResult, TranscriptDelegated } from '../rpc/index.js'
+import type { DagGetResult, SubagentCall, SubagentListResult, TranscriptDelegated } from '../rpc/index.js'
 import type { Msg, SessionInfo } from '../types.js'
 import type { DagRunState } from './dagRun.js'
 import type { FoldRow } from './episodeFold.js'
@@ -13,6 +13,7 @@ import { t } from '../i18n/index.js'
 import { fmtK } from '../lib/text.js'
 import { foldDagSnapshot } from './dagRun.js'
 import { clampToolPreview, foldRowsIntoEpisodes } from './episodeFold.js'
+import { spawnRunFromListRow } from './spawnRun.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from './turnArtifacts.js'
 
 /** Structurally `GatewayRpc`, restated so a test can pass a plain function. */
@@ -281,6 +282,71 @@ export const hydrateDagRuns = async (rows: unknown, msgs: Msg[], rpc: Rpc, sessi
   return msgs
 }
 
+/**
+ * Attach each resumed spawn call's run, rebuilt from the session's own
+ * delegation records.
+ *
+ * Same discipline as `hydrateDagRuns` above: done before the transcript is set,
+ * so drawing stays a pure function of state. One `subagent.list` read serves
+ * every call -- a row carries the run's label, status and clocks, and its id is
+ * the record `subagent.context` reads for the trace.
+ *
+ * A call whose record is gone attaches nothing. The row then reads as it did
+ * before spawn panels existed, which is the honest rendering of "the history
+ * was pruned".
+ */
+export const hydrateSpawnRuns = async (rows: unknown, msgs: Msg[], rpc: Rpc, sessionId: string): Promise<Msg[]> => {
+  if (!Array.isArray(rows)) {
+    return msgs
+  }
+
+  const byCall = new Map<string, string>()
+
+  for (const row of rows) {
+    const { spawn_task_id: taskId, tool_call_id: callId } = (row ?? {}) as TranscriptRow
+
+    if (taskId && callId) {
+      byCall.set(callId, taskId)
+    }
+  }
+
+  if (byCall.size === 0) {
+    return msgs
+  }
+
+  let listed: SubagentCall[] = []
+
+  try {
+    // `quiet` for the same reason as the dag hydrate: a pruned history dir must
+    // not print an error into the transcript a resume is trying to draw.
+    const result = await rpc<SubagentListResult>('subagent.list', { session_id: sessionId }, { quiet: true })
+
+    listed = result?.items ?? []
+  } catch {
+    // Reported nowhere on purpose: pruned delegation records are an ordinary
+    // state for an old session, not an error the reader has to acknowledge.
+  }
+
+  if (listed.length === 0) {
+    return msgs
+  }
+
+  for (const msg of msgs) {
+    for (const episode of msg.episodes ?? []) {
+      for (const tool of episode.tools) {
+        const taskId = byCall.get(tool.id)
+        const run = taskId ? spawnRunFromListRow(taskId, tool.id, listed) : null
+
+        if (run) {
+          tool.spawn = run
+        }
+      }
+    }
+  }
+
+  return msgs
+}
+
 export const fmtDuration = (ms: number) => {
   const t = Math.max(0, Math.floor(ms / 1000))
   const h = Math.floor(t / 3600)
@@ -306,6 +372,8 @@ interface TranscriptRow {
   context?: string
   /** Set on a `run_subagent_dag` tool row; the run it started, for `hydrateDagRuns`. */
   dag_run_id?: string
+  /** Set on a `spawn` tool row; the run's task id, for `hydrateSpawnRuns`. */
+  spawn_task_id?: string
   /** See `TranscriptMessage.delegated`: set when a delegated run's result opened the turn. */
   delegated?: TranscriptDelegated
   duration_ms?: number

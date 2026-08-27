@@ -3,10 +3,11 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { AlternateScreen, Box, NoSelect, ScrollBox, Text } from '@hermes/ink'
+import { AlternateScreen, Box, NoSelect, ScrollBox, stringWidth, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { Fragment, memo, useMemo, useRef } from 'react'
 
+import type { DirectTargetRef } from '../app/directChatStore.js'
 import type { AppLayoutProps } from '../app/interfaces.js'
 import type { Theme } from '../theme.js'
 
@@ -24,13 +25,13 @@ import {
   stableComposerColumns
 } from '../lib/inputMetrics.js'
 import { PerfPane } from '../lib/perfPane.js'
+import { compactPreview } from '../lib/text.js'
 import { AgentsOverlay } from './agentsOverlay.js'
 import { GoodVibesHeart, StatusRule, TranscriptScrollbar, WorkingIndicator } from './appChrome.js'
 import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel, StartupLoader } from './branding.js'
 import { FpsOverlay } from './fpsOverlay.js'
 import { HelpHint } from './helpHint.js'
-import { InstanceChips } from './instanceChips.js'
 import { LiveAgentsStrip } from './liveAgentsStrip.js'
 import { MessageLine } from './messageLine.js'
 import { QueuedMessages } from './queuedMessages.js'
@@ -39,21 +40,53 @@ import { TextInput, type TextInputMouseApi } from './textInput.js'
 
 const ESC_CLEAR_HINT = 'esc again to clear'
 
-// The composer's top border, with room kept at its right end for a transient
-// hint. Rendered as one row of segments rather than a spliced string so the
-// hint can carry its own color without re-measuring the rule.
-const ComposerTopRule = memo(function ComposerTopRule({ hint, t, width }: { hint: string; t: Theme; width: number }) {
-  const dashes = width - hint.length - 3
+// The composer's top border: a transient hint and, at the right end, the name
+// of the direct-chat target (which the chips row this replaces used to say).
+// Rendered as one row of segments rather than a spliced string so each segment
+// can carry its own color without re-measuring the rule. Always exactly one
+// row: width pressure sheds the target name before the hint -- the hint offers
+// the keypress the user is mid-way through, the name is standing state the
+// Agents Overlay can also answer -- and never wraps.
+const ComposerTopRule = memo(function ComposerTopRule({
+  hint,
+  t,
+  target,
+  width
+}: {
+  hint: string
+  t: Theme
+  target: DirectTargetRef | null
+  width: number
+}) {
+  const hintW = hint ? hint.length + 3 : 0
+  let label =
+    target === null ? '' : compactPreview(`${target.agent}/${target.handle}`, Math.max(8, Math.floor(width / 2)))
+  const tailWidth = () => (label ? stringWidth(` ${label} `) + 1 : 0)
 
-  if (!hint || dashes < 4) {
+  if (width - tailWidth() - hintW < 4) {
+    label = ''
+  }
+
+  const dashes = width - tailWidth() - hintW
+
+  if (dashes < 4) {
     return <Text color={t.color.primary}>{'─'.repeat(width)}</Text>
   }
 
   return (
     <Box>
       <Text color={t.color.primary}>{'─'.repeat(dashes)}</Text>
-      <Text color={t.color.warn}>{` ${hint} `}</Text>
-      <Text color={t.color.primary}>{'─'}</Text>
+      {hint !== '' && <Text color={t.color.warn}>{` ${hint} `}</Text>}
+      {hint !== '' && <Text color={t.color.primary}>{'─'}</Text>}
+
+      {label !== '' && (
+        <>
+          <Text bold color={t.color.accent}>
+            {` ${label}`}
+          </Text>
+          <Text color={t.color.primary}> ─</Text>
+        </>
+      )}
     </Box>
   )
 })
@@ -255,8 +288,6 @@ const ComposerPane = memo(function ComposerPane({
       }}
       paddingX={1}
     >
-      <InstanceChips cols={composer.cols} t={ui.theme} />
-
       <QueuedMessages
         cols={composer.cols}
         queued={composer.queuedDisplay}
@@ -296,6 +327,7 @@ const ComposerPane = memo(function ComposerPane({
             <ComposerTopRule
               hint={ui.escClearArmed ? ESC_CLEAR_HINT : ''}
               t={ui.theme}
+              target={directChat.active}
               width={Math.max(1, composer.cols - 2)}
             />
             <Box

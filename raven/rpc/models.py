@@ -275,6 +275,13 @@ class DirectTurn(_Strict):
             "prompt that opened one. A reader draws it inside the turn rather than as a new one."
         ),
     )
+    interrupted: bool | None = Field(
+        default=None,
+        description=(
+            "Set on a trailing user row whose turn died with its session: nothing is running now and "
+            "no reply ever landed. A reader marks the question as interrupted rather than leaving it hanging."
+        ),
+    )
 
 
 class UsageSnapshot(_Strict):
@@ -589,6 +596,14 @@ class SubagentStatusPayload(_Strict):
         description=(
             "The spawn record id `subagent.context` reads. Known from `running` onward; a "
             "`pending` run has not opened its record yet, so there is nothing to read."
+        ),
+    )
+    tool_call_id: str | None = Field(
+        default=None,
+        description=(
+            "The spawn tool call that dispatched this run, when the host correlates the two. "
+            "What lets a client pin the run onto the tool row that made it, the same way "
+            "dag.run_started names its call."
         ),
     )
     instance: str | None = Field(
@@ -2281,6 +2296,14 @@ class TranscriptMessage(_Strict):
             "The run a run_subagent_dag call started, so a resumed transcript can fetch its graph "
             "through dag.get. Absent on every other tool, and on a graph that was rejected before "
             "it ran."
+        ),
+    )
+    spawn_task_id: str | None = Field(
+        default=None,
+        description=(
+            "The task id a spawn call's result names, so a resumed transcript can find the run's "
+            "record through subagent.list. Absent on every other tool, and on a spawn that was "
+            "refused before it ran."
         ),
     )
     timestamp: str | None = None

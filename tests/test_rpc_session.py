@@ -2272,6 +2272,82 @@ def test_a_dag_tool_row_with_notice_prefix_still_names_the_run() -> None:
     assert rows[0]["dag_run_id"] == "20260823T063516789587Z-1e97d546"
 
 
+def test_a_spawn_tool_row_names_the_task_it_started() -> None:
+    """The task id is in the result text the manager authored; the client
+    should not have to parse prose to find it."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "spawn",
+                "tool_call_id": "call-1",
+                "content": ("Subagent [research CO] started (id: 1a021575). I'll notify you when it completes."),
+            }
+        ],
+        "sess",
+    )
+
+    assert rows[0]["spawn_task_id"] == "1a021575"
+
+
+def test_a_spawn_label_quoting_a_started_line_does_not_hijack_the_task_id() -> None:
+    """The label between the brackets is model-authored and can itself contain
+    a "started (id: ...)" shape; the manager's own suffix is the last one in
+    the sentence it wrote, so the last match names the task."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "spawn",
+                "tool_call_id": "call-1",
+                "content": (
+                    "Subagent [inspect log: started (id: deadbeef)] started (id: 1a021575). "
+                    "I'll notify you when it completes."
+                ),
+            }
+        ],
+        "sess",
+    )
+
+    assert rows[0]["spawn_task_id"] == "1a021575"
+
+
+def test_a_non_spawn_tool_row_with_spawn_shaped_content_names_no_task() -> None:
+    """A read_file or grep row can legitimately quote a spawn's own "started"
+    line back -- the name guard, not the regex, keeps such a row from being
+    mistaken for the run it quotes."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "read_file",
+                "tool_call_id": "c",
+                "content": "Subagent [x] started (id: 1a021575).",
+            }
+        ],
+        "sess",
+    )
+
+    assert "spawn_task_id" not in rows[0]
+
+
+def test_a_spawn_row_that_was_refused_names_no_task() -> None:
+    """A refused spawn returns its refusal, not a run."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "spawn",
+                "tool_call_id": "c",
+                "content": "Spawn refused: delegation is paused.",
+            }
+        ],
+        "sess",
+    )
+
+    assert "spawn_task_id" not in rows[0]
+
+
 async def test_session_resume_carries_the_stored_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The banner names what is being resumed.
 

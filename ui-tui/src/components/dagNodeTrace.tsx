@@ -105,12 +105,15 @@ const TraceBox = ({
       </Text>
 
       {fit.shown.length > 0 ? (
-        <Box flexDirection="column" height={rows} overflow="hidden">
+        // Bottom-aligned: a tail shorter than the box hugs the footer, so the
+        // slack reads as "history above" instead of a hole between the newest
+        // step and the count of what was cut.
+        <Box flexDirection="column" height={rows} justifyContent="flex-end" overflow="hidden">
           {/* `hidden` offsets the key out of the window, so a row keeps its
               instance as the tail slides instead of inheriting the previous
               row's state (see the same note in `agentsOverlay`). */}
           {fit.shown.map((msg, index) => (
-            <MessageLine cols={inner} key={fit.hidden + index} msg={msg} t={t} />
+            <MessageLine cols={inner} dense key={fit.hidden + index} msg={msg} t={t} />
           ))}
         </Box>
       ) : (

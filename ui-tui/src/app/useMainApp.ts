@@ -22,6 +22,7 @@ import { dagRunsFromHistory } from '../domain/dagRun.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
 import { attachedImageNotice, imageTokenMeta, withoutSpentIntro } from '../domain/messages.js'
 import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
+import { spawnRunsFromHistory, type SpawnRunState } from '../domain/spawnRun.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
@@ -32,6 +33,7 @@ import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
 import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../lib/platform.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
+import { $spawnOpenOverrides, spawnTraceOpen } from '../lib/spawnOpen.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
@@ -65,6 +67,7 @@ import { useDirectStepPoll } from './useDirectStepPoll.js'
 import { useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
 import { useSessionLifecycle } from './useSessionLifecycle.js'
+import { useSpawnTracePoll } from './useSpawnTracePoll.js'
 import { useSubmission } from './useSubmission.js'
 
 const GOOD_VIBES_RE = /\b(good bot|thanks|thank you|thx|ty|ily|love you)\b/i
@@ -349,6 +352,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const firstUserIdx = useMemo(() => virtualRows.findIndex(r => r.msg.role === 'user'), [virtualRows])
 
   const dagOpen = useStore($dagOpenNodes)
+  const spawnOverrides = useStore($spawnOpenOverrides)
 
   const estimateRowHeight = useCallback(
     (index: number) =>
@@ -357,10 +361,11 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
         dagOpen,
         details: detailsVisible,
         limitHistory: index < virtualRows.length - FULL_RENDER_TAIL_ITEMS,
+        spawnOverrides,
         userPrompt: ui.theme.brand.prompt,
         withSeparator: virtualRows[index]!.msg.role === 'user' && firstUserIdx >= 0 && index > firstUserIdx
       }),
-    [cols, dagOpen, detailsVisible, firstUserIdx, ui.compact, ui.theme.brand.prompt, virtualRows]
+    [cols, dagOpen, detailsVisible, firstUserIdx, spawnOverrides, ui.compact, ui.theme.brand.prompt, virtualRows]
   )
 
   const syncHeightCache = useCallback(
@@ -607,6 +612,38 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // that is a read rather than a stream.
   useDagNodePoll(rpc, sidRef, dagRuns, pinnedDagRuns, dagOpen)
 
+  const spawnRuns = useTurnSelector(state => state.spawnRuns)
+  const pinnedSpawnRuns = useMemo(() => spawnRunsFromHistory(historyItems), [historyItems])
+
+  // Which spawn panels are open -- running ones by default, plus the reader's
+  // own toggles -- resolved once here so the poll and the panel agree. Merged
+  // by task id, the live run winning, since the pinned copy's status can lag.
+  const spawnOpen = useMemo(() => {
+    const byTaskId = new Map<string, SpawnRunState>()
+
+    for (const run of pinnedSpawnRuns) {
+      byTaskId.set(run.taskId, run)
+    }
+
+    for (const run of spawnRuns) {
+      byTaskId.set(run.taskId, run)
+    }
+
+    const open = new Set<string>()
+
+    for (const run of byTaskId.values()) {
+      if (spawnTraceOpen(run, spawnOverrides)) {
+        open.add(run.taskId)
+      }
+    }
+
+    return open
+  }, [pinnedSpawnRuns, spawnOverrides, spawnRuns])
+
+  // A watched spawn run is re-read while it works, on the same terms as a
+  // watched DAG node.
+  useSpawnTracePoll(rpc, sidRef, spawnRuns, pinnedSpawnRuns, spawnOpen)
+
   // A graph outlives the turn that started it: `run_subagent_dag` returns and the
   // reply commits while nodes are still running, and from then on the transcript
   // is drawing `tool.dag` -- the copy frozen at commit time. So a run that
@@ -666,6 +703,61 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       return touched ? next : prev
     })
   }, [dagRuns, setHistoryItems])
+
+  // A spawn outlives its turn the same way a graph does: from turn end onward
+  // the transcript draws `tool.spawn` -- the copy frozen at commit time -- so
+  // later status frames are written back into the history item, exactly as for
+  // `tool.dag` above and for the same height-model reason.
+  useEffect(() => {
+    if (spawnRuns.length === 0) {
+      return
+    }
+
+    const live = new Map(spawnRuns.map(run => [run.taskId, run]))
+
+    setHistoryItems(prev => {
+      let touched = false
+      const next = prev.map(msg => {
+        if (!msg.episodes?.length) {
+          return msg
+        }
+
+        let msgTouched = false
+        const episodes = msg.episodes.map(episode => {
+          let epTouched = false
+          const tools = episode.tools.map(tool => {
+            const run = tool.spawn && live.get(tool.spawn.taskId)
+
+            if (!run || run === tool.spawn) {
+              return tool
+            }
+
+            epTouched = true
+
+            return { ...tool, spawn: run }
+          })
+
+          if (!epTouched) {
+            return episode
+          }
+
+          msgTouched = true
+
+          return { ...episode, tools }
+        })
+
+        if (!msgTouched) {
+          return msg
+        }
+
+        touched = true
+
+        return { ...msg, episodes }
+      })
+
+      return touched ? next : prev
+    })
+  }, [spawnRuns, setHistoryItems])
 
   const answerClarify = useCallback(
     (answer: string) => {

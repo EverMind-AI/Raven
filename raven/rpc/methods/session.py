@@ -254,6 +254,12 @@ def _manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionMan
 # sentence it does not author.
 _DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
 
+# The spawn counterpart: "Subagent [...] started (id: <task_id>)." names the run
+# the call dispatched. Same authorship argument as the DAG id above -- the
+# manager writes this sentence, so the server parses it; the task id is the
+# suffix of the run's record directory, which subagent.list reports.
+_SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
+
 
 def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
@@ -342,6 +348,13 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
         if m.get("name") == "run_subagent_dag" and isinstance(content, str):
             if match := _DAG_RUN_ID_RE.search(content):
                 entry["dag_run_id"] = match.group(1)
+        if m.get("name") == "spawn" and isinstance(content, str):
+            # The label between the brackets is model-authored text and can
+            # itself contain a "started (id: ...)" shape; the manager's own
+            # suffix is the last one in the sentence it wrote, so the last
+            # match is the task id.
+            if matches := _SPAWN_TASK_ID_RE.findall(content):
+                entry["spawn_task_id"] = matches[-1]
         reasoning = m.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             entry["reasoning_content"] = reasoning

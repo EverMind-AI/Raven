@@ -37,8 +37,16 @@ export { callSubject } from './episodeFold.js'
  * prefix still has to be stripped here too, against the same exported literal
  * rather than a second copy that could drift from it.
  */
-export const foldDirectTurns = (turns: DirectTurn[]): Msg[] =>
-  foldRowsIntoEpisodes(
+/** One shared object, not one per fold: the view keeps row identity across
+ *  re-reads (`replaceRows`), and the marker never varies. */
+const INTERRUPTED_ROW: Msg = {
+  kind: 'slash',
+  role: 'system',
+  text: 'interrupted — this turn ended with its session before it answered'
+}
+
+export const foldDirectTurns = (turns: DirectTurn[]): Msg[] => {
+  const msgs = foldRowsIntoEpisodes(
     turns.map((turn): FoldRow => {
       const failed = turn.role === 'tool' && turn.content.startsWith(FAILED_MARKER)
 
@@ -55,3 +63,9 @@ export const foldDirectTurns = (turns: DirectTurn[]): Msg[] =>
       }
     })
   )
+
+  // The server marks a trailing prompt whose turn died with its session --
+  // nothing running now, no reply on record. One muted line says so, where a
+  // bare unanswered question read as the view having lost the reply.
+  return turns.some(t => t.interrupted) ? [...msgs, INTERRUPTED_ROW] : msgs
+}

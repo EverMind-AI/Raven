@@ -10,14 +10,16 @@ import type { EpisodeTool, Msg } from '../types.js'
 import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
-import { dagDetailRoom, dagRowDetail, dagTraceBoxRows } from './dagStatus.js'
+import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows } from './dagStatus.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
+import { spawnTraceOpen } from './spawnOpen.js'
 import { boundedHistoryRenderText } from './text.js'
 
 // One allocation shared by every caller that has no open node, rather than one
 // per estimatedMsgHeight call.
 const EMPTY_OPEN: ReadonlySet<string> = new Set()
+const EMPTY_OVERRIDES: ReadonlyMap<string, boolean> = new Map()
 
 const hashText = (text: string) => {
   let h = 5381
@@ -47,11 +49,15 @@ export const messageHeightKey = (msg: Msg) => {
     dag
       ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}`
       : ''
+  // A spawn panel's height moves with its run's status (the trace box grows
+  // once the run settles, and its default open flips), so the status is part
+  // of the key the same way a dag's shape is.
+  const spawnSig = (spawn: EpisodeTool['spawn']) => (spawn ? `/s.${spawn.status}.${spawn.callId ? 1 : 0}` : '')
   const epSig =
     msg.episodes
       ?.map(
         ep =>
-          `${ep.narration?.length ?? 0}:${ep.steer?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}`).join(',')}`
+          `${ep.narration?.length ?? 0}:${ep.steer?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}${spawnSig(tool.spawn)}`).join(',')}`
       )
       .join('\u0001') ?? ''
 
@@ -146,21 +152,39 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
   return chrome + (picture?.height ?? 0) + run.nodes.length + details + slots + (run.done && run.dir ? 1 : 0)
 }
 
+/**
+ * Row count for one spawn call's panel. Exactly `SpawnPanel`'s structure,
+ * resolved through the same `spawnTraceOpen` and `dagTraceRows` the panel
+ * renders from, so the estimate cannot drift from what it draws.
+ *
+ * Folded: two border rows, the header, its rule, and the hint. Open: the hint
+ * row becomes the trace's own footer, so the difference is the meta line, the
+ * fixed-height trace, and that footer.
+ */
+const spawnPanelRows = (run: NonNullable<EpisodeTool['spawn']>, overrides: ReadonlyMap<string, boolean>): number =>
+  spawnTraceOpen(run, overrides) ? 6 + dagTraceRows(run.status) : 5
+
 export const estimatedMsgHeight = (
   msg: Msg,
   cols: number,
   {
     compact,
     dagOpen = EMPTY_OPEN,
+    dense = false,
     details,
     limitHistory = false,
+    spawnOverrides = EMPTY_OVERRIDES,
     userPrompt = '',
     withSeparator = false
   }: {
     compact: boolean
     dagOpen?: ReadonlySet<string>
+    /** Trace-box rendering (see `MessageLine`): segments keep no breathing
+     *  rows, so an episodes message measures without them too. */
+    dense?: boolean
     details: boolean
     limitHistory?: boolean
+    spawnOverrides?: ReadonlyMap<string, boolean>
     userPrompt?: string
     withSeparator?: boolean
   }
@@ -196,32 +220,35 @@ export const estimatedMsgHeight = (
     // marginTop={1}; counting no row for that is what keeps the estimate low,
     // and a low estimate is the stale-cell symptom.
     for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
-      h += i > 0 ? 1 : 0
+      h += i > 0 && !dense ? 1 : 0
 
       if (seg.kind === 'work') {
-        const dagTools = seg.tools.filter(tool => tool.dag)
+        const panelTools = seg.tools.filter(tool => tool.dag || tool.spawn)
 
-        if (dagTools.length === 0) {
+        if (panelTools.length === 0) {
           h++
           continue
         }
 
-        // A DAG call's graph renders at every fold depth, including the folded
-        // default -- see dagFor/WorkSegment in episodeView.tsx -- so this
-        // mirrors that instead of the one-row approximation below. A dag call
-        // draws no row of its own: the panel is a titled box that carries the
-        // call, so only the other tools in the stretch are counted as rows.
-        // depth/width match episodeView's own INDENT/STEP and width formula so
-        // the two cannot drift apart.
-        const dagWidth = cols ? Math.max(20, cols - 4) : 116
+        // A DAG call's graph -- and a spawn call's panel -- renders at every
+        // fold depth, including the folded default; see dagFor/spawnFor and
+        // WorkSegment in episodeView.tsx. So this mirrors that instead of the
+        // one-row approximation below. Neither call draws a row of its own: the
+        // panel is a titled box that carries the call, so only the other tools
+        // in the stretch are counted as rows. depth/width match episodeView's
+        // own INDENT/STEP and width formula so the two cannot drift apart.
+        const panelWidth = cols ? Math.max(20, cols - 4) : 116
+        const panelRows = (tool: EpisodeTool, width: number) =>
+          (tool.dag ? dagPanelRows(tool.dag, width, dagOpen) : 0) +
+          (tool.spawn ? spawnPanelRows(tool.spawn, spawnOverrides) : 0)
 
         if (seg.tools.length === 1) {
-          h += dagPanelRows(dagTools[0]!.dag!, Math.max(28, dagWidth - INDENT), dagOpen)
+          h += panelRows(seg.tools[0]!, Math.max(28, panelWidth - INDENT))
         } else {
-          h += 1 + (seg.tools.length - dagTools.length)
+          h += 1 + (seg.tools.length - panelTools.length)
 
-          for (const tool of dagTools) {
-            h += dagPanelRows(tool.dag!, Math.max(28, dagWidth - (INDENT + STEP)), dagOpen)
+          for (const tool of panelTools) {
+            h += panelRows(tool, Math.max(28, panelWidth - (INDENT + STEP)))
           }
         }
 
@@ -236,13 +263,14 @@ export const estimatedMsgHeight = (
       const narration = (seg.episode.narration ?? '').trim()
       const reasoning = (seg.episode.reasoning ?? '').trim()
 
-      // reasoning row (+ its own blank line above the prose)
-      h += hasMeaningfulReasoning(reasoning) ? 2 : 0
+      // reasoning row (+ its own blank line above the prose, kept out of a
+      // dense trace box)
+      h += hasMeaningfulReasoning(reasoning) ? (dense ? 1 : 2) : 0
       h += narration ? wrappedProseLines(narration, bodyWidth) : 0
     }
 
     if (msg.text) {
-      h += 1 + wrappedProseLines(msg.text, bodyWidth)
+      h += (dense ? 0 : 1) + wrappedProseLines(msg.text, bodyWidth)
     }
 
     return Math.max(1, h)

@@ -193,6 +193,92 @@ describe('reconcileFromList', () => {
 
     expect($liveAgents.get()[0]?.status).toBe('completed')
   })
+
+  it('seeds a run that was over before this session opened, for the overlay', async () => {
+    // After a resume the disk is the overlay's only account of what the
+    // session delegated; the strip is unaffected, never drawing a settled row.
+    const { liveAgentCounts, reconcileFromList, resetLiveAgents } = await import('../app/liveAgentsStore.js')
+
+    resetLiveAgents()
+    reconcileFromList([
+      { id: 'rec-old', kind: 'spawn', label: 'done before resume', message_count: 3, status: 'ok' },
+      { id: 'r9/n1', kind: 'dag', label: 'n1', message_count: 1, node: 'n1', run_id: 'r9', status: 'interrupted' }
+    ])
+
+    const rows = $liveAgents.get()
+    expect(rows.find(r => r.id === 'rec-old')).toMatchObject({ kind: 'spawn', status: 'completed' })
+    expect(rows.find(r => r.id === 'r9/n1')).toMatchObject({ kind: 'dag-node', status: 'cancelled' })
+    expect(liveAgentCounts(rows)).toEqual({ pending: 0, running: 0 })
+  })
+
+  it('keeps the newest rows when a resume seed crosses the row cap', async () => {
+    // `subagent.list` answers newest first; seeded in that order the newest
+    // rows drew the lowest seq and the cap prune, which keeps terminal rows by
+    // descending seq, retained the oldest 300 instead.
+    const { reconcileFromList, resetLiveAgents } = await import('../app/liveAgentsStore.js')
+
+    resetLiveAgents()
+
+    const items: SubagentCall[] = Array.from({ length: 302 }, (_, i) => ({
+      id: `rec-${String(302 - i).padStart(3, '0')}`,
+      kind: 'spawn' as const,
+      label: 'done before resume',
+      message_count: 1,
+      started_at: new Date(1_000_000 + (302 - i) * 1000).toISOString(),
+      status: 'ok'
+    }))
+    reconcileFromList(items)
+
+    const ids = new Set($liveAgents.get().map(r => r.id))
+    expect(ids.size).toBe(300)
+    expect(ids.has('rec-302')).toBe(true)
+    expect(ids.has('rec-301')).toBe(true)
+    expect(ids.has('rec-001')).toBe(false)
+    expect(ids.has('rec-002')).toBe(false)
+
+    // The same snapshot folds in again on every poll. A pruned old row is
+    // re-seeded with the freshest seq, so the cap must trim by chronology or
+    // each reconciliation rotates pruned rows back in and evicts newer ones.
+    reconcileFromList(items)
+    reconcileFromList(items)
+
+    const again = [...new Set($liveAgents.get().map(r => r.id))].sort()
+    expect(again).toEqual([...ids].sort())
+  })
+
+  it('stays stable across polls when rows carry no start clock, or share one', async () => {
+    // `started_at` is optional (a record whose meta was unreadable has none)
+    // and shareable (graph nodes start together); on a clock tie the trim must
+    // fall back to something stable across polls, which fresh insertion order
+    // is not.
+    const { reconcileFromList, resetLiveAgents } = await import('../app/liveAgentsStore.js')
+
+    for (const started_at of [undefined, new Date(1_000_000).toISOString()]) {
+      resetLiveAgents()
+
+      const items: SubagentCall[] = Array.from({ length: 302 }, (_, i) => ({
+        id: `rec-${String(302 - i).padStart(3, '0')}`,
+        kind: 'spawn' as const,
+        label: 'done before resume',
+        message_count: 1,
+        ...(started_at === undefined ? {} : { started_at }),
+        status: 'ok'
+      }))
+
+      reconcileFromList(items)
+      const first = [...new Set($liveAgents.get().map(r => r.id))].sort()
+      expect(first).toHaveLength(300)
+      expect(first).toContain('rec-302')
+      expect(first).toContain('rec-003')
+      expect(first).not.toContain('rec-001')
+      expect(first).not.toContain('rec-002')
+
+      reconcileFromList(items)
+      reconcileFromList(items)
+      const again = [...new Set($liveAgents.get().map(r => r.id))].sort()
+      expect(again).toEqual(first)
+    }
+  })
 })
 
 describe('$dagRuns', () => {

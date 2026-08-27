@@ -334,6 +334,10 @@ const dispatch = (
       return
     }
     case 'subagent.status':
+      // Twice on purpose: `$liveAgents` drives the strip for every run of the
+      // session, and the controller pins the frame onto the tool row that
+      // dispatched it (only frames carrying a tool_call_id land there).
+      turnController.recordSpawnStatus(event.payload)
       applySubagentStatus(event.payload)
       return
     case 'dag.run_started':

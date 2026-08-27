@@ -21,10 +21,11 @@ import type { Msg, PanelSection, SessionInfo, Usage } from '../types.js'
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
 
 import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
-import { hydrateDagRuns, introMsg, toTranscriptMessages } from '../domain/messages.js'
+import { hydrateDagRuns, hydrateSpawnRuns, introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { resetSpawnOpen } from '../lib/spawnOpen.js'
 import { resetDagNodeTraces } from './dagNodeStore.js'
 import { resetDirectChat } from './directChatStore.js'
 import { resetFolds } from './foldStore.js'
@@ -154,6 +155,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     resetDirectChat()
     resetFolds()
     resetDagNodeTraces()
+    resetSpawnOpen()
     resetLiveAgents()
     setHistoryItems([])
     setLastUserMsg('')
@@ -325,7 +327,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               resetSession()
               setSessionStartedAt(Date.now())
 
-              const resumed = await hydrateDagRuns(r.messages, toTranscriptMessages(r.messages), rpc, r.session_id)
+              const resumed = await hydrateSpawnRuns(
+                r.messages,
+                await hydrateDagRuns(r.messages, toTranscriptMessages(r.messages), rpc, r.session_id),
+                rpc,
+                r.session_id
+              )
 
               // hydrateDagRuns awaits one dag.get per run; re-check staleness
               // after it too, so a second switch minted during that fetch can't

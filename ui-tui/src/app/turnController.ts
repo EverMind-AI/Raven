@@ -5,7 +5,7 @@
 
 import type { DagEvent } from '../domain/dagRun.js'
 import type { SessionInterruptResponse, SubagentEventPayload } from '../gatewayTypes.js'
-import type { DagRunSnapshot } from '../rpc/index.js'
+import type { DagRunSnapshot, SubagentStatusEvent } from '../rpc/index.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import {
@@ -16,6 +16,7 @@ import {
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
 import { foldDagEvent, foldDagSnapshot, withPromptTemplates } from '../domain/dagRun.js'
+import { foldSpawnStatus, spawnRunSettled } from '../domain/spawnRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
@@ -218,6 +219,10 @@ class TurnController {
       // committed -- "0 done" forever. They are released at the next idle, by
       // which time `done` is set.
       dagRuns: state.dagRuns.filter(run => !run.done),
+      // A spawn outlives its turn the same way: the tool returns as soon as the
+      // run is scheduled, so a settled run goes with the turn and a working one
+      // stays for the frames still coming.
+      spawnRuns: state.spawnRuns.filter(run => !spawnRunSettled(run)),
       episodes: [],
       streamPendingTools: [],
       streamSegments: [],
@@ -1191,6 +1196,53 @@ class TurnController {
 
       if (et) {
         et.dag = run
+        this.publishEpisodes()
+        break
+      }
+    }
+  }
+
+  /**
+   * Fold one `subagent.status` frame into the turn's spawn runs.
+   *
+   * The single-run counterpart of `recordDagEvent`, with the same double write:
+   * the live list drives the in-flight panel and survives to the next idle, and
+   * the copy pinned onto the tool row is what the transcript keeps. Only frames
+   * carrying a `tool_call_id` land here -- one without names no row of this
+   * turn (an older gateway, or a spawn another surface dispatched), and
+   * `$liveAgents` already tracks it for the strip.
+   */
+  recordSpawnStatus(payload: SubagentStatusEvent['payload']) {
+    if (!payload.tool_call_id) {
+      return
+    }
+
+    patchTurnState(state => {
+      const at = state.spawnRuns.findIndex(run => run.taskId === payload.task_id)
+      const folded = foldSpawnStatus(at === -1 ? null : state.spawnRuns[at]!, payload)
+
+      return {
+        ...state,
+        spawnRuns:
+          at === -1 ? [...state.spawnRuns, folded] : state.spawnRuns.map((run, i) => (i === at ? folded : run))
+      }
+    })
+
+    this.pinSpawnToEpisodeTool(payload.task_id)
+  }
+
+  private pinSpawnToEpisodeTool(taskId: string) {
+    const run = getTurnState().spawnRuns.find(item => item.taskId === taskId)
+
+    if (!this.episodes.length || !run?.toolCallId) {
+      return
+    }
+
+    for (const ep of this.episodes) {
+      const et = ep.tools.find(tool => tool.id === run.toolCallId)
+
+      if (et) {
+        et.spawn = run
         this.publishEpisodes()
         break
       }

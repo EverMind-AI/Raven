@@ -247,7 +247,17 @@ const target = (tool: EpisodeTool, budget?: number): string => {
     return clip(tool.intent, budget)
   }
 
-  const raw = tool.summary.trim()
+  let raw = tool.summary.trim()
+
+  // Some transports lead the summary with the tool's own name ("web_fetch:
+  // https://..."); the verb already says that, so the row would say it twice
+  // ("fetched web_fetch: ..."). Only a prefix with something after it is
+  // stripped -- a bare echo of the name is all such a summary has to show.
+  const prefix = `${tool.name}:`
+
+  if (raw.toLowerCase().startsWith(prefix.toLowerCase()) && raw.length > prefix.length) {
+    raw = raw.slice(prefix.length).trim() || raw
+  }
 
   if (!raw) {
     return ''

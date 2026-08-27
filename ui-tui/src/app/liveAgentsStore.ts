@@ -110,8 +110,22 @@ const prune = (rows: LiveAgentRow[], nowMs: number): LiveAgentRow[] => {
   })
 
   if (out.length > MAX_ROWS) {
+    // Terminal rows are trimmed by chronology, not by insertion order: a
+    // snapshot can re-seed a row this cap pruned on the previous poll, and
+    // that row draws the freshest seq -- trimming by seq then rotates pruned
+    // old rows back in and evicts genuinely newer ones on every
+    // reconciliation. The start clock is the one reading both a seeded row
+    // and an event-fed row carry, but it is optional (a record whose meta was
+    // unreadable has none) and shareable (graph nodes start together), so the
+    // final tie-break is the row id -- stable across polls where insertion
+    // order is not, and the same tie-break the server's own newest-first list
+    // order uses.
+    const startedOf = (r: LiveAgentRow) => r.startedAtMs ?? r.endedAtMs ?? 0
     const terminalFirst = [...out].sort(
-      (a, b) => Number(isTerminal(a.status)) - Number(isTerminal(b.status)) || b.seq - a.seq
+      (a, b) =>
+        Number(isTerminal(a.status)) - Number(isTerminal(b.status)) ||
+        startedOf(b) - startedOf(a) ||
+        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
     )
     out = terminalFirst.slice(0, MAX_ROWS).sort((a, b) => a.seq - b.seq)
   }
@@ -406,6 +420,9 @@ export const applyDagEvent = (event: DagEvent): void => {
 const WIRE_TO_LIVE: Record<string, LiveAgentStatus> = {
   cancelled: 'cancelled',
   error: 'failed',
+  // Server-inferred for a non-terminal row of a run that died with its
+  // gateway; never on the event wire, only in `subagent.list` snapshots.
+  interrupted: 'cancelled',
   ok: 'completed',
   queued: 'pending',
   run: 'running',
@@ -512,7 +529,16 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
     return listIds.has(r.callId) || listIds.has(r.id)
   })
 
-  for (const item of items) {
+  // `subagent.list` answers newest first; seeding in that order hands the
+  // newest rows the lowest `seq`, and the row-cap prune keeps terminal rows by
+  // descending `seq` -- so a resume that crossed the cap kept the oldest rows
+  // and dropped the newest. Seed oldest-first, so seq reflects chronology
+  // whatever order the wire chooses.
+  const ordered = [...items].sort(
+    (a, b) => (isoToMs(a.started_at) ?? 0) - (isoToMs(b.started_at) ?? 0) || (a.id < b.id ? -1 : 1)
+  )
+
+  for (const item of ordered) {
     const status = WIRE_TO_LIVE[item.status]
 
     if (!status) {
@@ -532,14 +558,14 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
       continue
     }
 
-    // Nothing to show for a run that is already over and was never on screen.
-    if (isTerminal(status)) {
-      continue
-    }
-
+    // A run that was over before this client saw it is seeded too: the Agents
+    // Overlay reads these rows for the whole delegation record, and after a
+    // resume the disk is its only account. The strip stays a live monitor
+    // regardless -- a settled row is never drawn there, however it arrived.
     rows = upsert(rows, {
       agent: item.agent,
       callId: isDag ? undefined : item.id,
+      endedAtMs: isoToMs(item.ended_at),
       id: item.id,
       instance: item.instance,
       kind: isDag ? 'dag-node' : 'spawn',
