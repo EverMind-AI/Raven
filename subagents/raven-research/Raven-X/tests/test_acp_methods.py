@@ -28,11 +28,20 @@ class _StubHandle:
 class _Harness:
     """AcpMethods against a scripted submit."""
 
-    def __init__(self, on_submit=None, session_manager=None, question_broker=None, arm_ask_user=None):
+    def __init__(
+        self,
+        on_submit=None,
+        session_manager=None,
+        question_broker=None,
+        arm_ask_user=None,
+        on_session_open=None,
+    ):
         self.frames: list[dict] = []
         self.sessions = AcpSessions()
         self.submitted: list = []
+        self.opened: list[str] = []
         self._on_submit = on_submit
+        self._on_session_open = on_session_open
         self.methods = AcpMethods(
             submit=self._submit,
             sessions=self.sessions,
@@ -40,7 +49,14 @@ class _Harness:
             session_manager=session_manager,
             question_broker=question_broker,
             arm_ask_user=arm_ask_user,
+            on_session_open=self._open,
         )
+
+    async def _open(self, session_id):
+        self.opened.append(session_id)
+        if self._on_session_open is not None:
+            return self._on_session_open(session_id)
+        return None
 
     def _submit(self, req):
         self.submitted.append(req)
@@ -533,3 +549,38 @@ async def test_clarify_respond_is_gated_on_initialize():
     h = _Harness()
     response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": "r", "answer": "x"})
     assert response["error"]["code"] == protocol.INVALID_REQUEST
+
+
+# -- opening a session builds its engine ----------------------------------------
+
+
+async def test_every_route_into_the_registry_opens_the_session(tmp_path):
+    """new / load / resume are three ways in; an engine built on only one of them
+    leaves the other two failing halfway through their first turn."""
+    from raven.session.manager import SessionManager
+
+    manager = SessionManager(tmp_path)
+    key = "acp:20260827_000000_stored"
+    stored = manager.get_or_create(key)
+    stored.add_message("user", "earlier")
+    manager.save(stored)
+
+    h = _Harness(session_manager=manager)
+    await h.start()
+    minted = await h.new_session()
+    await h.call("session/load", {"sessionId": key})
+    await h.call("session/resume", {"sessionId": key})
+
+    assert h.opened == [minted, key, key]
+
+
+async def test_a_session_whose_engine_cannot_be_built_is_not_left_registered():
+    def boom(_session_id):
+        raise RuntimeError("no provider key")
+
+    h = _Harness(on_session_open=boom)
+    await h.start()
+    response = await h.call("session/new", {"cwd": "/tmp"})
+
+    assert response["error"]["code"] == protocol.INTERNAL_ERROR
+    assert h.sessions.sessions() == ()

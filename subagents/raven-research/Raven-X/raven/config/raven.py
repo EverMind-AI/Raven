@@ -1235,9 +1235,9 @@ SkillForgeConfig.model_rebuild()
 
 
 class CheckpointConfig(_Base):
-    """Per-turn shadow-git checkpoint of the workspace.
+    """Per-turn shadow-git checkpoint of the tree the agent's tools can write.
 
-    When active, the agent loop commits the workspace to an out-of-band
+    When active, the agent loop commits that tree to an out-of-band
     shadow git repo at the end of each turn (covering both normal and
     max-iteration exits). This is the safety net behind Bug2: a truncated
     multi-file edit leaves a recoverable snapshot, and the next turn gets a
@@ -1266,8 +1266,12 @@ class CheckpointConfig(_Base):
     docstring for the interaction with the AgentLoop ``interactive`` flag."""
 
     shadow_dir: str = ".raven/shadow.git"
-    """Shadow git-dir, relative to the workspace. The real workspace is the
-    work-tree; the user's own ``.git`` is never touched."""
+    """Shadow git-dir, relative to the tree the agent's file tools are rooted
+    in, which is that same tree's work-tree; the user's own ``.git`` is never
+    touched. That root is the workspace on every surface but ACP, where each
+    session's tools are rooted in a subtree of their own and so is its
+    snapshot -- one shadow repo under a shared work-tree would have concurrent
+    sessions racing it and staging each other's edits."""
 
 
 class RuntimeConfig(_Base):

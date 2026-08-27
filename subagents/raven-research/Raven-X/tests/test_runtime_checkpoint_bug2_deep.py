@@ -188,10 +188,16 @@ class _NoopProvider(LLMProvider):
         return "stub"
 
 
-def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
+def _agent_with_checkpoint(
+    workspace: Path,
+    file_workspace: Path | None = None,
+    pending_recovery: dict | None = None,
+) -> AgentLoop:
     return AgentLoop(
         provider=_NoopProvider(),
         workspace=workspace,
+        file_workspace=file_workspace,
+        pending_recovery=pending_recovery,
         model="stub",
         max_iterations=2,
         restrict_to_workspace=True,
@@ -221,6 +227,55 @@ def test_d3_interleaved_sessions_keep_recovery_isolated(workspace):
     text_a = msgs_a[-1]["content"]
     assert "a.py" in text_a and "aaa" in text_a
     assert "b.py" not in text_a
+
+
+def test_d3_a_shared_map_carries_recovery_across_a_rebuilt_engine(workspace):
+    """A surface that rebuilds a session's engine must not lose its stash.
+
+    The writer of a recovery record is the interrupted turn and the reader is
+    that session's next turn, so on a surface where an idle engine is evicted
+    between the two (ACP's engine cap) the two ends sit on different instances.
+    Per instance the second is rebuilt empty and injects nothing, while the
+    partial edits and the shadow commit are still on disk.
+    """
+    from raven.agent.loop import TurnOutcome
+
+    shared: dict = {}
+    first = _agent_with_checkpoint(workspace, pending_recovery=shared)
+    first._stash_recovery(
+        "acp:s",
+        TurnOutcome(status="interrupted", checkpoint_id="abc1234", edited_files=["partial.py"]),
+    )
+
+    second = _agent_with_checkpoint(workspace, pending_recovery=shared)
+    messages = [{"role": "user", "content": "carry on"}]
+    second._inject_recovery_block("acp:s", messages)
+    text = messages[-1]["content"]
+    assert "partial.py" in text and "abc1234" in text
+
+    # Consumed once, not once per engine: the rebuild must not resurrect it.
+    again = [{"role": "user", "content": "and again"}]
+    _agent_with_checkpoint(workspace, pending_recovery=shared)._inject_recovery_block("acp:s", again)
+    assert again[-1]["content"] == "and again"
+
+
+def test_d3_an_unshared_map_is_still_private_to_its_engine(workspace):
+    """The default is unchanged: no dict passed, no sharing.
+
+    Every surface but ACP holds one loop for the life of the process, where a
+    process-wide map would be the same thing by another name -- but two loops
+    built in one test, or two gateway processes, must not see each other's.
+    """
+    from raven.agent.loop import TurnOutcome
+
+    first = _agent_with_checkpoint(workspace)
+    second = _agent_with_checkpoint(workspace)
+    assert first._pending_recovery is not second._pending_recovery
+
+    first._stash_recovery("s", TurnOutcome(status="interrupted", checkpoint_id="x", edited_files=["a.py"]))
+    messages = [{"role": "user", "content": "hi"}]
+    second._inject_recovery_block("s", messages)
+    assert messages[-1]["content"] == "hi"
 
 
 def test_d3_repeated_stash_latest_wins(workspace):
@@ -260,6 +315,29 @@ async def test_d3_concurrent_commits_serialize_or_degrade(workspace):
     # locked out we accept (None, []) for it but never an exception.
     ids = [r1[0], r2[0]]
     assert any(cid is not None for cid in ids), f"at least one concurrent commit should land; got {r1!r}, {r2!r}"
+
+
+async def test_d3_one_sessions_edits_stay_out_of_another_sessions_snapshot(workspace):
+    """Two engines on one workspace, each rooted in its own file subtree.
+
+    The snapshot has to follow the tree the engine's tools can write, not the
+    shared workspace: ``add -A`` stages a whole work-tree, so one shadow under
+    the shared root has both engines racing the same repository -- the test
+    above accepts one of them degrading to ``(None, [])`` -- and, when git does
+    serialize them, puts one session's edits in the other's ``edited_files``,
+    which is the list the next turn's recovery prompt reads out.
+    """
+    roots = [workspace / "acp_workspaces" / name for name in ("a", "b")]
+    for root in roots:
+        root.mkdir(parents=True)
+    agents = [_agent_with_checkpoint(workspace, file_workspace=root) for root in roots]
+    for root, text in zip(roots, ("first\n", "second\n")):
+        (root / "report.md").write_text(text, encoding="utf-8")
+
+    results = [await agent._checkpoint.commit_turn("turn") for agent in agents]
+
+    assert all(cid is not None for cid, _changed in results), f"neither snapshot lost the repo; got {results!r}"
+    assert [changed for _cid, changed in results] == [["report.md"], ["report.md"]]
 
 
 # =============================================================================

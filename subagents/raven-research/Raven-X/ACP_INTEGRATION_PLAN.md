@@ -169,12 +169,18 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
   （`raven/rpc/spine.py:553`），而本仓 `OriginPools` 根本没有 direct 池。
   但**不能靠调大池来解决**：`WebSearchTool` / `WebFetchTool` 的 per-turn 状态是共享实例
   属性（`raven/agent/tools/web.py`，全文件无 ContextVar），并发 turn 会互相清 saturation /
-  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B。
+  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B
+  —— 以及其后的“决策 B 的后续”，那里改成了一个 session 一套 loop。
   另需审一遍其余进程级共享状态（`tui_rpc/methods/turn.py` 模块级 `_active_turns`、
   memory、token_wise、tracing）。
 - **`cwd` / workspace 语义**（更正第一稿的自相矛盾）：
   一进程一 engine（主仓 `server.py` 明写 "one engine per process"），
   AgentLoop 的 workspace 在构造期固定，**不可能**按 session id 派生。
+  （“决策 B 的后续”改了后半句：一 session 一 engine 之后，engine 是在
+  `session/new` 时才构造的，所以**文件工具的根**确实按 session id 派生了
+  —— `<workspace>/acp_workspaces/<chat_id>`。但 `workspace` 本身仍然共享且
+  仍在构造期固定，因为 system prompt 的记忆段和 skill 目录都从它读；
+  两者的区别见 `CONTEXT.md` 的 Session File Root。）
   run.py 之所以要 workspace-per-session-id，前提是"每次调用都是一个新进程"
   且 `get_data_dir()` 从 config 文件父目录推导、没有单独的 session 目录旋钮
   （run.py:216-223）—— in-process 时这条教训不适用：`SessionManager` 本来就按
@@ -184,6 +190,17 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
   **Phase 0 要查的是：除 session JSONL 之外还有什么是 workspace 级的**
   （报告产物、memory、tracing 落盘路径）—— 那些才是并发会话真会撞的东西，
   查完再决定是否需要 per-session 子目录。
+  （盘点结果，评审补的一项：**Checkpoint 的 shadow repo**
+  `<workspace>/.raven/shadow.git` 也是 workspace 级的，而且是并发下最会撞的一个 ——
+  `interactive=True` 让每个 session engine 各建一个 `CheckpointService`，却都指向同一个
+  git-dir，并发 turn 收尾会同时 `git add -A` / `commit`：轻则一方报
+  `could not lock config file` 降级成 `(None, [])`，重则即使 git 串行化了，
+  每次快照 stage 的仍是整棵共享工作树，把别的 session 的改动算进本 turn 的
+  `edited_files`，进而写进下一 turn 的 recovery prompt。做法是让快照跟着
+  **写入根**走（`file_workspace`，即文件/exec/media 工具的根），而不是跟着共享
+  `workspace` 走 —— 其他入口 `file_workspace` 就是 `workspace`，行为不变。
+  memory backend 是进程内一份、按 session_id 分 key，写入闸门共享有界；
+  tracing 未在本期改动范围内。）
 - **答案语义：ACP turn 跑非流式（`stream=False`），答案 = turn 最终提交的一条 `Text`**。
   真 LLM e2e 实测：`stream=True` 下 token 流承载模型整个 turn 说出的一切——工具调用前的
   叙述、DR verify/finalize 对答案的重述——报告在 message 流里出现了两次；而消费者把
@@ -222,6 +239,7 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
   **但 Phase 1 期间不把 `kind: "acp"` 注册进主仓**（决策 A 末条）：本期的验收全部走本仓
   stub client，主仓的第一次探测留到 Phase 2 之后，从而绕开 config-digest 型 snapshot 缓存。
 - 装配 Scheduler 时 `user_pool` 固定 1（§6 决策 B），并在构造处写明原因。
+  （已被“决策 B 的后续”取代：现在是 `acp.userPool`，默认 2，非 per-session 注册表时启动即 fail loud。）
 - `session/new`：铸 session id，映射 `Source(channel="acp", chat_id=<sessionId>)`。
 - `session/prompt`：构造 `TurnRequest(Origin.USER)` 提交 Scheduler，per-session future 等 turn 终结。
 - `session/cancel`。
@@ -278,9 +296,12 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
   `can_resume=True` 且 `can_load=True`。这条测试是防 A 类回归的唯一闸门。
 - **dialect 断言**：`dialect_for(<我们的 initialize 响应>)` 返回 spec 基类。
 - **stdout 纯净度**：子进程拉起 `raven acp`，跑完一轮，断言 stdout 全部字节被 framing 消费完。
-- **并发闸门**：断言 `user_pool` 只接受 1（>1 时启动 fail loud），并断言同一连接上两个
-  session 并发 prompt 时第二个排队而非并行进入 `run_turn`（§6 决策 B 的回归闸门）。
-  同时断言 `_active_turns` 等进程级状态不互相踩。
+- **并发闸门**（已按“决策 B 的后续”改口径）：断言 `user_pool > 1` 在**非** per-session
+  注册表上启动即 fail loud；断言两个**不同** session 并发 prompt 时确实并行（总墙钟约等于
+  最慢的一个，且各自跑在自己的 engine 上）；断言同一 session 上的第二个 prompt 仍被
+  `TurnAlreadyRunningError` 拒。同时断言进程级状态不互相踩 —— 现在具体是
+  `WebSearchTool` / `WebFetchTool` 的 per-turn 状态每 session 一份，
+  而 memory 写入闸门每进程一份。
 - 冒烟：对照 `tests/integration/test_tui_rpc_production_smoke.py` 写 acp 版
   （子进程拉起 `raven acp`，走 initialize → new → prompt → update 全链）。
 - e2e：主仓 spawn Raven-X 跑完整"澄清 → 回答 → follow-up"一轮，验证 stateful 路径。
@@ -295,6 +316,8 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
    清对方的 saturation / evidence round / seen 集合与预算。功能上不报错，只是分布被污染，
    且 §0.2 意义上无从记录。闸门：不提供旋钮 + §4 并发测试断言 >1 时 fail loud。
    代价（N 个 research task 串行）见 §6 决策 B 末段与 §7。
+   该串行化已由 per-session loop 解除，见“决策 B 的后续”；这条风险现在指的是
+   在**非** per-session 注册表上调大池子，闸门是启动时 fail loud。
 3. **stdout 污染**：一行日志就打碎 framing。Phase 0 完成前不接任何真实 turn。
 4. **`ok` 缺失导致转录说谎（双向）**：status 由 `_looks_failed` 启发式（结果预览以
    `Error` / `{"error"` 开头）推断，两个方向都会错——不符合注册表约定的失败被标
@@ -411,12 +434,29 @@ handle 绑定行为。为一个 agent 动所有 agent 的共用判据，收益�
   现在看这不是疏忽，是同一个约束。
 
 **代价明写**：pool=1 意味着 N 个并发 research task 串行，相对今天 N 个 run.py 子进程
-真并行是回退。见 §7 待确认。
+真并行是回退。
+
+#### 决策 B 的后续（已落地，见 `raven/acp/loops.py`）
+
+上面的论证仍然成立，但两点按实际改了：
+
+1. **§7 的待确认已有答案：会并发。** 所以决策 B 末段那一期已经做了 ——
+   `AcpLoops` 按 conversation id 一个 session 一套 `AgentLoop`（一套 tools + flow 对象），
+   provider / `SessionManager` / memory backend / token_wise 仍进程内一份。
+2. **"前置是搬 ContextVar"这句是错的。** per-session loop 之后每个 session 持**自己的**
+   tool 实例，跨 session 并发不共享任何对象；同 session 内并发被两道闸挡着
+   （`AcpSessions.begin_turn` 抛 `TurnAlreadyRunningError`，宿主侧 `session_lock` 更在前面）。
+   ContextVar 化只在"同一 session 内并发多 turn"时才需要，而协议层本来就禁止 ——
+   因此它可以独立排期，甚至永远不做。
+
+"数字旋钮"那条按原文的逃生阀形状实现：`acp.userPool`（默认 2）+ `acp.maxLoops`，
+且 `build_acp` 在 `user_pool > 1` 而注册表不是 per-session 时**启动即 fail loud**。
+`AcpLoops.single()` 就是那个非 per-session 形状。
 
 ## 7. 待确认（不阻塞开工）
 
-- **DR 场景会不会并发 spawn / DAG 并行发 research 任务？** 若会，决策 B 的串行化是硬吞吐
-  上限，需要在 Phase 3 接入前决定是接受，还是先做 per-session AgentLoop 那一期。
-  若 research 委派实际上是会话内串行的，则此回退无实际影响。
+- ~~**DR 场景会不会并发 spawn / DAG 并行发 research 任务？**~~ **会。** 已按决策 B 末段
+  做成 per-session AgentLoop，见上面"决策 B 的后续"。
 - `idSource: provisioned` 在 acp kind 下是否仍被读取（不在 `_ACP_FIELDS` 内）—— Phase 3 确认。
-- workspace 级资源盘点结果（§3 workspace 一条）—— Phase 0 产出。
+- ~~workspace 级资源盘点结果（§3 workspace 一条）~~ 见 §3 该条末段的盘点结果：
+  文件工具根与 Checkpoint 的 shadow repo 都已按 session 分开；tracing 落盘路径未改。
