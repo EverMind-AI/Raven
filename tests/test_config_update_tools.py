@@ -224,7 +224,77 @@ def test_malformed_config_refuses_the_new_writes_too(cfg: Path):
         lambda: ut.get_web_search(config_path=cfg),
         lambda: ut.set_media("image", {"model": "m"}, config_path=cfg),
         lambda: ut.get_media("image", config_path=cfg),
+        lambda: ut.set_jina_api_key("x", config_path=cfg),
+        lambda: ut.get_jina_api_key(config_path=cfg),
     ):
         with pytest.raises(ut.ConfigReadError):
             op()
     assert cfg.read_text(encoding="utf-8") == original
+
+
+# ---------------------------------------------------------------------------
+# tools.web.jinaApiKey -- a scalar leaf, not a subtree
+# ---------------------------------------------------------------------------
+
+
+def test_set_jina_api_key_writes_the_camelcase_leaf(cfg: Path):
+    ut.set_jina_api_key("jina-abc", config_path=cfg)
+    assert _raw(cfg)["tools"]["web"]["jinaApiKey"] == "jina-abc"
+    assert "jina_api_key" not in _raw(cfg)["tools"]["web"]
+
+
+def test_set_jina_api_key_leaves_its_siblings_byte_for_byte(cfg: Path):
+    """Why this is a leaf write rather than a ``tools.web`` subtree patch.
+
+    ``Base`` sets no ``extra``, so pydantic drops unknown fields: validating the
+    whole ``tools.web`` node to change one string would delete anything a user
+    hand-added under it and materialise defaults for the rest.
+    """
+    cfg.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "proxy": "http://127.0.0.1:7890",
+                        "search": {"apiKey": "serper-1", "maxResults": 8},
+                        "handAddedByTheUser": {"keep": "me"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ut.set_jina_api_key("jina-abc", config_path=cfg)
+
+    web = _raw(cfg)["tools"]["web"]
+    assert web["jinaApiKey"] == "jina-abc"
+    assert web["proxy"] == "http://127.0.0.1:7890"
+    assert web["search"] == {"apiKey": "serper-1", "maxResults": 8}
+    assert web["handAddedByTheUser"] == {"keep": "me"}
+
+
+def test_set_jina_api_key_replaces_a_non_mapping_web_node(cfg: Path):
+    cfg.write_text(json.dumps({"tools": {"web": "not-a-section"}}), encoding="utf-8")
+    ut.set_jina_api_key("jina-abc", config_path=cfg)
+    assert _raw(cfg)["tools"]["web"]["jinaApiKey"] == "jina-abc"
+
+
+def test_get_jina_api_key_redacts_by_default(cfg: Path):
+    assert ut.get_jina_api_key(config_path=cfg) == "(empty)"
+    ut.set_jina_api_key("jina-abc", config_path=cfg)
+    assert ut.get_jina_api_key(config_path=cfg) == "****set****"
+    assert ut.get_jina_api_key(redact=False, config_path=cfg) == "jina-abc"
+
+
+def test_get_serper_api_key_is_the_symmetric_accessor(cfg: Path):
+    """The Serper half of the pair, so a caller wanting one key gets a string.
+
+    ``get_web_search`` returns the whole section, and subscripting ``api_key``
+    out of it at the call site is what the credential-read invariant in
+    ``test_provider_auth_method`` flags. Reading it here instead keeps that read
+    in the module the invariant already sanctions for tool credentials.
+    """
+    assert ut.get_serper_api_key(config_path=cfg) == "(empty)"
+    ut.set_web_search({"api_key": "serper-abc"}, config_path=cfg)
+    assert ut.get_serper_api_key(config_path=cfg) == "****set****"
+    assert ut.get_serper_api_key(redact=False, config_path=cfg) == "serper-abc"

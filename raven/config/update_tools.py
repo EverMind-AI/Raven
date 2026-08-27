@@ -22,7 +22,7 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
-from raven.config.schema import DeepResearchToolConfig, MediaToolConfig, WebSearchConfig
+from raven.config.schema import DeepResearchToolConfig, MediaToolConfig, WebSearchConfig, WebToolsConfig
 
 _SECTION = "deepResearch"  # camelCase alias of ToolsConfig.deep_research
 
@@ -96,6 +96,7 @@ def reset_deep_research(*, config_path: Path | None = None) -> None:
 # which is what the caller has to tell the user.
 
 _WEB_SEARCH_PATH = ("web", "search")  # camelCase aliases of ToolsConfig.web.search
+_JINA_KEY = "jinaApiKey"  # camelCase alias of ToolsConfig.web.jina_api_key
 MEDIA_TOOLS = ("image", "speech", "video")
 """The ``tools.media`` sub-sections, in the order the UI shows them."""
 
@@ -178,6 +179,57 @@ def get_web_search(*, redact: bool = True, config_path: Path | None = None) -> d
     return {"api_key": key, "max_results": inst.max_results}
 
 
+def get_serper_api_key(*, redact: bool = True, config_path: Path | None = None) -> str:
+    """Return just ``tools.web.search.apiKey``, redacted by default.
+
+    ``get_web_search`` already returns it inside the section; a caller that
+    wants only the credential would have to subscript it back out, which is the
+    read ``test_provider_auth_method``'s credential invariant flags at the call
+    site. Reading it here keeps that read in the one module the invariant
+    already sanctions for tool credentials, and pairs with
+    ``get_jina_api_key``.
+    """
+    data = read_raw_or_raise(config_path or get_config_path())
+    inst = _current_subtree(data, _WEB_SEARCH_PATH, WebSearchConfig)
+    return ("****set****" if inst.api_key else "(empty)") if redact else inst.api_key
+
+
+def set_jina_api_key(key: str, *, config_path: Path | None = None) -> str:
+    """Set ``tools.web.jinaApiKey``. Returns the previous value.
+
+    A leaf write, unlike every other setter here, because the narrowest node
+    that holds this value is a string. The subtree a patch would have to
+    validate is ``tools.web``, and ``Base`` declares no ``extra``, so pydantic
+    drops unknown fields: round-tripping that node to change one string would
+    delete whatever the user hand-added under it and materialise defaults for
+    ``proxy`` and ``search`` besides.
+    """
+    validated = WebToolsConfig(jina_api_key=key).jina_api_key
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    tools = data.setdefault("tools", {})
+    if not isinstance(tools, dict):
+        tools = data["tools"] = {}
+    web = tools.get("web")
+    if not isinstance(web, dict):
+        web = tools["web"] = {}
+    prev = web.get(_JINA_KEY)
+    web[_JINA_KEY] = validated
+    _write_atomic(path, data)
+    return prev if isinstance(prev, str) else ""
+
+
+def get_jina_api_key(*, redact: bool = True, config_path: Path | None = None) -> str:
+    """Return ``tools.web.jinaApiKey``, redacted by default.
+
+    Redaction uses the same two markers as ``get_web_search`` / ``get_media``.
+    """
+    data = read_raw_or_raise(config_path or get_config_path())
+    raw = _subtree(data, ("web",)).get(_JINA_KEY)
+    key = raw if isinstance(raw, str) else ""
+    return ("****set****" if key else "(empty)") if redact else key
+
+
 def _media_path(tool: str) -> tuple[str, str]:
     if tool not in MEDIA_TOOLS:
         raise KeyError(f"Unknown media tool '{tool}'. Available: {list(MEDIA_TOOLS)}")
@@ -206,10 +258,13 @@ __all__ = [
     "ConfigReadError",
     "MEDIA_TOOLS",
     "get_deep_research",
+    "get_jina_api_key",
     "get_media",
+    "get_serper_api_key",
     "get_web_search",
     "reset_deep_research",
     "set_deep_research",
+    "set_jina_api_key",
     "set_media",
     "set_web_search",
 ]

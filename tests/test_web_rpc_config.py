@@ -2459,6 +2459,9 @@ def tool_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(update_providers, "get_config_path", lambda: path)
     for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(var, raising=False)
+    # Setting a key now also refreshes the shell env mirror under ~/.raven, so
+    # without this the suite would rewrite the developer's real one.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     return path
 
 
@@ -2513,6 +2516,36 @@ async def test_tools_set_writes_and_says_a_restart_is_needed(tool_cfg: Path) -> 
     # Still false, and that is the whole point of restart_required: the tool is
     # registered where the loop is built, so this process never gains it.
     assert web["registered"] is False
+
+
+async def test_tools_set_refreshes_the_shell_env_mirror(tool_cfg: Path, tmp_path: Path) -> None:
+    """``~/.raven/env`` has three writers and only the wizard used to refresh it.
+
+    A key rotated from the tools page left the mirror asserting the old one, and
+    cli/acp sub-agents read the environment rather than the config -- so they
+    kept using the stale key until the next ``raven onboard``.
+    """
+    d = Dispatcher()
+    register_config_methods(d)
+    mirror = tmp_path / ".raven" / "env"
+
+    await _dispatch(d, "raven.tools.set", {"kind": "web_search", "fields": {"api_key": "serper-old"}})
+    assert "export SERPER_API_KEY=serper-old" in mirror.read_text(encoding="utf-8")
+
+    await _dispatch(d, "raven.tools.set", {"kind": "web_search", "fields": {"api_key": "serper-new"}})
+    body = mirror.read_text(encoding="utf-8")
+    assert "export SERPER_API_KEY=serper-new" in body
+    assert "serper-old" not in body
+
+
+async def test_setting_a_media_key_leaves_the_web_mirror_alone(tool_cfg: Path, tmp_path: Path) -> None:
+    # The mirror carries the two web keys only; a media write must not create it.
+    d = Dispatcher()
+    register_config_methods(d)
+
+    await _dispatch(d, "raven.tools.set", {"kind": "image", "fields": {"api_key": "sk-image"}})
+
+    assert not (tmp_path / ".raven" / "env").exists()
 
 
 async def test_tools_list_reads_the_live_registry_not_the_file(tool_cfg: Path) -> None:
