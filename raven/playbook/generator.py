@@ -19,7 +19,6 @@ No prompt text lives here — see :mod:`raven.playbook.prompt`.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -27,6 +26,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.playbook.llm_result import (
+    ProviderFailure,
+    ProviderResponseError,
+    RequiredToolError,
+    required_tool_arguments,
+)
 from raven.playbook.prompt import (
     EMIT_TOOL_NAME,
     SYSTEM_PROMPT,
@@ -97,6 +102,24 @@ class PlaybookGenerationError(RuntimeError):
     def __init__(self, errors: list[str]) -> None:
         super().__init__("; ".join(errors) or "no tool call returned")
         self.errors = errors
+
+
+class PlaybookProtocolError(PlaybookGenerationError):
+    """A successful response violated the required structured-result contract."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__([f"{code}: {detail}"])
+        self.code = code
+
+
+class PlaybookProviderError(PlaybookGenerationError):
+    """The provider exhausted recovery without producing a model response."""
+
+    def __init__(self, failure: ProviderFailure) -> None:
+        super().__init__([failure.message])
+        self.classification = failure.classification
+        self.code = "provider_call_failed"
+        self.category = failure.category
 
 
 @dataclass
@@ -194,11 +217,7 @@ class PlaybookGenerator:
                 model=self._model or None,
                 tool_choice={"type": "function", "function": {"name": EMIT_TOOL_NAME}},
             )
-            args = _tool_args(response)
-            if args is None:
-                errors = ["no emit_playbook tool call in the response"]
-                messages.append({"role": "user", "content": build_repair_prompt({}, errors)})
-                continue
+            args = _required_tool_args(response)
 
             spec, errors, missing, reported = self._check(args, known_skills, fixed_name)
             if spec is not None and not errors:
@@ -271,16 +290,13 @@ def _split_skill_refs(refs: list[str]) -> tuple[list[str], list[tuple[str, str]]
     return pinned, inline
 
 
-def _tool_args(response: Any) -> dict[str, Any] | None:
-    if not getattr(response, "has_tool_calls", False):
-        return None
-    args = response.tool_calls[0].arguments
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            return None
-    return args if isinstance(args, dict) else None
+def _required_tool_args(response: Any) -> dict[str, Any]:
+    try:
+        return required_tool_arguments(response, EMIT_TOOL_NAME)
+    except ProviderResponseError as exc:
+        raise PlaybookProviderError(exc.failure) from exc
+    except RequiredToolError as exc:
+        raise PlaybookProtocolError(exc.code, exc.detail) from exc
 
 
 def _first_line(text: str, limit: int = 150) -> str:

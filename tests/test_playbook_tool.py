@@ -486,6 +486,8 @@ async def test_create_degrades_generation_failure_to_an_error_reply(tmp_path):
     out = await tool.execute("weekly-scan", "whatever")
 
     assert out.startswith("Error")
+    assert "Do not write directly" in out
+    assert "official validation" in out
     assert store.origin_of("weekly-scan") is None
     assert switched == []
 

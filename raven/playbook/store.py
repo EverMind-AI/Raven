@@ -33,6 +33,7 @@ from loguru import logger
 
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook.types import NAME_RE, PlaybookSpec
+from raven.playbook.validate import validate_structure
 
 #: Playbooks that ship with the package. Kept next to the code so the
 #: package-data glob picks the directories up; may not exist in a source
@@ -154,6 +155,7 @@ class PlaybookStore:
                 f"playbook {spec.name!r} already exists at {self.path_for(spec.name)};"
                 " revise it instead of regenerating"
             )
+        _require_valid_structure(spec)
         path = self._root / spec.name / "playbook.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_render(spec, notes or []), encoding="utf-8")
@@ -182,7 +184,15 @@ class PlaybookStore:
         data["description"] = front.get("description")
         if data["name"] != name:
             raise ValueError(f"playbook {name!r}: frontmatter name {data['name']!r} != directory name")
-        return PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
+        spec = PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
+        _require_valid_structure(spec)
+        return spec
+
+
+def _require_valid_structure(spec: PlaybookSpec) -> None:
+    if errors := validate_structure(spec, allow_blank_fillable=True):
+        detail = "; ".join(errors)
+        raise ValueError(f"playbook {spec.name!r} failed semantic validation: {detail}")
 
 
 def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:

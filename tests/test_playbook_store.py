@@ -136,6 +136,46 @@ def test_hand_written_directory_loads(tmp_path):
     assert spec.mode == "prompt" and spec.description == "written by hand"
 
 
+def test_hand_written_invalid_graph_is_rejected_on_load(tmp_path):
+    target = tmp_path / "broken-graph"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: broken-graph\ndescription: invalid dependency\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [broken graph]\n"
+        "nodes:\n"
+        "  - id: final-output\n"
+        "    subagent: raven\n"
+        "    promptTemplate: summarize {{ collect-hotspots.output }}\n"
+        "    dependsOn: []\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="not in its dependsOn"):
+        _store(tmp_path).load("broken-graph")
+
+
+def test_save_rejects_a_semantically_invalid_graph(tmp_path):
+    bad = _spec("invalid dependency").model_copy(
+        update={
+            "nodes": [
+                NodeSpec(
+                    id="final-output",
+                    subagent="raven",
+                    prompt_template="summarize {{ collect-hotspots.output }}",
+                    depends_on=[],
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="not in its dependsOn"):
+        _store(tmp_path).save(bad)
+    assert list(tmp_path.rglob("playbook.md")) == []
+
+
 # --- The two-layer library: a writable user root over the packaged builtin root.
 
 
@@ -208,6 +248,26 @@ def test_builtin_is_read_only_through_save(tmp_path):
     assert (tmp_path / "builtin" / "competitor-scan" / "playbook.md").read_bytes() == before
     assert store.is_shadowing("competitor-scan")
     assert store.load("competitor-scan").description == "my own take"
+
+
+def test_existing_name_is_reported_before_replacement_validation(tmp_path):
+    store = _layered(tmp_path)
+    store.save(_spec("existing"))
+    invalid = _spec("invalid replacement").model_copy(
+        update={
+            "nodes": [
+                NodeSpec(
+                    id="final-output",
+                    subagent="raven",
+                    prompt_template="summarize {{ missing.output }}",
+                    depends_on=[],
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(PlaybookExistsError):
+        store.save(invalid)
 
 
 def test_generated_playbook_lands_in_the_user_layer(tmp_path):

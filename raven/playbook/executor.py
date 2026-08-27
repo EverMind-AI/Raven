@@ -28,7 +28,6 @@ decide which playbooks get *described* to the model, never which one runs.)
 
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
 from raven.playbook.prompt import COMPOSE_TOOL_NAME, build_compose_prompt, compose_tool
 from raven.playbook.types import NodeSpec, PlaybookSpec
 from raven.playbook.validate import validate_graph_nodes
@@ -443,7 +443,11 @@ class PlaybookExecutor:
                 )
             except Exception as exc:  # noqa: BLE001 - composition failure degrades, never raises
                 return None, [str(exc)]
-            nodes, errors = _parse_nodes(response)
+            try:
+                args = required_tool_arguments(response, COMPOSE_TOOL_NAME)
+            except (ProviderResponseError, RequiredToolError) as exc:
+                return None, [str(exc)]
+            nodes, errors = _parse_nodes(args)
             if nodes is not None and not errors:
                 errors = validate_graph_nodes(nodes, set())
                 if not errors:
@@ -526,16 +530,8 @@ class PlaybookExecutor:
         return ExecutionPlan(kind="dag", reply=reply, notes=notes)
 
 
-def _parse_nodes(response: Any) -> tuple[list[NodeSpec] | None, list[str]]:
-    if not getattr(response, "has_tool_calls", False):
-        return None, ["no emit_graph tool call in the response"]
-    args = response.tool_calls[0].arguments
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            return None, ["unparseable emit_graph arguments"]
-    raw = (args or {}).get("nodes") if isinstance(args, dict) else None
+def _parse_nodes(args: dict[str, Any]) -> tuple[list[NodeSpec] | None, list[str]]:
+    raw = args.get("nodes")
     if not isinstance(raw, list) or not raw:
         return None, ["emit_graph returned no nodes"]
     nodes: list[NodeSpec] = []
