@@ -69,14 +69,49 @@ class _Pending:
 
     said: list[str] = field(default_factory=list)
     thought: list[str] = field(default_factory=list)
-    tools: int = 0
+    #: One entry per distinct `toolCallId`, not one per frame. ACP sends
+    #: `tool_call` to open a call and `tool_call_update` to carry its status and
+    #: its result, against the same id -- the measured adapter stub emits one
+    #: open and two updates for a single call. Counting frames therefore reported
+    #: one call as two or three, in the very row this turn writes to be truthful
+    #: about what it did. An id-less frame falls back to its own identity so a
+    #: dialect that omits the field still counts one per opening frame.
+    tool_ids: set[str] = field(default_factory=set)
     #: Set once the wire has been told this turn exists (message.start), which
     #: is also the promise that a message.complete will follow.
     turn_id: str | None = None
 
     @property
+    def tools(self) -> int:
+        return len(self.tool_ids)
+
+    @property
     def empty(self) -> bool:
-        return not self.said and not self.thought and not self.tools
+        return not self.said and not self.thought and not self.tool_ids
+
+    def answer(self) -> str:
+        """What to record as this turn's reply. Never empty for a turn that ran.
+
+        A wake often does its whole job through tools and says nothing -- looks
+        at a ledger, sees the run is still going, arms the next look. Measured
+        over one 18-minute campaign: five of its eight unprompted turns produced
+        no `agent_message_chunk` at all.
+
+        Those cannot fall through to no reply. `build_turn` writes the assistant
+        row only for a non-None answer, so an empty one leaves the `user`
+        boundary row standing alone -- and a lone boundary does the very damage
+        the boundary was added to prevent, one turn further on: the next turn's
+        reply is drawn as the answer to *this* turn's marker, and the log reads
+        as two questions with one answer between them.
+
+        So a turn with no words is recorded as the fact that it had none, which
+        is also the true account of what the operator would have seen.
+        """
+        said = "".join(self.said).strip()
+        if said:
+            return said
+        calls = f"{self.tools} tool call{'' if self.tools == 1 else 's'}"
+        return f"[unprompted: {calls}, no message]" if self.tools else "[unprompted: no message]"
 
 
 class UnpromptedRecorder:
@@ -120,7 +155,12 @@ class UnpromptedRecorder:
         elif kind == _THINK:
             buf.thought.append(_text_of(update))
         elif kind in ("tool_call", "tool_call_update"):
-            buf.tools += 1
+            call_id = update.get("toolCallId")
+            # The update's own position in the stream when the agent named no id:
+            # two updates of one unnamed call still count twice there, which is
+            # the best a frame with nothing to join on can do, and it is why the
+            # opening frame is the one worth having an id.
+            buf.tool_ids.add(str(call_id) if call_id else f"anon:{len(buf.tool_ids)}")
         elif kind == _END:
             self._cancel_idle(session_id)
             self._pending.pop(session_id, None)
@@ -224,7 +264,7 @@ class UnpromptedRecorder:
                 # fact rather than the text.
                 prompt="[unprompted: the agent acted on its own schedule]",
                 messages=None,
-                answer="".join(buf.said).strip() or None,
+                answer=buf.answer(),
             )
             logger.info("acp agent {!r}: recorded an unprompted turn on {}/{}", self._agent, self._agent, handle)
         except Exception as exc:  # noqa: BLE001 - an audit trail must not take down the run it describes

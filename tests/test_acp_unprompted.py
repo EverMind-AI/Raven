@@ -29,10 +29,12 @@ class _Registry:
         self.marks.append((session_key, handle, status))
 
 
-def _frame(kind: str, text: str | None = None, session="acp:abc"):
+def _frame(kind: str, text: str | None = None, session="acp:abc", call_id: str | None = None):
     update: dict = {"sessionUpdate": kind}
     if text is not None:
         update["content"] = {"text": text}
+    if call_id is not None:
+        update["toolCallId"] = call_id
     return "session/update", {"sessionId": session, "update": update}
 
 
@@ -206,3 +208,58 @@ async def test_a_resumed_session_does_not_replay_its_history_as_an_unprompted_tu
     await router.dispatch(*_frame("agent_message_chunk", "a real wake"))
     await rec.flush("acp:abc")
     assert any(r.get("content") == "a real wake" for r in _log_rows(tmp_path))
+
+
+async def test_a_wake_that_only_used_tools_is_recorded_as_having_said_nothing(tmp_path):
+    """A wake often does its whole job through tools -- reads a ledger, sees the
+    run is still going, arms the next look. Five of eight turns in one measured
+    campaign said nothing at all. Recording no reply for those leaves the `user`
+    boundary row standing alone, and a lone boundary does the damage the boundary
+    exists to prevent one turn further on: the next reply is drawn as the answer
+    to this marker."""
+    rec, emitted = _recorder(tmp_path)
+
+    # One call, as ACP actually sends it: an opening frame and the updates that
+    # carry its status and its result, all against the same id.
+    await rec(*_frame("tool_call", call_id="c1"))
+    await rec(*_frame("tool_call_update", call_id="c1"))
+    await rec(*_frame("tool_call_update", call_id="c1"))
+    await rec(*_frame("usage_update"))
+
+    rows = _log_rows(tmp_path)
+    boundary = [i for i, r in enumerate(rows) if r.get("role") == "user"]
+    assert boundary, "the turn was not recorded at all"
+    after = rows[boundary[-1] + 1] if boundary[-1] + 1 < len(rows) else None
+    assert after is not None and after.get("role") == "assistant", "boundary row left with no reply"
+    # One call, said once, and singular: three frames are not three calls.
+    assert after["content"] == "[unprompted: 1 tool call, no message]"
+
+
+async def test_two_calls_are_two_however_many_frames_each_one_takes(tmp_path):
+    """The count is over distinct `toolCallId`s, so a call that reports twice
+    still counts once and a second call is still visible."""
+    rec, _ = _recorder(tmp_path)
+
+    await rec(*_frame("tool_call", call_id="c1"))
+    await rec(*_frame("tool_call_update", call_id="c1"))
+    await rec(*_frame("tool_call", call_id="c2"))
+    await rec(*_frame("tool_call_update", call_id="c2"))
+    await rec(*_frame("tool_call_update", call_id="c2"))
+    await rec(*_frame("usage_update"))
+
+    rows = _log_rows(tmp_path)
+    assert any(r.get("content") == "[unprompted: 2 tool calls, no message]" for r in rows)
+
+
+async def test_a_turn_that_said_something_records_the_words_not_the_count(tmp_path):
+    """The fallback is for turns with nothing to quote; it must never displace
+    what the agent actually said."""
+    rec, _ = _recorder(tmp_path)
+
+    await rec(*_frame("tool_call"))
+    await rec(*_frame("agent_message_chunk", "the run passed the knee"))
+    await rec(*_frame("usage_update"))
+
+    rows = _log_rows(tmp_path)
+    assert any(r.get("role") == "assistant" and r["content"] == "the run passed the knee" for r in rows)
+    assert not any("no message" in str(r.get("content")) for r in rows)
