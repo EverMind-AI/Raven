@@ -1465,7 +1465,7 @@ export const callParts = (raw: unknown): { name: string; display: string } => {
   return m ? { name: m[1] as string, display: m[2] as string } : { name: String(raw || ''), display: '' }
 }
 
-export function history(lane: Lane, messages: HistoryMessage[]): void {
+export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
   /* A different conversation, so a different roster -- but only on the lane that
      IS one.
 
@@ -1502,10 +1502,19 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
      them -- under a note promising the output above was kept. */
   const spoken = (m: HistoryMessage | undefined): boolean =>
     !!m && m.role === 'assistant' && !m.turn_ended && !m.notice && !!m.text && !!m.text.trim()
+  /* Scanned over what FOLLOWS as well, which is not always drawn. The agent
+     stage paints a run in slices -- each poll hands over only what arrived
+     since the last one -- and "is anything still to be said" cannot be answered
+     from inside one slice. Answered from inside it, the last assistant message
+     of every slice looked like the turn's answer, so a run came out as a
+     column of finished answers, one per poll, each with its own copy button,
+     instead of narration folded under the work it introduced. `after` is the
+     rest of the conversation; nothing in it is drawn here. */
+  const ahead = after.length ? messages.concat(after) : messages
   const isFinal = messages.map((m, i) => {
     if (!(m && m.role === 'assistant' && m.text && m.text.trim())) return false
-    for (let j = i + 1; j < messages.length; j += 1) {
-      const n = messages[j] as HistoryMessage
+    for (let j = i + 1; j < ahead.length; j += 1) {
+      const n = ahead[j] as HistoryMessage
       if (n && n.role === 'user' && n.text && n.text.trim()) return true
       if (spoken(n)) return false
     }
@@ -1756,9 +1765,32 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
      own: a node whose list row had aged out, or whose last turn was still
      flagged live, kept saying "working" forever and its answer -- written,
      complete, sitting in the record -- was never drawn at all. */
-  const last = msgs[msgs.length - 1]
-  const streaming = !!(running && last && last.role === 'assistant')
-  const commit = streaming ? msgs.length - 1 : msgs.length
+  const said = (m: HistoryMessage | undefined): boolean =>
+    !!m && m.role === 'assistant' && !m.turn_ended && !m.notice && !!m.text && !!m.text.trim()
+  /* Where the certain part of this snapshot ends. While the run is going, the
+     last thing the model said is not yet known to be the turn's answer -- the
+     next round can make it narration -- and neither is what follows it, so the
+     hold starts there rather than at the last message. Snapshots do not always
+     end on an assistant row: the runtime records a tool result as soon as it
+     has one, before the next model round, and a slice that ends there used to
+     commit the narration above it as a finished answer, which the next round's
+     real answer then stood beside. Nothing said means nothing at risk. */
+  let commit = msgs.length
+  if (running) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      /* Only this turn's own words are unsettled. A pane that stays open across
+         turns hands over the whole conversation each poll, so a search that ran
+         past the question would pick the PREVIOUS turn's answer the moment a
+         second question arrived and nothing had been said yet -- and redraw
+         that answer, and the new question, under the rows already on screen. */
+      const m = msgs[i] as HistoryMessage | undefined
+      if (m && m.role === 'user' && m.text && m.text.trim()) break
+      if (said(m)) { commit = i; break }
+    }
+  }
+  /* And never behind what is already committed: those rows are on screen, and
+     a hold that started before them would draw them a second time. */
+  if (commit < lane.agentDrawn) commit = lane.agentDrawn
   /* Whatever the previous paint drew provisionally goes first, so the answer
      grows in place instead of stacking one copy per poll. */
   if (lane.agentHold) {
@@ -1768,17 +1800,18 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
   const tail = msgs.slice(lane.agentDrawn, commit)
   const did = fresh && r ? agentFlatCalls(r) : []
   if (tail.length || did.length) {
+    const after = msgs.slice(commit)
     if (did.length) {
-      history(lane, tail.filter((m) => m && m.role === 'user'))
+      history(lane, tail.filter((m) => m && m.role === 'user'), after)
       agentDidStep(lane, did)
-      history(lane, tail.filter((m) => !(m && m.role === 'user')))
+      history(lane, tail.filter((m) => !(m && m.role === 'user')), after)
       if (r) agentFoldTime(lane, r)
     } else {
-      history(lane, tail)
+      history(lane, tail, after)
     }
     lane.agentDrawn = commit
   }
-  if (streaming) {
+  if (commit < msgs.length) {
     lane.agentHold = lane.segs.length
     history(lane, msgs.slice(commit))
   }
