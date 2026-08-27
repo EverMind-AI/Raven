@@ -14,7 +14,7 @@ outside this directory.
 | Source | `github.com/TongLi31/Raven`, branch `feat/swarm_integration`, commit `e16aec5f` |
 | Local checkout | `./Raven-main` - the agent itself lives inside this folder |
 | Package / version | `raven` 0.1.9, branch `feat/swarm_integration`, updated 2026-08-20 (installed 2026-08-12 from a zip of the same branch at `537578e6`) |
-| Local patches | **one**, recorded in `local-patches.diff` - see below |
+| Local patches | **two**, recorded in `local-patches.diff` - see below |
 | **Read first** | **`Raven-main/README.SWARM.md`** - the branch's own contract, and the authority on everything below |
 
 This is **Raven-X's swarm-integration branch**, not plain upstream Raven. It is
@@ -33,17 +33,18 @@ patches is obsolete** - the branch does all six jobs itself, and better:
 | Raised the 10k exec output cap and made it configurable | 30k cap **plus** spill-to-file: past the cap the full output is written out and the truncation notice names the path for `grep` / `read_file`. Strictly better than a bigger cap |
 | Stripped `ask_user` from the system prompt, since the tool was disabled | Keeps `ask_user` registered and makes it answer instantly with `Error: ask_user not configured (no question broker)` when there is no channel. Verified here. So the tool stays enabled and the prompt stays honest |
 
-Those six are gone for good. **One patch has since come back**, and the rule that
-matters is that it is recorded rather than remembered:
+Those six are gone for good. **Two patches have since come back**, and the rule
+that matters is that they are recorded rather than remembered:
 
 | Patch | Why it is still here |
 |---|---|
 | `raven/plugin/memory/everos/backend.py` - coerce a message `timestamp` to the ms epoch | EverOS's `MessageItemDTO` declares `timestamp: int` while raven stamps its own records with an ISO-8601 string. A caller forwarding a persisted message fails the entire write with `422 INVALID_INPUT`, logged at warning level and surfaced nowhere else, so the store silently stops receiving turns. Upstream still carries the bare `m.get("timestamp") or now_ms` at `e16aec5f`. **Defense-in-depth, not an observed outage**: verified 2026-08-17 that no current caller sends an ISO string, so this is for the replay and direct-chat paths that do forward persisted messages |
+| `raven/session/manager.py` + `tests/test_session_state_dir.py` - drop the in-workspace session migration | `SessionManager` read `<workspace>/sessions` as a legacy location, moved every file into the per-workspace state bucket and removed the source tree. Trunk now keeps a raven's live transcripts exactly there, and this fork's workspace defaults to `~/.raven/workspace` - the host agent's own home - so the migration ran against the host's live store rather than a legacy one, once per launch. **Observed 2026-08-27**, not defense-in-depth. The two upstream tests that asserted the migration are inverted in the same patch, so a replay restores the fix and its regression guard together |
 
-`local-patches.diff` holds it as an appliable diff with that rationale in its
+`local-patches.diff` holds them as appliable diffs with that rationale in its
 header. Everything that adapts this agent to our gateway still lives *beside*
-the checkout, never inside it - the patch above is the one exception, and it is
-inside only because it is a fix to upstream's own code.
+the checkout, never inside it - the patches above are the exception, and they are
+inside only because they correct upstream's own code.
 
 **The 2026-08-20 update found this the hard way.** The tree that was here
 differed from its own stated source in eight files. Seven were `ruff format`
@@ -722,7 +723,7 @@ blocking.
 | `config.json` | Run config. Holds **no** secrets |
 | `.env` / `.env.example` | The real secrets (mode 600, never published) and their template |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders |
-| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **No local patches** |
+| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **Two local patches**, recorded in `local-patches.diff` |
 | `sessions/` | Raven's own transcripts, bucketed by workspace path. Created by the build beside its config; not ours to curate |
 
 ## Publishing

@@ -11,7 +11,7 @@ from typing import Any
 from loguru import logger
 
 from raven.utils.atomic_io import atomic_replace, locked_append
-from raven.utils.helpers import ensure_dir, safe_filename
+from raven.utils.helpers import safe_filename
 
 
 def new_chat_id(now: datetime | None = None) -> str:
@@ -149,35 +149,7 @@ class SessionManager:
         # is the user's repository, so state written there turns up as untracked
         # files in every run (and the agent spends turns investigating them).
         self.sessions_dir = get_workspace_state_dir(workspace, "sessions")
-        self._migrate_in_workspace_sessions()
         self._cache: dict[str, Session] = {}
-
-    def _migrate_in_workspace_sessions(self) -> None:
-        """Move sessions written by older versions into the state directory.
-
-        Best-effort and one-way: a file already present in the new location is
-        the newer one and is never overwritten. The source tree is removed only
-        once nothing is left in it, so a partial failure keeps the data.
-        """
-        legacy = self.workspace / "sessions"
-        if not legacy.is_dir() or legacy.is_symlink() or legacy == self.sessions_dir:
-            return
-        try:
-            for src in sorted(legacy.rglob("*")):
-                if not src.is_file():
-                    continue
-                dest = self.sessions_dir / src.relative_to(legacy)
-                if dest.exists():
-                    src.unlink()
-                    continue
-                ensure_dir(dest.parent)
-                src.replace(dest)
-            for path in sorted(legacy.rglob("*"), reverse=True):
-                if path.is_dir():
-                    path.rmdir()
-            legacy.rmdir()
-        except OSError as exc:
-            logger.debug("session migration skipped: {}", exc)
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session: sessions/{channel}/{chat_id}.jsonl."""
