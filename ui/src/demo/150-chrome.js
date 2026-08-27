@@ -117,7 +117,7 @@ $('#memBtn').onclick = () => openMem();
 $('#kbBtn').onclick = () => openKb();
 
 /* ── the 更多 flyout ──────────────────────────────────────────────────
-   连接 / 入口 / 定时 live here. The renderer is the nav flyout module
+   Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
    (ui/src/shell/navfly.ts), which also owns the button that opens the group;
    what remains here is the one name the live layer still calls. */
 function drawMoreFly() {

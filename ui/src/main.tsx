@@ -200,6 +200,8 @@ window.RavenIslands = {
   cron: {
     open: cron.open,
     close: cron.close,
+    /* Read by showPage: a page's own overlay closes when the page does. */
+    closeSheet: cron.closeSheet,
     refresh: cron.refresh,
     warm: cron.warm,
     redraw: cron.langRedraw,

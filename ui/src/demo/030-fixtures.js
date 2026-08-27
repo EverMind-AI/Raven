@@ -120,20 +120,49 @@ const cronFailing = () => CRONS.filter((j) => j.on && j.runs[0] && !j.runs[0].ok
 /* ══ module 2b data: channels — where you talk to it ═════════════════ */
 /* Brand names stay as they are; the two generic ones (email, and the vendors
    whose English name differs) come from the catalogue. */
+/* The field lists are not decoration: what an entrance costs to get into is
+   derived from them (no required field at all means the only way in is signing
+   in by phone), and the page groups and orders the catalogue by that. A fixture
+   without them read every brand as a scan-login entrance. Keys and labels
+   follow the real schemas, so the demo drawer is the drawer. */
+const creds = (...pairs) => pairs.map(([key, label, secret]) => ({ key, label, required:true, secret:!!secret, set:false }));
+const filled = (fs) => fs.map((f) => ({ ...f, set:true }));
+const CH_FIELDS = {
+  feishu:   creds(['app_id','应用 App ID'], ['app_secret','应用 App Secret', true]),
+  wecom:    creds(['corp_id','企业 CorpID'], ['secret','应用 Secret', true]),
+  slack:    creds(['bot_token','机器人 Bot Token', true], ['app_token','应用 App Token', true]),
+  dingtalk: creds(['client_id','应用 ClientID'], ['client_secret','应用 ClientSecret', true]),
+  qq:       creds(['app_id','App ID'], ['app_secret','App Secret', true]),
+  telegram: creds(['token','机器人 Token', true]),
+  discord:  creds(['bot_token','机器人 Bot Token', true]),
+  matrix:   creds(['homeserver','主服务器地址'], ['access_token','访问令牌', true]),
+  mochat:   creds(['claw_token','Claw Token', true]),
+  email:    creds(['imap_host','收件服务器（IMAP 地址）'], ['imap_username','邮箱账号'],
+                  ['imap_password','邮箱密码或授权码', true], ['smtp_host','发件服务器（SMTP 地址）'],
+                  ['smtp_username','发件账号'], ['smtp_password','发件密码或授权码', true]),
+  /* Two entrances sign in instead: no form, a code on the phone. */
+  weixin:   [],
+  whatsapp: []
+};
 const CHANNELS = [
-  { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind' },
+  { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
   { id:'wecom',    key:'gui.chan.wecom',    on:false },
-  { id:'weixin',   key:'gui.chan.weixin',   on:false },
+  { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
   { id:'slack',    name:'Slack',    on:false },
   { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
   { id:'qq',       name:'QQ',       on:false },
   { id:'telegram', name:'Telegram', on:false },
   { id:'discord',  name:'Discord',  on:false },
-  { id:'whatsapp', name:'WhatsApp', on:false },
-  { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai' },
+  { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
+  { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
   { id:'matrix',   name:'Matrix',   on:false },
   { id:'mochat',   key:'gui.chan.mochat',   on:false }
-];
+].map((c) => {
+  const fs = CH_FIELDS[c.id] || [];
+  /* An entrance in service has its credentials in place; one that is not is
+     missing all of them, which is what its row counts down. */
+  return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
+});
 // One accessor so a renderer never has to know which of the two it is.
 const chanName = (c) => (c.key ? T(c.key) : c.name);
 

@@ -1,4 +1,5 @@
 import { ds, shell } from '../../shell/bridge'
+import { dropAfterFade } from '../../shell/detailfade'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
 
@@ -129,24 +130,37 @@ export function detailHost(): HTMLDivElement {
   return host
 }
 
+/* Counts opens of the shared card -- see the xa store: the row object cannot
+   answer which open a pending close belongs to, because reopening the same row
+   hands back the same object. */
+let detailGen = 0
+
 export function openDetail(it: MemItem): void {
   const body = document.getElementById('dBody')
   if (body && !body.contains(detailHost())) {
     body.innerHTML = ''
     body.appendChild(detailHost())
   }
+  detailGen += 1
   set({ detail: it })
 }
 
 export function closeDetail(): void {
   shell().closeDetail?.()
-  if (state.detail) set({ detail: null })
+  detailDismissed()
 }
 
 /* Called when legacy chrome closed the drawer itself (Esc, the close
-   button, a click outside): only the island state has to follow. */
+   button, a click outside): only the island state has to follow -- but not
+   until the drawer has finished fading, or the card is gone from inside a
+   panel that is still on screen. */
 export function detailDismissed(): void {
-  if (state.detail) set({ detail: null })
+  if (!state.detail) return
+  const gen = detailGen
+  dropAfterFade(
+    () => set({ detail: null }),
+    () => detailGen !== gen,
+  )
 }
 
 export function remove(it: MemItem): void {

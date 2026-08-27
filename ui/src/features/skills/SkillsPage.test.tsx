@@ -84,6 +84,37 @@ describe('skills island', () => {
     expect(screen.getAllByText('gui.hub.install').length).toBe(2)
   })
 
+  /* The wait for a card's body used to be one line of grey text, which left the
+     shared panel a thin strip with a word in it that then jumped to a full card.
+     A skeleton of the card's own anatomy holds the box instead. */
+  it('holds the card box with a skeleton while its body is being read', async () => {
+    let settle: ((d: { description: string }) => void) | null = null
+    install([hubItem()], {
+      detail: () =>
+        new Promise((res) => {
+          settle = res
+        }),
+    })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('code-review-checklist')).click()
+    })
+    const body = document.getElementById('dBody')!
+    expect(body.querySelector('.skel')).toBeTruthy()
+    /* And the panel holds one box across the wait, so the skeleton and the card
+       it becomes are the same size -- a skeleton of its own fixed height only
+       moved the jump somewhere else. */
+    expect(document.getElementById('detail')!.dataset.fill).toBe('true')
+    /* No word standing in for the card, and no thin note. */
+    expect(body.textContent).toBe('')
+    expect(body.querySelector('.pnote')).toBeNull()
+    await act(async () => {
+      settle!({ description: 'the whole story' })
+    })
+    expect(body.querySelector('.skel')).toBeNull()
+    expect(body.textContent).toContain('the whole story')
+  })
+
   it('shows the empty note when the filter matches nothing', async () => {
     install([])
     await mount()

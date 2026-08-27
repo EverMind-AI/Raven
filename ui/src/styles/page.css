@@ -503,24 +503,37 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* 更多 opens in place: its three rows are rail rows, indented one step under
    the button that revealed them, so the group reads as part of the column it
    belongs to rather than as a floating panel beside it. */
-.moresub { display: none; overflow: hidden; }
-.moresub[data-open="true"] { display: block; animation: subin .14s ease backwards; }
-@keyframes subin { from { opacity: 0; transform: translateY(-3px); } }
-.moresub .mrow {
-  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 4.5px 10px 4.5px 34px; border-radius: 6px; cursor: pointer;
-  font-size: 13px; color: var(--muted);
+/* The group unfolds into the list rather than beside it: its rows are .navi
+   rows like the four above them -- same indent, same glyph slot, same lift when
+   current -- so opening it lengthens one list instead of revealing a second,
+   smaller one. Height is what animates; visibility is what keeps the folded
+   rows out of the tab order, and it holds `visible` for the length of the
+   close so the rows do not vanish before they have finished collapsing. */
+/* No extra air and no indent: the fold row keeps the exact rhythm and left
+   edge of the rows above it. One list, one grid -- being quieter is the only
+   thing that sets it apart. */
+.moresub {
+  overflow: hidden; max-height: 0; visibility: hidden;
+  transition: max-height .18s ease, visibility .18s;
 }
-.moresub .mrow:hover { background: var(--raised); color: var(--text); }
-.moresub .mrow svg { flex: none; width: 13.5px; height: 13.5px;
-  fill: none; stroke: currentColor; stroke-width: 1.8; color: var(--faint); }
-.moresub .mrow:hover svg { color: var(--text); }
-.moresub .mrow[aria-current="true"] {
-  background: var(--ink); color: var(--text); font-weight: 500;
-  box-shadow: inset 0 0 0 1px var(--line-soft), 0 1px 2px rgba(0, 0, 0, .045);
+.moresub[data-open="true"] { max-height: 120px; visibility: visible; }
+.moresub .navi svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.moresub .navi .nm { flex: 1; min-width: 0; }
+/* The fold itself: one step quieter than a destination -- between the rows'
+   grey and the timestamps' -- and no smaller. The chevron keeps the 15px box
+   the sibling glyphs sit in (its path is drawn lighter inside), because
+   shrinking the box shifts the label off the shared text edge; alignment is
+   the row's, quietness is the ink's. Hover restated: the compound selector
+   outweighs the shared .navi:hover rule. */
+.rail-nav .navi.more { color: color-mix(in oklab, var(--muted) 55%, var(--faint)); }
+.rail-nav .navi.more:hover { color: var(--text); }
+.navi.more .chev { transition: transform .14s ease; }
+.navi.more[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.navi.more .l-less, .navi.more[aria-expanded="true"] .l-more { display: none; }
+.navi.more[aria-expanded="true"] .l-less { display: inline; }
+@media (prefers-reduced-motion: reduce) {
+  .moresub, .navi.more .chev { transition: none; }
 }
-.moresub .mrow[aria-current="true"] svg { color: var(--amber); }
-.moresub .mrow .nm { flex: 1; min-width: 0; }
 
 /* Collapsed rail: ONE track, not `0 1fr`. A display:none grid item leaves the
    grid entirely, so with two tracks the main pane fell into the 0px one and
@@ -3033,6 +3046,131 @@ details[open] summary { margin-bottom: 8px; }
 .chrow .sub.warn { color: var(--amber); }
 .chrow > .mini { flex: none; width: auto; }
 
+/* ── the set-up pages' shared shape ───────────────────────────────────
+   One row, one group heading, one sheet anatomy, shared by the three
+   set-up-once pages: sub-agents, entrances, schedules
+   (ui/src/shell/setuprow.tsx and setupsheet.tsx). Same family as .clist above:
+   rows share a border so a group reads as a list rather than as N boxes.
+
+   Every child is placed explicitly. Grid auto-placement puts items that have a
+   definite row before items that have none, so one child with `grid-row` and no
+   `grid-column` is enough to send the name to the wrong column -- which is
+   exactly what it did while this was being drawn. */
+.sugrp { margin-top: 26px; }
+.sugrp > .hd { display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px; }
+.sugrp > .hd b {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--muted);
+  letter-spacing: .12em; text-transform: uppercase;
+}
+.sugrp > .hd .n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.sulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--ink); }
+.surow {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0 12px;
+  padding: 10px 14px; cursor: pointer; transition: background .12s; text-align: left;
+}
+.surow + .surow { border-top: 1px solid var(--line); }
+.surow:hover { background: var(--raised); }
+.surow:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
+.surow[aria-current="true"] { background: var(--raised); box-shadow: inset 2px 0 0 var(--amber); }
+/* A row that cannot run wears the mark on its edge, not as a red wash: the
+   state line already says what is wrong, in words. */
+.surow.bad { box-shadow: inset 2px 0 0 var(--clay); }
+.surow > .pmtile { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
+.surow > .nm {
+  grid-column: 2; grid-row: 1;
+  display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px;
+}
+.surow > .nm b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.surow > .suact { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 7px; align-items: center; justify-self: end; }
+.surow > .sufacts {
+  grid-column: 2; grid-row: 2; font-size: 11.5px; color: var(--faint); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.surow > .sufacts.warn { color: var(--amber); }
+.surow > .sufacts.bad { color: var(--clay); }
+/* A schedule has no identity to tile, so its row drops the first column and
+   grows two of its own: the settled "when / next" pair on the right, and a
+   third line for the last run. */
+.surow.notile { grid-template-columns: 1fr auto auto; }
+.surow.notile > .nm { grid-column: 1; }
+.surow.notile > .sufacts { grid-column: 1; }
+.surow.notile > .suextra { grid-column: 2; grid-row: 1 / span 2; text-align: right; align-self: center;
+  font-family: var(--mono); font-size: 11px; line-height: 1.6; padding-right: 4px; }
+.surow.notile > .suextra .nx { color: var(--faint); display: block; }
+.surow.notile > .suact { grid-column: 3; }
+.surow > .sufoot2 { grid-column: 2; grid-row: 3; margin-top: 4px; font-size: 11.5px; }
+.surow.notile > .sufoot2 { grid-column: 1; }
+.surow > .sufoot2 .rl { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: none; border: 0; padding: 0; font: inherit; color: var(--muted); max-width: 100%; }
+.surow > .sufoot2 .rl:hover { color: var(--text); }
+.surow > .sufoot2 .rl .st.ok { color: var(--moss); }
+.surow > .sufoot2 .rl .st.bad { color: var(--clay); }
+.surow > .sufoot2 .rl .nt { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.surow > .sufoot2 .never { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+/* The two tabs a schedule's page has, and the filter chips above its list. */
+.tabbar { display: flex; gap: 2px; margin-top: 16px; border-bottom: 1px solid var(--line); }
+.tabbar button { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; padding: 8px 11px; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
+.tabbar button:hover { color: var(--text); }
+.tabbar button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--amber); font-weight: 600; }
+.tabbar button .n { margin-left: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  font-variant-numeric: tabular-nums; }
+.seg.cronfilter { margin: 0 0 14px; }
+.seg.cronfilter .n { margin-left: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  font-variant-numeric: tabular-nums; }
+.cdruns .runhead { display: flex; justify-content: flex-end; padding: 12px 0 4px; }
+.everyn { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.everyn input { width: 58px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+  padding: 6px 8px; font: inherit; font-size: 12.5px; color: var(--text); outline: 0;
+  font-variant-numeric: tabular-nums; }
+.everyn input:focus { border-color: var(--amber); background: var(--ink); }
+.sustate .x { color: var(--faint); font-size: 11.5px; }
+/* A refused field says so under itself; nothing else ever stands there. */
+.ff > .e { display: block; font-size: 11.5px; color: var(--gold); margin-top: 4px; }
+.cronecho { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+/* The sheet's four parts. */
+.suhead { display: flex; align-items: flex-start; gap: 10px; }
+.suhead .meta { flex: 1; min-width: 0; }
+.suhead .l1 { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 14px; }
+.suhead .l1 b { font-weight: 600; }
+.suhead .l2 { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 3px; }
+.sumenu { flex: none; padding: 2px 8px; line-height: 1.1; }
+.sustate {
+  display: flex; align-items: center; gap: 9px; margin-top: 14px;
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; font-size: 12.5px;
+}
+.sustate .a { margin-left: auto; flex: none; }
+.sufield { margin-top: 14px; }
+.sufield > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.sufield > input, .sufield > textarea {
+  width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; font: inherit; font-size: 12.5px; color: var(--text); outline: 0;
+}
+.sufield > input:focus, .sufield > textarea:focus { border-color: var(--amber); background: var(--ink); }
+.sufield > textarea { resize: vertical; min-height: 62px; }
+/* The only thing that may sit under a field, which is what makes it read. */
+.sufield > .e { font-size: 11.5px; color: var(--gold); margin-top: 4px; }
+.sufoot {
+  display: flex; align-items: center; gap: 10px; margin-top: 20px;
+  padding-top: 14px; border-top: 1px solid var(--line);
+}
+.sufoot .n { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* The credentials heading, and the one link that answers "where do I get
+   these" -- a channel's secrets are minted in its own console, and the reader
+   should not have to guess which of a vendor's portals issues this token. */
+.sucreds { display: flex; align-items: baseline; gap: 10px; margin-top: 16px; }
+.sucreds .k { font-family: var(--mono); font-size: var(--xs, 10.5px); letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faint); }
+.sucreds .k .n { margin-left: 8px; letter-spacing: 0; text-transform: none; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.jump { display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
+  font-family: var(--mono); font-size: 11.5px; color: var(--gold); text-decoration: none; flex: none; }
+.jump:hover { text-decoration: underline; }
+.jump svg { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2; fill: none;
+  stroke-linecap: round; stroke-linejoin: round; }
+
 /* The dialog's one-line subject, between title and fields. */
 .sheet .dsub { padding: 3px 20px 0; font-size: 12px; color: var(--faint); }
 /* Disconnect sits alone under the fields, away from save. */
@@ -3068,6 +3206,10 @@ details[open] summary { margin-bottom: 8px; }
   border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; flex: none;
 }
 .kd.auth { color: var(--gold); border-color: color-mix(in oklab, var(--gold) 45%, transparent); }
+/* The same slot, used by an entrance already in service to say why it is not
+   receiving: amber for a step not finished, clay for an adapter that failed. */
+.kd.warn { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 45%, transparent); }
+.kd.bad { color: var(--clay); border-color: color-mix(in oklab, var(--clay) 45%, transparent); }
 .card .one { grid-column: 2; grid-row: 2; font-size: 12.5px; color: var(--muted); }
 .card .st { grid-column: 2; grid-row: 3; font-family: var(--mono); font-size: 11px; margin-top: 5px; }
 .card .ctl {
@@ -3099,6 +3241,40 @@ details[open] summary { margin-bottom: 8px; }
 }
 .adv input:focus { border-color: var(--muted); }
 
+/* The shape of a card that has not arrived yet: the card's own anatomy drawn
+   empty, at a settled height. The wait used to be one line of grey text, which
+   left the panel a 63px strip that jumped to 640 when the body landed -- so the
+   height here is fixed on purpose, and only the filling-in moves.
+
+   The shimmer is a band travelling across a flat fill, which is why the bars
+   carry a background-size wider than themselves. */
+/* No height of its own: the panel is a settled box now and provides it. */
+.skel { display: grid; gap: 18px; align-content: start; }
+.skhead { display: flex; align-items: center; gap: 13px; }
+.skmeta { flex: 1; display: grid; gap: 8px; }
+.sksec { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.sktile { width: 46px; height: 46px; border-radius: 13px; flex: none; }
+.skline { height: 11px; border-radius: 6px; }
+.skline.cap { height: 8px; }
+.skline.w80 { width: 80%; }
+.skline.w70 { width: 70%; }
+.skline.w50 { width: 50%; }
+.skline.w40 { width: 40%; }
+.skline.w30 { width: 30%; }
+.skline.w20 { width: 20%; }
+.sktile, .skline {
+  background: linear-gradient(90deg, var(--raised) 25%, var(--line-soft) 37%, var(--raised) 63%);
+  background-size: 320px 100%;
+  animation: skwave 1.4s ease-in-out infinite;
+}
+@keyframes skwave {
+  from { background-position: -160px 0; }
+  to { background-position: 320px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sktile, .skline { animation: none; background: var(--raised); }
+}
+
 /* capability detail: a floating sheet centered over the page. The scrim owns
    the click-away; the panel settles in with a short lift, never a slide. */
 .detail {
@@ -3117,6 +3293,15 @@ details[open] summary { margin-bottom: 8px; }
   transition: transform .3s cubic-bezier(.22, .61, .36, 1);
 }
 .detail[data-open="true"] .dpanel { transform: none; }
+/* A card whose body is fetched when it opens gets a settled box instead of one
+   that sizes to its content: it went 63px (a line of loading text) -> 640px
+   (the card), and a skeleton of any fixed height only moves that jump
+   somewhere else. So the skeleton and the card it becomes are the same box, and
+   what does not fit scrolls inside it. Set by the market drawers, which are the
+   two that load -- a card that renders from what the row already holds has
+   nothing to wait for, and giving it this box would only pad it with a
+   half-panel of nothing. */
+.detail[data-fill="true"] .dpanel { height: min(78vh, 740px); }
 @media (prefers-reduced-motion: reduce) { .detail, .detail .dpanel { transition: none; } }
 .detail header { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 16px 0 22px; }
 .detail header b { flex: 1; font-size: 13.5px; }
@@ -3125,6 +3310,18 @@ details[open] summary { margin-bottom: 8px; }
 .detail header:has(b:empty) { position: absolute; top: 12px; right: 12px; padding: 0; z-index: 1; }
 .detail header:has(b:empty) b { display: none; }
 .detail .body { overflow-y: auto; padding: 18px 22px 24px; display: grid; gap: 18px; min-height: 0; }
+/* A credential and the button that spends it, on one line: the only field the
+   agent card has, and only for the agents whose way in is a key. Its own
+   class, not the provider cards' `.keyrow`: that one is a grid item of
+   `.pcard` and reusing the name had this card's input styles landing on the
+   settings page's provider rows. */
+.sukey { display: flex; align-items: center; gap: 9px; }
+.sukey input {
+  flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 12.5px;
+  color: var(--text); outline: 0;
+}
+.sukey input:focus { border-color: var(--amber); background: var(--ink); }
 .dx {
   width: 30px; height: 30px; border-radius: 999px; flex: none;
   display: grid; place-items: center; color: var(--muted);
@@ -3744,6 +3941,76 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   overflow-y: auto; min-height: 0; scrollbar-gutter: stable; }
 .sheet footer { padding: 0 20px 16px;
   display: flex; justify-content: flex-end; gap: 9px; }
+
+/* A set-up card: head, one scrolling body, foot. The head and the foot are the
+   card's, not the scroller's, so the name of what is being edited and the verb
+   that acts on it are both always on screen -- with an unfolded optional block
+   the body is over a thousand pixels long, and both used to be somewhere in
+   it. One spacing scale, owned by the body's grid: the parts inside carry no
+   margins of their own, which is what kept the rhythm between a caption, a
+   field group and a fold from depending on which two happened to meet. */
+.sheet > .suhead { flex: none; padding: 15px 18px 13px; border-bottom: 1px solid var(--line-soft); }
+.sheet > .subody {
+  flex: 1; min-height: 0; padding: 15px 18px 16px; overflow-y: auto; scrollbar-gutter: stable;
+  display: grid; gap: 15px; align-content: start;
+  color: var(--muted); font-size: 13.5px;
+}
+.sheet > .subody > * { margin-top: 0; }
+.sheet > .sufoot {
+  flex: none; margin-top: 0; padding: 11px 18px 12px;
+  border-top-color: var(--line-soft); background: var(--surface);
+}
+/* One credential group: its own line, then the boxes under it. */
+.sugroup { display: grid; gap: 9px; }
+.sufields { display: grid; gap: 12px; }
+.sufields > .sufield { margin-top: 0; }
+
+/* The close control on a set-up card. The card covers the page, so unlike a
+   page it has to hand back what it covers. */
+.suclose { flex: none; padding: 2px 8px; line-height: 1.1; }
+/* A credential group's own line. Mail is two servers, and one flat column of
+   six boxes left the reader counting which three belonged to which. */
+.sugsub { font-size: 11.5px; color: var(--faint); margin: 0; }
+
+/* The optional block. Same caption grammar as the credentials line above it,
+   and the fields indent under a rule so they read as belonging to the fold --
+   the same shape the provider cards' own connect form uses. They are raw
+   config keys with no catalogue entry, so they are labelled in the mono face:
+   `socket_reconnect_delay_ms` is a setting's name, not a sentence. */
+.suadv { display: grid; gap: 12px; }
+.suadv .sufields { padding-left: 11px; border-left: 2px solid var(--line); }
+.suadv .sufield > label { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+.sucap {
+  justify-self: start; display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: var(--xs, 10.5px); letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faint);
+}
+.sucap:hover { color: var(--muted); }
+.sucap svg {
+  width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform .16s ease;
+}
+.sucap[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* The scan wizard. Signing in by phone has three moments, and a bare code said
+   nothing about the two around it -- least of all that the entry had to be
+   started before there was anything to scan. */
+/* The wizard IS the card's body: its three steps carry their own rhythm, so
+   the body's standing gap would double every gap between them. */
+.sheet > .subody.suwiz { gap: 4px; }
+.suwiz .step { display: grid; grid-template-columns: 21px 1fr; gap: 11px; padding: 7px 0; }
+.suwiz .step .n {
+  width: 19px; height: 19px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10.5px; border: 1px solid var(--line);
+  color: var(--faint); background: var(--surface);
+}
+.suwiz .step[data-state="now"] .n { border-color: var(--amber); color: var(--amber); }
+.suwiz .step[data-state="done"] .n { border-color: var(--moss); color: var(--moss); }
+.suwiz .step .st { font-size: 12.5px; color: var(--muted); }
+.suwiz .step[data-state="now"] .st { color: var(--text); font-weight: 600; }
+.suwiz .step[data-state="idle"] .st { color: var(--faint); }
+.suwiz .step .sd { font-size: 11.5px; color: var(--faint); margin-top: 4px; }
+.suwiz .qrbox { border: 0; padding: 10px 0 2px; margin: 0; justify-items: start; }
 /* The scan panel in a QR channel's configure dialog. Fixed frame, so the sheet
    does not resize under the reader each time the code rotates in. */
 .qrbox { display: grid; justify-items: center; gap: 10px; padding: 4px 0 18px;

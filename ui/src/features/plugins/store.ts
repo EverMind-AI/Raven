@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { dropAfterFade } from '../../shell/detailfade'
 import { show as toast } from '../../shell/toast'
 
 import type {
@@ -251,9 +252,27 @@ export function openDetail(kind: Drawer['kind'], id: string, keep?: boolean): vo
    X, and the island's own buttons. A running install keeps its prog so the
    sheet can be reentered from the card; a settled one is acknowledged. */
 export function drawerClosed(): void {
-  const patch: Partial<PlugState> = { drawer: null, form: false, confirm: false }
-  if (state.prog && state.prog.state !== 'run') patch.prog = null
-  set(patch)
+  const was = state.drawer
+  if (!was) return
+  /* The flag now, the card in a moment. Every caller here is either the legacy
+     close (which flips the flag itself, a line later) or one of the island's
+     own buttons (which had no other way to close the drawer than by unmounting
+     the card). Both want the fade to start at once -- and both wanted the card
+     to still be in it, which is what unmounting in the same tick took away.
+   *
+   * Written straight onto the element rather than through `shell().closeDetail`:
+   * the legacy closer is wrapped to call back into here, so going out through
+   * the shell would be a loop. */
+  const detail = document.getElementById('detail')
+  if (detail) detail.dataset.open = 'false'
+  dropAfterFade(
+    () => {
+      const patch: Partial<PlugState> = { drawer: null, form: false, confirm: false }
+      if (state.prog && state.prog.state !== 'run') patch.prog = null
+      set(patch)
+    },
+    () => state.drawer !== was,
+  )
 }
 
 export function unfoldForm(id: string): void {

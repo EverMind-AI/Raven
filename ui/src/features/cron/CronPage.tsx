@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { show as menuAt } from '../../shell/menu'
+import { SetupGroup, SetupRow } from '../../shell/setuprow'
+import { SheetFoot, SheetHead, StateLine } from '../../shell/setupsheet'
 import { show as toast } from '../../shell/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
@@ -85,8 +87,24 @@ export function CronApp(): JSX.Element {
   )
 }
 
+/* Which subset the list is showing. Three chips with counts, because the
+   question a reader arrives with is "did anything break" -- the banner that
+   used to answer it could only ever say yes or nothing, and had no way to show
+   the paused jobs at all. */
+type CronFilter = 'all' | 'fail' | 'paused'
+const failing = (j: CronJob): boolean => j.on && !!j.runs[0] && !j.runs[0].ok
+
 function CronList({ rows }: { rows: CronJob[] }): JSX.Element {
-  const fail = rows.filter((j) => j.on && j.runs[0] && !j.runs[0].ok)
+  const [filter, setFilter] = useState<CronFilter>('all')
+  const fail = rows.filter(failing)
+  const paused = rows.filter((j) => !j.on)
+  const shown = filter === 'fail' ? fail : filter === 'paused' ? paused : rows
+  const chip = (id: CronFilter, label: string, n: number): JSX.Element => (
+    <button key={id} aria-pressed={filter === id} onClick={() => setFilter(id)}>
+      {label}
+      <span className="n">{String(n)}</span>
+    </button>
+  )
   return (
     <>
       <div className="herorow">
@@ -97,115 +115,108 @@ function CronList({ rows }: { rows: CronJob[] }): JSX.Element {
           {t('gui.cron_new')}
         </button>
       </div>
-      {fail.length > 0 && (
-        <div className="banner" style={{ margin: '0 0 18px' }}>
-          <b>{t('gui.cron.failing', { n: fail.length })}</b>
-          <span>{fail.map((j) => j.name).join(', ')}</span>
-          <button onClick={() => void store.source().openRun(fail[0]!, fail[0]!.runs[0])}>
-            {t('gui.cron.why')}
-          </button>
-        </div>
-      )}
       {rows.length === 0 ? (
         <div className="empty-note">{t('gui.cron.none')}</div>
       ) : (
-        <div className="cronlist">
-          {rows.map((j) => (
-            <CronRow key={j.id} j={j} />
-          ))}
-        </div>
+        <>
+          <div className="seg cronfilter">
+            {chip('all', t('gui.cron.f_all'), rows.length)}
+            {chip('fail', t('gui.cron.f_fail'), fail.length)}
+            {chip('paused', t('gui.cron.f_paused'), paused.length)}
+          </div>
+          {shown.length === 0 ? (
+            <div className="empty-note">{t('gui.cron.f_none')}</div>
+          ) : (
+            <div className="sulist">
+              {shown.map((j) => (
+                <CronRow key={j.id} j={j} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </>
   )
 }
 
+/* One job, one row: what it does, when it runs, how it went last time, and the
+   switch. Everything else -- run now, duplicate, delete -- is one level in,
+   which is what keeps a destructive verb from being repeated down the page. */
 function CronRow({ j }: { j: CronJob }): JSX.Element {
   const last = j.runs[0]
+  const state = failing(j)
+    ? { cls: 'bad', text: j.what }
+    : { cls: j.on ? 'ok' : 'off', text: j.what }
   return (
-    <div
-      className={'cronjob' + (j.on && last && !last.ok ? ' bad' : '')}
-      style={{ cursor: 'pointer' }}
-      onClick={(e) => {
-        if ((e.target as HTMLElement).closest('button')) return
-        store.openDetail(j)
-      }}
-    >
-      <div className="nm">
-        <span className={'dot' + (!j.on ? '' : last && !last.ok ? ' err' : ' run')} />
-        <span>{j.name}</span>
-        <span className="when">{j.when}</span>
-      </div>
-      <div className="mo">{j.on ? t('gui.cron.next_only', { next: j.next }) : t('gui.cron.paused')}</div>
-      <div className="foot">
-        {last ? (
-          <>
-            <button
-              className={'mini ghost' + (!last.ok ? ' danger' : '')}
-              onClick={() => void store.source().openRun(j, last)}
-            >
-              {t('gui.cron.last_run_short', {
-                at: last.at,
-                state: t(last.ok ? 'gui.cron.ok' : 'gui.cron.failed'),
-              })}
-            </button>
-            <span
-              className="mono"
-              style={{
-                fontSize: 11,
-                color: 'var(--faint)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                minWidth: 0,
-                flex: 1,
-              }}
-            >
-              {last.note}
+    <SetupRow
+      tile={false}
+      name={j.name}
+      state={state}
+      onOpen={() => store.openDetail(j)}
+      extra={
+        <>
+          <span>{cronWhen(j)}</span>
+          <span className="nx">{j.on ? t('gui.cron.next_only', { next: j.next }) : t('gui.cron.paused')}</span>
+        </>
+      }
+      foot={
+        last ? (
+          /* The whole line is the link, because what the reader wants from a
+             result is the session it wrote. */
+          <button className="rl" onClick={() => void store.source().openRun(j, last)}>
+            <span className={'st ' + (last.ok ? 'ok' : 'bad')}>
+              {t(last.ok ? 'gui.cron.ok' : 'gui.cron.failed')}
             </span>
-          </>
+            <span className="at">{last.at}</span>
+            <span className="nt">{last.note}</span>
+            <span className="chev">&rsaquo;</span>
+          </button>
         ) : (
-          <span className="mono" style={{ fontSize: 11, color: 'var(--faint)' }}>
-            {t('gui.cron.never')}
-          </span>
-        )}
-      </div>
-      <div className="ctl">
-        <button
-          className="swi"
-          role="switch"
-          aria-checked={j.on}
-          aria-label={t('gui.caps.toggle_aria', { name: j.name })}
-          onClick={() => void store.source().toggle(j).then(() => store.refresh())}
-        />
-        <button
-          className="mini ghost"
-          aria-label={t('gui.cron.menu_aria', { name: j.name })}
-          onClick={(e) => {
-            const b = e.currentTarget.getBoundingClientRect()
-            menuAt(b.right - 150, b.bottom + 6, [
-              { label: t('gui.cron.run_now'), fn: () => void store.source().runNow(j).then(() => store.refresh()) },
-              { label: t('gui.cron.history'), fn: () => store.openDetail(j) },
-              { label: t('gui.cron.open_session'), fn: () => void store.source().openRun(j) },
-              '-',
-              { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(j) },
-            ])
-          }}
-        >
-          ⋯
-        </button>
-      </div>
-    </div>
+          <span className="never">{t('gui.cron.never')}</span>
+        )
+      }
+      act={
+        <>
+          <button
+            className="swi"
+            role="switch"
+            aria-checked={j.on}
+            aria-label={t('gui.caps.toggle_aria', { name: j.name })}
+            onClick={() => void store.source().toggle(j).then(() => store.refresh())}
+          />
+          <button
+            className="mini ghost"
+            aria-label={t('gui.cron.menu_aria', { name: j.name })}
+            onClick={(e) => {
+              const b = e.currentTarget.getBoundingClientRect()
+              menuAt(b.right - 150, b.bottom + 6, [
+                { label: t('gui.cron.run_now'), fn: () => void store.source().runNow(j).then(() => store.refresh()) },
+                { label: t('gui.cron.open_session'), fn: () => void store.source().openRun(j) },
+                '-',
+                { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(j) },
+              ])
+            }}
+          >
+            &#8943;
+          </button>
+        </>
+      }
+    />
   )
 }
 
-/* The job's own page: header actions, the editable schedule, and every run
-   it has made -- each row opens the transcript that run wrote. */
+/* The job's own page. One row opens one place, and that place has two tabs:
+   what it is set to do, and what it has done. They used to be two cards
+   stacked down one scroll, which meant editing a schedule with a run log
+   underfoot and a delete button between them. */
 function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: number }): JSX.Element {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
+  const [tab, setTab] = useState<'cfg' | 'runs'>('cfg')
+  const [running, setRunning] = useState(false)
   /* Keyed on rev, not just the job: the legacy page refetched history on
      every draw, and the shell leans on that -- live's cron.finished handler
      calls refresh() precisely so a run that lands while the reader is on
-     this page drops into the card. */
+     this page drops into the list. */
   useEffect(() => {
     let stale = false
     store
@@ -236,56 +247,63 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
       })
       .catch((e: unknown) => jobRefuse(draft, e))
   }
+  const runNow = (): void => {
+    setRunning(true)
+    void store
+      .source()
+      .runNow(job)
+      .then(() => store.refresh())
+      .finally(() => setRunning(false))
+  }
   return (
     <>
       <div className="pmback">
         <button className="mini ghost" onClick={() => store.backToList()}>
-          {'← ' + t('gui.cron.back')}
+          {'\u2190 ' + t('gui.cron.back')}
         </button>
-        <div className="trow">
-          <b>{job.name}</b>
-          <div className="cdacts">
-            <button className="mini gold" onClick={() => void store.source().runNow(job).then(() => store.refresh())}>
-              {t('gui.cron.run_now')}
-            </button>
-            <button className="mini ghost danger" onClick={() => removeThenList(job)}>
-              {t('gui.cron.delete')}
-            </button>
-            <button
-              className="swi"
-              role="switch"
-              aria-checked={job.on}
-              aria-label={t('gui.caps.toggle_aria', { name: job.name })}
-              onClick={() => void store.source().toggle(job).then(() => store.refresh())}
-            />
-          </div>
-        </div>
-        <div className="cdstat">
-          <span className={'dot' + (job.on ? ' on' : '')} />
-          <span>
-            {job.on
-              ? t('gui.cron.next', { when: cronWhen(job), next: job.next })
-              : `${cronWhen(job)} · ${t('gui.cron.paused')}`}
-          </span>
-        </div>
       </div>
-      <div className="cdcard">
-        <div className="t">{t('gui.cron.cfg')}</div>
-        <div>
+      <SheetHead
+        name={job.name}
+        facts={cronWhen(job)}
+        menu={[
+          { label: t('gui.cron.duplicate'), fn: () => store.openSheet(job) },
+          { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(job) },
+        ]}
+      />
+      <StateLine
+        cls={job.on ? 'ok' : 'off'}
+        text={job.on ? t('gui.cron.next_only', { next: job.next }) : t('gui.cron.paused')}
+        act={
+          <button
+            className="swi"
+            role="switch"
+            aria-checked={job.on}
+            aria-label={t('gui.caps.toggle_aria', { name: job.name })}
+            onClick={() => void store.source().toggle(job).then(() => store.refresh())}
+          />
+        }
+      />
+      <div className="tabbar" role="tablist">
+        <button role="tab" aria-selected={tab === 'cfg'} onClick={() => setTab('cfg')}>
+          {t('gui.cron.tab_cfg')}
+        </button>
+        <button role="tab" aria-selected={tab === 'runs'} onClick={() => setTab('runs')}>
+          {t('gui.cron.tab_runs')}
+          {runs !== null && runs.length > 0 ? <span className="n">{String(runs.length)}</span> : null}
+        </button>
+      </div>
+      {tab === 'cfg' ? (
+        <>
           <JobForm draft={draft} />
-        </div>
-        <div className="cdfoot">
-          <button className="mini gold" onClick={save}>
-            {t('gui.cron.save')}
-          </button>
-        </div>
-      </div>
-      <div className="cdcard">
-        <div className="t">
-          {t('gui.cron.hist_title2')}
-          {runs !== null && runs.length > 0 && <span className="n">{String(runs.length)}</span>}
-        </div>
+          <SheetFoot label={t('gui.cron.save')} onSave={save} />
+        </>
+      ) : (
         <div className="cdruns">
+          <div className="runhead">
+            <button className="mini" disabled={running} onClick={runNow}>
+              {t(running ? 'gui.cron.running_now' : 'gui.cron.run_now')}
+            </button>
+          </div>
           {runs === null ? null : runs.length === 0 ? (
             <div className="empty-note">{t('gui.cron.hist_none')}</div>
           ) : (
@@ -294,12 +312,12 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
                 <span className={'st' + (run.ok ? ' ok' : ' bad')} />
                 <span className="at">{run.at}</span>
                 <span className="note">{run.note || ''}</span>
-                <span className="chev">›</span>
+                <span className="chev">&rsaquo;</span>
               </button>
             ))
           )}
         </div>
-      </div>
+      )}
     </>
   )
 }
@@ -339,7 +357,7 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
             draft.blank = null
           }}
         />
-        {blankName && <span className="hint">{t('gui.job.need_name')}</span>}
+        {blankName && <span className="e">{t('gui.job.need_name')}</span>}
       </div>
       <div className="ff">
         <label>{t('gui.job.what')}</label>
@@ -354,7 +372,7 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
             draft.blank = null
           }}
         />
-        {blankWhat && <span className="hint">{t('gui.job.need_what')}</span>}
+        {blankWhat && <span className="e">{t('gui.job.need_what')}</span>}
       </div>
       <div className="ff">
         <label>{t('gui.job.freq')}</label>
@@ -402,6 +420,26 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
               }}
             />
           )}
+          {/* The backend has taken an interval for "hourly" all along
+              (`every_seconds`); the form only ever sent the default, so every
+              hourly job in the product runs exactly once an hour. */}
+          {draft.freq === 'hour' && (
+            <label className="everyn">
+              {t('gui.job.every_n_pre')}
+              <input
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={String(Math.max(1, Math.round((draft.every_ms || 3600000) / 3600000)))}
+                onInput={(e) => {
+                  const n = Math.max(1, Math.min(24, Number(e.currentTarget.value) || 1))
+                  draft.every_ms = n * 3600000
+                  draft.bad = null
+                }}
+              />
+              {t('gui.job.every_n_post')}
+            </label>
+          )}
           {draft.freq !== 'hour' && draft.freq !== 'once' && draft.freq !== 'week' && (
             <AtInput draft={draft} />
           )}
@@ -418,22 +456,24 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
             />
           )}
         </div>
-        {draft.bad && <span className="hint">{t(draft.bad)}</span>}
+        {draft.bad && <span className="e">{t(draft.bad)}</span>}
       </div>
+      {/* Where results go is a setting, not a property of one job: the save
+          payload has never carried a per-job destination (`jobToSave` does not
+          read it, and every row comes back as `app`), so the selector that
+          stood here promised a choice the write threw away. It states the
+          effective setting and points at the one place that can change it. */}
       <div className="ff">
         <label>{t('gui.job.deliver')}</label>
-        <select
-          defaultValue={draft.deliver}
-          onChange={(e) => {
-            draft.deliver = e.currentTarget.value
-          }}
-        >
-          {Object.entries(DELIVER).map(([k, v]) => (
-            <option key={k} value={k}>
-              {t(v)}
-            </option>
-          ))}
-        </select>
+        <div className="sustate" style={{ marginTop: 0 }}>
+          <span>{t(DELIVER[draft.deliver] || DELIVER.app!)}</span>
+          <span className="x">{t('gui.job.deliver_global')}</span>
+          <span className="a">
+            <button className="mini ghost" onClick={() => void shell().openSet?.()}>
+              {t('gui.job.deliver_open')}
+            </button>
+          </span>
+        </div>
       </div>
     </>
   )
@@ -456,7 +496,10 @@ function AtInput({ draft }: { draft: CronDraft }): JSX.Element {
           setExpr(e.currentTarget.value)
         }}
       />
-      {draft.freq === 'cron' && <span className="hint">{cronExprHuman(expr)}</span>}
+      {/* Not a standing hint -- the class those went out with. This is the
+          expression read back in words as the reader types, which is the only
+          way five cron fields are checkable without running them. */}
+      {draft.freq === 'cron' && <span className="cronecho">{cronExprHuman(expr)}</span>}
     </>
   )
 }

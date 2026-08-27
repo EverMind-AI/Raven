@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { dropAfterFade } from '../../shell/detailfade'
 import { show as toast } from '../../shell/toast'
 
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
@@ -152,16 +153,23 @@ export function openDetail(kind: 'market' | 'inst', id: string): void {
 }
 
 /* The legacy close path (X, Esc, page switch) already closed #detail;
-   this only drops the island's sheet state behind it. */
+   this only drops the island's sheet state behind it -- and not until the
+   drawer has finished fading, or the card is gone from inside a panel that is
+   still on screen. */
 export function dropDrawer(): void {
-  set({ drawer: null })
+  const was = state.drawer
+  if (!was) return
+  dropAfterFade(
+    () => set({ drawer: null }),
+    () => state.drawer !== was,
+  )
 }
 
 /* The island's own close paths go through the shell so the shared
    #detail dialog and its legacy cousins' state close with the sheet. */
 export function closeDrawer(): void {
-  set({ drawer: null })
   shell().closeDetail?.()
+  dropDrawer()
 }
 
 export function fetchDetail(hubId: string): void {

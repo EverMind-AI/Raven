@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
+import { CardSkeleton } from '../../shell/skeleton'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
@@ -382,9 +383,13 @@ function DrawerHost({ drawer, s }: { drawer: store.Drawer; s: store.PlugState })
     if (title) title.textContent = ''
     body.appendChild(host)
     detail.dataset.open = 'true'
+    /* This card's body is fetched when it opens, so the panel holds a settled
+       box while it is on its way -- see `.detail[data-fill]`. */
+    detail.dataset.fill = 'true'
     return () => {
       host.remove()
       detail.dataset.open = 'false'
+      delete detail.dataset.fill
     }
   }, [host])
   return createPortal(
@@ -751,7 +756,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
       stale = true
     }
   }, [id])
-  if (!got) return <div className="pnote">{t('gui.hub.reading')}</div>
+  if (!got) return <CardSkeleton />
 
   const entry = got.entry
   const it = s.items.find((x) => x.id === id)

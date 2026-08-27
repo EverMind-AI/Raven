@@ -27,6 +27,11 @@ function showPage(id) {
   markNewCurrent();
   /* caps and memory both use the shared detail drawer */
   if (id !== 'capsPage' && id !== 'memPage') closeDetail();
+  /* Same rule for the overlays a single page owns: the channel drawer and the
+     new-job sheet used to survive the switch and sit over whatever came next,
+     still showing the entry the reader had left behind. */
+  if (id !== 'connPage') RavenIslands?.connections?.closeDialog?.();
+  if (id !== 'cronPage') RavenIslands?.cron?.closeSheet?.();
 }
 
 /* Switching module resets the filters: a query typed while browsing skills is
@@ -100,12 +105,16 @@ function drawXa() {
    how a disabled agent reads as broken, or a missing binary reads as
    switched off. */
 const XA_FIXTURE = [
-  { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, enabled: true,
+  /* `vendored` is not decoration: it is what tells the page that connecting this
+     row means running the tree's installer, not writing a config entry from a
+     preset it does not have. A fixture missing it read as a preset nobody could
+     add. */
+  { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
     description: 'A vendored build, discovered under subagents/ and registered as cli.' },
-  { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, enabled: false,
-    probe_status: 'unknown', probe_detail: '', has_api_key: false, test_running: false,
+  { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: false,
+    probe_status: 'missing', probe_detail: 'venv not built in Raven-PPT', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
     description: 'A vendored build whose venv is not built yet, so it is listed and disabled.' },
   { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
@@ -137,19 +146,23 @@ DS.xa ??= {
   load: async () => XA_FIXTURE,
   act: async (op, row, args) => {
     const a = args || {};
-    if (op === 'connect') { row.configured = true; row.enabled = row.kind !== 'openai'; }
-    if (op === 'remove') { row.configured = false; row.enabled = false; }
-    if (op === 'upgrade') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = null; }
-    if (op === 'toggle') row.enabled = !!a.enabled;
-    if (op === 'update') {
-      if (a.new_name) row.name = a.new_name;
-      if (a.description != null) row.description = a.description || row.description;
+    if (op === 'connect') {
+      row.configured = true;
+      row.enabled = row.kind !== 'openai' || row.has_api_key;
       if (a.api_key) { row.has_api_key = true; row.enabled = true; }
     }
-    if (op === 'test') {
-      row.last_test_ok = row.probe_status === 'ready';
-      row.last_test_at_ms = Date.now();
-    }
+    /* One switch for every kind of row, including the discovered ones: the
+       server materializes a registry entry for those and puts the flag on it. */
+    if (op === 'toggle') row.enabled = !!a.enabled;
+    if (op === 'update' && a.api_key) { row.has_api_key = true; row.enabled = true; }
+    /* Instant here, minutes in life: the real call returns as soon as the
+       download starts and the row carries `building` until it lands. The fixture
+       shows the outcome rather than a spinner nothing would ever clear -- the
+       demo source has no second answer to poll for. */
+    if (op === 'build') { row.building = false; row.probe_status = 'ready'; row.probe_detail = ''; row.enabled = true; }
+    /* A preset that moved transport: removed and added back, which is what
+       clears `upgrade_to`. Switching `enabled` never did. */
+    if (op === 'migrate') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = ''; row.enabled = true; }
     return XA_FIXTURE;
   },
 };

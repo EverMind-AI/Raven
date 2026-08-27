@@ -84,16 +84,22 @@
         </svg>
         <span data-i18n="gui.nav.mem">记忆</span>
       </button>
-      <!-- 连接 / 入口 / 定时 live one level in: they are set-up-once surfaces,
+      <!-- Sub-agents / entrances / schedules live one level in: they are
+           set-up-once surfaces,
            not daily destinations, and seven top-level rows buried the four
-           that are. The flyout drawn by drawMoreFly() is their home. -->
-      <button class="navi" id="moreBtn" aria-expanded="false" aria-controls="moreFly">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <circle cx="5" cy="12" r="1.1"/><circle cx="12" cy="12" r="1.1"/><circle cx="19" cy="12" r="1.1"/>
-        </svg>
-        <span data-i18n="gui.nav.more">更多</span>
-      </button>
+           that are. The group drawn by navfly's draw() is their home.
+
+           The rows land above this button, not below it, because the button is
+           the fold: it reads "More" while they are hidden and "Less" once they
+           stand in the list, which only works if it sits at the list's end. -->
       <div class="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more"></div>
+      <button class="navi more" id="moreBtn" aria-expanded="false" aria-controls="moreFly">
+        <svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M7 9.8l5 5.4 5-5.4"/>
+        </svg>
+        <span class="l-more" data-i18n="gui.nav.more">更多</span>
+        <span class="l-less" data-i18n="gui.nav.less">收起</span>
+      </button>
     </nav>
 
     <div class="find" id="findBox" hidden>
@@ -351,7 +357,7 @@
 <!-- ─── module 2b: connections ─────────────────────────────────────── -->
 <section class="page" id="xaPage" data-open="false" data-i18n-aria="gui.page.agents">
   <header>
-    <h2 data-i18n="gui.page.agents">连接</h2>
+    <h2 data-i18n="gui.page.agents">子智能体</h2>
   </header>
   <div class="work">
     <div class="wrap" id="xaBody"></div>
@@ -460,7 +466,7 @@
 <div class="veil" id="connVeil" data-open="false"></div>
 
 <!-- The 更多 flyout: a slim second column that grows out of the rail, drawn by
-     drawMoreFly(). It holds the set-up-once modules (连接 / 入口 / 定时). -->
+     drawMoreFly(). It holds the set-up-once modules: sub-agents, entrances, schedules. -->
 <div class="menu" id="menu" data-open="false" role="menu"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 

@@ -93,14 +93,19 @@ DS.xa = {
         api_key: a.api_key || undefined,
       });
     } else if (op === 'toggle') {
+      /* One switch for every kind of row. A discovered folder has no config
+         entry, so the server writes one from the folder's own manifest and puts
+         the flag on it -- which is why connecting one back on is this same call
+         and not a second mechanism. */
       await rpc.call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
-    } else if (op === 'remove') {
-      await rpc.call('subagents.remove', { name: row.name });
-    } else if (op === 'upgrade') {
-      /* There is no "change the transport" write: `subagents.update` touches name,
-         description and key only, on purpose. So the switch is a remove plus an add
+    } else if (op === 'migrate') {
+      /* A stale transport is the one connect that cannot be a flag. There is no
+         "change the transport" write -- `subagents.update` touches name,
+         description and key only, on purpose -- so it is a remove plus an add
          from the preset, which is also what makes it visible in config as one
-         entry replaced rather than an entry mutated underneath its session handles. */
+         entry replaced rather than an entry mutated underneath its session
+         handles. Toggling `enabled` would have left `upgrade_to` standing and
+         the old command line in place. */
       await rpc.call('subagents.remove', { name: row.name });
       await rpc.call('subagents.add', {
         preset: row.preset || row.name,
@@ -112,19 +117,6 @@ DS.xa = {
          few hundred MB of downloads. The row's `building` flag is what says it is
          still going, and the store polls the list while any row carries it. */
       await rpc.call('subagents.build', { name: row.name });
-    } else if (op === 'test_cancel') {
-      await rpc.call('subagents.test_cancel', { name: row.name });
-    } else if (op === 'test') {
-      /* The call runs the agent for real and does not return until it answers.
-         The page marks the row running and redraws before handing over, so the
-         button does not look dead for the length of a model turn. */
-      const res = await rpc.call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
-      if (!res.ok && res.detail && !res.cancelled) toast(`${row.name}: ${res.detail}`);
-      /* probe:true here, unlike every other mutation: a test is the one write that
-         changes the probe verdict. An acp test records the capability snapshot the
-         probe reads, so carrying the old "not recorded yet" over would leave the
-         row telling the user to run the test they just ran. */
-      return xaFetch(true);
     }
     return xaFetch(false);
   },

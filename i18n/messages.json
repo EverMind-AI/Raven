@@ -723,65 +723,29 @@
       "en": "Name, e.g. internal CRM",
       "zh": "名称，例如 内部 CRM"
     },
-    "gui.agent.cancel": {
-      "en": "Cancel",
-      "zh": "取消"
-    },
-    "gui.agent.configure": {
-      "en": "Configure",
-      "zh": "设置"
-    },
     "gui.agent.connect": {
       "en": "Connect",
       "zh": "连接"
-    },
-    "gui.agent.desc": {
-      "en": "What it is good at",
-      "zh": "它擅长什么"
-    },
-    "gui.agent.desc_hint": {
-      "en": "Read by the model when it picks which agent to delegate to.",
-      "zh": "模型挑选把任务交给谁时会读这句。"
-    },
-    "gui.agent.disable": {
-      "en": "Disable",
-      "zh": "停用"
-    },
-    "gui.agent.disabled": {
-      "en": "switched off",
-      "zh": "已停用"
-    },
-    "gui.agent.disc_body": {
-      "en": "Disconnect {name}? Its configuration is removed; sessions it already ran are kept.",
-      "zh": "断开 {name}？它的配置会被删除，已经跑过的会话保留。"
     },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
     },
-    "gui.agent.enable": {
-      "en": "Enable",
-      "zh": "启用"
-    },
     "gui.agent.failed": {
       "en": "That did not work: {detail}",
       "zh": "没成功：{detail}"
     },
-    "gui.agent.hero": {
-      "en": "Other agents Raven can hand work to",
-      "zh": "可以把活交给的其它智能体"
+    "gui.agent.g_on": {
+      "en": "Connected",
+      "zh": "已接入"
     },
-    "gui.agent.hero_sub": {
-      "en": "Connect a coding agent or an assistant, and Raven can delegate a task to it and read back what it did.",
-      "zh": "接上一个编码智能体或助手，Raven 就能把任务交给它，并读回它做了什么。"
+    "gui.agent.g_off": {
+      "en": "Available",
+      "zh": "可接入"
     },
     "gui.agent.key": {
       "en": "API key",
       "zh": "API key"
-    },
-    "gui.agent.key_hint": {
-      "en": "Stored in this machine's config, never sent to the page.",
-      "zh": "存在本机配置里，不会发到页面。"
     },
     "gui.agent.key_set": {
       "en": "already set",
@@ -799,109 +763,17 @@
       "en": "openai",
       "zh": "openai"
     },
-    "gui.agent.missing": {
-      "en": "not reachable",
-      "zh": "连不上"
-    },
-    "gui.agent.name": {
-      "en": "Name",
-      "zh": "名称"
-    },
-    "gui.agent.name_hint": {
-      "en": "What Raven calls it when it hands over a task.",
-      "zh": "Raven 交活时怎么称呼它。"
-    },
-    "gui.agent.needs_key": {
-      "en": "needs an API key",
-      "zh": "缺 API key"
-    },
     "gui.agent.none": {
       "en": "Nothing connected yet.",
       "zh": "还没有连接任何智能体。"
-    },
-    "gui.agent.off": {
-      "en": "Available",
-      "zh": "可连接"
-    },
-    "gui.agent.on": {
-      "en": "Connected",
-      "zh": "已连接"
     },
     "gui.agent.probe": {
       "en": "Re-check",
       "zh": "重新检查"
     },
-    "gui.agent.probing": {
-      "en": "checking",
-      "zh": "检查中"
-    },
-    "gui.agent.ready": {
-      "en": "ready",
-      "zh": "可用"
-    },
     "gui.agent.save": {
       "en": "Save",
       "zh": "保存"
-    },
-    "gui.agent.sec_status": {
-      "en": "Status",
-      "zh": "状态"
-    },
-    "gui.agent.sec_config": {
-      "en": "Configuration",
-      "zh": "配置"
-    },
-    "gui.agent.sec_transport": {
-      "en": "Transport",
-      "zh": "传输"
-    },
-    "gui.agent.sec_last_test": {
-      "en": "Last test",
-      "zh": "最近测试"
-    },
-    "gui.agent.test": {
-      "en": "Test",
-      "zh": "测试"
-    },
-    "gui.agent.test_bad": {
-      "en": "test failed - {ago}",
-      "zh": "测试失败 · {ago}"
-    },
-    "gui.agent.test_cancel": {
-      "en": "Stop",
-      "zh": "停止"
-    },
-    "gui.agent.test_never": {
-      "en": "never tested",
-      "zh": "还没测试过"
-    },
-    "gui.agent.test_ok": {
-      "en": "test passed - {ago}",
-      "zh": "测试通过 · {ago}"
-    },
-    "gui.agent.test_spend": {
-      "en": "A test really dispatches {name} once, spending its own quota.",
-      "zh": "测试会真的调一次 {name}，花它自己的额度。"
-    },
-    "gui.agent.testing": {
-      "en": "testing...",
-      "zh": "测试中…"
-    },
-    "gui.agent.unverified": {
-      "en": "not verified",
-      "zh": "未验证"
-    },
-    "gui.agent.upgrade": {
-      "en": "This preset now runs over {to}.",
-      "zh": "这个预设现在走 {to}。"
-    },
-    "gui.agent.upgrade_body": {
-      "en": "Switch {name} to the transport its preset now uses? Its command line changes, and session handles bound to it stop resolving.",
-      "zh": "把 {name} 切到它的预设现在用的传输方式？它的命令行会变，绑在它上面的会话句柄会失效。"
-    },
-    "gui.agent.upgrade_do": {
-      "en": "Switch",
-      "zh": "切换"
     },
     "gui.ai_note": {
       "en": "AI-generated content -- double-check what matters.",
@@ -1319,10 +1191,6 @@
       "en": "{who} - sends and receives as you",
       "zh": "{who} · 以你的身份收发消息"
     },
-    "gui.conn.configure": {
-      "en": "Configure",
-      "zh": "配置"
-    },
     "gui.conn.connect": {
       "en": "Connect",
       "zh": "接入"
@@ -1334,18 +1202,6 @@
     "gui.conn.saved_x": {
       "en": "{name} saved",
       "zh": "{name} 配置已保存"
-    },
-    "gui.conn.disabled": {
-      "en": "disabled",
-      "zh": "停用"
-    },
-    "gui.conn.disc_body": {
-      "en": "After disconnecting, you can no longer reach Raven in {name}.",
-      "zh": "断开后你在{name}里无法再找到 Raven。"
-    },
-    "gui.conn.hero_sub": {
-      "en": "Where Raven receives messages. Each one signs in on its own.",
-      "zh": "Raven 从这些地方收消息，每个入口各自登录。"
     },
     "gui.conn.qr_alt": {
       "en": "Sign-in code",
@@ -1383,13 +1239,53 @@
       "en": "Disconnect",
       "zh": "断开"
     },
+    "gui.conn.disabled": {
+      "en": "disabled",
+      "zh": "停用"
+    },
     "gui.conn.enabled": {
       "en": "enabled",
       "zh": "启用"
     },
-    "gui.conn.hero": {
-      "zh": "消息入口",
-      "en": "Channels"
+    "gui.conn.g_on": {
+      "en": "In service",
+      "zh": "已接入"
+    },
+    "gui.conn.g_off": {
+      "en": "Available",
+      "zh": "可接入"
+    },
+    "gui.conn.cost_scan": {
+      "en": "scan to sign in",
+      "zh": "扫码登录"
+    },
+    "gui.conn.cost_n": {
+      "en": "{n} credentials",
+      "zh": "{n} 项凭据"
+    },
+    "gui.conn.st_off": {
+      "en": "switched off",
+      "zh": "已停用"
+    },
+    "gui.conn.st_live": {
+      "en": "receiving",
+      "zh": "正在收消息"
+    },
+    "gui.conn.st_missing": {
+      "en": "{n} credentials still needed",
+      "zh": "还差 {n} 项凭据"
+    },
+    "gui.conn.gw_live": {
+      "en": "Receiving on {n} entries",
+      "zh": "{n} 个入口在收消息"
+    },
+    "gui.conn.creds": {
+      "en": "Credentials",
+      "zh": "凭据"
+    },
+    "gui.conn.apply": {
+      "en": "Where to get these",
+      "zh": "去申请"
     },
     "gui.conn.toggled": {
       "en": "{name} {state} - reopen the Raven app to apply",
@@ -1402,10 +1298,6 @@
     "gui.cron.back": {
       "en": "Back",
       "zh": "返回"
-    },
-    "gui.cron.cfg": {
-      "en": "Configuration",
-      "zh": "任务配置"
     },
     "gui.cron.delete": {
       "en": "Delete",
@@ -1434,10 +1326,6 @@
     "gui.cron.failed": {
       "en": "failed",
       "zh": "失败"
-    },
-    "gui.cron.failing": {
-      "en": "{n} schedules failed on their last run",
-      "zh": "{n} 个任务上次没跑成"
     },
     "gui.cron.h.allday": {
       "en": "all day",
@@ -1499,33 +1387,65 @@
       "en": "Weekends",
       "zh": "周末"
     },
+    "gui.cron.f_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.cron.f_fail": {
+      "en": "Last run failed",
+      "zh": "上次失败"
+    },
+    "gui.cron.f_paused": {
+      "en": "Paused",
+      "zh": "已暂停"
+    },
+    "gui.cron.f_none": {
+      "en": "Nothing under this filter.",
+      "zh": "这个筛选下没有任务。"
+    },
+    "gui.cron.tab_cfg": {
+      "en": "Configuration",
+      "zh": "配置"
+    },
+    "gui.cron.tab_runs": {
+      "en": "Runs",
+      "zh": "运行记录"
+    },
+    "gui.cron.duplicate": {
+      "en": "Duplicate as a new job",
+      "zh": "复制为新任务"
+    },
+    "gui.cron.running_now": {
+      "en": "Running",
+      "zh": "运行中"
+    },
+    "gui.job.every_n_pre": {
+      "en": "every",
+      "zh": "每"
+    },
+    "gui.job.every_n_post": {
+      "en": "hours",
+      "zh": "小时"
+    },
+    "gui.job.deliver_global": {
+      "en": "a global setting, shared by every job",
+      "zh": "全局设置 · 所有任务共用"
+    },
+    "gui.job.deliver_open": {
+      "en": "Change",
+      "zh": "更改"
+    },
     "gui.cron.hero": {
       "zh": "定时任务",
       "en": "Scheduled tasks"
-    },
-    "gui.cron.hero_sub": {
-      "zh": "{n} 个计划任务，到点自己跑，每次运行都可回看",
-      "en": "{n} schedules that run on time and leave a reviewable trail"
     },
     "gui.cron.hist_none": {
       "en": "Never run.",
       "zh": "还没跑过。"
     },
-    "gui.cron.hist_note": {
-      "en": "Open any run to see the session it produced.",
-      "zh": "点任意一次运行，打开它当时产出的会话。"
-    },
     "gui.cron.hist_title": {
       "en": "{name} - run history",
       "zh": "{name} · 运行记录"
-    },
-    "gui.cron.hist_title2": {
-      "en": "Run history",
-      "zh": "运行历史"
-    },
-    "gui.cron.history": {
-      "en": "See all runs",
-      "zh": "查看全部运行"
     },
     "gui.cron.last_run": {
       "en": "last run {at} - {state} - {dur}",
@@ -1619,10 +1539,6 @@
       "en": "\"{name}\" triggered - you will be told when it finishes",
       "zh": "已触发「{name}」，跑完会通知你"
     },
-    "gui.cron.why": {
-      "en": "See why",
-      "zh": "看原因"
-    },
     "gui.cron_new": {
       "en": "New schedule",
       "zh": "新建定时任务"
@@ -1704,7 +1620,7 @@
       "zh": "这个节点还没有产出。"
     },
     "gui.dag.open_run": {
-      "en": "Open the run \u2197",
+      "en": "Open the run ↗",
       "zh": "打开运行记录 ↗"
     },
     "gui.dag.parallel": {
@@ -2291,10 +2207,6 @@
       "en": "Where results go",
       "zh": "结果发到哪"
     },
-    "gui.job.deliver_hint": {
-      "en": "Sending to Feishu or email needs that channel connected first.",
-      "zh": "发到飞书或邮件需要先在「入口」里接入。"
-    },
     "gui.job.edit_title": {
       "en": "Edit schedule",
       "zh": "编辑定时任务"
@@ -2302,10 +2214,6 @@
     "gui.job.freq": {
       "en": "How often",
       "zh": "多久跑一次"
-    },
-    "gui.job.freq_cron_hint": {
-      "en": "A five-field cron expression.",
-      "zh": "用 cron 表达式，五段式。"
     },
     "gui.job.name": {
       "en": "Name",
@@ -2342,10 +2250,6 @@
     "gui.job.what": {
       "en": "What to do",
       "zh": "要做什么"
-    },
-    "gui.job.what_hint": {
-      "en": "This text is exactly what it receives when the time comes.",
-      "zh": "这段话就是它到时候收到的指令。"
     },
     "gui.job.what_ph": {
       "en": "Write it the way you would brief a colleague: what to do, and what shape the result should take.",
@@ -2652,8 +2556,8 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Connections",
-      "zh": "连接"
+      "en": "Sub-agents",
+      "zh": "子智能体"
     },
     "gui.nav.conn": {
       "en": "Channels",
@@ -2667,17 +2571,21 @@
       "en": "More",
       "zh": "更多"
     },
+    "gui.nav.less": {
+      "en": "Less",
+      "zh": "收起"
+    },
     "gui.nav.kb": {
       "en": "Knowledge",
-      "zh": "\u77e5\u8bc6\u5e93"
+      "zh": "知识库"
     },
     "gui.kb.none": {
       "en": "No knowledge base yet.",
-      "zh": "\u8fd8\u6ca1\u6709\u77e5\u8bc6\u5e93\u3002"
+      "zh": "还没有知识库。"
     },
     "gui.kb.unconfigured": {
       "en": "No embedding endpoint is configured, so no base can be created yet.",
-      "zh": "\u8fd8\u6ca1\u6709\u914d\u7f6e embedding \u7aef\u70b9\uff0c\u73b0\u5728\u5efa\u4e0d\u4e86\u77e5\u8bc6\u5e93\u3002"
+      "zh": "还没有配置 embedding 端点，现在建不了知识库。"
     },
     "gui.kb.unconfigured_where": {
       "en": "A base is built with an embedding model. Set one under Settings - Memory and personalisation, in the EverOS models group.",
@@ -2689,43 +2597,43 @@
     },
     "gui.kb.new": {
       "en": "New base",
-      "zh": "\u65b0\u5efa"
+      "zh": "新建"
     },
     "gui.kb.new_hint": {
       "en": "Name a knowledge base",
-      "zh": "\u7ed9\u77e5\u8bc6\u5e93\u8d77\u4e2a\u540d\u5b57"
+      "zh": "给知识库起个名字"
     },
     "gui.kb.delete": {
       "en": "Delete",
-      "zh": "\u5220\u9664"
+      "zh": "删除"
     },
     "gui.kb.delete_body": {
       "en": "Delete {name} and its {n} documents? The vectors go with them.",
-      "zh": "\u5220\u9664\u300c{name}\u300d\u53ca\u5176 {n} \u4efd\u6587\u6863\uff1f\u5411\u91cf\u4e00\u5e76\u5220\u9664\u3002"
+      "zh": "删除「{name}」及其 {n} 份文档？向量一并删除。"
     },
     "gui.kb.back": {
       "en": "Back",
-      "zh": "\u8fd4\u56de"
+      "zh": "返回"
     },
     "gui.kb.no_docs": {
       "en": "No document in this base yet.",
-      "zh": "\u8fd9\u4e2a\u77e5\u8bc6\u5e93\u8fd8\u6ca1\u6709\u6587\u6863\u3002"
+      "zh": "这个知识库还没有文档。"
     },
     "gui.kb.upload": {
       "en": "Add a document",
-      "zh": "\u6dfb\u52a0\u6587\u6863"
+      "zh": "添加文档"
     },
     "gui.kb.ask": {
       "en": "Search this base",
-      "zh": "\u5728\u8fd9\u4e2a\u5e93\u91cc\u68c0\u7d22"
+      "zh": "在这个库里检索"
     },
     "gui.kb.no_hits": {
       "en": "Nothing matched.",
-      "zh": "\u6ca1\u6709\u5339\u914d\u7684\u5185\u5bb9\u3002"
+      "zh": "没有匹配的内容。"
     },
     "gui.kb.chunks": {
       "en": "{n} chunks",
-      "zh": "{n} \u4e2a\u5206\u6bb5"
+      "zh": "{n} 个分段"
     },
     "gui.kb.from_doc": {
       "en": "from {name}",
@@ -2733,19 +2641,19 @@
     },
     "gui.kb.doc_pending": {
       "en": "Queued",
-      "zh": "\u6392\u961f\u4e2d"
+      "zh": "排队中"
     },
     "gui.kb.doc_indexing": {
       "en": "Indexing",
-      "zh": "\u7d22\u5f15\u4e2d"
+      "zh": "索引中"
     },
     "gui.kb.doc_ready": {
       "en": "Searchable",
-      "zh": "\u53ef\u68c0\u7d22"
+      "zh": "可检索"
     },
     "gui.kb.doc_failed": {
       "en": "Failed",
-      "zh": "\u5931\u8d25"
+      "zh": "失败"
     },
     "gui.kb.doc_retry": {
       "en": "Try again",
@@ -2761,7 +2669,7 @@
     },
     "gui.kb.docs": {
       "en": "{n} documents",
-      "zh": "{n} \u4efd\u6587\u6863"
+      "zh": "{n} 份文档"
     },
     "gui.nav.mem": {
       "zh": "记忆",
@@ -2876,8 +2784,8 @@
       "zh": "欢迎使用 Raven"
     },
     "gui.page.agents": {
-      "en": "Connections",
-      "zh": "连接"
+      "en": "Sub-agents",
+      "zh": "子智能体"
     },
     "gui.page.conn": {
       "en": "Channels",
@@ -5271,10 +5179,6 @@
       "en": "Write file",
       "zh": "写文件"
     },
-    "gui.conn.unset": {
-      "en": "Not configured",
-      "zh": "未配置"
-    },
     "gui.conn.advanced": {
       "en": "Optional settings ({n})",
       "zh": "可选设置（{n} 项）"
@@ -5355,26 +5259,6 @@
       "en": "Changed only in the config file, then restart raven:",
       "zh": "只能在配置文件里修改，改完重启 raven 生效："
     },
-    "gui.agent.builtin": {
-      "en": "Built in",
-      "zh": "内置"
-    },
-    "gui.agent.builtin_h": {
-      "en": "Raven's own agents. Always available, nothing to install; switch one off to keep it off the roster.",
-      "zh": "Raven 自己的智能体。始终可用、无需安装；关掉某一个即可让它不出现在名单里。"
-    },
-    "gui.agent.vendored": {
-      "en": "Shipped with Raven",
-      "zh": "随 Raven 一起装的"
-    },
-    "gui.agent.vendored_h": {
-      "en": "Separate Raven builds that came with this install. Nothing to connect - each is a folder on disk, so removing one means removing its folder. One that is not built yet stays off the roster until it is.",
-      "zh": "随本次安装一起来的几个独立 Raven 构建。无需连接 —— 每一个都是磁盘上的一个目录，要移除就是删掉那个目录。没构建完的会一直不出现在名单里。"
-    },
-    "gui.agent.install": {
-      "en": "Install",
-      "zh": "安装"
-    },
     "gui.agent.installing": {
       "en": "Installing...",
       "zh": "正在安装..."
@@ -5383,17 +5267,101 @@
       "en": "Downloads this build's dependencies (a few hundred MB) and takes a few minutes. It keeps running if you leave this page.",
       "zh": "会下载这个构建的依赖(几百 MB),要几分钟。离开这个页面也会继续跑。"
     },
-    "gui.agent.packaged_note": {
-      "en": "Name and description come with the package, not from config, so there is nothing to connect or save here.",
-      "zh": "名称和描述随安装包一起来,不在配置里,所以这里没有可连接或可保存的东西。"
-    },
-    "gui.agent.inprocess": {
-      "en": "in-process",
-      "zh": "进程内"
-    },
     "gui.agent.kind_builtin": {
       "en": "built in",
       "zh": "内置"
+    },
+    "gui.conn.cost_scan_line": {
+      "en": "Signs in by scanning a code on your phone.",
+      "zh": "手机扫码登录"
+    },
+    "gui.conn.foot_need": {
+      "en": "{n} required boxes left",
+      "zh": "还需 {n} 项必填"
+    },
+    "gui.conn.foot_clean": {
+      "en": "unchanged",
+      "zh": "未修改"
+    },
+    "gui.conn.foot_dirty": {
+      "en": "unsaved",
+      "zh": "未保存"
+    },
+    "gui.conn.g_imap": {
+      "en": "Receiving (IMAP)",
+      "zh": "收件（IMAP）"
+    },
+    "gui.conn.g_smtp": {
+      "en": "Sending (SMTP)",
+      "zh": "发件（SMTP）"
+    },
+    "gui.conn.w1_done": {
+      "en": "Entry is on",
+      "zh": "入口已启用"
+    },
+    "gui.conn.w1_idle": {
+      "en": "Turn the entry on",
+      "zh": "启用入口"
+    },
+    "gui.conn.w2": {
+      "en": "Scan with your phone",
+      "zh": "用手机扫码"
+    },
+    "gui.conn.w2_done": {
+      "en": "Scanned",
+      "zh": "扫描成功"
+    },
+    "gui.conn.w3": {
+      "en": "Start receiving",
+      "zh": "开始收消息"
+    },
+    "gui.conn.w_wait": {
+      "en": "Waiting for the scan. Closing this card does not cancel it.",
+      "zh": "等待扫描 · 关掉卡片不会取消"
+    },
+    "gui.conn.w_done": {
+      "en": "Done",
+      "zh": "完成"
+    },
+    "gui.conn.close": {
+      "en": "Close",
+      "zh": "关闭"
+    },
+    "gui.conn.w2_blocked": {
+      "en": "Raven App is not running - open it and the code appears here",
+      "zh": "Raven 后台没在运行 · 打开 Raven App 就会启动并出现二维码"
+    },
+    "gui.agent.stale_to": {
+      "en": "the preset now uses {to}",
+      "zh": "预设现在走 {to}"
+    },
+    "gui.conn.tag_unpaired": {
+      "en": "waiting for a scan",
+      "zh": "待扫码"
+    },
+    "gui.conn.tag_down": {
+      "en": "not started",
+      "zh": "未启动"
+    },
+    "gui.conn.tag_unknown": {
+      "en": "state unknown",
+      "zh": "状态未知"
+    },
+    "gui.conn.g_pending": {
+      "en": "Connecting",
+      "zh": "接入中"
+    },
+    "gui.conn.retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
+    "gui.agent.migrate_do": {
+      "en": "Switch transport",
+      "zh": "换到新方式"
+    },
+    "gui.agent.migrate_body": {
+      "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
+      "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     }
   }
 }

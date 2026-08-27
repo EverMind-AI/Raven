@@ -42,17 +42,23 @@ DS.conn = {
       if (initial) toast(`加载失败：${e.message || e}`);
     }
     if (initial && !gatewayRunningLive && CHANNELS.some((c) => c.on)) {
-      toast('已启用的入口还没在收消息 — 重新打开 Raven App 即可生效');
+      toast('已启用的入口还没在收消息 — 打开 Raven App 就会启动');
     }
     return CHANNELS;
   },
   /* The write the old code hid behind an Object.defineProperty accessor on
      `c.on`: optimistic flip, then the setting, then the toast -- and on
      failure the flip is taken back and the rejection marked handled so the
-     island redraws without toasting a second time. */
+     island redraws without toasting a second time.
+   *
+   * Through channels.configure, not settings.set on the raw key. It validates
+   * the name against the channel's own schema, and it is the one writer the
+   * adapter's start and stop hang off server-side, so both verbs take the same
+   * path. Writing the flag straight into config left them lopsided: whatever
+   * the connect path did, disconnect only ever wrote `false`. */
   toggle: (c, on) => {
     c.on = on;
-    return rpc.call('settings.set', { key: `channels.${c.id}.enabled`, value: on })
+    return rpc.call('channels.configure', { name: c.id, fields: {}, enabled: on })
       .then(() => toast(T('gui.conn.toggled', { name: chanName(c), state: T(on ? 'gui.conn.enabled' : 'gui.conn.disabled') })))
       .catch((e) => {
         c.on = !on;
