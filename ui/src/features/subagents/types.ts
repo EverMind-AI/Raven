@@ -89,6 +89,11 @@ export interface AgentsSource {
   /* One turn addressed to this instance instead of to the conversation. Optional
      like the rest: a server without direct chat has no lane to send it down. */
   instanceSend?(agent: string, handle: string, text: string): Promise<void>
+  /* Start a fresh instance of one sub-agent. Optional like the rest: a server
+     without direct chat has none to start. Only an enabled, stateful agent can
+     be instantiated -- a stateless one answers each turn from nothing, so a
+     handle onto it would name a conversation that does not exist. */
+  instanceCreate?(agent: string, sessionKey: string): Promise<InstanceRow>
   /* The live heartbeat: the source calls back every couple of seconds and
      the island decides whether anything on screen needs asking about. */
   watch?(fn: () => void): void

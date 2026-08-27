@@ -4467,6 +4467,24 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .agent-bot svg { display: block; width: 15px; height: 15px; stroke-linecap: round; stroke-linejoin: round; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+.agent-headrow { display: flex; align-items: center; min-width: 0; }
+.agent-headrow .agent-head { flex: 1; min-width: 0; }
+/* Standing, not revealed on hover: this is the only way to start a conversation
+   with an agent nothing has been delegated to, and a reader who does not know it
+   is there will not hover looking for it. Faint until wanted, like the row
+   actions beneath it. */
+.agent-new { width: 20px; height: 20px; margin-right: 5px; display: grid; place-items: center; flex: none;
+  border: 0; border-radius: 4px; background: transparent; color: var(--faint); cursor: pointer;
+  transition: background .12s ease, color .12s ease; }
+.agent-headrow:hover .agent-new { color: var(--muted); }
+.agent-new:hover { background: var(--surface); color: var(--text); }
+.agent-new:disabled { cursor: default; }
+/* The spinner is the only sign the click landed, so it must not also brighten
+   or dim as the pointer wanders across the row. */
+.agent-new:disabled, .agent-new:disabled:hover, .agent-headrow:hover .agent-new:disabled {
+  background: transparent; color: var(--faint); }
+.agent-new svg { width: 14px; height: 14px; stroke-linecap: round; }
+.agent-newfail { margin: 0 7px 4px 28px; color: var(--clay); font: 9.5px/1.5 var(--mono); }
 .agent-instances { margin-left: 18px; padding-left: 0; border-left: 1px solid var(--line-soft); }
 .agent-instances .sarow { height: 29px; padding: 0 7px; gap: 8px; border-radius: 0; }
 .agent-instances .desk-status { width: 8px; display: grid; place-items: center; flex: none; }

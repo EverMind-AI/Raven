@@ -4851,6 +4851,18 @@
       "en": "Remove",
       "zh": "移出列表"
     },
+    "gui.ws.instance_new": {
+      "en": "New instance",
+      "zh": "新建实例"
+    },
+    "gui.ws.instance_new_hint": {
+      "en": "Start a new conversation with {name}",
+      "zh": "和 {name} 开一个新会话"
+    },
+    "gui.ws.instance_new_fail": {
+      "en": "Could not start: {why}",
+      "zh": "无法新建:{why}"
+    },
     "gui.ws.instance_say": {
       "en": "Send",
       "zh": "发送"
