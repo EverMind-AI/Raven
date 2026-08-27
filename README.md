@@ -2,6 +2,8 @@
 
 ![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
+<p align="center"><strong>Coming next:</strong> The Harness of Harnesses is Raven's next-version direction, not a capability of the current public release.</p>
+
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
@@ -17,35 +19,35 @@
 
 # Raven
 
-Raven is the open-source, **self-improving Agent Harness** you can run today. It brings terminal-first execution, local tracing, long-term memory, skills, evaluation, and reusable workflows into one system for long-running AI work.
+The current public release of Raven is the open-source, **self-improving Agent Harness** you can run today. It brings terminal-first execution, local tracing, long-term memory, skills, evaluation, and reusable workflows into one system for long-running AI work.
 
-## The Harness of Harnesses
+## Coming Next: The Harness of Harnesses
 
 As AI agents move from narrow tasks toward long-running, cross-domain work, manually designing a single, ever-larger harness stops scaling. A harness optimized for one model or domain also cannot provide every capability needed for general intelligence.
 
-**Raven** also names the broader research and ecosystem direction behind this work: **The Harness of Harnesses**. It aims to automatically build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network**.
+Raven's next version will move toward **The Harness of Harnesses**: a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. It is designed to build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network**.
 
 | **Trusted** | **Persistent** | **Evolving** |
 | --- | --- | --- |
-| Capability is earned through verified performance, not self-declared labels. | Verified results, task state, and long-term memory carry across executors. | Every real run improves capability profiles, skills, routing, and the network itself. |
+| Harness capabilities will be scored based on verified performance, not self-declared labels. | The network is designed to carry verified results, task state, and long-term memory across executors. | Each verified run will feed experience back into capability profiles, skills, routing, and the wider network. |
 
-Raven does not treat a model and its harness as a fixed pair. Through a continuous **evaluation -> execution -> verification -> memory -> feedback** loop, it discovers, composes, and improves the right capabilities for each task. Validated work becomes reusable experience, allowing both individual agents and the wider capability network to evolve.
+This next-version architecture is designed to move beyond fixed model-harness pairs. Through a continuous **evaluation -> execution -> verification -> memory -> feedback** loop, it will discover, compose, and improve the right capabilities for each task. Validated work will become reusable experience, allowing both individual agents and the wider capability network to evolve.
 
-The Raven evaluation spans **22 Agent benchmark tasks** across task quality, cost, and key mechanism gains. The reported results show broad performance and efficiency improvements over existing agent systems while advancing the **quality-cost Pareto frontier**.
+The internal research prototype behind this direction has been evaluated across **22 Agent benchmark tasks** covering task performance, cost, and key mechanism gains. The reported results show comprehensive performance and efficiency improvements over existing agent systems while advancing the **quality-cost Pareto frontier**.
 
-> Raven names both the runnable open-source harness in this repository and the broader multi-agent research and ecosystem direction described above.
+> The current public Raven release does not yet implement The Harness of Harnesses. Raven today is the runnable self-improving Agent Harness described in this repository; the section above describes the next version we are building toward.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
-## Benchmarks
+## Next-Version Research Benchmarks
 
-| Benchmark | Raven Result | Comparison |
+| Benchmark | Research Prototype Result | Comparison |
 | --- | --- | --- |
 | Efficiency | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
 | Self-evolution | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
 | Proactivity | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
 
-Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
+These results come from the internal research prototype. They do not mean that the current public release already supports the Harness of Harnesses network. Model, task set, and evaluation protocol all affect outcomes.
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
