@@ -4444,7 +4444,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .agent-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 .agent-fold { width: 8px; height: 14px; margin-right: -4px; display: grid; place-items: center; flex: none;
   color: var(--faint); transform: rotate(-90deg); transition: transform .12s ease, color .12s ease; }
-.agent-fold[hidden] { display: none; }
+.agent-fold[data-empty="true"] { visibility: hidden; }
 .agent-head:hover .agent-fold { color: var(--muted); }
 .agent-fold[data-open="true"] { transform: rotate(0); }
 .agent-fold svg { width: 12px; height: 12px; stroke-linecap: round; stroke-linejoin: round; }

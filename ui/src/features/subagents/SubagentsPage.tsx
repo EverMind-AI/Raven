@@ -209,7 +209,12 @@ export function AgentList({ s, onOpen, compact = false }: {
                 return next
               })}
             >
-              <span className="agent-fold" data-open={foldable && !folded} hidden={!foldable} aria-hidden="true">
+              {/* The slot is drawn on every head, foldable or not. `hidden` took it
+                  out of the flow, so a group with children started its icon and its
+                  name 12px right of every leaf row's -- one list on two vertical
+                  lines. What a leaf row has no business showing is the glyph, not
+                  the column. */}
+              <span className="agent-fold" data-open={foldable && !folded} data-empty={!foldable} aria-hidden="true">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="m5.5 6.5 2.5 3 2.5-3" />
                 </svg>
