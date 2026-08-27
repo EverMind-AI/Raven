@@ -576,6 +576,10 @@ describe('what a reload finds on the desk', () => {
     it('is not something the palette shows over', () => {
       desk.sync()
       desk.openDeskFile('/workspace/a.ts')
+      /* Opening the window stood the desk down; the reader reaches for it
+         again, which is what this test needs on screen before the pane is
+         blown up. */
+      desk.toggleDesk()
       expect(desk.showing()).toBe(true)
 
       desk.toggleSolo('file:/workspace/a.ts')
@@ -846,5 +850,146 @@ describe('choosing a tab on the way up', () => {
     deliver('/w/a.md')
     desk.openDeskTab('diff')
     expect(desk.getState().tab).toBe('diff')
+  })
+})
+
+describe('the desk standing down for a window', () => {
+  /* The default for a conversation is open (palette.ts), which is the state
+     these start from unless they say otherwise. */
+  it('puts the desk down when a window opens and hands it back with the last one', () => {
+    expect(desk.getState().paletteOpen).toBe(true)
+
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+
+    desk.openDeskFile('/workspace/b.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+
+    /* Not the last one: there is still something to stand down for. */
+    desk.closePane('file:/workspace/b.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+
+    desk.closePane('file:/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(true)
+  })
+
+  /* The suspension is not a decision, so it must not be filed as one. If
+     `addPane` wrote the palette note, every reader would come back to a
+     collapsed desk in every conversation they had ever opened a file in. */
+  it('does not record standing down as the reader collapsing the desk', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+
+    /* `reset` + `sync`, which is the session-switch path and re-reads the
+       palette note. NOT `_resetForTests`: that clears the note as well, so it
+       could never see one being written and the test passed under the very
+       mutation it exists to catch. */
+    desk.reset()
+    setCurrent('s1')
+    desk.sync()
+    expect(desk.getState().paletteOpen).toBe(true)
+  })
+
+  /* And the counterpart: a collapse the reader DID make is theirs to keep. The
+     desk does not reappear over a conversation they put it away in just
+     because they opened and closed a file. */
+  it('hands back a collapsed desk still collapsed', () => {
+    desk.toggleDesk()
+    expect(desk.getState().paletteOpen).toBe(false)
+
+    desk.openDeskFile('/workspace/a.ts')
+    desk.closePane('file:/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+  })
+
+  /* Edge-triggered, not a predicate over panes.length: reaching for the desk
+     over an open window is how a reader opens a second thing beside the first,
+     and a predicate would take it straight back off them. */
+  it('lets the reader open the desk over a window and leaves it open', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+    desk.toggleDesk()
+    expect(desk.getState().paletteOpen).toBe(true)
+    /* `showing`, not just the flag: making this a predicate over `panes.length`
+       anywhere in the chain is the way this design gets undone, and the flag
+       alone would not notice. */
+    expect(desk.showing()).toBe(true)
+    expect(desk.getState().panes).toHaveLength(1)
+  })
+
+  /* ...and the next window they open from it puts it down again. */
+  it('stands down again for the next window opened from it', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+    desk.toggleDesk()
+    desk.openDeskFile('/workspace/b.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+  })
+
+  /* Opening the desk over a window IS the reader's answer for this
+     conversation, so the last window closing leaves it where they put it. */
+  it('hands back a desk the reader opened over a window', () => {
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(false)
+    desk.toggleDesk()
+    desk.closePane('file:/workspace/a.ts')
+    expect(desk.getState().paletteOpen).toBe(true)
+  })
+})
+
+/* Private mode, or over quota. `palette.write_` swallows the refusal on the
+   reasoning that a preference which cannot be stored is one the next VISIT
+   does without -- but the desk is handed back from that same answer while the
+   reader is still in front of it, so a refused write used to turn their
+   collapse into the conversation default the moment they shut a window.
+   Found in review. */
+describe('when storage refuses the reader answer', () => {
+  /* On the instance and restored by redefining: happy-dom's `localStorage`
+     resolves neither through `Storage.prototype` (patching it there refuses
+     nothing) nor through a deletable own property (its Proxy refuses the
+     delete trap). */
+  const refusing = <T>(fn: () => T): T => {
+    const real = localStorage.setItem
+    Object.defineProperty(localStorage, 'setItem', {
+      configurable: true,
+      value: () => { throw new DOMException('quota', 'QuotaExceededError') },
+    })
+    try {
+      return fn()
+    } finally {
+      Object.defineProperty(localStorage, 'setItem', { configurable: true, value: real })
+    }
+  }
+
+  it('hands back a collapse it could not store', () => {
+    refusing(() => {
+      desk.toggleDesk()
+      expect(desk.getState().paletteOpen).toBe(false)
+      /* Nothing was kept, which is what makes this the failure path rather
+         than the ordinary one. */
+      expect(localStorage.getItem('raven.gui.desk.open')).toBeNull()
+
+      desk.openDeskFile('/workspace/a.ts')
+      desk.closePane('file:/workspace/a.ts')
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
+  })
+
+  /* The same answer a session switch reads, so the fix has to hold there too
+     -- this half was already broken before the desk started standing down. */
+  it('keeps it across a session switch away and back', () => {
+    refusing(() => {
+      desk.toggleDesk()
+
+      desk.reset()
+      setCurrent('s2')
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(true)
+
+      desk.reset()
+      setCurrent('s1')
+      desk.sync()
+      expect(desk.getState().paletteOpen).toBe(false)
+    })
   })
 })

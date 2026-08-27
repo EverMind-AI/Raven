@@ -196,7 +196,12 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
        Same rule the full path applies below, and it has to be applied here too:
        returning before it is what made the click genuinely inert. */
     const solo = state.solo === pane.id ? state.solo : null
-    if (state.active !== pane.id || solo !== state.solo) commit({ active: pane.id, solo })
+    /* `paletteOpen` joins the guard rather than forcing a commit: a click that
+       changes nothing must still change nothing, which is what this branch
+       exists for. */
+    if (state.active !== pane.id || solo !== state.solo || state.paletteOpen) {
+      commit({ active: pane.id, solo, paletteOpen: false })
+    }
     revealWorkspace()
     return
   }
@@ -219,6 +224,11 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
        look at, and looking at it means leaving the one screen that hides it. */
     solo: state.solo && (state.solo === pane.id || state.solo === supersedes) ? pane.id : null,
     active: pane.id,
+    /* The desk stands down for what it just opened. Not written to the
+       conversation's palette note, so this is a suspension rather than a
+       choice: `closePane` hands the desk back to whatever the reader last
+       chose once the last window is gone. */
+    paletteOpen: false,
   })
   revealWorkspace()
 }
@@ -297,6 +307,15 @@ export function seeTab(tab: DeskTab): void {
    the reader left it open. A fullscreen pane IS the window -- there is no
    column for the desk to hang off and nothing of it should be over the pane --
    so the desk is not showing while one is up.
+ *
+ * `paletteOpen` itself now moves on two events besides the reader's own hand:
+ * opening a window puts the desk down (`addPane`) and closing the last one
+ * hands it back at whatever the reader last chose (`closePane`). Both are
+ * edge-triggered, and deliberately not a predicate over `panes.length`: a
+ * predicate would refuse the reader the desk for as long as any window is up,
+ * and reaching for it over a window -- to open a second file beside the first
+ * -- is the thing the launcher is for. So the desk goes down when a window
+ * arrives and stays wherever the reader puts it after that.
  *
  * One answer, because more than the rendering reads it: the marks are moved
  * from the same flag, and a bubble cleared behind a fullscreen pane is news the
@@ -455,6 +474,12 @@ export function closePane(id: string): void {
     panes,
     solo: state.solo === id ? null : state.solo,
     active: state.active === id ? panes[panes.length - 1]?.id || null : state.active,
+    /* The last window closing gives the reader their desk back -- as they left
+       it, not open. `palette.read` is the same answer `sync` gives on a session
+       switch, so a conversation whose desk the reader collapsed stays collapsed
+       here too. While windows remain there is nothing to hand back: the desk is
+       still standing down for them. */
+    ...(panes.length ? {} : { paletteOpen: palette.read(currentSession()) }),
   })
   if (!panes.length) shell().workspaceSetOpen?.(false)
 }

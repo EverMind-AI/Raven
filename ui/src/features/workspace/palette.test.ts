@@ -107,3 +107,52 @@ describe('the palette memory', () => {
     expect(Object.keys(JSON.parse(localStorage.getItem('raven.gui.desk.open') || '{}')).length).toBe(50)
   })
 })
+
+/* Private mode, or over quota. `write_` swallows the refusal, and the question
+   is what the reader gets for the rest of the visit. */
+describe('when storage refuses the answer', () => {
+  /* Defined on the instance and put back the same way. happy-dom's
+     `localStorage` does not resolve `setItem` through `Storage.prototype`, so
+     patching it there refuses nothing and every assertion below would pass on
+     a write that went through -- which is why each test also checks the row
+     really is absent. And the instance is a Proxy whose deleteProperty trap
+     refuses, so the restore redefines rather than deletes. */
+  const refusing = <T>(fn: () => T): T => {
+    const real = localStorage.setItem
+    Object.defineProperty(localStorage, 'setItem', {
+      configurable: true,
+      value: () => { throw new DOMException('quota', 'QuotaExceededError') },
+    })
+    try {
+      return fn()
+    } finally {
+      Object.defineProperty(localStorage, 'setItem', { configurable: true, value: real })
+    }
+  }
+
+  it('still answers with what the reader said', () => {
+    refusing(() => palette.write('s1', false))
+
+    expect(palette.read('s1')).toBe(false)
+    /* And it really was refused -- otherwise this passes on the stored row and
+       proves nothing. */
+    expect(localStorage.getItem('raven.gui.desk.open')).toBeNull()
+  })
+
+  it('leaves a conversation it was never asked about on its default', () => {
+    refusing(() => palette.write('s1', false))
+
+    expect(palette.read('s2')).toBe(true)
+  })
+
+  /* A draft's answer is for a conversation with none of its own, and a refused
+     write is still an answer. */
+  it('does not hand a refused answer the draft answer instead', () => {
+    palette.write(null, true)
+    refusing(() => palette.write('s1', false))
+
+    palette.adopt('s1')
+
+    expect(palette.read('s1')).toBe(false)
+  })
+})
