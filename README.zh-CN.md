@@ -2,6 +2,8 @@
 
 ![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
+<p align="center"><strong>下一版本方向：</strong>The Harness of Harnesses 是 Raven 下一版本的发展方向，并非当前公开版本已经支持的能力。</p>
+
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
@@ -17,35 +19,35 @@
 
 # Raven
 
-Raven 是今天即可运行的开源 **自我进化 Agent Harness**。它将终端执行、本地 Tracing、长期记忆、Skills、评测与可复用工作流整合进同一套系统，面向长程 AI 任务持续学习与改进。
+当前公开版本的 Raven 是一套已经可以运行的开源 **自我进化 Agent Harness**。它将终端执行、本地 Tracing、长期记忆、Skills、评测与可复用工作流整合进同一套系统，面向长程 AI 任务持续学习与改进。
 
-## The Harness of Harnesses
+## 下一版本方向：The Harness of Harnesses
 
 随着 AI Agent 从单一任务走向长程、多领域协作，依赖人工设计一个不断膨胀的 harness 已经难以持续扩展；而与特定模型和领域深度绑定的单一 harness，也无法覆盖通用智能所需的全部能力。
 
-**Raven** 同时代表这一工作的更广阔研究与生态方向，其核心定义是 **The Harness of Harnesses**。它旨在自动构建和提升适配特定模型与领域的 Agent Harness，并将不同 Harness 的异构执行能力汇聚为统一的 **全领域协作网络（All-Domain Collaboration Network）**。
+Raven 的下一版本将走向 **The Harness of Harnesses**：一个持续进化、自主协作、开放共建的 Multi-Agent 生态。它将面向特定模型与领域构建和提升 Agent Harness，并把不同 Harness 的异构执行能力汇聚为统一的 **全领域协作网络（All-Domain Collaboration Network）**。
 
 | **可信** | **可延续** | **可进化** |
 | --- | --- | --- |
-| 能力由真实、可验证的表现决定，而非自我声明。 | 经过验证的结果、任务状态与长期记忆能够跨执行者延续。 | 每次真实执行都会改进能力档案、Skills、调度与整个协作网络。 |
+| Harness 能力将基于真实、可验证的表现进行评分，而非由自我声明决定。 | 这一网络将让经过验证的结果、任务状态与长期记忆跨执行者延续。 | 每次经过验证的执行都将把经验反馈到能力档案、Skills、调度与整个协作网络。 |
 
-Raven 不再把模型与 harness 视为静态组合，而是通过持续的 **评测 → 执行 → 验证 → 记忆 → 反馈** 闭环，发现、编排并优化每项任务所需的能力。经过验证的工作会沉淀为可复用经验，使 Agent 个体与更广泛的能力网络共同进化。
+下一版本的架构将不再把模型与 harness 视为静态组合，而是通过持续的 **评测 → 执行 → 验证 → 记忆 → 反馈** 闭环，发现、编排并优化每项任务所需的能力。经过验证的工作将沉淀为可复用经验，使 Agent 个体与更广泛的能力网络共同进化。
 
-Raven 的评测覆盖 **22 个 Agent 基准任务**，从任务质量、成本与关键机制收益等维度进行验证。报告结果显示，其在性能与效率上相较现有 Agent 系统实现了全面提升，并进一步推进了 **质量—成本帕累托前沿**。
+这一方向背后的内部研究原型已在 **22 个 Agent 基准任务**上完成评测，覆盖任务性能、成本与关键机制收益。报告结果显示，其在性能与效率上相较现有 Agent 系统实现了全面提升，并进一步推进了 **质量—成本帕累托前沿**。
 
-> Raven 既指本仓库中可运行的开源 harness，也指上述更广阔的 Multi-Agent 研究与生态方向。
+> 当前公开版本的 Raven 尚未实现 The Harness of Harnesses。今天的 Raven 是本仓库中可运行的自我进化 Agent Harness；上述内容描述的是我们正在构建的下一版本方向。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
-## 基准测试
+## 下一版本研究评测
 
-| 基准测试 | Raven 结果 | 对比 |
+| 基准测试 | 研究原型结果 | 对比 |
 | --- | --- | --- |
 | 效率 | 27B 下为 `56.7%`；397B 下为 `58.1%` | Hermes 为 `46.8%` / `47.9%`；27B 下领先 `+9.9pp` |
 | 自我进化 | EvoAgentBench 排名 `#1` | 在四种方法中领先下一名 `+6.2pp` |
 | 主动性 | ProAgentBench F1 为 `0.60` | 是 Hermes/OpenClaw `0.253` 的 `2.4x` |
 
-以上结果对应已发布的测试配置；模型、任务集和评测协议都会影响最终结果。
+以上结果来自内部研究原型，并不代表当前公开版本已经支持 The Harness of Harnesses 协作网络。模型、任务集和评测协议都会影响最终结果。
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
