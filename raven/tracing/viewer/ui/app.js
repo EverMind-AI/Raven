@@ -660,6 +660,73 @@ function isSessionLoading(sessionId) {
   return state.loadingSessions.has(sessionId);
 }
 
+// How many sessions' traces a tab keeps. The open one is never evicted.
+const MAX_CACHED_SESSIONS = 8;
+
+function rememberSession(sessionId, session) {
+  // Re-inserted so Map iteration order is least-recently-used first.
+  state.sessionDetails.delete(sessionId);
+  state.sessionDetails.set(sessionId, session);
+  for (const key of [...state.sessionDetails.keys()]) {
+    if (state.sessionDetails.size <= MAX_CACHED_SESSIONS) break;
+    if (key === state.selectedSessionId) continue;
+    state.sessionDetails.delete(key);
+  }
+}
+
+async function fetchSession(sessionId) {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}?ts=${Date.now()}`, {
+    cache: 'no-store'
+  });
+  if (!response.ok) throw new Error(`session request failed with status ${response.status}`);
+  return (await response.json()).session;
+}
+
+// Refresh a session already on screen without ever marking it loading, and
+// without touching the DOM when the answer has not changed. A poll that redrew
+// unconditionally is a poll the reader sees.
+async function revalidateSession(sessionId) {
+  if (!sessionId || state.loadingSessions.has(sessionId)) return;
+  const current = state.sessionDetails.get(sessionId);
+  if (!current) {
+    ensureSessionLoaded(sessionId);
+    return;
+  }
+  try {
+    const session = await fetchSession(sessionId);
+    if (JSON.stringify(session) === JSON.stringify(current)) return;
+    rememberSession(sessionId, session);
+    state.detailsRenderSignature = null;
+    render();
+  } catch (error) {
+    // Keep showing what is on screen; the next poll tries again. The pill still
+    // has to move: loadData does not await this, and it paints "connected" for
+    // the list request before this catch runs -- so without a repaint the panel
+    // reports itself healthy while serving detail it failed to refresh.
+    state.connectionStatus = 'disconnected';
+    paintConnectionStatus();
+  }
+}
+
+async function revalidateApiCalls(windowKey) {
+  if (!state.apiCallsByWindow.has(windowKey) || state.loadingApiWindows.has(windowKey)) return;
+  try {
+    const response = await fetch(`/api/llm-calls?window=${encodeURIComponent(windowKey)}&ts=${Date.now()}`, {
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`llm calls request failed with status ${response.status}`);
+    const calls = (await response.json()).calls || [];
+    const current = state.apiCallsByWindow.get(windowKey) || [];
+    if (calls.length === current.length && JSON.stringify(calls) === JSON.stringify(current)) return;
+    state.apiCallsByWindow.set(windowKey, calls);
+    state.detailsRenderSignature = null;
+    render();
+  } catch (error) {
+    state.connectionStatus = 'disconnected';
+    paintConnectionStatus();
+  }
+}
+
 async function ensureSessionLoaded(sessionId) {
   if (!sessionId) return;
   if (
@@ -672,12 +739,7 @@ async function ensureSessionLoaded(sessionId) {
   state.loadingSessions.add(sessionId);
   render();
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}?ts=${Date.now()}`, {
-      cache: 'no-store'
-    });
-    if (!response.ok) throw new Error(`session request failed with status ${response.status}`);
-    const payload = await response.json();
-    state.sessionDetails.set(sessionId, payload.session);
+    rememberSession(sessionId, await fetchSession(sessionId));
     state.failedSessions.delete(sessionId);
   } catch (error) {
     // Recorded, not merely absent. The render below re-enters this loader, so an
@@ -2944,20 +3006,25 @@ function requestVisibleData() {
   if (state.selectedSessionId) ensureSessionLoaded(state.selectedSessionId);
 }
 
-function render() {
-  captureScrollState();
-  syncSelection();
-  requestVisibleData();
-  renderAgentFilter();
-  renderApiFilters();
+function paintConnectionStatus() {
   if (elements.connectionStatus) {
-    elements.connectionStatus.textContent = state.connectionStatus === 'connected' ? t('status.connected') : t('status.disconnected');
+    elements.connectionStatus.textContent =
+      state.connectionStatus === 'connected' ? t('status.connected') : t('status.disconnected');
     elements.connectionStatus.classList.toggle('is-connected', state.connectionStatus === 'connected');
     elements.connectionStatus.classList.toggle('is-disconnected', state.connectionStatus !== 'connected');
   }
   if (elements.lastUpdated) {
     elements.lastUpdated.textContent = formatTimeOnly(state.lastUpdated);
   }
+}
+
+function render() {
+  captureScrollState();
+  syncSelection();
+  requestVisibleData();
+  renderAgentFilter();
+  renderApiFilters();
+  paintConnectionStatus();
   document.body.classList.toggle('app-view-api', state.appView === 'api');
   if (state.appView === 'api') {
     elements.apiScene.innerHTML = renderApiDashboard();
@@ -3051,18 +3118,30 @@ async function loadData(options = {}) {
   try {
     const response = await fetch(`/api/sessions?ts=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`API failed with status ${response.status}`);
+    const previous = state.data ? JSON.stringify(state.data.sessions) : null;
     state.data = await response.json();
-    // A refresh re-reads what is on screen and forgets the rest, so a session
-    // opened an hour ago is not held for the life of the tab.
-    const open = state.selectedSessionId;
-    state.sessionDetails = new Map();
-    state.apiCallsByWindow = new Map();
+    const listChanged = previous !== JSON.stringify(state.data.sessions);
+    // Revalidate what is on screen in place, and keep the rest of the cache.
+    // Clearing it here and re-entering ensureSessionLoaded is what made the
+    // panel flicker: that marks the session loading, loading is what draws the
+    // skeleton, so every poll tore the trace pane down and rebuilt it even when
+    // nothing had changed. Bounded below instead, so a long-lived tab still does
+    // not hold every session it ever opened.
     state.failedSessions = new Set();
     state.failedApiWindows = new Set();
-    if (open) ensureSessionLoaded(open);
+    if (state.selectedSessionId) revalidateSession(state.selectedSessionId);
+    if (state.appView === 'api') revalidateApiCalls(state.apiWindow);
     state.connectionStatus = 'connected';
     state.lastUpdated = new Date().toISOString();
-    render();
+    // Only redraw when the list actually moved. renderTraceList clears and
+    // rebuilds its container on every render, so an unconditional render here is
+    // a visible teardown every few seconds for a panel that has not changed;
+    // the revalidations above render themselves when their own answer differs.
+    if (listChanged) {
+      render();
+    } else {
+      paintConnectionStatus();
+    }
   } catch (error) {
     state.connectionStatus = 'disconnected';
     if (!silent) {
