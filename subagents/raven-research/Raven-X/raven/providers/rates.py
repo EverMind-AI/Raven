@@ -50,6 +50,10 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16384
 _FALLBACK_PRICING: dict[str, tuple[float, float]] = {
     # OpenRouter model pages (snapshot 2026-03)
     "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M
+    # OpenRouter model pages (snapshot 2026-08). Priced under the stored id
+    # rather than the wire one: an id that does not name OpenRouter never
+    # reaches the live catalogue, and this is the id the loop asks about.
+    "openai/gpt-5.6-sol-pro": (2e-6, 10e-6),  # $2.00/$10.00 per 1M
 }
 
 # Live OpenRouter price table, fetched lazily and cached 1h in-process.

@@ -229,6 +229,19 @@ def test_the_manual_table_answers_a_model_too_new_for_the_others():
     assert _rate_cost(model, 1000, 500) == pytest.approx(1000 * p_rate + 500 * c_rate, rel=0.01)
 
 
+def test_a_shipped_agents_own_model_is_priced_by_something():
+    """An unpriced model does not report itself as unpriced.
+
+    ``token_rates`` degrades to None honestly, but the agent loop writes
+    ``estimate_cost_usd(...) or 0.0`` into its telemetry, so None lands on disk
+    as 0.0 -- a call that cost nothing and a call nobody could price read the
+    same there. The tokens are still counted beside it, which is what makes the
+    zero easy to miss. So a model this repo ships a configured agent for has to
+    reach a rate through some tier of the ladder.
+    """
+    assert token_rates("openai/gpt-5.6-sol-pro") is not None
+
+
 # --- Context windows ---
 
 

@@ -355,6 +355,32 @@ class EndpointRotorProvider(LLMProvider):
         endpoint under one rotor shares it."""
         return self._inners[0].wire_model_id(model)
 
+    def supports_prompt_caching(self, model: str) -> bool:
+        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+        whether the wire can carry the field is a property of the section every
+        inner was built from, not of the endpoint that happens to answer."""
+        return self._inners[0].supports_prompt_caching(model)
+
+    @property
+    def disable_auto_cache_control(self) -> bool:
+        return getattr(self, "_disable_auto_cache_control", False)
+
+    @disable_auto_cache_control.setter
+    def disable_auto_cache_control(self, value: bool) -> None:
+        """Push it down to every inner, exactly as ``generation`` is pushed.
+
+        The agent loop assigns this on the provider the running turn's binding
+        resolved, once it knows CacheOptimizer is placing the breakpoints (a
+        session switched mid-conversation sends through a pool-built provider
+        no construction site ever saw). Landing it on the rotor
+        alone leaves every inner -- the objects that actually build requests --
+        still marking a system block of their own, which spends a breakpoint the
+        operator's ``maxCacheBreakpoints`` did not budget for.
+        """
+        self._disable_auto_cache_control = value
+        for inner in getattr(self, "_inners", []):
+            inner.disable_auto_cache_control = value
+
     @property
     def model_overrides(self) -> dict[str, dict[str, Any]]:
         """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:

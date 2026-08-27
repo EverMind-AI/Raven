@@ -35,8 +35,8 @@ def mod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _source(tmp_path: Path, extra: dict | None = None) -> Path:
     config = {
-        "providers": {"custom": {"apiBase": "https://example.invalid/v1"}},
-        "agents": {"defaults": {"provider": "custom", "model": "own-model", "maxToolIterations": 150}},
+        "providers": {"openrouter": {"apiBase": "https://example.invalid/v1"}},
+        "agents": {"defaults": {"provider": "openrouter", "model": "own-model", "maxToolIterations": 150}},
     }
     for key, value in (extra or {}).items():
         config.setdefault("agents", {}).setdefault("defaults", {})[key] = value
@@ -55,7 +55,7 @@ def test_secrets_land_in_their_slots_and_the_source_stays_clean(
     rendered = mod.render_config(source)
 
     data = json.loads(rendered.read_text(encoding="utf-8"))
-    assert data["providers"]["custom"]["apiKey"] == "k-llm"
+    assert data["providers"]["openrouter"]["apiKey"] == "k-llm"
     assert data["tools"]["web"]["search"]["apiKey"] == "k-serper"
     assert "k-llm" not in source.read_text(encoding="utf-8")
 

@@ -538,11 +538,18 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             registry=plugin_registry,
         )
 
+        from raven.cli._token_wise_stack import caching_probe, install_from_config
         from raven.providers.pool import ProviderPool
+
+        strategies = install_from_config(
+            ec_config.token_wise,
+            supports_caching=caching_probe(provider),
+        )
 
         agent_loop = AgentLoop(
             provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
+            strategies=strategies,
             workspace=config.workspace_path,
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,

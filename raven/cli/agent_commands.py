@@ -272,8 +272,14 @@ def register(app: typer.Typer) -> None:
             registry=plugin_registry,
         )
         from raven.agent.tools._deliverables import DeliverableStore
+        from raven.cli._token_wise_stack import caching_probe, install_from_config
         from raven.config.paths import get_deliverables_path
         from raven.providers.pool import ProviderPool
+
+        strategies = install_from_config(
+            ec_config.token_wise,
+            supports_caching=caching_probe(provider),
+        )
 
         # No cron_service here: with the REPL gone this process is never a
         # cron runner, so registering CronTool would create jobs nothing
@@ -282,6 +288,7 @@ def register(app: typer.Typer) -> None:
         agent_loop = AgentLoop(
             provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
+            strategies=strategies,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,
             model=config.agents.defaults.model,

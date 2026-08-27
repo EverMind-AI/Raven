@@ -14,7 +14,7 @@
     "agentId": "raven-research"
   },
   "recommendedLlm": {
-    "provider": "custom",
+    "provider": "openrouter",
     "model": "openai/gpt-5.6-sol-pro",
     "apiBase": "https://openrouter.ai/api/v1"
   }

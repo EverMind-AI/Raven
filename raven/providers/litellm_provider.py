@@ -285,6 +285,10 @@ class LiteLLMProvider(LLMProvider):
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
         return spec is not None and (spec.is_local or spec.name == "custom")
 
+    def supports_prompt_caching(self, model: str) -> bool:
+        """See ``LLMProvider.supports_prompt_caching``."""
+        return self._supports_cache_control(model)
+
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
 

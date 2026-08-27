@@ -101,6 +101,7 @@ def _invoke_agent_capturing_session(
 
     from raven.config.loader import get_config_path, save_config
     from raven.config.schema import Config
+    from raven.providers.base import LLMProvider
     from raven.spine import Text, TurnOutcome, Usage
 
     cfg = Config()
@@ -146,7 +147,19 @@ def _invoke_agent_capturing_session(
     # catchable SystemExit so the CliRunner sees a clean exit instead of the
     # whole pytest process dying.
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
-    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
+
+    class _StubProvider(LLMProvider):
+        """Subclassed rather than faked with ``object()``: the CLI reads capability
+        probes off whatever ``make_provider`` returns, so a stub that inherits them
+        stays honest as probes are added instead of failing on the next one."""
+
+        async def chat(self, *args, **kwargs):
+            raise AssertionError("the loop is stubbed here; no LLM call is reached")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: _StubProvider())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     # This test exercises session keying, not memory: don't boot the real
     # (bundled) everos backend / plugin tools inside the CliRunner (the
