@@ -19,6 +19,30 @@
 #    no current caller sends an ISO string (the assembler's messages carry no
 #    timestamp key; the importer converts to ms before storing). Keep it for
 #    the replay / direct-chat paths that do forward persisted messages.
+#
+# 2. in-workspace session migration removed. This build still carries
+#    `SessionManager._migrate_in_workspace_sessions`, which treats
+#    `<workspace>/sessions` as a legacy location and moves every file out of it
+#    before `rmdir`-ing the tree. Trunk has since made `<workspace>/sessions`
+#    the canonical home of the host's live transcripts, and this fork's
+#    workspace defaults to `~/.raven/workspace` -- the host's own agent home --
+#    so the migration fired on the host's store, not on a legacy one.
+#
+#    Status: observed outage, 2026-08-27. Two launches (02:39 and 02:58) each
+#    relocated the whole host session tree into
+#    `<STATE_ROOT>/sessions/_root_.raven_workspace/`. A conversation ended up
+#    split across two roots, sub-agent records opened before a launch could not
+#    be finished (`SpawnRecord.finish` returns early when its directory is
+#    gone, so no `out.md`, `status` stuck at `running`, and no instance log at
+#    all), and the `dest.exists()` branch `unlink`-ed one segment outright.
+#    Drop the migration rather than re-point it: this fork has no legacy tree
+#    of its own to migrate, so there is nothing left for it to do.
+#
+#    Covers `tests/test_session_state_dir.py` as well as the module. The two
+#    upstream tests there assert the migration happens, so a replay carrying the
+#    module hunk alone restores the fix and a suite that contradicts it (2 failed,
+#    3 passed) -- and loses the regression guard this patch exists to keep. They
+#    are inverted rather than deleted: the hazard is the claim, not the identifier.
 diff --git a/raven/plugin/memory/everos/backend.py b/raven/plugin/memory/everos/backend.py
 index 39addf39..da6a5793 100644
 --- a/raven/plugin/memory/everos/backend.py
@@ -93,3 +117,115 @@ index 39addf39..da6a5793 100644
                  "content": content,
              }
              if tool_calls:
+diff --git a/raven/session/manager.py b/raven/session/manager.py
+index 7b195591..b7dd73cb 100644
+--- a/raven/session/manager.py
++++ b/raven/session/manager.py
+@@ -11,7 +11,7 @@ from typing import Any
+ from loguru import logger
+ 
+ from raven.utils.atomic_io import atomic_replace, locked_append
+-from raven.utils.helpers import ensure_dir, safe_filename
++from raven.utils.helpers import safe_filename
+ 
+ 
+ def new_chat_id(now: datetime | None = None) -> str:
+@@ -149,36 +149,8 @@ class SessionManager:
+         # is the user's repository, so state written there turns up as untracked
+         # files in every run (and the agent spends turns investigating them).
+         self.sessions_dir = get_workspace_state_dir(workspace, "sessions")
+-        self._migrate_in_workspace_sessions()
+         self._cache: dict[str, Session] = {}
+ 
+-    def _migrate_in_workspace_sessions(self) -> None:
+-        """Move sessions written by older versions into the state directory.
+-
+-        Best-effort and one-way: a file already present in the new location is
+-        the newer one and is never overwritten. The source tree is removed only
+-        once nothing is left in it, so a partial failure keeps the data.
+-        """
+-        legacy = self.workspace / "sessions"
+-        if not legacy.is_dir() or legacy.is_symlink() or legacy == self.sessions_dir:
+-            return
+-        try:
+-            for src in sorted(legacy.rglob("*")):
+-                if not src.is_file():
+-                    continue
+-                dest = self.sessions_dir / src.relative_to(legacy)
+-                if dest.exists():
+-                    src.unlink()
+-                    continue
+-                ensure_dir(dest.parent)
+-                src.replace(dest)
+-            for path in sorted(legacy.rglob("*"), reverse=True):
+-                if path.is_dir():
+-                    path.rmdir()
+-            legacy.rmdir()
+-        except OSError as exc:
+-            logger.debug("session migration skipped: {}", exc)
+-
+     def _get_session_path(self, key: str) -> Path:
+         """Get the file path for a session: sessions/{channel}/{chat_id}.jsonl."""
+         channel, _, chat_id = key.partition(":")
+diff --git a/tests/test_session_state_dir.py b/tests/test_session_state_dir.py
+index a55a040c..142cacca 100644
+--- a/tests/test_session_state_dir.py
++++ b/tests/test_session_state_dir.py
+@@ -3,7 +3,11 @@
+ For a coding agent the workspace is the user's repository: writing session
+ files there makes every run show up as untracked files, which the agent then
+ spends turns investigating. ``get_workspace_state_dir`` is the established
+-convention for raven's own state; sessions predate it and are migrated here.
++convention for raven's own state, and this bucket is where sessions go.
++
++What this build must not do is reach into ``<workspace>/sessions`` and clear it
++out: a raven that shares the workspace keeps its live transcripts exactly
++there. See ``../local-patches.diff``.
+ """
+ 
+ from raven.session.manager import SessionManager
+@@ -25,32 +29,23 @@ def test_each_workspace_gets_its_own_bucket(tmp_path):
+     assert SessionManager(a).sessions_dir != SessionManager(b).sessions_dir
+ 
+ 
+-def test_existing_in_workspace_sessions_are_migrated_once(tmp_path):
+-    workspace = tmp_path / "repo"
+-    legacy = workspace / "sessions" / "cli"
+-    legacy.mkdir(parents=True)
+-    (legacy / "old.jsonl").write_text('{"role": "user", "content": "hi"}\n', encoding="utf-8")
+-
+-    mgr = SessionManager(workspace)
+-    assert (mgr.sessions_dir / "cli" / "old.jsonl").read_text(encoding="utf-8").startswith('{"role"')
+-    # The workspace copy is gone, so the repository stops showing an untracked dir.
+-    assert not (workspace / "sessions").exists()
+-
++def test_an_in_workspace_sessions_tree_is_left_untouched(tmp_path):
++    """Another raven's live store shares this directory, and outranks us.
+ 
+-def test_migration_never_overwrites_newer_state(tmp_path):
++    An earlier version read ``<workspace>/sessions`` as this build's own legacy
++    layout and moved it into the state directory, removing the source. Pointed
++    at a workspace a current raven also uses, that ate the host's live session
++    store rather than a legacy one.
++    """
+     workspace = tmp_path / "repo"
+-    legacy = workspace / "sessions" / "cli"
+-    legacy.mkdir(parents=True)
+-    (legacy / "s.jsonl").write_text("legacy\n", encoding="utf-8")
++    host = workspace / "sessions" / "cli"
++    host.mkdir(parents=True)
++    (host / "live.jsonl").write_text('{"role": "user", "content": "hi"}\n', encoding="utf-8")
+ 
+     mgr = SessionManager(workspace)
+-    target = mgr.sessions_dir / "cli" / "s.jsonl"
+-    target.write_text("current\n", encoding="utf-8")
+ 
+-    legacy.mkdir(parents=True, exist_ok=True)
+-    (legacy / "s.jsonl").write_text("legacy again\n", encoding="utf-8")
+-    SessionManager(workspace)
+-    assert target.read_text(encoding="utf-8") == "current\n"
++    assert (host / "live.jsonl").read_text(encoding="utf-8").startswith('{"role"')
++    assert not (mgr.sessions_dir / "cli" / "live.jsonl").exists()
+ 
+ 
+ def test_round_trip_still_works_from_the_new_location(tmp_path):
