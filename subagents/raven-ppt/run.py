@@ -59,6 +59,15 @@ MATERIAL_SUFFIXES = {
 _PATH_RE = re.compile(r"/[^\s'\"`,;()<>\[\]]+")
 _INPUTS_FENCE = re.compile(r"```(?:raven-ppt|json)?\s*\n\s*(\{.*?\})\s*\n\s*```", re.DOTALL)
 
+_EXIT_TIMEOUT = 124
+"""Exit code for a run the watchdog killed on its own deadline.
+
+GNU ``timeout``'s convention, and its own code rather than 1 because the two
+are different terminal states: 1 is the agent having run and published nothing
+verifiable. A kill says nothing about the work at all, and a caller that folds
+it into the same code has no way back to that distinction.
+"""
+
 _LOG_FILE: Path | None = None
 _VERBOSE = False
 
@@ -619,6 +628,17 @@ def main() -> int:
     deck, slides = verified_deck(out_dir, tail, before)
     log(f"[run] exit_code={rc} timed_out={timed_out} deck={deck} slides={slides}")
 
+    if deck is None and timed_out:
+        # A terminal state of its own: the watchdog cut the run short, which is
+        # not the same claim as the agent having run and published nothing.
+        # Only the caller can decide between a longer deadline and a smaller
+        # deck, and it cannot decide that from "no verifiable deck".
+        print(
+            f"TIMEOUT: killed after {args.timeout}s before a verifiable deck was published. "
+            f"See {_LOG_FILE}",
+            flush=True,
+        )
+        return _EXIT_TIMEOUT
     if deck is None:
         print(f"FAILED: no verifiable deck was published. See {_LOG_FILE}", flush=True)
         return 1
@@ -627,6 +647,12 @@ def main() -> int:
 
     delivered = None if args.no_deliver else deliver(deck, args.deliver_to)
     print(f"Published a {slides}-slide deck.", flush=True)
+    if timed_out:
+        # The deck is real -- `verified_deck` opened it -- so this stays a
+        # success, but the run was killed on the way and whatever it would have
+        # done after publishing is gone. Saying so is the difference between a
+        # partial delivery and a silent one.
+        print(f"Timed out: killed after {args.timeout}s, after this deck was published.", flush=True)
     print(f"Deck: {deck}", flush=True)
     print(f"MEDIA: {delivered if delivered is not None else deck}", flush=True)
     return 0

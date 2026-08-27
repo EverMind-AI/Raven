@@ -227,6 +227,16 @@ def render_config(source: Path) -> Path:
     return RENDERED_CONFIG
 
 
+_EXIT_TIMEOUT = 124
+"""Exit code for a run the launcher killed on its own deadline.
+
+GNU ``timeout``'s convention, and its own code rather than 1 because the two
+are different terminal states: 1 is the agent reporting a config or credential
+error, or finishing without committing an answer -- both of which say the run
+*ran*. A kill says nothing about the work at all, and a caller that folds it
+into the same code has no way back to that distinction.
+"""
+
 _LOG_FILE: Path | None = None
 _VERBOSE = False
 
@@ -635,6 +645,7 @@ def main() -> int:
         "RAVEN_TRACING_DIR": os.environ.get("RAVEN_TRACING_DIR", str(config.parent / "traces")),
     }
     started = time.time()
+    timed_out = False
     try:
         proc = subprocess.run(
             argv,
@@ -647,6 +658,11 @@ def main() -> int:
         rc: int | None = proc.returncode
         stderr_tail = (proc.stderr or "").strip().splitlines()[-5:]
     except subprocess.TimeoutExpired:
+        # Its own flag rather than `rc is None` read back at each later branch:
+        # what the launcher owes the caller after a kill differs from what it
+        # owes after an exit, and recovering that distinction from a sentinel
+        # exit code is how the two came to be conflated below.
+        timed_out = True
         rc, stderr_tail = None, ["timed out"]
     elapsed = int(time.time() - started)
     log(f"[run] exit={rc} elapsed={elapsed}s")
@@ -662,17 +678,39 @@ def main() -> int:
     answer = None
     if transcript is not None and transcript.is_file():
         answer = extract_answer(transcript, pre_lines)
+    elif timed_out:
+        # Not "no transcript found": after a kill the absence is a consequence
+        # of the kill, and reporting it as the finding is what put "no
+        # transcript" in front of a user whose run had actually timed out.
+        log("[run] no transcript: killed before the agent wrote one")
     else:
         log("[run] no transcript found")
+    # Held before the fallbacks below overwrite `answer` with a sentence about
+    # the run: only a value that came out of the transcript is the agent's own
+    # answer, and only that one can be described as having been committed.
+    committed = answer is not None
     log(f"[run] answer_chars={len(answer or '')}")
 
-    if answer is None:
-        reason = "timed out" if rc is None else "no answer was committed"
-        log(f"[run] FAILED: {reason}")
+    if answer is None and timed_out:
+        # A terminal state of its own, with its own exit code: the run was cut
+        # short, which is not the same claim as the agent having finished
+        # without an answer, and only the caller can decide whether to rerun it
+        # with a longer deadline or take the work elsewhere.
+        log(f"[run] TIMEOUT: killed after {args.timeout}s with nothing committed")
         if not args.keep_going:
-            print(f"FAILED: Raven-Oncall produced no answer ({reason}). See {_LOG_FILE}", flush=True)
+            print(
+                f"TIMEOUT: Raven-Oncall was killed after {args.timeout}s before it committed an answer. "
+                f"See {_LOG_FILE}",
+                flush=True,
+            )
+            return _EXIT_TIMEOUT
+        answer = f"(killed after {args.timeout}s with nothing committed)"
+    elif answer is None:
+        log("[run] FAILED: no answer was committed")
+        if not args.keep_going:
+            print(f"FAILED: Raven-Oncall produced no answer (no answer was committed). See {_LOG_FILE}", flush=True)
             return 1
-        answer = f"(no answer committed: {reason})"
+        answer = "(no answer committed)"
 
     # The watch footer is the part of the reply the agent cannot write: whether
     # anything will actually come back for it, and what its own trail says.
@@ -686,6 +724,15 @@ def main() -> int:
     footer.extend(campaign_state(config))
 
     out = [answer]
+    if timed_out and committed:
+        # The answer above is the agent's own -- it reached the transcript
+        # before the kill landed, and `--wait-skill-extract` alone means the
+        # process routinely outlives the answer it already committed. But the
+        # run did not finish, so whatever it would have done next is gone.
+        # Returning 0 without saying so is how a timed-out run reported as a
+        # clean success. The `--keep-going` case says it in `answer` instead:
+        # there is no committed answer there for this line to qualify.
+        out.append(f"\n--- timed out: killed after {args.timeout}s, after this answer was committed")
     if footer:
         out.append("\n--- watch state\n" + "\n".join(footer))
     print("\n".join(out), flush=True)
