@@ -21,6 +21,7 @@ longer is a job, and a job has a different home.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shlex
 from typing import Any
@@ -198,7 +199,14 @@ async def run_on_machine(command: str, *, campaign: str = "", connection: str = 
     body = f"bash -c {shlex.quote(command)} 2>&1"
     if transport_of(meta) != LOCAL:
         body = f"timeout {_TIMEOUT_S} {body}"
-    rc, out = runner(f"cd {shlex.quote(where)} 2>/dev/null || exit 66; {body}")
+    # to_thread, the same idiom both backends' `_arun` uses: the runner is a
+    # synchronous subprocess.run (transport.py), and calling it bare from this
+    # async def froze the server's whole event loop for up to _TIMEOUT_S per
+    # look. Measured 2026-08-27: two back-to-back remote docker probes blocked
+    # frame reading long enough that a concurrent `session/new` sat unparsed
+    # for the host's full 120s readyTimeoutMs and the second instance was
+    # declared dead. Wakes and `session/cancel` stalled the same way.
+    rc, out = await asyncio.to_thread(runner, f"cd {shlex.quote(where)} 2>/dev/null || exit 66; {body}")
     body = out if len(out) <= _MAX_BYTES else (
         out[:_MAX_BYTES] + f"\n...[truncated, {len(out)} bytes total]"
     )
