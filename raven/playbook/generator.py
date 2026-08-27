@@ -19,12 +19,13 @@ No prompt text lives here — see :mod:`raven.playbook.prompt`.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, get_args, get_origin
 
 from loguru import logger
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from raven.playbook.llm_result import (
     ProviderFailure,
@@ -50,6 +51,29 @@ if TYPE_CHECKING:
 
 _MAX_REPAIR_ROUNDS = 3
 _SKILL_CANDIDATES_K = 12
+
+
+def _structural_fields() -> frozenset[str]:
+    """Emitted keys whose value is an object or an array, both spellings.
+
+    Read off the contract rather than listed by hand, so a field added to
+    :class:`PlaybookSpec` is covered without a second list to remember. The two
+    report arrays ride the same tool call without being spec fields.
+    """
+    names = {"blockingQuestions", "assumptions"}
+    for name, spec_field in PlaybookSpec.model_fields.items():
+        annotation = spec_field.annotation
+        for candidate in (annotation, *get_args(annotation)):
+            origin = get_origin(candidate) or candidate
+            structural = origin in (dict, list) or (isinstance(origin, type) and issubclass(origin, BaseModel))
+            if structural:
+                names.add(name)
+                names.add(spec_field.alias or name)
+                break
+    return frozenset(names)
+
+
+_STRUCTURAL_FIELDS = _structural_fields()
 
 
 class CapabilityInventory(Protocol):
@@ -253,6 +277,7 @@ class PlaybookGenerator:
         # Weaker models sometimes wrap the whole spec in one envelope key.
         if len(data) == 1 and isinstance(next(iter(data.values())), dict):
             data = dict(next(iter(data.values())))
+        data = _decode_stringified(data)
         questions = [str(q) for q in data.pop("blockingQuestions", None) or []]
         assumptions = [str(a) for a in data.pop("assumptions", None) or []]
         data.pop("version", None)
@@ -275,6 +300,34 @@ class PlaybookGenerator:
             known_mcp=self._inventory.known_mcp(),
         )
         return spec, errors + asset_errors, missing, (questions, assumptions)
+
+
+def _decode_stringified(data: dict[str, Any]) -> dict[str, Any]:
+    """Decode fields the model serialised twice.
+
+    Some models emit a nested object or array as a JSON *string* inside the
+    tool-call arguments -- ``"triggers": "{\\"keywords\\": [...]}"`` instead of
+    the object. The content is right and only the encoding is wrong, but
+    pydantic sees a str and the repair round cannot help: the error says the
+    field is not a dictionary, which the model reads as a complaint about
+    content it can already see is a dictionary, so it resends the same bytes
+    until the budget runs out.
+
+    Only fields the contract types as an object or an array are touched, so
+    free text that happens to open with a brace stays the text it is.
+    """
+    decoded = dict(data)
+    for key in _STRUCTURAL_FIELDS:
+        value = decoded.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            decoded[key] = parsed
+    return decoded
 
 
 def _split_skill_refs(refs: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
