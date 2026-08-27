@@ -553,6 +553,7 @@ def register_config_methods(
     # tool is registered only once its model or key is set -- so a write here
     # takes effect on the next gateway restart, which is what ``set`` reports.
     from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
+    from raven.config.env_file import refresh_env_file
     from raven.config.update_tools import MEDIA_TOOLS, get_media, get_web_search, set_media, set_web_search
 
     _media_classes = {"image": ImageGenerateTool, "speech": SpeechGenerateTool, "video": VideoGenerateTool}
@@ -635,6 +636,10 @@ def register_config_methods(
         fields = params.get("fields") or {}
         if kind == "web_search":
             set_web_search(fields)
+            # The shell env mirror is derived from this key, and cli/acp
+            # sub-agents read the environment rather than the config -- so
+            # rotating it here without refreshing leaves them on the old one.
+            refresh_env_file()
         else:
             set_media(kind, fields)  # raises KeyError on an unknown kind
         return {"ok": True, "restart_required": True}

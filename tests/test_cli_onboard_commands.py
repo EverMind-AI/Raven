@@ -1,4 +1,4 @@
-"""CLI tests for ``raven onboard`` — the five-step wizard.
+"""CLI tests for ``raven onboard`` — the seven-step wizard.
 
 Most tests exercise ``--non-interactive`` so we can drive the wizard
 deterministically without a real TTY. Interactive paths are covered by
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from raven.cli import onboard_channels, onboard_commands, onboard_everos
+from raven.cli import onboard_channels, onboard_commands, onboard_everos, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.plugin.memory.everos import _discover as _discover_mod
@@ -655,8 +656,9 @@ def test_onboard_interactive_uses_stubbed_pickers(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -791,8 +793,9 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -2546,8 +2549,9 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
     monkeypatch.setattr(onboard_channels, "_step3_channel", _s3)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
     # s2 returns BACK once → s1 replays → s2 again → forward.
@@ -2575,8 +2579,9 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -2622,8 +2627,9 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     # Should complete (not raise typer.Exit) — steps 2/3/4 ran.
     onboard_commands.run_wizard(non_interactive=False)
@@ -2657,8 +2663,9 @@ def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -2969,31 +2976,128 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
 # --------------------------------------------------------------------------- step 5 (sub-agents)
 
 
-def test_total_steps_is_six() -> None:
-    # sub-agents (step 5) + import (step 6) bumped the wizard from 4 to 6;
-    # the progress dots + "Step n/N" header derive from this constant.
-    assert onboard_commands._TOTAL_STEPS == 6
+def test_total_steps_is_seven() -> None:
+    # sub-agents + import took the wizard from 4 to 6; web tool keys made it 7.
+    # The progress dots + "Step n/N" header derive from this constant.
+    assert onboard_commands._TOTAL_STEPS == 7
 
 
-def test_step5_skip_or_non_interactive_never_configures(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_step6_skip_or_non_interactive_never_configures(monkeypatch: pytest.MonkeyPatch) -> None:
     # Both the --skip-subagents and non-interactive paths must return without
     # entering the interactive configure flow (which would hit questionary/disk).
     import raven.cli.subagent_setup as setup
 
     calls: list = []
     monkeypatch.setattr(setup, "configure_subagents", lambda **k: calls.append(k))
-    assert onboard_commands._step5_subagents(skip=True, non_interactive=False, warnings=[]) is None
-    assert onboard_commands._step5_subagents(skip=False, non_interactive=True, warnings=[]) is None
+    assert onboard_commands._step6_subagents(skip=True, non_interactive=False, warnings=[]) is None
+    assert onboard_commands._step6_subagents(skip=False, non_interactive=True, warnings=[]) is None
     assert calls == []
 
 
-def test_step5_interactive_delegates_to_shared_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_step6_interactive_delegates_to_shared_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     import raven.cli.subagent_setup as setup
 
     seen: dict = {}
     monkeypatch.setattr(setup, "configure_subagents", lambda **k: seen.update(k) or 0)
-    onboard_commands._step5_subagents(skip=False, non_interactive=False, warnings=["w"])
+    onboard_commands._step6_subagents(skip=False, non_interactive=False, warnings=["w"])
     assert seen.get("non_interactive") is False and seen.get("warnings") == ["w"]
+
+
+def _trace_screens(monkeypatch: pytest.MonkeyPatch, seen: list[str]) -> None:
+    """Replace every screen with a recorder, so only the order is under test."""
+    for mod, name in (
+        (onboard_commands, "_step1_provider"),
+        (onboard_commands, "_step2_sandbox"),
+        (onboard_channels, "_step3_channel"),
+        (onboard_everos, "_step4_memory"),
+        (onboard_web, "_step5_web"),
+        (onboard_commands, "_step6_subagents"),
+        (onboard_commands, "_step7_import"),
+    ):
+        monkeypatch.setattr(mod, name, (lambda label: lambda **_: seen.append(label))(name))
+
+
+def test_wizard_runs_the_web_step_between_memory_and_subagents(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Order is load-bearing, not cosmetic.
+
+    The keys have to be on disk before Step 6 offers to set up the sub-agent
+    folders, because that is the step whose launchers fall back to the host's
+    config for exactly these two values.
+    """
+    seen: list[str] = []
+    _trace_screens(monkeypatch, seen)
+
+    onboard_commands.run_wizard(non_interactive=True, show_next_steps=False)
+
+    assert seen == [
+        "_step1_provider",
+        "_step2_sandbox",
+        "_step3_channel",
+        "_step4_memory",
+        "_step5_web",
+        "_step6_subagents",
+        "_step7_import",
+    ]
+
+
+def test_skip_web_reaches_the_web_step(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+    _trace_screens(monkeypatch, [])
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **kw: seen.update(kw))
+
+    onboard_commands.run_wizard(non_interactive=True, skip_web=True, show_next_steps=False)
+
+    assert seen["skip"] is True
+
+
+def test_web_key_flags_reach_the_web_step(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+    _trace_screens(monkeypatch, [])
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **kw: seen.update(kw))
+
+    onboard_commands.run_wizard(
+        non_interactive=True,
+        serper_api_key="sk-flag",
+        jina_api_key="jina-flag",
+        show_next_steps=False,
+    )
+
+    assert seen["serper_api_key"] == "sk-flag"
+    assert seen["jina_api_key"] == "jina-flag"
+
+
+def test_onboard_cli_writes_the_keys_passed_as_flags(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify
+) -> None:
+    """End to end: the typer options exist and land in config.
+
+    A non-interactive run auto-skips the screen, so without the flags being
+    honoured past that skip this invocation would accept them and write nothing.
+    """
+    monkeypatch.setattr(onboard_commands, "_check_tty_or_die", lambda non_interactive: None)
+    monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
+
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "anthropic",
+            "--api-key",
+            "sk-int-test",
+            "--serper-api-key",
+            "sk-flag",
+            "--jina-api-key",
+            "jina-flag",
+        ],
+    )
+    assert r.exit_code == 0, r.stdout
+
+    web = json.loads(tmp_env.read_text())["tools"]["web"]
+    assert web["search"]["apiKey"] == "sk-flag"
+    assert web["jinaApiKey"] == "jina-flag"
 
 
 def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
@@ -3020,7 +3124,7 @@ def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 6 — import wizard navigation
+# Step 7 — import wizard navigation
 # ---------------------------------------------------------------------------
 
 
@@ -3145,7 +3249,7 @@ def _run_import_step(
         "raven.cli.import_commands._build_and_run",
         AsyncMock(return_value=_no_op_import_result()),
     )
-    onboard_commands._step6_import(skip=False, non_interactive=False)
+    onboard_commands._step7_import(skip=False, non_interactive=False)
     return scripted
 
 
@@ -3188,7 +3292,7 @@ def test_import_step_installs_skills_when_the_scan_finds_nothing(
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step6_import(skip=False, non_interactive=False)
+    onboard_commands._step7_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -3226,7 +3330,7 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
     _patch_skill_count(monkeypatch, 12)
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step6_import(skip=False, non_interactive=False)
+    onboard_commands._step7_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -3247,7 +3351,7 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
 
-    onboard_commands._step6_import(skip=False, non_interactive=False)
+    onboard_commands._step7_import(skip=False, non_interactive=False)
 
     installer.assert_not_awaited()
     out = " ".join(capsys.readouterr().out.split())
@@ -6253,3 +6357,419 @@ class TestALeftoverRootIsOnlyTakenOverOnPurpose:
         assert slice_["owned"] is False
         assert slice_["base_url"] == "http://127.0.0.1:8000"
         assert "root" not in slice_
+
+
+# ---------------------------------------------------------------------------
+# Step 5 — web tool keys (Serper / Jina)
+# ---------------------------------------------------------------------------
+
+
+def _set_keys(cfg: Path, *, serper: str = "", jina: str = "") -> None:
+    from raven.config import update_tools
+
+    update_tools.set_web_search({"api_key": serper}, config_path=cfg)
+    update_tools.set_jina_api_key(jina, config_path=cfg)
+
+
+def test_env_file_carries_both_keys_owner_only(tmp_env: Path) -> None:
+    import stat as _stat
+
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, serper="sk-serper", jina="jina-abc")
+
+    path = onboard_web.write_env_file()
+
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    assert "export SERPER_API_KEY=sk-serper" in body
+    assert "export JINA_API_KEY=jina-abc" in body
+    # The whole point of a separate file: the rc stays credential-free and this
+    # one is not world-readable the way ~/.bashrc is under a 0022 umask.
+    assert _stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_env_file_never_exports_a_key_that_is_not_set(tmp_env: Path) -> None:
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, serper="sk-serper")
+
+    body = onboard_web.write_env_file().read_text(encoding="utf-8")
+
+    assert "export SERPER_API_KEY=sk-serper" in body
+    # An empty export is not the same as no export: it would shadow a
+    # JINA_API_KEY the user exported for themselves, turning a working key into
+    # "". The unconfigured key gets the retire stanza instead, which is a no-op
+    # unless raven is the one that exported it.
+    assert "export JINA_API_KEY" not in body
+    assert "unset JINA_API_KEY" in body
+
+
+def test_env_file_is_not_created_when_neither_key_is_set(tmp_env: Path) -> None:
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env)
+
+    assert onboard_web.write_env_file() is None
+    assert not (Path.home() / ".raven" / "env").exists()
+
+
+def test_clearing_a_key_retires_it_rather_than_only_dropping_the_export(tmp_env: Path) -> None:
+    """Omitting the export is not the same as clearing the key.
+
+    A shell that sourced the previous mirror already holds the value in its own
+    environment, and every shell started from it inherits it. Re-sourcing a file
+    that merely lacks the line leaves that untouched, so the credential the user
+    just cleared stays live and the tools keep resolving it through their
+    environment fallback.
+    """
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, serper="sk-serper", jina="jina-abc")
+    path = onboard_web.write_env_file()
+
+    _set_keys(tmp_env)
+    again = onboard_web.write_env_file()
+
+    body = path.read_text(encoding="utf-8")
+    assert again == path
+    assert "export SERPER_API_KEY" not in body
+    assert "export JINA_API_KEY" not in body
+    assert "unset SERPER_API_KEY" in body
+    assert "unset JINA_API_KEY" in body
+
+
+def test_a_cleared_key_is_gone_from_a_shell_that_inherited_it(tmp_env: Path) -> None:
+    """The behaviour the file shape exists for, driven through a real shell.
+
+    One process sources the configured mirror and then the cleared one, which is
+    what a live shell does across a `raven onboard` that clears the key.
+    """
+    import shutil
+    import subprocess
+
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, serper="sk-serper")
+    configured = onboard_web.write_env_file()
+    kept = configured.with_name("configured.env")
+    shutil.copyfile(configured, kept)
+
+    _set_keys(tmp_env)
+    cleared = onboard_web.write_env_file()
+
+    out = subprocess.run(
+        ["sh", "-c", f'. "{kept}"; . "{cleared}"; printf "[%s]" "${{SERPER_API_KEY-unset}}"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout == "[unset]"
+
+
+def test_clearing_does_not_disturb_a_key_the_user_exported_themselves(tmp_env: Path) -> None:
+    """The other direction, which a blanket `unset` would get wrong.
+
+    Someone who exports `SERPER_API_KEY` in their own rc, and never configured
+    one in raven, must keep it: the mirror may only retire what it set itself.
+    """
+    import subprocess
+
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, jina="jina-abc")
+    cleared = onboard_web.write_env_file()
+
+    out = subprocess.run(
+        ["sh", "-c", f'export SERPER_API_KEY=mine; . "{cleared}"; printf "[%s]" "${{SERPER_API_KEY-unset}}"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout == "[mine]"
+
+
+def test_env_file_survives_a_key_that_would_break_the_shell(tmp_env: Path) -> None:
+    import subprocess
+
+    from raven.cli import onboard_web
+
+    nasty = "a'b c$d\"e"
+    _set_keys(tmp_env, serper=nasty)
+
+    path = onboard_web.write_env_file()
+    out = subprocess.run(
+        ["sh", "-c", f'. "{path}"; printf %s "$SERPER_API_KEY"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout == nasty
+
+
+def test_bash_targets_the_login_profile_as_well_as_the_rc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``bash -lic`` reads the profile chain, not ``~/.bashrc``.
+
+    The env capture every cli/acp sub-agent inherits from runs exactly that, so
+    a line that lives only in ``~/.bashrc`` reaches a sub-agent solely by grace
+    of a distro ``~/.profile`` that happens to source it. Both files are
+    targeted: the profile for the capture and for login shells, the rc for the
+    user's own interactive non-login terminals.
+    """
+    from raven.cli import onboard_web
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    assert onboard_web.rc_targets() == [tmp_path / ".profile", tmp_path / ".bashrc"]
+
+
+def test_bash_profile_wins_over_profile_when_it_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """bash reads the FIRST of bash_profile / bash_login / profile, and stops.
+
+    Writing to ``~/.profile`` on a home that has a ``~/.bash_profile`` puts the
+    line in a file bash will never open.
+    """
+    from raven.cli import onboard_web
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    (tmp_path / ".bash_profile").write_text("", encoding="utf-8")
+
+    assert onboard_web.rc_targets() == [tmp_path / ".bash_profile", tmp_path / ".bashrc"]
+
+
+def test_zsh_targets_zshenv_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # ~/.zshenv is read by every zsh invocation, login or not, so one file is
+    # the whole answer -- unlike bash, which needs two.
+    from raven.cli import onboard_web
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+
+    assert onboard_web.rc_targets() == [tmp_path / ".zshenv"]
+
+
+def test_rc_targets_are_empty_for_a_shell_the_env_capture_cannot_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirrors ``login_shell_env``'s own {bash, zsh} allowlist.
+
+    Writing a fish rc would put the keys where the sub-agent env capture never
+    looks, so the step reports the line instead of pretending it wired anything.
+    """
+    from raven.cli import onboard_web
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("SHELL", "/usr/bin/fish")
+    assert onboard_web.rc_targets() == []
+    monkeypatch.delenv("SHELL", raising=False)
+    assert onboard_web.rc_targets() == []
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to run the capture")
+def test_the_login_shell_capture_actually_sees_the_keys(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The end-to-end claim the whole step rests on.
+
+    Everything else here checks a file's contents; this checks that the shell
+    invocation ``login_shell_env`` performs -- and therefore every cli/acp
+    sub-agent's environment -- comes back holding both keys. The home is given a
+    ``~/.bash_profile`` that does not source ``~/.bashrc``, which is the shape
+    that made an rc-only append silently reach nothing.
+    """
+    import subprocess
+
+    from raven.cli import onboard_web
+
+    home = Path.home()
+    (home / ".bash_profile").write_text("# no bashrc sourcing here\n", encoding="utf-8")
+    _set_keys(tmp_env, serper="sk-capture", jina="jina-capture")
+    onboard_web.write_env_file()
+    for target in onboard_web.rc_targets_for("bash"):
+        onboard_web.ensure_rc_source_line(target)
+
+    captured = subprocess.run(
+        ["bash", "-lic", "env"],
+        env={"HOME": str(home), "SHELL": "/bin/bash", "PATH": "/usr/local/bin:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        start_new_session=True,
+    ).stdout
+
+    assert "SERPER_API_KEY=sk-capture" in captured
+    assert "JINA_API_KEY=jina-capture" in captured
+
+
+def test_rc_source_line_is_appended_exactly_once(tmp_path: Path) -> None:
+    from raven.cli import onboard_web
+
+    rc = tmp_path / ".bashrc"
+    rc.write_text("export PATH=/x\n", encoding="utf-8")
+
+    assert onboard_web.ensure_rc_source_line(rc) is True
+    # `onboard --reset` re-runs the step; a second append would grow the rc by a
+    # line every time.
+    assert onboard_web.ensure_rc_source_line(rc) is False
+
+    body = rc.read_text(encoding="utf-8")
+    assert body.count(onboard_web.RC_MARKER) == 1
+    assert body.startswith("export PATH=/x\n")
+
+
+def test_rc_source_line_does_not_break_a_shell_without_the_env_file(tmp_path: Path) -> None:
+    import subprocess
+
+    from raven.cli import onboard_web
+
+    rc = tmp_path / ".bashrc"
+    rc.write_text("", encoding="utf-8")
+    onboard_web.ensure_rc_source_line(rc)
+
+    # No ~/.raven/env exists here: the guard is what keeps a deleted env file
+    # from making every new shell print an error.
+    done = subprocess.run(
+        ["sh", "-c", f'HOME="{tmp_path}"; . "{rc}"; echo ok'],
+        capture_output=True,
+        text=True,
+    )
+
+    assert done.returncode == 0
+    assert done.stdout.strip() == "ok"
+    assert done.stderr == ""
+
+
+def test_step5_skip_or_non_interactive_writes_nothing(tmp_env: Path) -> None:
+    from raven.cli import onboard_web
+
+    assert onboard_web._step5_web(skip=True, non_interactive=False) is None
+    assert onboard_web._step5_web(skip=False, non_interactive=True) is None
+
+    # Not "tools.web is empty" but "nothing was created at all": a skipped step
+    # that still materialised the section would leave `web_search` looking
+    # configured-but-blank to anything reading the file.
+    assert not tmp_env.exists()
+    assert not (Path.home() / ".raven" / "env").exists()
+
+
+def test_step5_writes_both_keys_and_the_env_file(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.cli import onboard_web
+
+    answers = iter(["sk-serper", "jina-abc"])
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: next(answers))
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    web = json.loads(tmp_env.read_text())["tools"]["web"]
+    assert web["search"]["apiKey"] == "sk-serper"
+    assert web["jinaApiKey"] == "jina-abc"
+    assert "export SERPER_API_KEY=sk-serper" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
+
+
+def test_step5_empty_answer_keeps_the_key_already_configured(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.cli import onboard_web
+
+    _set_keys(tmp_env, serper="sk-existing", jina="jina-existing")
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "")
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    web = json.loads(tmp_env.read_text())["tools"]["web"]
+    assert web["search"]["apiKey"] == "sk-existing"
+    assert web["jinaApiKey"] == "jina-existing"
+
+
+def test_step5_leaves_the_rc_alone_unless_the_user_confirms(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.cli import onboard_web
+
+    rc = Path.home() / ".bashrc"
+    rc.write_text("export PATH=/x\n", encoding="utf-8")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _targets: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    assert rc.read_text(encoding="utf-8") == "export PATH=/x\n"
+    assert not (Path.home() / ".profile").exists()
+
+
+def test_yes_answers_the_rc_confirmation_instead_of_stopping_on_it(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--yes`` is documented as "Skip all confirm prompts".
+
+    A confirm the flag does not reach turns a scripted `raven onboard --yes`
+    into one that blocks on a prompt nobody is there to answer, which is the
+    opposite of the flag's contract. Skipping is answering it, not declining:
+    the name says yes.
+    """
+    from raven.cli import onboard_web
+
+    rc = Path.home() / ".bashrc"
+    rc.write_text("export PATH=/x\n", encoding="utf-8")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
+    monkeypatch.setattr(
+        onboard_web,
+        "_confirm_rc",
+        lambda _targets: pytest.fail("--yes must not reach the confirmation"),
+    )
+
+    onboard_web._step5_web(skip=False, non_interactive=False, yes=True)
+
+    assert onboard_web.RC_MARKER in rc.read_text(encoding="utf-8")
+
+
+def test_the_wizard_hands_yes_to_the_web_step(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The plumbing half: the flag has to arrive, not just be honoured once here.
+    seen: dict = {}
+    _trace_screens(monkeypatch, [])
+    monkeypatch.setattr(onboard_web, "_step5_web", lambda **kw: seen.update(kw))
+
+    onboard_commands.run_wizard(non_interactive=True, yes=True, show_next_steps=False)
+
+    assert seen["yes"] is True
+
+
+def test_step5_appends_to_every_target_on_confirmation(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.cli import onboard_web
+
+    rc = Path.home() / ".bashrc"
+    rc.write_text("export PATH=/x\n", encoding="utf-8")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _targets: True)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    # Both, for the two different things bash does with them: the profile is
+    # what `bash -lic` reads (so, sub-agents), the rc what an interactive
+    # non-login terminal reads.
+    assert onboard_web.RC_MARKER in rc.read_text(encoding="utf-8")
+    assert onboard_web.RC_MARKER in (Path.home() / ".profile").read_text(encoding="utf-8")
+
+
+def test_step5_key_flags_are_written_even_though_the_step_is_skipped(tmp_env: Path) -> None:
+    """Non-interactive auto-skips the screen, so a flag is the only way in.
+
+    Without this, ``raven onboard --non-interactive --serper-api-key ...`` would
+    accept the flag and silently drop it.
+    """
+    from raven.cli import onboard_web
+
+    onboard_web._step5_web(
+        skip=False,
+        non_interactive=True,
+        serper_api_key="sk-flag",
+        jina_api_key="jina-flag",
+    )
+
+    web = json.loads(tmp_env.read_text())["tools"]["web"]
+    assert web["search"]["apiKey"] == "sk-flag"
+    assert web["jinaApiKey"] == "jina-flag"
+    assert "export SERPER_API_KEY=sk-flag" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 
@@ -510,7 +511,13 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
-        return _write_raw_key(key, checker(value))
+        written = _write_raw_key(key, checker(value))
+        if key in MIRRORED_KEYS:
+            # cli/acp sub-agents read these two from the environment, not from
+            # the config, so the ~/.raven/env mirror has to follow the write or
+            # they keep running on the key this call just replaced.
+            refresh_env_file()
+        return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
 

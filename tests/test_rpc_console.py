@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.tools.base import Tool
+from raven.config import update_tools
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 
@@ -1205,3 +1206,56 @@ async def test_deliverables_list_is_empty_without_a_key_or_a_store() -> None:
 
     assert (await console_module.deliverables_list({"session_key": ""}, agent_loop_factory=lambda: loop))["files"] == []
     assert (await console_module.deliverables_list({"session_key": "tui:s1"}))["files"] == []
+
+
+# ---------------------------------------------------------------------------
+# settings.set keeps the shell env mirror in step
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def settings_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A config this suite may write, with ``~`` pointed somewhere disposable.
+
+    ``settings.set`` now refreshes ``~/.raven/env`` for the two web keys, so an
+    unisolated home would have this rewrite the developer's real one.
+    """
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    # Two bindings, not one: ``_write_raw_key`` imports ``get_config_path``
+    # inside the call, while ``update_tools`` bound it at import -- and the
+    # mirror reads the keys back through the latter.
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr(update_tools, "get_config_path", lambda: path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("key", "env_var"),
+    [("tools.web.search.apiKey", "SERPER_API_KEY"), ("tools.web.jinaApiKey", "JINA_API_KEY")],
+)
+async def test_settings_set_refreshes_the_shell_env_mirror(
+    settings_cfg: Path, tmp_path: Path, key: str, env_var: str
+) -> None:
+    """Both keys, because the settings page can write either one.
+
+    Parametrised rather than asserted on one: the jina half has no other write
+    path at all outside the wizard, so a mirror wired for Serper alone would
+    look right and leave that key permanently stale.
+    """
+    await console_module.settings_set({"key": key, "value": "rotated-1"})
+
+    mirror = tmp_path / ".raven" / "env"
+    assert f"export {env_var}=rotated-1" in mirror.read_text(encoding="utf-8")
+
+    await console_module.settings_set({"key": key, "value": "rotated-2"})
+    body = mirror.read_text(encoding="utf-8")
+    assert f"export {env_var}=rotated-2" in body
+    assert "rotated-1" not in body
+
+
+async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(settings_cfg: Path, tmp_path: Path) -> None:
+    await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
+
+    assert not (tmp_path / ".raven" / "env").exists()

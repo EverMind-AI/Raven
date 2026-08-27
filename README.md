@@ -77,14 +77,19 @@ raven
 
 That is the whole first run: with nothing configured yet, `raven` walks you through setup and then opens the TUI in the same session. To reconfigure later, run `raven onboard` explicitly.
 
-The bilingual onboarding wizard configures six areas without requiring manual edits to `~/.raven/config.json`:
+The bilingual onboarding wizard configures seven areas without requiring manual edits to `~/.raven/config.json`:
 
 1. LLM provider and model
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Deep Research
-6. Cold-start import from other AI tools
+5. Web tool keys (Serper for `web_search`, Jina for `web_fetch`)
+6. Sub-agents shipped in this checkout
+7. Cold-start import from other AI tools
+
+Step 5 also mirrors the two keys into `~/.raven/env` (owner-only) and offers to add one
+guarded `source` line to your shell rc, so new shells and the `cli` / `acp` sub-agents --
+whose environment is captured from a login shell -- inherit them.
 
 Provider setup includes an in-step connectivity check. Optional steps can be skipped and configured later. If setup is incomplete, run:
 
@@ -179,7 +184,7 @@ raven gateway
 | --- | --- |
 | `raven` or `raven tui` | Launch the terminal UI |
 | `raven agent -m "..."` | Run a one-shot task |
-| `raven onboard` | Configure providers, sandboxing, channels, memory, research, and import |
+| `raven onboard` | Configure providers, sandboxing, channels, memory, web tool keys, sub-agents, and import |
 | `raven status` | Show configuration and runtime status |
 | `raven doctor` | Diagnose provider and environment problems |
 | `raven tracing` | Open the local trace dashboard |

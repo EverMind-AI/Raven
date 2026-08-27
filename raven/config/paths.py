@@ -117,6 +117,18 @@ def restrict_to_owner(*paths: Path) -> None:
             path.chmod(0o600)
 
 
+def get_env_file() -> Path:
+    """Return the shell env file the onboard wizard generates.
+
+    A derived artefact of ``config.json``, not a second source of truth: it
+    exists so consumers that never read raven's config -- the user's own shell,
+    and the ``cli`` / ``acp`` sub-agents whose environment comes from a login
+    shell capture -- still see the tool credentials. Whoever writes it owns
+    creating the parent and tightening the mode; see ``restrict_to_owner``.
+    """
+    return Path.home() / ".raven" / "env"
+
+
 def get_legacy_sessions_dir() -> Path:
     """Return the legacy global session directory used for migration fallback."""
     return Path.home() / ".raven" / "sessions"

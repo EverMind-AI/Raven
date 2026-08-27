@@ -1418,7 +1418,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → sub-agents → cold-start import) that also seeds
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web tool keys → sub-agents → cold-start import) that also seeds
 Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:
