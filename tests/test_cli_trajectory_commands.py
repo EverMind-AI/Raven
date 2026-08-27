@@ -56,7 +56,7 @@ def test_group_registered_on_app() -> None:
 
 
 def test_subcommand_help() -> None:
-    for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "list"):
+    for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "merge", "split", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
         assert r.exit_code == 0, cmd
 
@@ -110,17 +110,19 @@ def test_save_by_turn_trace_id_bundles_whole_attempt(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", attempt_id="att-x", session_key="cli:a"),
-            _span("trace-2", attempt_id="att-x", session_key="cli:a", name="tool.call"),
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a", name="tool.call"),
         ],
     )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["save", "trace-1"])
 
     assert r.exit_code == 0
-    assert (state / "bundles" / "att-x" / "manifest.json").exists()
-    assert "att-x" in r.stdout and "whole attempt" in r.stdout
-    assert "spans: 2" in r.stdout
+    assert (state / "bundles" / aid / "manifest.json").exists()
+    norm = " ".join(r.stdout.split())
+    assert aid in norm and "whole attempt" in norm
+    assert "spans: 2" in norm
 
 
 def test_save_unknown_id_errors(state) -> None:
@@ -290,12 +292,12 @@ def test_report_unknown_id_errors(state, report_config) -> None:
 
 
 def test_verdict_records_user_source(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
 
-    r = runner.invoke(trajectory_app, ["verdict", "att-1", "--status", "fail", "--why", "wrong answer"])
+    r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail", "--why", "wrong answer"])
 
     assert r.exit_code == 0
-    got = tverdict.read_verdicts(state, attempt_id="att-1")
+    got = tverdict.read_verdicts(state, attempt_id="trace-1")
     assert len(got) == 1
     assert got[0].status == "fail" and got[0].source == "user" and got[0].why == "wrong answer"
 
@@ -306,16 +308,17 @@ def test_verdict_by_turn_trace_id_lands_on_attempt(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", attempt_id="att-x"),
-            _span("trace-2", attempt_id="att-x", name="tool.call"),
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a", name="tool.call"),
         ],
     )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail"])
 
     assert r.exit_code == 0
-    assert "att-x" in r.stdout
-    got = tverdict.read_verdicts(state, attempt_id="att-x")
+    assert aid in " ".join(r.stdout.split())
+    got = tverdict.read_verdicts(state, attempt_id=aid)
     assert len(got) == 1 and got[0].status == "fail"
     assert tverdict.read_verdicts(state, attempt_id="trace-1") == []
 
@@ -337,17 +340,17 @@ def test_verdict_rejects_bad_status(state) -> None:
 
 
 def test_pin_unpin_roundtrip(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
 
-    r = runner.invoke(trajectory_app, ["pin", "att-1", "--reason", "bug #42"])
+    r = runner.invoke(trajectory_app, ["pin", "trace-1", "--reason", "bug #42"])
     assert r.exit_code == 0
-    assert tstore.pins(state)["att-1"]["reason"] == "bug #42"
+    assert tstore.pins(state)["trace-1"]["reason"] == "bug #42"
 
-    r = runner.invoke(trajectory_app, ["unpin", "att-1"])
+    r = runner.invoke(trajectory_app, ["unpin", "trace-1"])
     assert r.exit_code == 0
     assert tstore.pins(state) == {}
 
-    r = runner.invoke(trajectory_app, ["unpin", "att-1"])
+    r = runner.invoke(trajectory_app, ["unpin", "trace-1"])
     assert r.exit_code == 0
     assert "not pinned" in r.stdout
 
@@ -356,7 +359,7 @@ def test_pin_command_uses_locked_pin_attempt(state, monkeypatch) -> None:
     """Guard: the CLI must pin through the attempts-lock-aware pin_attempt —
     a lock-free resolve + literal pin() can land on an id a concurrent split
     just deleted, leaving a dangling pin that protects nothing."""
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
     calls = []
 
     def record(id_, *, reason="", state_dir=None):
@@ -381,14 +384,15 @@ def test_pin_unpin_resolve_turn_trace_id(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", attempt_id="att-x"),
-            _span("trace-2", attempt_id="att-x", name="tool.call"),
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a", name="tool.call"),
         ],
     )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["pin", "trace-1"])
     assert r.exit_code == 0
-    assert set(tstore.pins(state)) == {"att-x"}
+    assert set(tstore.pins(state)) == {aid}
 
     r = runner.invoke(trajectory_app, ["unpin", "trace-2"])
     assert r.exit_code == 0
@@ -412,10 +416,215 @@ def test_unpin_clears_stale_literal_pin(state) -> None:
     assert tstore.pins(state) == {}
 
 
+def test_unpin_clears_definition_aliases_and_members(state) -> None:
+    """Unpin on a definition drops every pin protecting the attempt: the
+    definition id, absorbed aliases, and member-level pins."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a"),
+            _span("trace-3", session_key="cli:a"),
+        ],
+    )
+    tstore.pin("trace-1", reason="member", state_dir=state)
+    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    d2 = tstore.merge_attempts([d1, "trace-3"], state_dir=state)
+    tstore.pin("trace-2", reason="manual", state_dir=state)
+    assert tstore.pins(state)
+
+    r = runner.invoke(trajectory_app, ["unpin", d2])
+
+    assert r.exit_code == 0
+    assert tstore.pins(state) == {}
+
+
+# ── merge / split ─────────────────────────────────────────────────────
+
+
+def test_merge_creates_definition(state) -> None:
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:a")],
+    )
+
+    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
+
+    assert r.exit_code == 0
+    (aid,) = tstore.definitions(state)
+    assert aid.startswith("att-")
+    assert aid in " ".join(r.stdout.split())
+    assert sorted(tstore.definitions(state)[aid]["traces"]) == ["trace-1", "trace-2"]
+
+
+def test_merge_save_list_split_roundtrip(state) -> None:
+    """The whole flow: merge -> save by member id -> one list row -> split ->
+    two list rows again."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a", name="tool.call"),
+        ],
+    )
+
+    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
+    assert r.exit_code == 0
+    (aid,) = tstore.definitions(state)
+
+    r = runner.invoke(trajectory_app, ["save", "trace-2"])
+    assert r.exit_code == 0
+    assert (state / "bundles" / aid / "manifest.json").exists()
+    assert "whole attempt" in " ".join(r.stdout.split())
+
+    # A wide terminal keeps the minted id in one table cell line (the default
+    # 80 columns folds it mid-id, breaking substring assertions).
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
+    assert r.exit_code == 0
+    squash = "".join(r.stdout.split())
+    assert squash.count(aid) == 1
+    assert "trace-1" not in squash and "trace-2" not in squash
+
+    r = runner.invoke(trajectory_app, ["split", aid])
+    assert r.exit_code == 0
+
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
+    assert r.exit_code == 0
+    squash = "".join(r.stdout.split())
+    assert "trace-1" in squash and "trace-2" in squash
+    assert aid not in squash
+
+
+def test_merge_legacy_attempt_expands_whole_group(state) -> None:
+    """A legacy id input pulls its whole span-attribute group in as members,
+    and the canonical legacy id survives as an alias."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
+            _span("trace-2", attempt_id="att-old", session_key="cli:a", name="tool.call"),
+            _span("trace-3", session_key="cli:a"),
+        ],
+    )
+
+    r = runner.invoke(trajectory_app, ["merge", "att-old", "trace-3"])
+
+    assert r.exit_code == 0
+    (aid,) = tstore.definitions(state)
+    entry = tstore.definitions(state)[aid]
+    assert sorted(entry["traces"]) == ["trace-1", "trace-2", "trace-3"]
+    assert "att-old" in entry["aliases"]
+
+
+def test_merge_rejects_unknown_id(state) -> None:
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    r = runner.invoke(trajectory_app, ["merge", "trace-1", "no-such-id"])
+    assert r.exit_code == 1
+    assert "unknown id" in " ".join(r.stdout.split())
+    assert tstore.definitions(state) == {}
+
+
+def test_merge_rejects_cross_session(state) -> None:
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:b")],
+    )
+    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
+    assert r.exit_code == 1
+    assert tstore.definitions(state) == {}
+
+
+def test_merge_rejects_single_group(state) -> None:
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-1"])
+    assert r.exit_code == 1
+    assert tstore.definitions(state) == {}
+
+
+def test_split_pure_legacy_exits_1(state) -> None:
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", attempt_id="att-old"),
+            _span("trace-2", attempt_id="att-old", name="tool.call"),
+        ],
+    )
+    r = runner.invoke(trajectory_app, ["split", "att-old"])
+    assert r.exit_code == 1
+    assert "only merged attempts can be split" in " ".join(r.stdout.split())
+
+
+def test_split_unknown_id_exits_1(state) -> None:
+    r = runner.invoke(trajectory_app, ["split", "no-such-id"])
+    assert r.exit_code == 1
+    assert "only merged attempts can be split" in " ".join(r.stdout.split())
+
+
+def test_split_reports_traces_not_attempts(state) -> None:
+    """A definition holding a multi-trace legacy group restores fewer attempts
+    than traces, so the output counts member traces, never attempts."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
+            _span("trace-2", attempt_id="att-old", session_key="cli:a", name="tool.call"),
+            _span("trace-3", session_key="cli:a"),
+        ],
+    )
+    aid = tstore.merge_attempts(["att-old", "trace-3"], state_dir=state)
+
+    r = runner.invoke(trajectory_app, ["split", aid])
+
+    assert r.exit_code == 0
+    norm = " ".join(r.stdout.split())
+    assert "3 member trace" in norm
+    assert "3 attempts" not in norm and "per-turn" not in norm
+
+    r = runner.invoke(trajectory_app, ["list"])
+    squash = "".join(r.stdout.split())
+    assert "att-old" in squash and "trace-3" in squash
+    assert aid not in squash
+    assert "trace-1" not in squash and "trace-2" not in squash
+
+
+def test_split_by_member_id_does_not_claim_removed_input(state) -> None:
+    """split addressed by a member id (or alias) must not present that input
+    as the deleted definition."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a"),
+            _span("trace-3", session_key="cli:a"),
+        ],
+    )
+    tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    r = runner.invoke(trajectory_app, ["split", "trace-1"])
+
+    assert r.exit_code == 0
+    norm = " ".join(r.stdout.split())
+    assert "addressed by trace-1" in norm
+    assert "Removed definition" not in norm
+    assert tstore.definitions(state) == {}
+
+    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    tstore.merge_attempts([d1, "trace-3"], state_dir=state)
+
+    r = runner.invoke(trajectory_app, ["split", d1])
+
+    assert r.exit_code == 0
+    norm = " ".join(r.stdout.split())
+    assert f"addressed by {d1}" in norm
+    assert "Removed definition" not in norm
+    assert tstore.definitions(state) == {}
+
+
 # ── list ──────────────────────────────────────────────────────────────
 
 
-def test_list_aggregates_attempts(state) -> None:
+def test_list_legacy_logs_still_group(state) -> None:
+    """Pre-definition logs (span-level attempt.id) keep aggregating by it."""
     _write_log(
         state / "logs" / "audit-spans.log",
         [
@@ -438,7 +647,7 @@ def test_list_session_filter(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", attempt_id="att-x", session_key="cli:a"),
+            _span("trace-1", session_key="cli:a"),
             _span("trace-3", session_key="cli:b"),
         ],
     )
@@ -447,13 +656,163 @@ def test_list_session_filter(state) -> None:
 
     assert r.exit_code == 0
     assert "trace-3" in r.stdout
-    assert "att-x" not in r.stdout
+    assert "trace-1" not in r.stdout
+
+
+def test_list_folds_definition_members_single_row(state) -> None:
+    """Definition ownership outranks a member's legacy attempt.id — a merged
+    legacy member must not surface as a second row."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a"),
+        ],
+    )
+    aid = tstore.merge_attempts(["att-old", "trace-2"], state_dir=state)
+
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
+
+    assert r.exit_code == 0
+    squash = "".join(r.stdout.split())
+    assert aid in squash
+    assert "att-old" not in squash
+    assert "trace-1" not in squash and "trace-2" not in squash
+
+
+def test_list_merged_attempt_shows_verdict_via_alias(state) -> None:
+    """A verdict recorded under an absorbed definition id (now an alias) stays
+    visible on the current definition's row; a later verdict wins."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a"),
+            _span("trace-2", session_key="cli:a"),
+            _span("trace-3", session_key="cli:a"),
+        ],
+    )
+    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    tverdict.record_verdict(d1, "fail", source="user", state_dir=state)
+    d2 = tstore.merge_attempts([d1, "trace-3"], state_dir=state)
+    assert d1 in tstore.definitions(state)[d2]["aliases"]
+
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
+    assert r.exit_code == 0
+    assert d2 in "".join(r.stdout.split())
+    assert "fail" in r.stdout
+
+    tverdict.record_verdict(d2, "pass", source="user", state_dir=state)
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
+    assert r.exit_code == 0
+    assert "pass" in r.stdout and "fail" not in r.stdout
 
 
 def test_list_empty(state) -> None:
     r = runner.invoke(trajectory_app, ["list"])
     assert r.exit_code == 0
     assert "No attempts found" in r.stdout
+
+
+# ── markup safety ─────────────────────────────────────────────────────
+
+
+def test_list_renders_markup_legacy_id_literally(state) -> None:
+    """A legal legacy id may contain Rich markup; the table cell must show it
+    literally instead of crashing markup parsing."""
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="x[/red]y")])
+
+    r = runner.invoke(trajectory_app, ["list"])
+
+    assert r.exit_code == 0
+    assert "x[/red]y" in "".join(r.stdout.split())
+
+
+def test_list_empty_markup_session_is_safe(state) -> None:
+    """The no-matches notice echoes the --session filter, which is user input."""
+    r = runner.invoke(trajectory_app, ["list", "--session", "x[/dim]y"])
+
+    assert r.exit_code == 0
+    assert "x[/dim]y" in "".join(r.stdout.split())
+    assert "No attempts found" in r.stdout
+
+
+def test_list_tolerates_malformed_span_attributes(state) -> None:
+    """JSON-legal records with non-string ids, keys, or timestamps degrade
+    per-field instead of killing the whole listing."""
+    spans = [
+        _span("trace-1", session_key="cli:a"),
+        _span("trace-int"),
+        _span("trace-list"),
+        _span("trace-badkey"),
+        _span("trace-badtime", session_key="cli:a"),
+    ]
+    spans[1]["attributes"]["attempt.id"] = 123
+    spans[2]["attributes"]["attempt.id"] = ["not", "hashable"]
+    spans[3]["attributes"]["session.key"] = 123
+    spans[4]["startTime"] = 123
+    spans.append({"schemaVersion": "audit.span.v1", "traceId": 456, "name": "session.turn", "attributes": {}})
+    _write_log(state / "logs" / "audit-spans.log", spans)
+
+    r = runner.invoke(trajectory_app, ["list"])
+
+    assert r.exit_code == 0
+    squash = "".join(r.stdout.split())
+    assert "trace-1" in squash
+    # Non-string attempt.id falls back to the trace id; the rest degrade to "-".
+    assert "trace-int" in squash and "trace-list" in squash
+    assert "trace-badkey" in squash and "trace-badtime" in squash
+
+
+def test_markup_legacy_id_success_paths_are_safe(state) -> None:
+    legacy = "x[/red]y"
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id=legacy)])
+
+    r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail"])
+    assert r.exit_code == 0
+    assert legacy in "".join(r.stdout.split())
+
+    r = runner.invoke(trajectory_app, ["pin", "trace-1"])
+    assert r.exit_code == 0
+    assert legacy in "".join(r.stdout.split())
+    assert legacy in tstore.pins(state)
+
+    r = runner.invoke(trajectory_app, ["unpin", legacy])
+    assert r.exit_code == 0
+    assert legacy in "".join(r.stdout.split())
+    assert tstore.pins(state) == {}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["merge", "x[/red]y", "trace-1"],
+        ["split", "x[/red]y"],
+        ["save", "x[/red]y"],
+        ["replay", "x[/red]y"],
+        ["minimize", "x[/red]y"],
+    ],
+    ids=["merge", "split", "save", "replay", "minimize"],
+)
+def test_markup_unknown_target_error_paths_are_safe(state, argv) -> None:
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+
+    r = runner.invoke(trajectory_app, argv)
+
+    assert r.exit_code == 1
+    assert "x[/red]y" in "".join(r.stdout.split())
+
+
+def test_minimize_markup_manifest_id_error_is_safe(state, tmp_path) -> None:
+    """A markup-bearing manifest attempt_id (it contains '/') is refused as a
+    default cassette directory name, with the id echoed literally."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(json.dumps({"format_version": 1, "attempt_id": "x[/red]y"}), encoding="utf-8")
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
+
+    assert r.exit_code == 1
+    assert "x[/red]y" in "".join(r.stdout.split())
 
 
 # ── replay ────────────────────────────────────────────────────────────
