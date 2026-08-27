@@ -505,6 +505,7 @@ window.RavenIslands = {
     history: transcript.history,
     delivered: transcript.delivered,
     dagFeed: transcript.dagFeed,
+    spawnFeed: transcript.spawnFeed,
     stopStream: transcript.stopStream,
     nudge: transcript.nudge,
     redraw: transcript.redraw,

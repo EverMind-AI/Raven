@@ -22,6 +22,45 @@ export interface DagRunLike {
   task_summary?: string
 }
 
+/* What `subagent.context` answers. `messages` is the same wire shape
+   `session.resume` returns -- which is the whole point of that shape: one
+   renderer draws a delegated run's conversation and a session's, so the two
+   cannot drift. */
+/* One row of `subagent.list`. Only the fields a card reads: the row also carries
+   the clocks and the token cost, which are the panel's business. */
+export interface SpawnListRow {
+  agent?: string | null
+  /* ISO here, where the event sends ms. Both name the run's own clock. */
+  started_at?: string | null
+  ended_at?: string | null
+  id?: string
+  instance?: string | null
+  kind?: string
+  label?: string
+  status?: string
+}
+
+export interface SpawnRecordLike {
+  messages?: HistoryMessage[]
+  status?: string | null
+}
+
+/* One `subagent.status` frame, as the live layer forwards it. The fields this
+   card reads, not the whole wire shape: `task_id`, `started_at` and `ended_at`
+   are the live-agents strip's business, and the card has its own clock. */
+export interface SubagentStatusLike {
+  agent?: string
+  call_id?: string | null
+  /* The RUN's own clock, in ms. Present from `running` onward and on the terminal
+     frame; the tool row's clock measures the dispatch, not the work. */
+  started_at?: number | null
+  ended_at?: number | null
+  instance?: string | null
+  label?: string
+  status?: string
+  tool_call_id?: string | null
+}
+
 export interface CallData {
   v: number
   id: number
@@ -42,6 +81,43 @@ export interface CallData {
   open: boolean
   /* spawn / dag cards */
   t0: number
+  /* Who the run is and what it was asked, from `subagent.status` rather than
+     from the model's own arguments. The event is the authority: the caller may
+     omit `instance` and have one minted for it, and the header has to name the
+     handle that was actually used. All three land on the `pending` frame, before
+     any record exists. */
+  spawnAgent: string
+  spawnInstance: string
+  spawnLabel: string
+  /* The run's own lifecycle word, which is not the tool call's. A spawn returns
+     when the work is *dispatched*, so the tool row is `done` while the run is
+     still going -- reading `done` as "the sub-agent finished" is what made a
+     finished-looking card sit on a live run. */
+  spawnStatus: string
+  /* The record id `subagent.context` reads. Empty until the run reports
+     `running`, which is when its record is opened. */
+  spawnId: string
+  /* The manager's task id, which is what a RESTORED card has instead of a record
+     id: a record's directory is `<stamp>-<task_id>`, so one `subagent.list` read
+     turns this into `spawnId`. Empty on a live card, which never needs it. */
+  spawnTaskId: string
+  /* Whether that list read has been made for this card. Once, like the dag
+     card's `asked`: the answer cannot change for a settled run. */
+  spawnAsked: boolean
+  /* The RUN's own clock, in ms since the epoch, from whichever source named it.
+     Not the tool call's: a spawn returns when the work is dispatched, so `ms` is
+     near zero on every spawn card and reading it printed `耗时 0.0s` over a run
+     that had taken eight seconds. Zero means unknown. */
+  spawnT0: number
+  spawnT1: number
+  /* The run's own messages, newest last, as `subagent.context` answers them.
+     Live while it runs: the acp backend republishes its transcript into the
+     activity index on every update, and the method serves that when the record's
+     file does not exist yet. */
+  stream: HistoryMessage[]
+  /* Whether a read is in flight, so a slow answer cannot stack up behind the
+     heartbeat. */
+  reading: boolean
   runId: string | null
   /* What the graph was dispatched for. On the arguments for a model-composed
      graph, and only from `dag.get` for a playbook load, whose arguments name
@@ -235,6 +311,11 @@ export interface Lane {
    surface the old widgets returned, driving the store instead of the DOM. */
 export interface CallHandle {
   done(ok: boolean, res: unknown, ms: number, diff?: string | string[] | null, truncated?: boolean): void
+  /* The run a restored spawn call started, from the `spawn_task_id` the server
+     stamped on its result row. A live card learns its run from
+     `subagent.status`; a restored one saw none of those frames, and this is the
+     only thread back to the record -- the same one ui-tui pulls on. */
+  spawnTask?(taskId: string): void
 }
 
 export interface StepHandle {
@@ -262,6 +343,11 @@ export interface NoteHandle {
 /* The history messages session.resume hands over. */
 export interface HistoryMessage {
   role: string
+  /* The run a spawn call started, stamped by the server onto the result row
+     whose sentence names it (`session.resume`). Absent on every other tool, and
+     on a spawn refused before it ran. What a restored card resolves itself by --
+     it saw no `subagent.status` and has no record id without this. */
+  spawn_task_id?: string
   text?: string
   name?: string
   timestamp?: string | number
@@ -305,6 +391,14 @@ export interface TranscriptSource {
      which is why the card could name every node and never the graph: a field
      this seam did not return was a field no card could draw. */
   dagRun?: (runId: string) => Promise<DagRunLike>
+  /* One spawned run's messages so far, by the record id `subagent.status`
+     reported. Answers a moving stream while the run is live, not a finished
+     transcript: see MsgLike. */
+  spawnRecord?: (callId: string) => Promise<SpawnRecordLike>
+  /* Every delegated call this conversation made, as `subagent.list` answers it.
+     Read to turn a restored card's task id into the record id its stream is
+     read by -- once per conversation, not once per card. */
+  spawnList?: () => Promise<SpawnListRow[]>
   openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Open the delegated GRAPH a delivery came from. One verb rather than the

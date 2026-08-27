@@ -167,6 +167,25 @@ DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId }
 DS.transcript.dagRun = (runId) => rpc.call('dag.get', { run_id: runId, session_key: sessionCurrent() })
   .then((r) => (r && r.run) || {});
 
+/* One spawned run's messages so far. Answers a MOVING stream while the run is
+   live: the record's own transcript.jsonl is only written when the run finishes,
+   and until then `subagent.context` serves the activity collector's copy, which
+   the acp backend republishes on every update it receives. */
+DS.transcript.spawnRecord = (callId) =>
+  rpc.call('subagent.context', { id: callId, session_id: sessionCurrent() });
+
+/* Every delegated call this conversation made. Read once per conversation, to
+   turn a restored card's task id into the record id its stream is read by: a
+   record's directory is `<stamp>-<task_id>`, so the row is found by suffix. */
+DS.transcript.spawnList = () => {
+  /* Guarded like DS.agents.list is: a server without the subagent surface answers
+     -32601, and a card that asked would then re-ask on every reopen for an answer
+     that cannot arrive. */
+  if (!rpcHas('subagent')) return Promise.resolve([]);
+  return rpc.call('subagent.list', { session_id: sessionCurrent() })
+    .then((r) => (r && r.items) || []);
+};
+
 /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */

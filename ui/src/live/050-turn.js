@@ -188,6 +188,14 @@ function onEvent(ev) {
        at bring-up and flushed to the first subscription, so this arrives once
        per restart rather than per job -- the count is the payload's own. */
     toast(T('gui.cron.missed_x', { count: p.count }));
+  } else if (ev.type === 'subagent.status') {
+    /* The run's own lifecycle, which is not the spawn tool call's: the tool
+       returns when the work is dispatched. This is what tells the card who it
+       dispatched (`instance`, `agent`, `label`, all on the first frame) and,
+       from `running`, the record id its stream is read by. Through the island
+       for the same reason the dag events go through it: what a frame means to a
+       card is one definition, next to the model it moves. */
+    RavenIslands.transcript.spawnFeed(p);
   } else if (ev.type === 'subagent.delivered') {
     /* A result was submitted, not yet visible: the turn it opens is still
        queued behind its parent, so the row does NOT belong here. It arrives

@@ -181,6 +181,10 @@ export function dagFeed(type: string, p: Parameters<typeof store.dagFeed>[1]): v
   store.dagFeed(type, p)
 }
 
+export function spawnFeed(p: Parameters<typeof store.spawnFeed>[0]): void {
+  store.spawnFeed(p)
+}
+
 export function stopStream(): void {
   store.stopFlush(mainLane())
 }

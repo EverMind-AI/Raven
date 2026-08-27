@@ -844,6 +844,27 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    was handed the work, its state, and -- for a graph -- every node with its
    own chip, painted live off the dag.* events. */
 .dtl.dlg .bd { padding: 9px 12px 10px; }
+/* ── a spawn's live second line ───────────────────────────────────
+   The row above says what was dispatched and never changes; this says what the
+   run is doing and changes constantly. Indented under the row's icon so the two
+   read as one card, and clipped to one line: it is a pulse, not a transcript --
+   the transcript is behind the caret. */
+.dlgtail {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  margin: 1px 0 2px 20px; min-width: 0; max-width: 100%;
+  color: var(--faint); font-size: 11.5px; line-height: 1.5;
+}
+.dlgtail:hover { color: var(--muted); }
+.dlgtail .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlgtail .wkg { flex: none; }
+/* The run's own conversation inside the fold. Its own scroll so a long run
+   cannot push the rest of the trail off screen, and a rule down the left so it
+   reads as a quotation of another agent rather than as this one's own turn. */
+.dlgchat {
+  margin-top: 8px; padding-left: 10px; border-left: 1px solid var(--line-soft);
+  max-height: 340px; overflow-y: auto; overscroll-behavior: contain;
+}
+.dlgchat > .wsempty { padding: 6px 0; color: var(--faint); font-size: 11.5px; }
 .dlg .dgr { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; font-size: 11.5px; }
 .dlg .dgr .k { color: var(--faint); }
 .dlg .dgr .v {
