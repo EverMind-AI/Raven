@@ -470,6 +470,25 @@ def register_config_methods(
 
     dispatcher.register("raven.channels.qr", _channels_qr)
 
+    async def _channels_start(params: dict) -> dict:
+        """Start (or stop) one channel's adapter now, without a gateway restart.
+
+        The switch is written by whichever process the reader is talking to --
+        the page's ``raven serve``, the TUI, the CLI -- and the adapter only
+        exists here. So enabling a channel used to mean nothing until the next
+        launch: no adapter, no QR to scan, no messages. ``outcome`` is a word
+        from ChannelManager, every value of which is a state the caller draws.
+        """
+        name = str(params.get("name") or "")
+        want_on = params.get("enabled")
+        if channel_manager is None:
+            return {"outcome": "no_manager"}
+        if want_on is False:
+            return {"outcome": await channel_manager.stop_one(name)}
+        return {"outcome": await channel_manager.start_one(name)}
+
+    dispatcher.register("raven.channels.start", _channels_start)
+
     # Rebinding: pairing a QR-login channel to a different account without
     # stopping it. The adapter keeps the account it has until a new scan is
     # confirmed, so these two methods are safe to call on a live channel and a

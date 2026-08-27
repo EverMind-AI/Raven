@@ -257,6 +257,20 @@ class RavenChannelsQrParams(_Strict):
     name: str | None = None
 
 
+class RavenChannelsStartParams(_Strict):
+    name: str | None = None
+    enabled: bool | None = Field(None, description="False stops the adapter; anything else starts it.")
+
+
+class RavenChannelsStartResult(_Strict):
+    outcome: str = Field(
+        ...,
+        description=(
+            "started | already | stopped | absent | disabled | deny_all | missing_dep | unknown | no_manager."
+        ),
+    )
+
+
 class WebRebindState(_Strict):
     """How a QR channel's rebind is going, carried on the QR poll the client
     already makes.
@@ -706,6 +720,7 @@ WEB_METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "raven.channels.list": (RavenChannelsListParams, RavenChannelsListResult),
     "raven.channels.set": (RavenChannelsSetParams, RavenChannelsSetResult),
     "raven.channels.qr": (RavenChannelsQrParams, RavenChannelsQrResult),
+    "raven.channels.start": (RavenChannelsStartParams, RavenChannelsStartResult),
     "raven.channels.rebind": (RavenChannelsRebindParams, RavenChannelsRebindResult),
     "raven.channels.rebind.cancel": (
         RavenChannelsRebindCancelParams,

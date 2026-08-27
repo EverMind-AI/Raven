@@ -1002,6 +1002,56 @@ async def test_channels_configure_connects_and_disconnects(isolated_config: None
     assert raw["channels"]["telegram"]["token"] == "123:abc", "disconnecting must keep the credentials"
 
 
+async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated_config: None) -> None:
+    """The switch is config; the adapter is the gateway's, in another process.
+    Writing the flag alone was the whole of "connect", so a channel turned on
+    here did nothing until the next launch -- for a scan-login entrance that
+    meant no QR could ever be fetched and nobody could sign in from the UI.
+    """
+    asked: list[tuple[str, bool]] = []
+
+    async def fake_start(name: str, *, enabled: bool = True) -> str:
+        asked.append((name, enabled))
+        return "started" if enabled else "stopped"
+
+    import raven.channels.live_probe as probe
+
+    probe_start = probe.channel_start
+    probe.channel_start = fake_start
+    try:
+        await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+        assert asked == [("telegram", True)]
+        await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
+        assert asked == [("telegram", True), ("telegram", False)]
+        # A credential correction with no switch in it does not restart anything.
+        await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
+        assert asked == [("telegram", True), ("telegram", False)]
+    finally:
+        probe.channel_start = probe_start
+
+
+async def test_channels_configure_still_applies_when_no_gateway_answers(isolated_config: None) -> None:
+    """No gateway is the ordinary case for a first run: the config write stands
+    and the next launch honours it, so the failure to reach one must not turn a
+    successful write into an error."""
+    import json as _json
+
+    import raven.channels.live_probe as probe
+    from raven.config.loader import get_config_path
+
+    async def boom(name: str, *, enabled: bool = True) -> str:
+        raise OSError("no gateway here")
+
+    probe_start = probe.channel_start
+    probe.channel_start = boom
+    try:
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+    finally:
+        probe.channel_start = probe_start
+    assert r == {"applied": True}
+    assert _json.loads(get_config_path().read_text())["channels"]["telegram"]["enabled"] is True
+
+
 async def test_channels_configure_refuses_an_empty_request(isolated_config: None) -> None:
     from raven.rpc.errors import ConfigValidationError
 

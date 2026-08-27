@@ -520,6 +520,17 @@ def register(app: typer.Typer) -> None:
                     send_max_retries=config.gateway.send_max_retries,
                 )
 
+                # A channel enabled while the gateway runs gets its outlet too:
+                # build_gateway registers one per channel that existed at
+                # launch, and without this a hot-started channel could receive
+                # but every reply to it was dropped by the hub.
+                from raven.channels.outlet import ChannelOutletAdapter
+
+                channels.on_started = lambda ch: gw_hub.register(ChannelOutletAdapter(ch))
+                # And retired when it stops, so a channel disabled and enabled
+                # again is not left replying through the adapter it dropped.
+                channels.on_stopped = gw_hub.retire
+
                 # Web-app channel (ui-webui P1): its own streaming spine + a
                 # WebSocket JSON-RPC server the web backend connects to as a
                 # client, built alongside the gateway's spine and sharing this

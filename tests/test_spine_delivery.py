@@ -448,3 +448,120 @@ async def test_drain_keeps_wait_idle_consistent(hub):
     assert hub.drain() == 1  # s2 dropped (with task_done)
     slow.gate.set()  # s1 completes -> task_done
     await hub.wait_idle("slow")  # both the in-flight and the drained item accounted -> returns
+
+
+# ── retire: a channel whose adapter is replaced ────────────────────────
+
+
+async def test_retire_lets_the_next_register_take_on_a_channel_that_delivered(hub):
+    """The reason retire exists. A worker is resident and captures its outlet
+    when it starts, so re-registering alone left the old adapter serving: an
+    entrance disabled and enabled again received on the new adapter and replied
+    through the stopped one."""
+    old, new = FakeOutlet("tg"), FakeOutlet("tg")
+    hub.register(old)
+    first = Text(content="one", source=_src("tg"))
+    await hub.dispatch(first)
+    await _settle(lambda: old.received == [first])
+
+    await hub.retire("tg")
+    hub.register(new)
+    second = Text(content="two", source=_src("tg"))
+    await hub.dispatch(second)
+    await _settle(lambda: new.received == [second])
+    assert old.received == [first], "the stopped adapter must not see anything after the swap"
+
+
+async def test_retire_releases_a_caller_already_waiting_on_the_queue(hub):
+    """Queued events are dropped -- the adapter they were addressed to is going
+    away -- but marked done first, because a caller that entered `wait_idle`
+    before the retire is holding that queue object and its `join()` is the one
+    thing popping the queue cannot release.
+
+    Entering the wait first is the whole test: asked afterwards, `wait_idle`
+    finds no queue and returns at once whether or not anything was marked done.
+    """
+    gated = GatedOutlet("tg")
+    hub.register(gated)
+    await hub.dispatch(Text(content="blocked", source=_src("tg")))
+    await _settle(lambda: gated.entered.is_set())
+    await hub.dispatch(Text(content="queued", source=_src("tg")))
+    waiting = asyncio.create_task(hub.wait_idle("tg"))
+    await _settle(lambda: not waiting.done())
+
+    await hub.retire("tg")
+    await asyncio.wait_for(waiting, timeout=1)
+    assert gated.received == [], "the gate never opened, so nothing was delivered"
+
+
+async def test_retire_is_a_no_op_for_a_channel_that_never_delivered(hub):
+    await hub.retire("nobody")
+    hub.register(FakeOutlet("tg"))
+    await hub.retire("tg")  # registered, never dispatched: no worker, no queue
+
+
+async def test_retire_cannot_be_outrun_by_a_concurrent_dispatch(hub):
+    """A dispatch that arrives during a retirement must not resurrect the
+    channel. While retire awaited the cancelled worker with the outlet still in
+    the table, a dispatch in that moment installed a *new* resident worker on
+    the old queue. Retire then dropped the
+    queue without noticing it, and every later reply went onto a queue that
+    worker was not reading.
+
+    The outlet now goes before the first await. `_enqueue` reads the outlet and
+    installs a worker with no await between, so a dispatch either ran wholly
+    before that line or drops on the missing outlet.
+    """
+    old, new = FakeOutlet("tg"), FakeOutlet("tg")
+    hub.register(old)
+    await hub.dispatch(Text(content="one", source=_src("tg")))
+    await _settle(lambda: old.received)
+
+    # Both in the same tick, which is the only way the window opens.
+    await asyncio.gather(hub.retire("tg"), hub.dispatch(Text(content="racing", source=_src("tg"))))
+
+    hub.register(new)
+    landed = Text(content="two", source=_src("tg"))
+    await hub.dispatch(landed)
+    await asyncio.wait_for(hub.wait_idle("tg"), timeout=1)
+    assert new.received == [landed]
+    assert old.received == [Text(content="one", source=_src("tg"))]
+
+
+async def test_retire_accounts_for_a_producer_blocked_on_a_full_queue(hub):
+    """A producer suspended on a full queue has to be accounted for too.
+    `get_nowait` wakes one, but it only runs when the loop next gets control -- so a single drain
+    pass declares the queue empty and the resumed producer then adds an item to
+    it, unfinished, on a queue whose worker is already cancelled. Anyone inside
+    `wait_idle` waits forever on that item.
+    """
+    from raven.spine.delivery import _OUTLET_QUEUE_MAXSIZE
+
+    gated = GatedOutlet("tg")
+    hub.register(gated)
+    # One in flight (held at the gate), the queue filled to its cap, and one
+    # more dispatch that cannot fit and suspends inside put().
+    await hub.dispatch(Text(content="held", source=_src("tg")))
+    await _settle(lambda: gated.entered.is_set())
+    for i in range(_OUTLET_QUEUE_MAXSIZE):
+        await hub.dispatch(Text(content=f"q{i}", source=_src("tg")))
+    # The queue itself, because that is what a caller inside wait_idle holds and
+    # what has to come out of this accounted for. Asking the hub afterwards
+    # cannot see it: retire drops it from the table, and wait_idle then answers
+    # "already idle" for a queue with an item nobody will ever mark done.
+    queue = hub._queues["tg"]
+    blocked = asyncio.create_task(hub.dispatch(Text(content="over", source=_src("tg"))))
+    # Suspended *inside* put, which is the whole scenario. "the task is not
+    # done" is true the moment it is created and before it has run at all --
+    # settling on that put nothing in the queue's way and the test proved
+    # nothing.
+    await _settle(lambda: bool(queue._putters))
+
+    await hub.retire("tg")
+
+    await asyncio.wait_for(blocked, timeout=1)
+    # join() is the assertion: it returns only when every item that ever entered
+    # was marked done, including the one the woken producer added after the first
+    # drain pass had declared the queue empty.
+    await asyncio.wait_for(queue.join(), timeout=1)
+    assert queue.qsize() == 0
