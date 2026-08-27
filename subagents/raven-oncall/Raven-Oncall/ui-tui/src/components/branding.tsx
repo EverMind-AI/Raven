@@ -230,10 +230,12 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
   const lineBudget = Math.max(12, w - 2)
   const strip = (s: string) => (s.endsWith('_tools') ? s.slice(0, -6) : s)
 
-  // Footer meta (model · provider · session). Kept beside `/help` only when it
-  // fits the column; otherwise the footer becomes a column so the whole meta
-  // line drops below `/help` instead of wrapping mid-string.
-  const footerMeta = `${info.model.split('/').pop()} · ${formatProvider(info.provider, info.model_id)}${sid ? ` · ${sid}` : ''}`
+  // Footer meta (model · provider · endpoint · session). Kept beside `/help`
+  // only when it fits the column; otherwise the footer becomes a column so the
+  // whole meta line drops below `/help` instead of wrapping mid-string. The
+  // endpoint segment appears only for a provider that has several, since a
+  // single-endpoint one has no label worth a slot.
+  const footerMeta = `${info.model.split('/').pop()} · ${formatProvider(info.provider, info.model_id)}${info.endpoint ? ` · ${info.endpoint}` : ''}${sid ? ` · ${sid}` : ''}`
   const footerInline = FOOTER_HELP_TEXT.length + 2 + footerMeta.length <= w
 
   // ── Local collapse state for each section ──
@@ -436,30 +438,6 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
               {footerMeta}
             </Text>
           </Box>
-
-          {typeof info.update_behind === 'number' && info.update_behind > 0 && (
-            <>
-              <Box>
-                <Text color={t.color.border} wrap="truncate">
-                  {'─'.repeat(Math.max(1, w))}
-                </Text>
-              </Box>
-              <Text bold color={t.color.warn}>
-                ! {info.update_behind} {info.update_behind === 1 ? 'commit' : 'commits'} behind
-                <Text bold={false} color={t.color.warn} dimColor>
-                  {' '}
-                  - run{' '}
-                </Text>
-                <Text bold color={t.color.warn}>
-                  {info.update_command || 'raven upgrade'}
-                </Text>
-                <Text bold={false} color={t.color.warn} dimColor>
-                  {' '}
-                  to update
-                </Text>
-              </Text>
-            </>
-          )}
         </Box>
 
         <Box marginTop={1}>

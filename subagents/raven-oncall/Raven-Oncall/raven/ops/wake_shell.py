@@ -40,8 +40,23 @@ a run on a different model is. Report it before attributing anything to it.
 
 What it deliberately does not do:
 
-  - it does not deliver to anyone. The child process owns delivery through its
-    own channel wiring, the same as when a TUI fires the job.
+  - it does not deliver to anyone, and does not compose anything, in the hosting
+    it was written for: the child process owns delivery through its own channel
+    wiring, the same as when a TUI fires the job.
+
+    That holds while nobody is watching, which is the case this shell exists for.
+    It stops holding the moment this install is a sub-agent instance with an
+    operator's pane open on it: the child's reply goes to a pipe this shell reads
+    and drops, so the round happens and the person never sees it. Measured
+    2026-08-25 through ``/new-instance``: the first round reached the operator
+    (it was the direct turn that started the campaign) and rounds two onward did
+    not, because from there on the only thing firing them was this shell.
+
+    ``--dispatch-agent`` is the answer to that and changes only WHO ANSWERS the
+    wake, never what the wake says: the job is handed to the host's store
+    addressed to the instance that owns it, and the host runs it as one
+    direct-chat turn against that instance. Still no delivery decided here -- the
+    hand-off names the addressee and the host's ordinary machinery does the rest.
   - it does not retry a failed turn. ``CronService`` records ``last_status`` and
     ``last_error``; a retry policy would be a decision, and there is no evidence
     yet about what the right one is.
@@ -81,6 +96,16 @@ if TYPE_CHECKING:
 # The ephemeral channels no resident process claims today. IM channels are left
 # to the gateway on purpose.
 DEFAULT_CHANNELS: frozenset[str] = frozenset({"tui", "cli"})
+
+# How often the sweep looks for dispatched wakes whose turn has finished.
+_SWEEP_INTERVAL_S = 30.0
+# A backstop, not the signal. The signal is the handed-over job disappearing from
+# the host's store, which is precise; this only bounds the case where that can no
+# longer be read -- an unreadable store, a host that rewrote it by hand -- so the
+# campaign is not left waiting on an answer that will never come. Deliberately
+# long: whenever the store IS readable it decides, and a slow turn must never be
+# judged for not having scheduled something it is still working on.
+_DISPATCH_BACKSTOP_S = 1800.0
 
 LEDGER_FILE = "wake_shell.jsonl"
 
@@ -229,6 +254,8 @@ class WakeShell:
         ledger_dir: Path | None = None,
         allow_shared_store: bool = False,
         fire_missed: bool = False,
+        notify_store: Path | None = None,
+        dispatch_agent: str | None = None,
     ) -> None:
         from raven.proactive_engine.schedulers.cron.service import CronService
 
@@ -242,19 +269,215 @@ class WakeShell:
         self.overdue: list[OverdueWake] = []
         # job_id -> how late that wake was, so the turn's own record carries it.
         self._late_by_job: dict[str, int] = {}
+        # Where "this campaign concluded" is delivered, or None for the old
+        # silence. The gap it closes, measured 2026-08-25: a campaign started
+        # from a host raven's direct chat ran and concluded entirely in
+        # wake-spawned turns, whose stdout only this shell ever reads -- the
+        # person found out it had finished by asking. The store named here is
+        # the HOST raven's cron store: its TUI already polls it for reminders,
+        # so a one-shot ownerless job on the "tui" channel surfaces there with
+        # no host-side change, waits if every window is closed, and is deleted
+        # once shown. This shell stays a messenger -- the text is lifted from
+        # the campaign's own report, never composed.
+        self._notify_store = Path(notify_store) if notify_store else None
+        # Campaigns whose conclusion was already announced -- or that were
+        # concluded before this shell started, which a restart must not
+        # re-announce. In-memory on purpose: the cost of the miss window (a
+        # conclusion landing exactly between shell restarts goes unannounced)
+        # is one silent ending, the same as today; a persisted set would be a
+        # second ledger to keep true.
+        self._notified: set[str] = set(self._concluded_campaigns())
+        # The name this install is registered under on the HOST raven, or None for
+        # the old behaviour of answering every wake in a child process of our own.
+        #
+        # Set, a wake owned by a window is handed back to that window instead of
+        # being answered here -- see ``_dispatch_handle``. This is the difference
+        # between the two hostings, and it is a difference in WHO IS WATCHING, not
+        # in what the loop does: with nobody at a terminal a wake answered in a
+        # child process is the best available outcome, and with an operator
+        # holding that instance's pane open it is the worst, because the round
+        # happens and they never see it.
+        self._dispatch_agent = (dispatch_agent or "").strip() or None
+        # Wakes handed to the host, each with the moment after which this shell
+        # should ask whether anything came of it. Held in memory on purpose: a
+        # restart means no turn of ours is outstanding, and re-arming for a turn
+        # some previous process dispatched would be deciding about a turn nobody
+        # here watched. The cost of the miss window is one unwatched round, and
+        # the wake the campaign's own turn schedules is unaffected.
+        self._rearm_due: list[tuple[float, str, "CronJob"]] = []
+        self._sweep_task: asyncio.Task | None = None
         self._cron = CronService(
             self.store_path,
             on_job=self._fire,
             allowed_channels=set(allowed_channels) if allowed_channels is not None else None,
+            # This runner holds no conversation, so the 2026-08-14 hazard the
+            # owner rule guards against cannot occur here -- and every wake it
+            # exists for is owned by a one-shot turn that is dead by the time
+            # the wake is due. A live owner still keeps its wake.
+            adopt_orphans=True,
         )
 
-    async def _fire(self, job: "CronJob") -> None:
-        """Spawn the turn and record that it happened.
+    def _dispatch_target(self, job: "CronJob") -> tuple[str, str] | None:
+        """``(handle, session_key)`` for the host instance that owns this wake.
+
+        A wake carries its owner as this install's own session key, and that
+        session was minted by the host: ``subagent.json`` passes
+        ``--session {agent_id}``, so the owner is ``cli:<agent id>``.
+
+        The agent id is NOT the handle. Measured 2026-08-26 on a live
+        ``/new-instance`` run: the wake's owner was
+        ``cli:c9514237-6b26-450a-87dc-4229e3b92c3c`` while the host knew that
+        very instance as ``raven-oncall-ca43bc``. A provisioned id and a handle
+        are two names the host keeps for one instance, and only the host's
+        registry relates them -- ``{agent_id}`` is the only one of the two the
+        command template can even substitute, so the child never sees the other.
+
+        The session key has to come from the same row for the same reason. The
+        lane a direct chat runs on is ``<session key>#<agent>/<handle>``, and the
+        session key is the host TUI's own (``tui:20260826_102911_ff4d5f``), not
+        the ``tui:default`` a cron binding would suggest. Reconstructing it from
+        the job's channel and recipient produces a lane no pane subscribes to,
+        which loses the reply exactly as silently as not sending it.
+
+        Read at fire time rather than cached: the operator may close the pane and
+        open another between one wake and the next, and the row that matters is
+        the one true when the wake goes off.
+
+        None whenever the answer is not certain: no ``--dispatch-agent``, no
+        notify store, an owner that is not a ``cli:`` session, or no row for this
+        agent id. A wake this shell cannot address still has to be answered here
+        rather than dropped -- an unwatched campaign is the one outcome worse
+        than an unseen round.
+        """
+        if self._dispatch_agent is None or self._notify_store is None:
+            return None
+        owner = (getattr(job.payload, "owner", None) or "").strip()
+        if not owner.startswith("cli:"):
+            return None
+        agent_id = owner[len("cli:"):].strip()
+        if not agent_id:
+            return None
+        # The host home is the notify store's grandparent -- <home>/cron/jobs.json
+        # -- so the one path this shell is given locates the registry too, and no
+        # second flag can be set to a different install than the store.
+        registry = Path(self._notify_store).parent.parent / "subagent_instances.json"
+        try:
+            rows = json.loads(registry.read_text(encoding="utf-8")).get("instances") or []
+        except (OSError, ValueError, AttributeError):
+            return None
+        best: dict[str, Any] | None = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("agent") != self._dispatch_agent or row.get("agentId") != agent_id:
+                continue
+            if best is None or (row.get("updatedAtMs") or 0) > (best.get("updatedAtMs") or 0):
+                best = row
+        if best is None:
+            return None
+        handle = str(best.get("handle") or "").strip()
+        session_key = str(best.get("sessionKey") or "").strip()
+        if not handle or ":" not in session_key:
+            return None
+        return handle, session_key
+
+    def _dispatch_to_host(self, job: "CronJob", handle: str, session_key: str) -> str:
+        """Hand this wake to the host raven, addressed to the instance that owns it.
+
+        A plain write into the host's store, the same door ``_deliver_conclusion``
+        uses. What is different is the addressing: naming the instance turns the
+        wake into one direct-chat turn against it rather than a reminder the main
+        agent reads out -- the main agent has no ops tools and could only
+        paraphrase a message that says "read this ledger and decide".
+
+        The message is passed through untouched. A wake turn starts from an empty
+        history, so the message is the whole of what it gets, and a shell that
+        edited it would be deciding something.
+        """
+        from datetime import datetime as _dt
+
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        # The host's session, split back into the (channel, recipient) a cron
+        # binding is made of, so the host reassembles exactly the session key
+        # this instance lives under. Carried in the fields that already exist
+        # rather than a new one: the binding IS the delivery target, and the
+        # instance's own session is the right target for the instance's round.
+        channel, _, chat_id = session_key.partition(":")
+        host = CronService(self._notify_store, allowed_channels=None)
+        # The id is the receipt. delete_after_run means the host removes this job
+        # in its post-run writeback -- AFTER the turn has run -- so the id going
+        # missing from that store is this shell's only precise account of "the
+        # turn is over". A wake still sitting there is queued for a window that
+        # has not opened yet, which is not the same as a campaign nobody is
+        # watching, and must not be re-armed on top of.
+        handed = host.add_job(
+            name=job.name,
+            # A few seconds out: add_job refuses an ``at`` already in the past,
+            # and "now" is in the past by the time the write lands.
+            schedule=CronSchedule(kind="at", at_ms=int(_dt.now().timestamp() * 1000) + 5000),
+            message=job.payload.message,
+            channel=channel,
+            to=chat_id,
+            delete_after_run=True,
+            dedup=False,
+            campaign=getattr(job.payload, "campaign", None),
+            direct_agent=self._dispatch_agent,
+            direct_handle=handle,
+        )
+        return getattr(handed, "id", "")
+
+    async def _fire(self, job: "CronJob") -> Any:
+        """Answer the wake and record that it happened.
 
         Recorded by the shell rather than inferred later: nothing downstream can
         tell "the wake fired and the turn did nothing" from "the wake never
-        fired", and the cron store only keeps the most recent run.
+        fired", and the cron store only keeps the most recent run. A dispatched
+        wake is recorded for the same reason and as a distinct record: it fired
+        here and ran somewhere else, so this shell's ledger holds no turn for it
+        and its absence must not read as a wake that never went off.
         """
+        target = self._dispatch_target(job)
+        if target is not None:
+            handle, session_key = target
+            handed_id = ""
+            try:
+                handed_id = self._dispatch_to_host(job, handle, session_key)
+            except Exception as exc:  # noqa: BLE001 -- a failed hand-off must not stop the loop
+                logger.warning("wake_shell: could not dispatch '{}' to instance {}: {}", job.name, handle, exc)
+            else:
+                self._append_ledger_row(
+                    {
+                        "record": "dispatch",
+                        "job_id": job.id,
+                        "job_name": job.name,
+                        "at_ms": int(time.time() * 1000),
+                        "agent": self._dispatch_agent,
+                        "handle": handle,
+                        "session_key": session_key,
+                    }
+                )
+                logger.info(
+                    "wake_shell: job '{}' handed to instance {}/{} in session {} on {}",
+                    job.name, self._dispatch_agent, handle, session_key, self._notify_store,
+                )
+                # Who holds the schedule now is the question this answers. The
+                # in-process re-arm cannot: it runs the instant the wake is handed
+                # over, when the turn has not started and the honest answer to
+                # "did it schedule its next look?" is "ask again later". This is
+                # the later. Measured 2026-08-26: a dispatched turn reported its
+                # results in prose and called no ops tool at all -- no next wake,
+                # no trail entry, and the campaign stopped for good with 4 trials
+                # done and the question it wanted answered sitting in a chat.
+                self._rearm_due.append((time.monotonic() + _DISPATCH_BACKSTOP_S, handed_id, job))
+                self._announce_conclusions()
+                # Tells CronService this wake has a turn coming somewhere else,
+                # so it does not read "no next look yet" as "the turn ignored the
+                # campaign" and arm a second driver.
+                from raven.proactive_engine.schedulers.cron.service import HANDED_OFF
+
+                return HANDED_OFF
         spawn = await self._spawner(job)
         late_ms = self._late_by_job.pop(job.id, None)
         if late_ms is not None:
@@ -267,6 +490,7 @@ class WakeShell:
             )
         else:
             logger.info("wake_shell: job '{}' turn finished in {}ms", job.name, spawn.duration_ms)
+        self._announce_conclusions()
 
     def _append_ledger_row(self, row: dict[str, Any]) -> None:
         try:
@@ -280,6 +504,81 @@ class WakeShell:
 
     def _append_ledger(self, spawn: Spawn) -> None:
         self._append_ledger_row({"record": "spawn", **asdict(spawn)})
+
+    def _concluded_campaigns(self) -> list[str]:
+        """Names of campaigns whose directory holds a concluded.json."""
+        try:
+            from raven.ops.instrument import ops_home
+
+            home = ops_home()
+            if not home.exists():
+                return []
+            return sorted(d.name for d in home.iterdir()
+                          if d.is_dir() and (d / "concluded.json").exists())
+        except Exception:  # noqa: BLE001 -- an unreadable ops home is no conclusions, not a crash
+            return []
+
+    def _announce_conclusions(self) -> None:
+        """Deliver each newly concluded campaign's report to the notify store, once.
+
+        Runs after every fired turn rather than on a timer: a conclusion can only
+        be produced by a turn, and this shell is what runs them. The message is
+        the campaign's own words -- outcome from concluded.json and the head of
+        its newest report -- because a shell that summarised would be a second
+        author of the result.
+        """
+        if self._notify_store is None:
+            return
+        for name in self._concluded_campaigns():
+            if name in self._notified:
+                continue
+            self._notified.add(name)
+            try:
+                self._deliver_conclusion(name)
+            except Exception as exc:  # noqa: BLE001 -- a failed delivery must not stop the loop
+                logger.warning("wake_shell: could not announce '{}' concluding: {}", name, exc)
+
+    def _deliver_conclusion(self, campaign: str) -> None:
+        from datetime import datetime as _dt
+
+        from raven.ops.instrument import ops_home
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        cdir = ops_home() / campaign
+        outcome = "?"
+        try:
+            outcome = json.loads((cdir / "concluded.json").read_text(encoding="utf-8")).get("outcome", "?")
+        except Exception:  # noqa: BLE001 -- a malformed conclusion is still worth announcing
+            pass
+        head = ""
+        reports = sorted(cdir.glob("report-*.md"))
+        if reports:
+            lines = reports[-1].read_text(encoding="utf-8").splitlines()
+            head = "\n".join(lines[:16])
+        message = (
+            f"[Ops campaign '{campaign}' concluded: {outcome}]\n"
+            f"{head}\n...\n"
+            f"Full report: {reports[-1] if reports else cdir}"
+        )
+        # A plain write into the host's store: no owner, so whichever window is
+        # open claims it; nobody open, it waits. delete_after_run so it is shown
+        # once. The service is never start()ed here -- add_job is a locked file
+        # write, and firing belongs to the host's own runner.
+        host = CronService(self._notify_store, allowed_channels=None)
+        host.add_job(
+            name=f"ops:{campaign}:concluded",
+            # A few seconds out: add_job refuses an ``at`` already in the past,
+            # and "now" is in the past by the time the write lands.
+            schedule=CronSchedule(kind="at", at_ms=int(_dt.now().timestamp() * 1000) + 5000),
+            message=message,
+            channel="tui",
+            to="default",
+            delete_after_run=True,
+            dedup=True,
+            campaign=campaign,
+        )
+        logger.info("wake_shell: announced '{}' concluded ({}) into {}", campaign, outcome, self._notify_store)
 
     def _survey_overdue(self) -> list[OverdueWake]:
         """Record every already-due one-shot wake, and rescue it if asked to.
@@ -369,12 +668,79 @@ class WakeShell:
             self._append_ledger_row({"record": "overdue_wake", **asdict(wake)})
         return found
 
+    def _host_job_ids(self) -> set[str] | None:
+        """The ids still pending in the host's store, or None if it cannot be read.
+
+        None is not an empty set: unreadable has to mean "no conclusion", or a
+        transient read error would read as "every turn finished" and re-arm the
+        lot of them.
+        """
+        if self._notify_store is None:
+            return None
+        try:
+            data = json.loads(Path(self._notify_store).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        jobs = data.get("jobs")
+        if not isinstance(jobs, list):
+            return None
+        return {str(j.get("id")) for j in jobs if isinstance(j, dict)}
+
+    def _sweep_dispatched(self) -> None:
+        """Re-arm a campaign whose dispatched turn has finished leaving no next look.
+
+        Two ways to decide the turn is over, and the first is the real one:
+
+        - **its job is gone from the host's store.** ``delete_after_run`` means the
+          host removes it in the writeback that follows the turn, so its absence
+          is an account of the turn ending rather than a guess about how long one
+          takes. A turn is unbounded; every fixed grace is wrong for the slow one.
+        - **the backstop elapsed**, for when that store stopped being readable.
+
+        Only wakes this shell handed over. One it answered itself was judged by
+        ``_execute_job`` when its child exited -- the right moment for that
+        hosting, and the wrong one for this.
+        """
+        if not self._rearm_due:
+            return
+        now = time.monotonic()
+        live = self._host_job_ids()
+        keep: list[tuple[float, str, "CronJob"]] = []
+        due: list["CronJob"] = []
+        for deadline, handed_id, job in self._rearm_due:
+            ran = live is not None and handed_id and handed_id not in live
+            if ran or now >= deadline:
+                due.append(job)
+            else:
+                keep.append((deadline, handed_id, job))
+        self._rearm_due = keep
+        for job in due:
+            try:
+                self._cron.ensure_campaign_watched(job)
+            except Exception as exc:  # noqa: BLE001 -- one campaign must not stop the sweep
+                logger.warning("wake_shell: re-arm check failed for '{}': {}", job.name, exc)
+
+    async def _sweep_forever(self) -> None:
+        while True:
+            await asyncio.sleep(_SWEEP_INTERVAL_S)
+            try:
+                self._sweep_dispatched()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- the sweep is a safety net, not a critical path
+                logger.exception("wake_shell: dispatch sweep failed; continuing")
+
     async def start(self) -> None:
         self.overdue = self._survey_overdue()
         self._late_by_job = {w.job_id: w.late_ms for w in self.overdue if w.fired}
         await self._cron.start()
+        if self._dispatch_agent is not None:
+            self._sweep_task = asyncio.ensure_future(self._sweep_forever())
 
     def stop(self) -> None:
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            self._sweep_task = None
         self._cron.stop()
 
     def status(self) -> dict[str, Any]:
@@ -430,6 +796,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--stop-after", type=float, default=None, help="exit after this many seconds")
     ap.add_argument("--allow-shared-store", action="store_true", help="permit the default ~/.raven cron store")
     ap.add_argument(
+        "--notify-store",
+        type=Path,
+        default=None,
+        help=(
+            "a HOST raven's cron store (jobs.json) to drop a one-shot 'campaign concluded' "
+            "reminder into; omitted, a conclusion stays where it always was, on disk"
+        ),
+    )
+    ap.add_argument(
+        "--dispatch-agent",
+        default=None,
+        help=(
+            "the name this install is registered under on the HOST raven; set, a wake "
+            "owned by a host-minted session is handed back to that instance's pane "
+            "instead of being answered in a child process here (needs --notify-store)"
+        ),
+    )
+    ap.add_argument(
         "--fire-missed",
         action="store_true",
         help=(
@@ -440,8 +824,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def apply_instance_config(config: Path | None) -> None:
+    """Point THIS process at the instance it serves, not just its children.
+
+    --config was only ever handed to the spawned turns, so the shell's own
+    process kept the default ~/.raven -- and everything in it that resolves
+    ops_home() ran against the wrong instance. Measured 2026-08-25: the rearm
+    hook appended wake_rearmed events into a same-named campaign of the DEFAULT
+    instance, and the rearm message embedded that instance's ledger path, which
+    the woken turn then obediently used -- concluding an experiment this shell
+    had nothing to do with. The conclusion scan for --notify-store reads
+    ops_home() too, and without this it would announce the wrong instance's
+    endings.
+    """
+    if config is None:
+        return
+    from raven.config.loader import set_config_path
+
+    set_config_path(Path(config))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    apply_instance_config(args.config)
     channels = None if args.channels.strip().lower() == "any" else frozenset(
         c.strip() for c in args.channels.split(",") if c.strip()
     )
@@ -452,6 +857,8 @@ def main(argv: list[str] | None = None) -> int:
             allowed_channels=channels,
             allow_shared_store=args.allow_shared_store,
             fire_missed=args.fire_missed,
+            notify_store=args.notify_store,
+            dispatch_agent=args.dispatch_agent,
         )
     except SharedStoreRefused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)

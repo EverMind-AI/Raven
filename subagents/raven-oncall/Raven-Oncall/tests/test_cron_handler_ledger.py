@@ -60,9 +60,7 @@ def _make_job(*, topic_tag: str | None, message: str = "吃药提醒") -> CronJo
         name=message[:30],
         schedule=CronSchedule(kind="at", at_ms=1779144600000),
         payload=CronPayload(
-            kind="agent_turn",
             message=message,
-            deliver=True,
             channel="cli",
             to="direct",
             topic_tag=topic_tag,

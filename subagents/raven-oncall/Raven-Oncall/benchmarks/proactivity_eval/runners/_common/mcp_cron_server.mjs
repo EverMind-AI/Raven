@@ -53,18 +53,24 @@ const TOOLS = [
   {
     name: "set_reminder",
     description:
-      "Schedule a reminder to fire at a specific future time. The reminder will appear later as a system notification with the given message. Use ISO8601 datetime including timezone (e.g., \"2026-04-28T09:00:00+08:00\"). The current sim time is provided at the top of each user message — use it as your reference for relative phrases (\"in 5 minutes\", \"tomorrow at 9\").",
+      "Schedule a reminder to fire at a specific future time. The reminder will appear later as a system notification with the given message. Use ISO8601 datetime including timezone (e.g., \"2026-04-28T09:00:00+08:00\"). The current sim time is provided at the top of each user message — use it as your reference for relative phrases (\"in 5 minutes\", \"tomorrow at 9\"). For recurring reminders (e.g. daily medication), set `repeat` instead of re-registering every day.",
     inputSchema: {
       type: "object",
       properties: {
         when: {
           type: "string",
           description:
-            "ISO8601 datetime with timezone, must be in the future relative to the sim time.",
+            "ISO8601 datetime with timezone for the first (or only) firing, must be in the future relative to the sim time.",
         },
         message: {
           type: "string",
           description: "The reminder text the user will receive when it fires.",
+        },
+        repeat: {
+          type: "string",
+          enum: ["daily", "weekdays", "weekly"],
+          description:
+            "Optional recurrence. When set, the reminder fires repeatedly at the same time of day ('daily' = every day, 'weekdays' = Mon-Fri, 'weekly' = every 7 days). Omit for a one-shot reminder.",
         },
       },
       required: ["when", "message"],
@@ -107,18 +113,78 @@ function handleToolCall(name, args) {
         ],
       };
     }
+    const repeat = ["daily", "weekdays", "weekly"].includes(args.repeat) ? args.repeat : null;
+    // Validate `when` against the sim clock (injected per turn by the
+    // harness). Mirrors hermes native one-shot semantics: >120s in the
+    // past is rejected with an error the agent can act on; "now"/slightly
+    // past is bumped forward so it fires at the next tick instead of
+    // being silently unfireable (host fire window is strictly cur < when).
+    let effectiveWhen = when;
+    // Parse wall-clock fields into a TZ-independent comparable epoch. The
+    // whole benchmark clock is tz-naive; stripping the offset and feeding
+    // to `new Date()` would parse as CONTAINER-local, so a container in a
+    // non-UTC TZ (or an agent that appends Z vs +08:00) could skew the
+    // past/future check. Reading Y-M-D H:M:S directly via Date.UTC makes
+    // both operands depend only on the digits, never on container TZ.
+    const naive = (s) => {
+      const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+      if (!m) return new Date(NaN);
+      return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)));
+    };
+    const simNowRaw = process.env.LONGRUN_FAKE_NOW || "";
+    const simNow = simNowRaw ? naive(simNowRaw) : null;
+    if (simNow && !isNaN(simNow.getTime())) {
+      const whenDt = naive(when);
+      if (isNaN(whenDt.getTime())) {
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: JSON.stringify({ ok: false, error: `unparseable when: ${when}` }) },
+          ],
+        };
+      }
+      const GRACE_MS = 120 * 1000;
+      if (whenDt.getTime() <= simNow.getTime() - GRACE_MS) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                ok: false,
+                error: `'when' (${when}) is in the past — current sim time is ${simNowRaw}. Schedule a future time.`,
+              }),
+            },
+          ],
+        };
+      }
+      if (whenDt.getTime() <= simNow.getTime() && !repeat) {
+        // One-shot at/just-past now: bump so the response shows a real
+        // future fire time (the host also fires overdue reminders late,
+        // so this is cosmetic, not load-bearing). Use UTC getters to match
+        // the Date.UTC parse above (container-TZ-independent).
+        const bumped = new Date(simNow.getTime() + 60 * 1000);
+        const pad = (n) => String(n).padStart(2, "0");
+        effectiveWhen = `${bumped.getUTCFullYear()}-${pad(bumped.getUTCMonth() + 1)}-${pad(bumped.getUTCDate())}T${pad(bumped.getUTCHours())}:${pad(bumped.getUTCMinutes())}:${pad(bumped.getUTCSeconds())}`;
+      }
+      // repeat reminders keep the requested clock time even when it just
+      // passed — the host fires the overdue occurrence late and advances
+      // by schedule, so the series keeps the intended time-of-day instead
+      // of permanently shifting to the bump minute.
+    }
     const id = `rem-${store.reminders.length + 1}-${Date.now().toString(36)}`;
     store.reminders.push({
       id,
-      when,
+      when: effectiveWhen,
       message,
+      repeat,
       registered_at: new Date().toISOString(),
       fired: false,
     });
     saveStore(store);
     return {
       content: [
-        { type: "text", text: JSON.stringify({ ok: true, reminder_id: id, when, message }) },
+        { type: "text", text: JSON.stringify({ ok: true, reminder_id: id, when: effectiveWhen, message, repeat }) },
       ],
     };
   }

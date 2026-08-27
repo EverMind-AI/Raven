@@ -6,6 +6,7 @@ import pytest
 from raven.spine import (
     ChatType,
     Deliverable,
+    EpisodeStart,
     Media,
     MediaOut,
     Notice,
@@ -129,7 +130,7 @@ def test_tool_event_phase_is_typed():
 
 def test_runner_event_is_the_six_deliverables_excluding_lifecycle():
     runner_members = set(get_args(RunnerEvent))
-    assert runner_members == {ToolEvent, Text, MediaOut, StreamDelta, Reasoning, Notice}
+    assert runner_members == {ToolEvent, Text, MediaOut, StreamDelta, Reasoning, Notice, EpisodeStart}
     # lifecycle events are not deliverable: the basis for narrowing the runner's emit
     assert TurnStarted not in runner_members
     assert TurnFailed not in runner_members

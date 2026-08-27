@@ -33,6 +33,7 @@ import type {
 } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
+import { argPreview } from '../lib/toolArgs.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { patchUiState } from './uiStore.js'
@@ -99,6 +100,26 @@ interface InternalState {
   turnId: string | null
 }
 
+// Render an ISO timestamp for the cron.missed summary block: local HH:MM
+// when the reminder was scheduled today, MM-DD HH:MM otherwise - a missed
+// notice's whole point is how long ago, and a bare "09:00" after a weekend
+// away reads like this morning. Falls back to the raw string when
+// unparseable.
+const formatScheduledAt = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) {
+    return iso
+  }
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  if (sameDay) {
+    return hhmm
+  }
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm}`
+}
+
 const dispatch = (
   state: InternalState,
   event: TurnEvent,
@@ -108,6 +129,9 @@ const dispatch = (
   switch (event.type) {
     case 'message.start':
       onMessageStart(state, event)
+      return
+    case 'episode.start':
+      turnController.recordEpisodeStart(event.payload.index)
       return
     case 'token.delta':
       onTokenDelta(event)
@@ -142,6 +166,15 @@ const dispatch = (
       }
       return
     }
+    case 'cron.missed': {
+      if (sys) {
+        const { count, items } = event.payload
+        const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`)
+        const noun = count === 1 ? 'reminder' : 'reminders'
+        sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
+      }
+      return
+    }
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -162,15 +195,10 @@ const onTokenDelta = (ev: TokenDeltaEvent): void => {
 }
 
 const onToolStart = (ev: ToolStartEvent): void => {
-  const { tool_call_id, name, arguments: args } = ev.payload
-  // Render a short context line from the first scalar argument value so the
-  // active-tool list shows useful preview text without leaking the full
-  // argument blob into the UI.
-  const previewKey = Object.keys(args)[0]
-  const previewVal = previewKey !== undefined ? args[previewKey] : undefined
-  const context =
-    typeof previewVal === 'string' ? previewVal : previewVal !== undefined ? JSON.stringify(previewVal) : ''
-  turnController.recordToolStart(tool_call_id, name, context)
+  const { tool_call_id, name, arguments: args, display } = ev.payload
+  // Prefer the tool-authored call label; else preview the "what" of the call
+  // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
+  turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))
 }
 
 const onToolComplete = (ev: ToolCompleteEvent): void => {
@@ -208,16 +236,19 @@ const onError = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const { reason, message, code } = ev.payload
+  const { reason, message, code, detail } = ev.payload
   state.turnId = null
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
     return
   }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
-  // the live anchor so the user can submit again.
+  // the live anchor so the user can submit again. Append the real failure
+  // detail (e.g. the underlying exception) when present, so a generic
+  // `turn_failed` code is not the only thing the user sees.
   if (sys) {
-    sys(`error: ${message} (code=${code})`)
+    const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
+    sys(`error: ${message} (code=${code})${extra}`)
   }
   turnController.recordError()
   patchUiState({ busy: false, status: `error: ${message.slice(0, 80)}` })

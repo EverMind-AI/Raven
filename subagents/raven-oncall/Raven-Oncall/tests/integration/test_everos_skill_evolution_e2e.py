@@ -30,7 +30,7 @@ import pytest
 
 from raven.memory_engine import Memory
 from raven.plugin import PluginContext, ServiceLocator
-from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
+from raven.plugin.memory.everos.backend import EverosBackend, _HttpEverosAdapter
 from tests.integration.conftest import as_everos_payload
 
 pytestmark = pytest.mark.real_llm
@@ -55,14 +55,17 @@ _CITIES = [
 ]
 
 
-def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
+def _backend(tmp_path: Path, *, user_id: str, agent_id: str) -> EverosBackend:
+    # Identity comes from the host. Recall below passes agent_id explicitly, so
+    # the old `config={"agent_id": ...}` was inert here rather than wrong -- but
+    # it is a key the backend now warns about, and nothing reads it.
     be = EverosBackend(
         PluginContext(
-            config={"mode": "embedded", "agent_id": agent_id},
-            services=ServiceLocator(workspace=tmp_path),
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
         )
     )
-    assert isinstance(be._adapter, _RealEverosAdapter), "embedded backend did not bind the real everos adapter"
+    assert isinstance(be._adapter, _HttpEverosAdapter), "backend did not bind the HTTP adapter"
     return be
 
 
@@ -160,7 +163,7 @@ async def test_weather_skill_evolves_and_is_recallable(
     # 3) Retrieve through the production recall path (what EverosSkillSource
     #    uses to fill ``# Skills``): the distilled skill must come back as
     #    ``type == skill``, not only its source cases.
-    be = _backend(tmp_path, agent_id=ids.agent_id)
+    be = _backend(tmp_path, user_id=ids.user_id, agent_id=ids.agent_id)
     await be.start()
     try:
         hits = await be.recall(_RECALL_QUERY, agent_id=ids.agent_id, top_k=10)

@@ -388,7 +388,13 @@ async def _fanout_cron_missed(emitter, *, drops) -> None:
         await emitter.emit(session_key, event)
 
 
-def _build_cron_callback_spine(base_on_cron, emitter, *, default_channel: str = LOCAL_CHANNEL):
+def _build_cron_callback_spine(
+    base_on_cron,
+    emitter,
+    *,
+    default_channel: str = LOCAL_CHANNEL,
+    direct_targets: dict[str, dict[str, str]] | None = None,
+):
     """Wrap the spine cron callback so a **tui** job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
@@ -401,13 +407,42 @@ def _build_cron_callback_spine(base_on_cron, emitter, *, default_channel: str = 
     ``tui``: a job addressed to an IM channel is delivered there by the hub, and
     echoing its reply to every page session would deliver it twice. In `raven
     tui` / `raven serve` every job resolves to tui and the gate never bites; the
-    gateway passes its own default so only its tui-addressed jobs fan out."""
+    gateway passes its own default so only its tui-addressed jobs fan out.
+
+    A job naming a sub-agent instance is skipped for the same "already delivered"
+    reason the IM gate exists for. That wake runs as a direct turn on the
+    instance's own lane, which *does* have a subscriber -- the pane the operator
+    is looking at -- so its reply is on screen before this wrapper sees it, and
+    fanning it out would print the round twice, once in the conversation and
+    once as a reminder."""
     from datetime import datetime, timezone
 
     async def wrapped(job):
+        # Bind the addressee before the turn, exactly as ``turn.send`` does for a
+        # typed message: the outlet and sink read this map to stamp ``target`` on
+        # the turn's events, and the client demultiplexes on that stamp -- an
+        # untagged frame reads as the main conversation's, which is where a wake's
+        # reply went until this was here. The sink pops the entry at turn end, so
+        # nothing is removed here (same contract as turn.send).
+        #
+        # Measured 2026-08-26: the round ran, the instance log grew, and the pane
+        # showed nothing -- the events reached the client with no target on them.
+        agent = getattr(job.payload, "direct_agent", None)
+        handle = getattr(job.payload, "direct_handle", None)
+        if agent and handle and direct_targets is not None:
+            from raven.spine import direct_lane
+
+            lane = direct_lane(f"{job.payload.channel or default_channel}:{job.payload.to or 'direct'}", agent, handle)
+            direct_targets[lane] = {"agent": agent, "handle": handle}
         response = await base_on_cron(job)
         resolved_channel = job.payload.channel or default_channel
-        if response and resolved_channel == LOCAL_CHANNEL:
+        # getattr, as the campaign field is read elsewhere: this is the delivery
+        # path, and a payload that predates the field must lose the gate, never
+        # the reminder.
+        addressed_to_instance = bool(
+            getattr(job.payload, "direct_agent", None) and getattr(job.payload, "direct_handle", None)
+        )
+        if response and resolved_channel == LOCAL_CHANNEL and not addressed_to_instance:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -760,7 +795,9 @@ async def _run_rpc_server_until_done(
                 default_channel="tui",
                 cron_service=agent_loop.cron_service,
             )
-            agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
+            agent_loop.cron_service.on_job = _build_cron_callback_spine(
+                base_on_cron, emitter, direct_targets=direct_targets
+            )
             await agent_loop.cron_service.start()
             # start() dropped past-due one-shot reminders on this runner's
             # partition; surface them as one cron.missed startup notice.

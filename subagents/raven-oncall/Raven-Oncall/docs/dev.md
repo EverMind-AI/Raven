@@ -54,12 +54,12 @@ Creates `~/.raven/config.json` and the workspace directory. Edit the config to a
 
 | Command | Description |
 |---|---|
-| `raven agent` | Start interactive chat session |
+| `raven tui` | Start the interactive chat TUI |
 | `raven agent -m "Hello"` | Send a single message and exit |
 | `raven gateway` | Start full server (all channels + heartbeat + cron) |
 | `raven status` | Show config path, workspace, and API key status |
 | `raven channels status` | Show which messaging channels are enabled |
-| `raven provider login <name>` | Authenticate with an OAuth provider (e.g. `openai-codex`) |
+| `raven provider login <name>` | Authenticate with an OAuth provider (for example `openai-codex`, `minimax-global`, or `minimax-cn`) |
 
 ### 6. Run tests
 

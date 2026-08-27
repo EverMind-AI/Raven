@@ -3,6 +3,9 @@
 # Remote:
 #   irm https://raven.evermind.ai/install.ps1 | iex
 #
+# A piped run always installs the published release wheel, even from inside a
+# clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+#
 # Goal: a clean Windows machine ends up able to run `raven` / `raven tui`
 # without admin rights. The script is idempotent: it reuses existing tools when
 # available and only fills the gaps:
@@ -191,21 +194,93 @@ function Ensure-Node {
     }
 }
 
+# Reads the latest stable tag off the release page redirect. The GitHub API caps
+# unauthenticated callers at 60 requests/hour per IP, which a shared egress can
+# exhaust; the release page carries no API quota. Returns "" when the redirect is
+# missing or does not name a stable tag, so the caller can fail with its own message.
+function Resolve-RavenLatestVersion {
+    $target = ""
+    try {
+        $response = Invoke-WebRequest "https://github.com/EverMind-AI/Raven/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
+        $target = [string]$response.Headers.Location
+    } catch {
+        # Windows PowerShell raises on an unfollowed redirect; the Location header
+        # still rides on the exception's response.
+        $failed = $_.Exception.Response
+        if ($failed) {
+            try { $target = [string]$failed.Headers.Location } catch { $target = "" }
+            if (-not $target) {
+                try { $target = [string]$failed.Headers.GetValues("Location")[0] } catch { $target = "" }
+            }
+        }
+    }
+    if ($target -match "^https://github\.com/EverMind-AI/Raven/releases/tag/v([0-9]+\.[0-9]+\.[0-9]+)$") {
+        return $Matches[1]
+    }
+    return ""
+}
+
 function Resolve-RavenWheel {
     if ($env:RAVEN_WHEEL_URL) { return $env:RAVEN_WHEEL_URL }
     Write-Info "Resolving the latest Raven release from GitHub..."
-    $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
-    $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
-    if (-not $asset) {
-        Fail "Could not resolve the latest Raven release wheel from GitHub. Set RAVEN_WHEEL_URL to a wheel URL."
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
+        $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
+        if ($asset) { return $asset.browser_download_url }
+        Write-Warn "GitHub API returned no release wheel; falling back to the release page."
+    } catch {
+        Write-Warn "GitHub API lookup failed ($($_.Exception.Message)); falling back to the release page."
     }
-    return $asset.browser_download_url
+    $version = Resolve-RavenLatestVersion
+    if (-not $version) {
+        Fail "Could not resolve the latest Raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
+    }
+    return "https://github.com/EverMind-AI/Raven/releases/download/v$version/raven-$version-py3-none-any.whl"
+}
+
+function Resolve-RavenConstraints([string]$WheelUrl) {
+    # Derive the locked-constraints URL from the wheel URL (same release dir) so
+    # the constraints always match the wheel being installed -- including when
+    # RAVEN_WHEEL_URL pins an older wheel. Returns a local temp-file path, or
+    # $null when the asset is absent (release predates it) or the download fails,
+    # so the installer degrades to an unconstrained install rather than failing.
+    $url = $env:RAVEN_CONSTRAINTS_URL
+    if (-not $url) {
+        if ($WheelUrl -notmatch "/[^/]+\.whl$") { return $null }
+        $url = $WheelUrl -replace "/[^/]+\.whl$", "/raven-constraints.txt"
+    }
+    $dest = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
+    try {
+        Invoke-WebRequest $url -OutFile $dest
+    } catch {
+        Write-Warn "Could not download locked constraints; installing without version pinning."
+        return $null
+    }
+    return $dest
+}
+
+function Test-RavenSource([string]$Dir) {
+    if (-not $Dir) { return $false }
+    $pyproject = Join-Path $Dir "pyproject.toml"
+    return (Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)
 }
 
 function Install-Raven([string]$UvPath, [string]$NodePath) {
-    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-    $pyproject = Join-Path $scriptDir "pyproject.toml"
-    if ((Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)) {
+    # $PSScriptRoot is set only when this script runs as a file. Piped through
+    # `irm ... | iex` it is empty, and falling back to the current directory
+    # turns a one-line install started from inside a clone into a silent
+    # editable install of that working tree. So local mode requires
+    # $PSScriptRoot; RAVEN_LOCAL_SRC is the explicit opt-in for a piped run.
+    $scriptDir = $null
+    if ($env:RAVEN_LOCAL_SRC) {
+        $resolved = Resolve-Path -LiteralPath $env:RAVEN_LOCAL_SRC -ErrorAction SilentlyContinue
+        if (-not $resolved) { Fail "RAVEN_LOCAL_SRC is not a directory: $($env:RAVEN_LOCAL_SRC)" }
+        $scriptDir = $resolved.Path
+        if (-not (Test-RavenSource $scriptDir)) { Fail "RAVEN_LOCAL_SRC is not a Raven source checkout: $scriptDir" }
+    } elseif ($PSScriptRoot -and (Test-RavenSource $PSScriptRoot)) {
+        $scriptDir = $PSScriptRoot
+    }
+    if ($scriptDir) {
         Write-Info "Detected local Raven source checkout; installing editable: $scriptDir"
         $entry = Join-Path $scriptDir "ui-tui\dist\entry.js"
         if (-not (Test-Path $entry)) {
@@ -225,26 +300,36 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
                 Write-Warn "Found node but not npm; skipping TUI bundle build"
             }
         }
+        # Pin to the locked dependency set so an install matches what we test.
+        $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
+        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
         # channel SDK cannot block the whole install.
         try {
-            & $UvPath tool install --force -e "$scriptDir[channels]"
+            & $UvPath tool install --force -c "$constraints" -e "$scriptDir[channels]"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force -e "$scriptDir"
+            & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
             if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
         }
     } else {
         $wheelUrl = Resolve-RavenWheel
+        $constraints = Resolve-RavenConstraints $wheelUrl
+        if ($constraints) {
+            $cArgs = @("-c", $constraints)
+        } else {
+            Write-Warn "Release has no locked-constraints asset; installing without version pinning."
+            $cArgs = @()
+        }
         Write-Info "  installing $wheelUrl"
         try {
-            & $UvPath tool install --force "raven[channels] @ $wheelUrl"
+            & $UvPath tool install --force @cArgs "raven[channels] @ $wheelUrl"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force $wheelUrl
+            & $UvPath tool install --force @cArgs $wheelUrl
             if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
         }
     }
@@ -253,6 +338,10 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
 }
 
 function Main {
+    # Read before installing so the closing hint can tell a first run from an
+    # upgrade; the install itself never writes config.json (the wizard does).
+    $hadConfig = Test-Path (Join-Path $RavenHome "config.json")
+
     $uv = Ensure-Uv
     $node = Ensure-Node
     Install-Raven $uv $node
@@ -261,11 +350,19 @@ function Main {
     Add-ProcessPath $toolBin
 
     Write-Host ""
-    Write-Ok "All set. Open a new PowerShell window, or continue in this one, then run:"
-    Write-Host ""
-    Write-Host "    raven            # enter the TUI"
-    Write-Host "    raven agent -m `"hello`""
-    Write-Host ""
+    if ($hadConfig) {
+        Write-Ok "Raven updated. Your config in $RavenHome is unchanged."
+        Write-Host ""
+        Write-Host "    raven    # continue where you left off"
+        Write-Host ""
+        Write-Host "  tip: next time you can upgrade in place with 'raven upgrade'"
+        Write-Host ""
+    } else {
+        Write-Ok "All set. Open a new PowerShell window, or continue in this one, then run:"
+        Write-Host ""
+        Write-Host "    raven    # sets you up on first run, then opens the TUI"
+        Write-Host ""
+    }
     if (($env:PATH -split ';') -notcontains $toolBin) {
         Write-Warn "Current PATH does not include $toolBin. Restart PowerShell if 'raven' is not found."
     }

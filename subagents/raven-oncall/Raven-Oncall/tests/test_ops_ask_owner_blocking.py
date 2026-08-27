@@ -143,3 +143,138 @@ def test_only_a_blocking_question_closes_the_submit_door(campaign):
         campaign="blade", question="budget is out, go on?", expected_loss_minutes=60,
         blocks_progress=True))
     assert "budget" in blocking_question_open(campaign)
+
+
+class _Cron:
+    """Records the wake a tool schedules, the way CronService would take it."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def add_job(self, **kw):
+        self.jobs.append(kw)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(id="job-1", name=kw.get("name", ""))
+
+    def list_jobs(self, include_disabled=False):
+        return []
+
+
+def test_a_wait_that_ends_with_no_answer_schedules_the_next_look(campaign):
+    """Otherwise the turn ends with nothing pending and the campaign never returns.
+
+    Measured 2026-08-21: two campaigns asked a blocking question, waited out the
+    broker, and sat untouched for three hours with 86% and 81% of their budgets
+    unspent. The reply text promised "the owner's reply will reach the next
+    round" -- there was no next round.
+    """
+    import asyncio
+
+    _ledger(campaign, "succeeded")
+    cron = _Cron()
+    tool = OpsAskOwnerTool(registry=_Registry(_Msg()), broker=_Broker(""), cron_service=cron)
+    # The wake's own door, not set_context: the loop deliberately never gives this
+    # tool a delivery context, so a test that armed the wake through set_context
+    # was testing a wiring production does not have.
+    tool.set_wake_context("tui", "default", "tui:20260826_135122_5b9597")
+    out = asyncio.run(tool.execute(
+        campaign="blade", question="which way?", expected_loss_minutes=60,
+        blocks_progress=True))
+
+    assert cron.jobs, "nothing would have brought the campaign back"
+    assert cron.jobs[0]["name"] == "ops:blade:after-ask"
+    assert "ops_tune_status" in cron.jobs[0]["message"], "a wake turn's whole context is this text"
+    assert "nobody answered" in out
+
+
+def test_an_answered_wait_needs_no_wake(campaign):
+    """The answer is in hand and the turn carries on with it."""
+    import asyncio
+
+    _ledger(campaign, "succeeded")
+    cron = _Cron()
+    tool = OpsAskOwnerTool(registry=_Registry(_Msg()), broker=_Broker("go left"), cron_service=cron)
+    tool.set_wake_context("tui", "default", "tui:20260826_135122_5b9597")
+    asyncio.run(tool.execute(
+        campaign="blade", question="which way?", expected_loss_minutes=60,
+        blocks_progress=True))
+
+    assert cron.jobs == []
+
+
+def test_a_non_blocking_ask_also_leaves_a_wake(campaign):
+    """It said it had other work, but nothing guarantees it does any.
+
+    Measured 2026-08-21: two of the four asks that day were non-blocking (the
+    parameter is required and was not passed, so it defaulted), and both
+    campaigns then sat untouched for three hours -- 86% and 81% of budget
+    unspent -- because the turn ended with nothing pending.
+    """
+    import asyncio
+
+    _ledger(campaign, "succeeded")
+    cron = _Cron()
+    tool = OpsAskOwnerTool(registry=_Registry(_Msg()), broker=None, cron_service=cron)
+    tool.set_wake_context("tui", "default", "tui:20260826_135122_5b9597")
+    asyncio.run(tool.execute(campaign="blade", question="which way?",
+                             expected_loss_minutes=60, blocks_progress=False))
+
+    assert cron.jobs, "a non-blocking ask still has to leave something pending"
+    assert cron.jobs[0]["name"] == "ops:blade:after-ask"
+
+
+def test_a_running_trial_keeps_its_own_wake(campaign):
+    """The trial already has one set for when it should be done, and wakes are
+    idempotent per campaign -- scheduling here would replace it with a sooner one
+    and throw away the eta the loop reasoned about."""
+    import asyncio
+
+    _ledger(campaign, "running")
+    cron = _Cron()
+    tool = OpsAskOwnerTool(registry=_Registry(_Msg()), broker=None, cron_service=cron)
+    tool.set_wake_context("tui", "default", "tui:20260826_135122_5b9597")
+    asyncio.run(tool.execute(campaign="blade", question="which way?",
+                             expected_loss_minutes=60, blocks_progress=False))
+
+    assert cron.jobs == []
+
+
+def test_the_loop_gives_the_ask_tool_its_wake_context() -> None:
+    """The wiring the tests above assumed and production did not have.
+
+    Every test in this file that exercises the safety wake sets the context by
+    hand. That is legitimate as a unit, and it is also exactly how a feature ships
+    green and dead: ``_update_tool_context`` drives a fixed list of tool names,
+    ``ops_ask_owner`` is deliberately not on it (adopting the turn's channel would
+    deliver a wake turn's question to "cron", which nothing subscribes to), and so
+    the wake asked for on every ask was armed on none -- ``_schedule_ops_wake``
+    refuses without a channel and reports the refusal as a returned string.
+
+    Measured 2026-08-26: a campaign asked a blocking question with all four trials
+    terminal, no wake in either store, and stopped there.
+
+    So this pins the loop's side of it: the tool is handed a wake context, and its
+    delivery context is still left alone.
+    """
+    from raven.agent.tools.ops_escalation import OpsAskOwnerTool
+
+    tool = OpsAskOwnerTool(registry=_Registry(_Msg()))
+    assert tool._wake_channel == "" and tool._session_key == ""
+
+    from raven.agent.loop.main import AgentLoop
+
+    class _Tools:
+        def get(self, name):
+            return tool if name == "ops_ask_owner" else None
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.tools = _Tools()
+    AgentLoop._set_tool_context(loop, "tui", "default", None, "tui:20260826_135122_5b9597", "")
+
+    assert tool._wake_channel == "tui"
+    assert tool._wake_chat_id == "default"
+    assert tool._session_key == "tui:20260826_135122_5b9597"
+    # Delivery is still deliberately unset, which is what keeps the question off
+    # the "cron" channel.
+    assert tool._channel == "" and tool._chat_id == ""

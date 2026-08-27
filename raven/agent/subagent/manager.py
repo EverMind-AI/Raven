@@ -295,6 +295,23 @@ class SubagentManager:
             raise RuntimeError(
                 f"sub-agent {agent!r} is not on the agent table (or its backend failed to build); nothing was run"
             )
+        # Where this manager keeps a session's records, handed over for a backend
+        # that has to write one without being asked to run anything. An acp agent
+        # can act between prompts -- an on-call wake -- and the turn it produces
+        # belongs in the instance's log like any other; but backends are shared
+        # across managers by the registry, so the derivation cannot be baked into
+        # one at build time. Handed over here, where the manager that owns the
+        # answer is the one dispatching.
+        binder = getattr(backend, "bind_session_dir", None)
+        if callable(binder):
+            binder(self._session_dir)
+        # And where its wire events go, for the same turn: the recorder renders
+        # an unprompted turn through the same message.start/token.delta/
+        # message.complete a typed direct-chat turn uses, and _emit_event is the
+        # door those already leave through (subagent.delivered rides it too).
+        events = getattr(backend, "bind_event_sink", None)
+        if callable(events):
+            events(self._emit_event)
         return backend
 
     def list_agents(self) -> list[AgentMeta]:

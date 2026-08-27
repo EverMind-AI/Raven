@@ -35,6 +35,35 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = 1
 
 
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """On CI, hard-exit past interpreter finalization once the run is over.
+
+    A fully green run still exited 139 on Linux: the suite finalizes with
+    native state live (asyncio subprocess transports collected during GC),
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
+    routes its exit through the same helper, but on a different trigger --
+    see raven.cli._exit for the lancedb-specific gate it uses, which is not
+    what fires here.
+
+    Local runs keep normal semantics so nothing masks an exit-time error, and
+    the recorded status is preserved either way -- a failing run still exits
+    non-zero.
+    """
+    import os
+
+    if not os.environ.get("CI"):
+        return
+
+    from raven.cli._exit import flush_and_hard_exit
+
+    flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
@@ -137,6 +166,39 @@ def _isolate_shared_raven_home(isolated_raven_home, monkeypatch):
         pass
 
     try:
+        from raven.ops import connections as _connections
+
+        def _isolated_connections_store() -> Path:
+            """The isolated home, unless the test chose an instance itself.
+
+            Added here for the reason this fixture states above: the connection
+            registry is read by default from the config file's own directory,
+            which this fixture deliberately does not move, so it landed in the
+            operator's real ``~/.raven``. That is what decides whether the on-call
+            surface is present at all (raven.ops.gate), so leaving it unisolated
+            made a machine registered on the developer's laptop change the tool
+            schema every test sees -- and the suite passed or failed by whose
+            machine it ran on.
+
+            The env override wins here as it does in production: it is how a
+            launcher points an instance at the owner's registry, and a test that
+            sets it is naming a path of its own rather than reaching for the
+            developer's home.
+            """
+            import os
+
+            chosen = os.environ.get(_connections.CONNECTIONS_ENV, "").strip()
+            if chosen:
+                return Path(chosen).expanduser()
+            if _config_loader._current_config_path is not None:
+                return _config_loader._current_config_path.parent / _connections.STORE
+            return home / _connections.STORE
+
+        monkeypatch.setattr(_connections, "store_path", _isolated_connections_store, raising=False)
+    except ImportError:
+        pass
+
+    try:
         from raven.token_wise import usage_tracker
 
         monkeypatch.setattr(usage_tracker, "_default_telemetry_dir", lambda: home / "telemetry", raising=False)
@@ -149,6 +211,88 @@ def _isolate_shared_raven_home(isolated_raven_home, monkeypatch):
         _spans._store = None
 
 
+
+@pytest.fixture(autouse=True)
+def _on_call_off_unless_asked(monkeypatch):
+    """Pin the on-call switch off for the whole suite.
+
+    ``tools.oncall.enabled`` is read from the operator's own config, which this
+    file deliberately does not move (see ``_isolate_shared_raven_home``), so a
+    developer who turned on-call on for their own runs would have every test see
+    thirteen extra tools and an extra model call per turn -- and the suite would
+    pass or fail by whose machine ran it. It did: enabling it locally put four
+    upstream tests into failure, over a config file no test had touched.
+
+    A test that wants the surface asks for ``on_call_enabled``, which patches the
+    same function afterwards and therefore wins.
+    """
+    from raven.ops import gate
+
+    monkeypatch.setattr(gate, "on_call_available", lambda: False)
+    yield
+
+
+@pytest.fixture
+def on_call_enabled(monkeypatch):
+    """The owner's switch, on. It is what puts the on-call surface in an instance.
+
+    Off by default (``tools.oncall.enabled``), because everything it adds costs
+    every turn and is inert for someone who never runs work on another machine.
+    A test asserting any of it -- the thirteen tools, the work-to-watch
+    judgement, exec's ``machine`` parameter, the notes appended to TOOLS.md --
+    has to turn it on, the same way an owner does.
+
+    Patched at ``raven.ops.gate`` rather than written into a config file: the
+    gate is what every caller asks, and going through the loader would depend on
+    which config path this test happens to have selected.
+    """
+    from raven.ops import gate
+
+    monkeypatch.setattr(gate, "on_call_available", lambda: True)
+    yield True
+
+
+@pytest.fixture(autouse=True)
+def _no_update_check(tmp_path, monkeypatch):
+    """Keep the startup update check off the network and off the real disk.
+
+    ``raven tui`` fires ``maybe_refresh_async()`` and ``session.create`` reads
+    the cache, so any test reaching either path would otherwise fetch the
+    GitHub releases API and write ``<cache dir>/update_check.json`` under the
+    real home. Redirecting the cache dir alone still leaves an empty cache,
+    which is exactly the state that spawns the fetch -- so opt out by env for
+    the whole suite. Tests that exercise the notice clear the variable.
+    """
+    from raven.cli import update_notice
+
+    monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
+    monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_oauth_credentials(tmp_path, monkeypatch):
+    """Point every OAuth credential lookup at a temp dir for the whole suite.
+
+    ``import_litellm`` publishes these variables so LiteLLM's drivers and raven
+    agree on one location, and they outlive the test that triggered the import:
+    a later test that fakes the home directory still reads whatever the first one
+    resolved. On a developer machine that is a real signed-in credential, which
+    makes providers report themselves configured, sends the Codex catalog lookup
+    to the network, and puts a real credential file in reach of a test that
+    deletes one. All four families are covered, not only the two LiteLLM reads by
+    variable: the other two derive their path from the home directory, which a
+    test may or may not have faked. Tests that exercise a credential set these
+    themselves.
+    """
+    for name in ("CHATGPT_TOKEN_DIR", "CHATGPT_AUTH_FILE", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "oauth" / "chatgpt"))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "oauth" / "github_copilot"))
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path / "oauth"))
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
@@ -159,16 +303,16 @@ def _no_openrouter_network(tmp_path):
     and mock the transport. The disk cache path is also redirected to a temp
     file so the real ~/.raven/cache/ is never read or written.
     """
-    from raven.token_wise import model_catalog_cache, pricing
+    from raven.providers import model_catalog_cache, rates
 
-    original_fetch = pricing._fetch_openrouter_models
+    original_fetch = rates._fetch_openrouter_models
     original_path = model_catalog_cache._CACHE_PATH
-    pricing._fetch_openrouter_models = lambda: {}
+    rates._fetch_openrouter_models = lambda: {}
     model_catalog_cache._CACHE_PATH = tmp_path / "model-catalog.json"
     try:
         yield
     finally:
-        pricing._fetch_openrouter_models = original_fetch
+        rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        pricing._OPENROUTER_CACHE.clear()
-        pricing._OPENROUTER_CACHE_TIME = 0.0
+        rates._OPENROUTER_CACHE.clear()
+        rates._OPENROUTER_CACHE_TIME = 0.0

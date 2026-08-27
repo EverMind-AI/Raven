@@ -4,12 +4,19 @@ Isolates the gate: build_executor and _run_subagent_inner are stubbed, so the
 test drives only the Semaphore in _run_subagent (no real VM, no real LLM). A
 stubbed inner holds each subagent inside the gate on an Event, letting the test
 observe the concurrent peak.
+
+Also covers: a subagent reuses the main LiteLLMProvider instance verbatim
+(SubagentManager.provider), so the api_key that instance was constructed
+with reaches acompletion on the subagent's own chat_with_retry() calls too —
+acompletion is mocked, so this stays "no real LLM".
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +24,9 @@ from pydantic import ValidationError
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
+from raven.providers.base import LLMResponse, ToolCallRequest
+from raven.providers.litellm_provider import LiteLLMProvider
+from raven.sandbox import ExecResult, SandboxExecutor
 
 
 class _StubProvider:
@@ -30,6 +40,41 @@ class _DummyExecutor:
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
+
+
+class _RecordingExecutor(SandboxExecutor):
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    @property
+    def is_sandboxed(self) -> bool:
+        return False
+
+    async def exec(self, command: str, **kwargs) -> ExecResult:
+        self.commands.append(command)
+        return ExecResult(stdout="ok", stderr="", exit_code=0)
+
+
+class _DeleteRetryProvider(_StubProvider):
+    def __init__(self) -> None:
+        self.responses = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm file.txt"}),
+                    ToolCallRequest(
+                        id="call-b",
+                        name="exec",
+                        arguments={"command": 'bash -c "rm file.txt"'},
+                    ),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="Retried through a shell wrapper.", finish_reason="stop"),
+        ]
+
+    async def chat_with_retry(self, **kwargs) -> LLMResponse:
+        return self.responses.pop(0)
 
 
 async def _settle(predicate, *, tries: int = 2000) -> None:
@@ -57,7 +102,7 @@ async def _drive(monkeypatch, *, max_concurrent: int, spawn_n: int) -> int:
     state = {"current": 0, "peak": 0}
     release = asyncio.Event()
 
-    async def _stub_inner(task_id, task, label, origin, executor) -> None:
+    async def _stub_inner(task_id, task, label, origin, executor, provider, model) -> None:
         state["current"] += 1
         state["peak"] = max(state["peak"], state["current"])
         await release.wait()
@@ -88,6 +133,39 @@ async def test_gate_caps_concurrent_subagents(monkeypatch):
 async def test_gate_of_one_serializes_subagents(monkeypatch):
     peak = await _drive(monkeypatch, max_concurrent=1, spawn_n=4)
     assert peak == 1
+
+
+async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_path):
+    provider = _DeleteRetryProvider()
+    manager = SubagentManager(provider=provider, workspace=tmp_path)
+    executor = _RecordingExecutor()
+    announcements: list[dict[str, str]] = []
+
+    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
+
+    async def _capture_announcement(task_id, label, task, result, origin, status) -> None:
+        announcements.append({"result": result, "status": status})
+
+    monkeypatch.setattr(manager, "_announce_result", _capture_announcement)
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "delete file.txt",
+        "delete",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
+        executor,
+        manager.provider,
+        manager.model,
+    )
+
+    assert executor.commands == []
+    assert len(provider.responses) == 1
+    assert announcements == [
+        {
+            "result": manager_mod._ABORTED_ACTION_RESULT,
+            "status": "error",
+        }
+    ]
 
 
 @pytest.mark.parametrize("bad", [0, -1])
@@ -179,7 +257,7 @@ async def test_cancel_by_session_cancels_live_task(monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def _blocking_inner(task_id, task, label, origin, executor) -> None:
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
         entered.set()
         await release.wait()  # never set — keeps the task live until cancelled
 
@@ -257,3 +335,47 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
     mgr._build_subagent_prompt()
 
     assert calls == [False]
+
+
+async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
+    """A subagent runs in-process against the exact provider instance the main
+    agent was built with (manager.provider), not a fresh one — so an api_key
+    set only on the main instance must still reach acompletion for the
+    subagent's own chat_with_retry() calls.
+
+    A reported spawn-subagent 401 could not be reproduced by reading the
+    code (chat()/chat_stream() already pass api_key explicitly to
+    acompletion), but nothing in the test suite actually asserted that
+    kwarg ever arrived -- this pins it down.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
+    manager = SubagentManager(provider=provider, workspace=Path("/tmp"))
+
+    assert manager.provider is provider
+
+    response = await manager.provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="openai/gpt-4o",
+    )
+
+    assert response.finish_reason != "error"
+    assert captured["api_key"] == "k-main"

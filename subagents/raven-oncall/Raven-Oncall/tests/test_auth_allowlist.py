@@ -10,7 +10,7 @@ Two layers:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from typing import Any
 
 import pytest
@@ -215,5 +215,5 @@ class TestManagedSettings:
 
     def test_frozen_dataclass(self):
         s = ManagedSettings()
-        with pytest.raises(Exception):  # FrozenInstanceError subclass
+        with pytest.raises(FrozenInstanceError):
             s.description = "mutated"  # type: ignore[misc]

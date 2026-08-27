@@ -1,7 +1,90 @@
 """Base class for agent tools."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
+
+from raven.utils.helpers import ContentPart
+
+
+@dataclass
+class ToolResult:
+    """A tool's output split into the model-facing text and an optional
+    human-facing display string.
+
+    ``execute`` may return a bare ``str`` (model text only — the UI falls back
+    to a generic preview of it) or this, when the tool wants a cleaner
+    transcript rendering than what it feeds the model. ``display_text`` must be
+    built from the tool's own execution data, not by re-parsing ``model_text``.
+
+    ``retryable=False`` suppresses the registry's generic change-approach hint.
+    ``abort_action=True`` tells the agent loop not to execute sibling calls or
+    ask the model for another approach.
+
+    ``blocks`` carries multimodal content parts (OpenAI-shaped ``text`` /
+    ``image_url`` dicts) for tools whose result is not expressible as text — a
+    read of a PNG, say. It is strictly *additive*: ``model_text`` must stand on
+    its own, because only providers that can carry an image in a tool result
+    ever look at ``blocks`` (see ``supports_image_tool_result``). Everything
+    else — the sentinel, subagents, the curator, session export, a provider
+    talking Chat Completions — keeps using the text and must still make sense.
+    So a tool setting ``blocks`` puts the metadata *and* the file path in
+    ``model_text``, never "see the image above".
+
+    ``ends_turn`` overrides the tool's own ``ends_turn`` property for this one
+    call, and exists for the tools whose whole point is to say "and now we wait":
+    when such a call is *refused*, nothing was arranged and the turn must go on.
+    Measured 2026-08-21 while adding a budget that stops a watch from arranging
+    another look -- a refused ``ops_check_later`` closed the turn exactly as an
+    accepted one does, so the campaign was left with no pending wake and no
+    report, which is the one state nothing recovers from.
+    """
+
+    model_text: str
+    display_text: str | None = None
+    retryable: bool = True
+    abort_action: bool = False
+    blocks: list[ContentPart] | None = None
+    ends_turn: bool | None = None
+
+
+class ToolOutput(str):
+    """What :meth:`ToolRegistry.execute` hands back: the model-facing text with
+    the optional display string and multimodal blocks attached.
+
+    A ``str`` subclass on purpose. Every caller of the registry boundary --
+    the sentinel action executor, the subagent manager, the context curator,
+    tracing -- puts the return value straight into a message, a preview or an
+    artifact, so the boundary has to return something that *is* a str; handing
+    them a :class:`ToolResult` would format its repr into model context and
+    user-facing replies. The agent loop reads ``display_text`` off it to render
+    the transcript row, ``blocks`` to build a multimodal tool result, and the
+    control flags to enforce terminal tool decisions.
+    """
+
+    display_text: str | None
+    retryable: bool
+    abort_action: bool
+    blocks: list[ContentPart] | None
+    ends_turn: bool | None
+
+    def __new__(
+        cls,
+        model_text: str,
+        display_text: str | None = None,
+        *,
+        retryable: bool = True,
+        abort_action: bool = False,
+        blocks: list[ContentPart] | None = None,
+        ends_turn: bool | None = None,
+    ) -> "ToolOutput":
+        out = super().__new__(cls, model_text)
+        out.display_text = display_text
+        out.retryable = retryable
+        out.abort_action = abort_action
+        out.blocks = blocks
+        out.ends_turn = ends_turn
+        return out
 
 
 class Tool(ABC):
@@ -68,7 +151,7 @@ class Tool(ABC):
         return False
 
     @abstractmethod
-    async def execute(self, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> "str | ToolResult":
         """
         Execute the tool with given parameters.
 
@@ -76,9 +159,56 @@ class Tool(ABC):
             **kwargs: Tool-specific parameters.
 
         Returns:
-            String result of the tool execution.
+            The model-facing result as a ``str``, or a :class:`ToolResult` when
+            the tool wants a distinct human-facing display string.
         """
         pass
+
+    def display_call(self, args: dict[str, Any]) -> str | None:
+        """Human-facing one-line summary of a call to this tool.
+
+        ``None`` (the default) lets the UI derive a generic summary from the
+        arguments. Override only when a tool wants a cleaner label than the
+        generic one (e.g. ask_user showing just its question, not the raw
+        arguments blob).
+        """
+        return None
+
+    @property
+    def truncation_hint(self) -> str | None:
+        """What to do differently when a call to this tool arrives cut off.
+
+        The generic truncation message can only say "send less", which leaves a
+        model to guess at what smaller looks like -- and dropping the largest
+        field is one of the guesses. What it needs is the next action, and only
+        the tool knows what that is: write_file can be appended to, a shell
+        command can be split into several runs, and some tools have no smaller
+        form at all.
+
+        ``None`` (the default) means the generic message stands on its own.
+
+        Only for a cut the upstream confirmed. Where the cause is merely likely
+        see ``incomplete_hint``: advice written for a turn that ran out of room
+        misleads a model that simply wrote bad JSON, and sends it looking for a
+        size problem it does not have.
+        """
+        return None
+
+    @property
+    def incomplete_hint(self) -> str | None:
+        """What to do differently when a call arrives unparseable and last.
+
+        Same situation as ``truncation_hint`` under one of its two readings, and
+        deliberately a separate string rather than the same one reused: this one
+        is consumed under an ``If it was the output limit:`` heading and has to
+        read as the consequent of a condition, where the other states a fact.
+
+        The near-duplication is the cost of not asserting a cause we cannot
+        establish. A tool answering one of the two and not the other leaves the
+        ambiguous refusal with no way forward, which is the case that exists
+        because the upstream under-reports -- guarded by a test.
+        """
+        return None
 
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""

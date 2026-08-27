@@ -200,9 +200,8 @@ def mention_gate(config: MochatConfig, target_kind: str, target_id: str, group_i
 
 def parse_timestamp(value: Any) -> int | None:
     """ISO-8601 string -> epoch milliseconds, or None."""
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
         return None
-    try:
-        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
-    except ValueError:
-        return None
+    from raven.utils.text import parse_iso_ts_ms
+
+    return parse_iso_ts_ms(value)

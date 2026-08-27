@@ -21,6 +21,14 @@ prices in licence-hours or node-hours is a line of configuration rather than
 another accumulator. The measurement -- when a job ran, how many units wide it
 was -- stays with the backend, which is the only thing that can read it off the
 machine.
+
+*Which* measurement, though, is declared too. Everything above prices machine
+time, and that is not what every watch spends. A campaign that sits on a price
+feed for a day runs no jobs at all: what it spends is the span it was asked to
+cover and the number of times it woke to look, and each of those wakes is a whole
+cold start. Nothing on the machine can be asked for either figure -- the machine
+was idle -- so the meter says who holds the reading, and a budget metered off the
+machine is answered from the campaign's own record (``raven.ops.attendance``).
 """
 
 from __future__ import annotations
@@ -29,6 +37,13 @@ from dataclasses import dataclass
 
 SHARED = "shared"
 ADDITIVE = "additive"
+
+# Who holds the reading for this budget's unit.
+COMPUTE = "compute"  # the machine: core-minutes, gpu-minutes, licence-hours
+WALL_CLOCK = "wall-clock"  # the clock: how long the watch has been open
+LOOKS = "look"  # the campaign's own record: one per time it read the world
+
+_METERS = frozenset({COMPUTE, WALL_CLOCK, LOOKS})
 
 # The fields that predate this one, and what each meant where it was used. Kept
 # because campaigns carrying them are on disk and running; a campaign's meta is
@@ -44,15 +59,28 @@ _LEGACY = {
 
 @dataclass(frozen=True)
 class Budget:
-    """A declared allowance: how much of what, and how concurrent use adds up."""
+    """A declared allowance: how much of what, who measures it, and how
+    concurrent use adds up."""
 
     unit: str
     total: float
     overlap: str = SHARED
+    meter: str = COMPUTE
 
     @property
     def is_additive(self) -> bool:
         return self.overlap == ADDITIVE
+
+    @property
+    def off_machine(self) -> bool:
+        """Whether the spend has to be read from the campaign rather than the host.
+
+        The two cases this separates are not variants of one another: a host asked
+        for the spend on a wall-clock budget answers with the machine time its jobs
+        used, which for a watch that ran no jobs is zero however long it has been
+        watching. Zero is the reading a loop acts on most freely.
+        """
+        return self.meter in (WALL_CLOCK, LOOKS)
 
 
 def from_meta(meta: dict) -> Budget | None:
@@ -72,10 +100,15 @@ def from_meta(meta: dict) -> Budget | None:
         except (TypeError, ValueError):
             return None
         overlap = str(declared.get("overlap") or SHARED)
+        meter = str(declared.get("meter") or COMPUTE)
         return Budget(
             unit=str(declared.get("unit") or "unit"),
             total=total,
             overlap=overlap if overlap in (SHARED, ADDITIVE) else SHARED,
+            # Never inferred from the unit. "minute" is a wall-clock minute on a
+            # watch and a core-minute on a solver campaign, and guessing puts a
+            # spend nobody measured against a total somebody set.
+            meter=meter if meter in _METERS else COMPUTE,
         )
     for key, (unit, overlap) in _LEGACY.items():
         value = meta.get(key)

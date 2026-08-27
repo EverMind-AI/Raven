@@ -16,6 +16,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.methods.turn import (
@@ -153,7 +154,7 @@ async def test_turn_cancel_keeps_subscription_open_for_next_turn(
 
 
 async def test_turn_cancel_rejects_missing_session_key(emitter: SubscriptionEmitter) -> None:
-    with pytest.raises(Exception):  # noqa: BLE001
+    with pytest.raises(ValidationError):
         await turn_cancel({}, emitter=emitter)
 
 

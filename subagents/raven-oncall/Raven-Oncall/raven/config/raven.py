@@ -74,8 +74,30 @@ class ContextConfig(_Base):
     fast_path_threshold: float = 0.60
     """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
 
-    curator_model: str = "gemini-2.5-flash"
-    """Model used by the Curator agent loop (Slow Path). Kept small & fast."""
+    curator_model: str | None = None
+    """Model for the Curator agent loop (Slow Path). Unset means the Curator
+    runs on the model of the conversation it is curating.
+
+    Worth setting, and worth setting to something small: one slow-path pass is
+    a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
+    housekeeping rather than an answer, and unset means a long conversation
+    pays conversation-model prices for it. Pair it with ``curator_provider``:
+    a model id alone does not say which credential serves it, and a model id
+    without a key of its own is not a configured subsystem -- the Curator
+    falls back to the conversation rather than send that id on the
+    conversation's key."""
+
+    curator_provider: str | None = None
+    """Which configured provider serves ``curator_model``.
+
+    Set this whenever the id alone is ambiguous, which is most of the time
+    once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
+    and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
+    credentials and different bills, and only you know which was meant.
+
+    Unset, the pin goes to your configured gateway if you have one -- it serves
+    whatever id it is handed -- and only without a gateway is the vendor derived
+    from the id. Neither is a guess you should rely on."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -668,13 +690,12 @@ class SmartRoutingConfig(_Base):
     """SmartRouter configuration."""
 
     enabled: bool = False
-    tiers: dict[str, list[str]] = Field(
-        default_factory=lambda: {
-            "light": ["gemini-2.5-flash", "claude-haiku-4-5"],
-            "medium": ["claude-sonnet-4-6", "gpt-4.1-mini"],
-            "heavy": ["claude-opus-4-6", "gpt-4.1"],
-        }
-    )
+    tiers: dict[str, list[str]] = Field(default_factory=dict)
+    """Which models each tier may route to. Empty out of the box: the table
+    this replaced named six models across three vendors, for users who may
+    hold no key for any of them, and routing has no meaning without models to
+    choose between -- so enabling this means listing your own."""
+
     default_tier: Literal["light", "medium", "heavy"] = "heavy"
     """Fallback tier when routing is uncertain — conservative default."""
 
@@ -686,7 +707,8 @@ class ToolResultLifecycleConfig(_Base):
     full_retention_turns: int = 3
     summary_retention_turns: int = 10
     placeholder_text: str = "[Tool result archived — retrievable via Curator]"
-    summary_model: str = "gemini-2.5-flash"
+    summary_model: str | None = None
+    """Unset means the conversation's own model. See ``curator_model``."""
 
 
 class TokenWiseConfig(_Base):
@@ -804,6 +826,21 @@ class SkillForgeConfig(_Base):
     enabled: bool = True
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
+
+    blocklist: list[str] = Field(default_factory=list)
+    """Skill names refused everywhere (config key ``skillForge.blocklist``):
+    dropped from the injection pool for every source and refused by
+    ``use_skill``. Matched case-insensitively against the skill's name,
+    slug, and native id."""
+
+    auto_install: Literal["auto", "prompt", "off"] = "auto"
+    """Consent policy for Hub bundle downloads (config key
+    ``skillForge.autoInstall``), applied on both install paths (context
+    auto-inject and ``use_skill``). ``auto`` installs silently (current
+    behavior); ``prompt`` asks for confirmation on an interactive
+    terminal and behaves like ``off`` when no TTY is attached; ``off``
+    skips the download with a one-line notice — skill bodies still
+    inject, only the on-disk bundle is withheld."""
 
     router: "SkillForgeRouterConfig" = Field(
         default_factory=lambda: SkillForgeRouterConfig(),
@@ -965,7 +1002,18 @@ class SkillForgeConfig(_Base):
 
     llm_gate_model: str | None = None
     """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model)."""
+    provider's default chat model (typically the agent's main model).
+
+    Pair it with ``llm_gate_provider``: an id alone does not say which
+    credential serves it."""
+
+    llm_gate_provider: str | None = None
+    """Which configured provider serves ``llm_gate_model``.
+
+    Same rule as ``context.curator_provider``: set it when the id alone is
+    ambiguous (a gateway serving another vendor's model). Unset, a configured
+    gateway takes the pin and only without one is the vendor derived from the
+    id."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic
@@ -1003,7 +1051,7 @@ class SkillForgeConfig(_Base):
     rewrites — e.g. ``"claude-opus-4-6"``."""
 
     # --- Detect / extraction gating (wired into everos) ---
-    detect_model: str = "gemini-2.5-flash"
+    detect_model: str | None = None
     """LLM used for the cheap per-turn classification work — today that's
     the everos boundary detector (multi-turn task split). A
     smaller / faster model than ``evolve_model`` is intentional: boundary
@@ -1083,9 +1131,9 @@ class PluginsConfig(_Base):
     ``disabled`` is the user opt-out list keyed by plugin id (matches
     the ``id`` in ``raven-plugin.toml``). ``config`` is the per-
     plugin config slice the registry hands to each plugin's factory
-    via :class:`PluginContext.config` — its shape is determined by
-    each plugin's own ``config_schema`` in the manifest, so the host
-    treats it as a free-form dict.
+    via :class:`PluginContext.config` — the host treats it as a
+    free-form dict and never validates it, so each plugin is
+    responsible for reading and defaulting its own keys.
     """
 
     disabled: list[str] = Field(default_factory=list)
@@ -1108,9 +1156,11 @@ class MemoryConfig(_Base):
     agent-track recall (``backend.recall`` takes one XOR the other).
     EverOS routes each to its matching store; flat backends (mem0 /
     MemOS / Letta) use ``user_id`` and return empty for the agent call.
-    Each value must match the corresponding id the active backend
-    stamps on stored messages (e.g. ``plugins.config["everos-memory"]``
-    ``user_id`` / ``agent_id``) for stored memory to be retrievable.
+    These two fields are the only place either id is configured. A
+    backend receives them through ``ctx.services`` and must not read an
+    id from its own config slice: a second place holding the same value
+    lets a user edit one of them and silently split writes from reads,
+    after which every stored memory is unrecallable with no warning.
     """
 
     backend: str | None = "everos"
@@ -1150,8 +1200,11 @@ class HubSourceConfig(_Base):
     """Per-request timeout (hot turn-path)."""
 
     min_safety: float = 0.7
-    """Skills with ``score_safety`` below this are filtered out of the
-    catalog (and refused by ``use_skill``)."""
+    """Skills with ``score_safety`` below this are dropped. Catalog hits
+    that carry a score are filtered by ``HubSkillSource``; the standard
+    catalog payload omits the score, so the authoritative check runs on
+    the detail metadata — ``SkillsSegmentBuilder`` drops low-scored hits
+    after the pre-gate hydrate, and ``use_skill`` refuses the install."""
 
     source: str = "raven"
     """Download ``source`` tag for Hub usage stats."""
@@ -1171,7 +1224,7 @@ class SkillForgeRouterConfig(_Base):
 
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "local": 1.0,
+            "local": 0.96,
             "everos": 0.9,
             "hub": 0.85,
         },
@@ -1179,7 +1232,18 @@ class SkillForgeRouterConfig(_Base):
     """Per-source RRF weight. Higher = more rank mass when the same skill
     surfaces from multiple sources. Local highest (hand-curated); Hub
     (the remote marketplace, replaces the retired Mass source) lowest as
-    imported/unvalidated; Everos in between (task-specific, auto-evolved)."""
+    imported/unvalidated; Everos in between (task-specific, auto-evolved).
+
+    Only the ratios matter -- scaling all three leaves the order unchanged.
+    Read them together with ``rrf_k``: the spread has to stay well inside
+    the rank ladder that ``rrf_k`` produces, or weight silently overrides
+    rank and each source becomes a strict tier."""
+
+    rrf_k: int = Field(default=10, ge=1)
+    """RRF damping constant, mirroring ``skill_forge.fusion.RRF_K``.
+    Lower = source-internal rank carries more weight relative to
+    ``weights``; higher = flatter, so cross-source agreement and source
+    identity dominate."""
 
     over_fetch_factor: int = 2
     """Each source is asked for ``top_k * factor`` hits before fusion

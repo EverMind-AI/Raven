@@ -109,13 +109,12 @@ def test_create_prints_id(patched_workspace: Path) -> None:
     assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6}", first_line), f"expected bare chat_id on line 1, got {first_line!r}"
 
 
-def test_create_lazy_no_file(patched_workspace: Path) -> None:
+def test_create_bare_persists_file(patched_workspace: Path) -> None:
     r = runner.invoke(session_app, ["create"])
     assert r.exit_code == 0
     sessions_dir = patched_workspace / "sessions" / "cli"
-    assert not sessions_dir.exists() or not list(sessions_dir.glob("*.jsonl")), (
-        "bare `session create` must not write a file (lazy)"
-    )
+    jsonl_files = list(sessions_dir.glob("*.jsonl")) if sessions_dir.exists() else []
+    assert jsonl_files, "bare `sessions create` must persist metadata immediately"
 
 
 def test_create_with_title_persists(patched_workspace: Path) -> None:
@@ -314,7 +313,10 @@ def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:
 def test_session_fork_help() -> None:
     r = runner.invoke(session_app, ["fork", "--help"])
     assert r.exit_code == 0
-    assert "fork" in r.stdout.lower()
+    # Not just "fork": the usage line echoes the subcommand name, so that
+    # would hold even with no help text at all.
+    assert "fork-at-head" in r.stdout
+    assert "--title" in r.stdout
 
 
 def test_fork_prints_child_id(two_sessions: list[str], patched_workspace: Path, manager: SessionManager) -> None:
@@ -400,3 +402,67 @@ def test_export_write_failure_exits_cleanly(patched_workspace: Path, manager: Se
     r = runner.invoke(session_app, ["export", cid, "--output", str(dest)])
     assert r.exit_code != 0
     assert r.exception is None or isinstance(r.exception, SystemExit)
+
+
+# ── create/delete roundtrip ───────────────────────────────────────────
+
+
+def test_session_create_list_delete_roundtrip(patched_workspace: Path) -> None:
+    created = runner.invoke(session_app, ["create"])
+    assert created.exit_code == 0
+    sid = created.stdout.splitlines()[0].strip()
+
+    listed = runner.invoke(session_app, ["list"])
+    assert sid in listed.stdout
+
+    deleted = runner.invoke(session_app, ["delete", sid])
+    assert deleted.exit_code == 0
+
+
+def test_session_delete_unknown_id_still_clear(patched_workspace: Path) -> None:
+    r = runner.invoke(session_app, ["delete", "20990101_000000_deadbe"])
+    assert r.exit_code == 1
+    assert "not found" in r.output.lower()
+
+
+# ── auto-title ────────────────────────────────────────────────────────
+
+
+def test_session_autotitle_from_first_message(patched_workspace: Path, manager: SessionManager) -> None:
+    msg = "hello raven"
+    cid = new_chat_id()
+    s = manager.get_or_create(f"cli:{cid}")
+    s.add_message("user", msg)
+    manager.save(s)
+
+    reloaded = manager.peek(f"cli:{cid}")
+    assert reloaded is not None
+    title = reloaded.metadata.get("title")
+    assert title
+    assert msg.startswith(title)
+    assert len(title) <= 40
+
+    r = runner.invoke(session_app, ["list"])
+    assert r.exit_code == 0
+    row = next(line for line in r.stdout.splitlines() if cid in line)
+    cells = [c.strip() for c in row.split("│") if c.strip()]
+    assert cells[1] == title
+    assert cells[1] != "-"
+
+
+def test_session_explicit_title_not_overwritten(patched_workspace: Path, manager: SessionManager) -> None:
+    import re
+
+    created = runner.invoke(session_app, ["create", "--title", "X"])
+    assert created.exit_code == 0
+    match = re.search(r"\d{8}_\d{6}_[0-9a-f]{6}", created.stdout)
+    assert match, created.stdout
+    cid = match.group(0)
+
+    s = manager.get_or_create(f"cli:{cid}")
+    s.add_message("user", "a completely different first message")
+    manager.save(s)
+
+    reloaded = manager.peek(f"cli:{cid}")
+    assert reloaded is not None
+    assert reloaded.metadata.get("title") == "X"

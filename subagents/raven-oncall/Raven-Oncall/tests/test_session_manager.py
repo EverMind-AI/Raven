@@ -245,7 +245,10 @@ def test_concurrent_writers_lose_no_turns(tmp_path: Path):
     """Two processes saving the same session: both turn blocks land,
     each block's messages contiguous (tool_call/result adjacency)."""
     key = "tui:race01"
-    procs = [multiprocessing.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
+    # spawn, not the Linux default fork: pytest leaves the parent multi-threaded,
+    # and forking from there segfaults the interpreter at exit.
+    ctx = multiprocessing.get_context("spawn")
+    procs = [ctx.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
     for p in procs:
         p.start()
     for p in procs:
@@ -273,6 +276,33 @@ def test_find_most_recent_reflects_latest_append(tmp_path: Path):
     first.add_message("user", "z")
     mgr.save(first)
     assert mgr.find_most_recent_chat_id("tui") == "first"
+
+
+def test_find_most_recent_prefers_sessions_with_messages(tmp_path: Path):
+    """A freshly minted zero-message session (bare ``sessions create``) must
+    not hijack recency: the newest session WITH messages wins even when an
+    empty one carries a later updated_at."""
+    mgr = SessionManager(tmp_path)
+    real = mgr.get_or_create("cli:real01")
+    real.add_message("user", "hello")
+    real.updated_at = datetime(2026, 6, 10, 10, 0, 0)
+    mgr.save(real)
+
+    empty = mgr.get_or_create("cli:empty01")
+    empty.updated_at = datetime(2026, 6, 10, 11, 0, 0)
+    mgr.save(empty)
+
+    assert mgr.find_most_recent_chat_id("cli") == "real01"
+
+
+def test_find_most_recent_falls_back_to_empty_when_all_empty(tmp_path: Path):
+    """When every session on the channel has zero messages, the newest empty
+    one is still returned rather than None."""
+    _seed_nested(tmp_path, "cli", "older", "2026-06-10T10:00:00")
+    _seed_nested(tmp_path, "cli", "newer", "2026-06-10T11:00:00")
+
+    mgr = SessionManager(tmp_path)
+    assert mgr.find_most_recent_chat_id("cli") == "newer"
 
 
 def test_loader_skips_partial_trailing_line(tmp_path: Path):
@@ -712,6 +742,39 @@ def test_fork_inherits_last_consolidated(tmp_path: Path):
     assert child.last_consolidated == 1
 
 
+def test_fork_inherits_the_model_the_parent_chose(tmp_path: Path):
+    """A fork continues its parent's conversation, so it continues on its model.
+
+    The branch handler re-points the live binding, but that is in memory only.
+    Without the record the fork reads the default the first time it is resumed
+    in a new process, which is a silent downgrade rather than a visible one.
+    """
+    mgr = SessionManager(tmp_path)
+    src = _seed(mgr, "cli:src08", ("user", "a"))
+    src.metadata["model"] = "anthropic/claude-opus-4-8"
+    src.metadata["provider"] = "anthropic"
+    mgr.save(src)
+
+    child = mgr.fork("cli:src08")
+
+    reloaded = SessionManager(tmp_path).get_or_create(child.key)
+    assert reloaded.metadata["model"] == "anthropic/claude-opus-4-8"
+    assert reloaded.metadata["provider"] == "anthropic"
+
+
+def test_fork_of_an_unswitched_parent_carries_no_model(tmp_path: Path):
+    """The parent never chose one, so the fork must start on the default too --
+    not on a model copied out of nowhere.
+    """
+    mgr = SessionManager(tmp_path)
+    _seed(mgr, "cli:src09", ("user", "a"))
+
+    child = mgr.fork("cli:src09")
+
+    assert "model" not in child.metadata
+    assert "provider" not in child.metadata
+
+
 def test_fork_resets_pending_clarification(tmp_path: Path):
     """The child does not carry the source's clarification wait-state."""
     mgr = SessionManager(tmp_path)
@@ -755,10 +818,13 @@ def test_fork_deepcopies_messages(tmp_path: Path):
 
 
 def test_fork_default_title_appends_fork_suffix(tmp_path: Path):
-    """Without an explicit title, a titled parent yields '<title> (fork)'."""
+    """Without an explicit title, a titled parent yields '<title> (fork)'.
+
+    The parent was auto-named on its first save; the human rename via
+    set_title clears the marker, so the new title is inherited."""
     mgr = SessionManager(tmp_path)
     src = _seed(mgr, "cli:src10", ("user", "x"))
-    src.metadata["title"] = "My chat"
+    src.set_title("My chat")
     mgr.save(src)
 
     child = mgr.fork("cli:src10")
@@ -784,6 +850,36 @@ def test_fork_explicit_title_overrides(tmp_path: Path):
     child = mgr.fork("cli:src12", title="Custom")
 
     assert child.metadata["title"] == "Custom"
+
+
+def test_fork_inherits_human_title_equal_to_auto_derivation(tmp_path: Path):
+    """A human title that happens to equal the auto-derived text of the first
+    user message is still human: the child inherits '<title> (fork)'."""
+    mgr = SessionManager(tmp_path)
+    src = mgr.get_or_create("cli:src13")
+    src.set_title("Plan the trip")
+    src.add_message("user", "Plan the trip")
+    mgr.save(src)
+
+    child = mgr.fork("cli:src13")
+
+    assert child.metadata["title"] == "Plan the trip (fork)"
+
+
+def test_fork_skips_auto_named_title_via_marker(tmp_path: Path):
+    """An auto-named source carries title_auto in its persisted metadata and
+    the child does not inherit the title, even after a disk round-trip."""
+    mgr = SessionManager(tmp_path)
+    _seed(mgr, "cli:src14", ("user", "Plan the trip"))
+
+    reloaded_mgr = SessionManager(tmp_path)
+    source = reloaded_mgr.peek("cli:src14")
+    assert source.metadata.get("title") == "Plan the trip"
+    assert source.metadata.get("title_auto") is True
+
+    child = reloaded_mgr.fork("cli:src14")
+
+    assert child.metadata.get("title") is None
 
 
 # ── resolve_key (shared cross-channel resolution core) ─────────────────

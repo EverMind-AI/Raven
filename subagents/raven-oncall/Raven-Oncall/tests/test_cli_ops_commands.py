@@ -34,6 +34,11 @@ def test_tune_help_lists_adaptive_options() -> None:
 
 
 def test_adaptive_requires_llm_endpoint() -> None:
-    result = runner.invoke(ops_app, ["--host", "1.2.3.4", "--adaptive"])
+    # Named, not implied. `ops` collapsed to `tune` only while `tune` was its one
+    # command -- a typer convenience, not a shape anyone chose -- and `connection`
+    # ends it. Nothing outside this line ever used the collapsed form: the two
+    # places the trunk spells this call, ops.py's module docstring and
+    # runner.py's, both already write `raven ops tune`.
+    result = runner.invoke(ops_app, ["tune", "--host", "1.2.3.4", "--adaptive"])
     assert result.exit_code == 1
     assert "requires --llm-base-url and --llm-model" in result.output

@@ -1,8 +1,7 @@
-"""Tests for ``reload.mcp`` RPC handler (specs §3.10, design §3a.2).
+"""Tests for the ``reload.mcp`` RPC handler.
 
-Q10 deferred: hermes UI polls ``reload.mcp`` every 5s (hard-coded in fork-imported
-``useConfigSync.ts:202``). v0.1 returns a deterministic no-op shape — never
-throws so the polling does not pollute logs.
+Reloading MCP from the TUI is not implemented; the handler answers ``/reload-mcp``
+with the shape that says nothing happened, which is what these pin.
 """
 
 from __future__ import annotations

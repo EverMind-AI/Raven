@@ -18,6 +18,7 @@ group. The actual implementations live in per-feature modules:
     - ``sandbox``  → ``raven/cli/sandbox_commands.py``
     - ``sentinel`` → ``raven/cli/sentinel_commands.py``
     - ``sessions`` → ``raven/cli/session_commands.py``
+    - ``import``   → ``raven/cli/import_commands.py``
     - ``skill``    → ``raven/cli/skill_commands.py``
 
 Shared helpers used across multiple command modules live in
@@ -139,26 +140,36 @@ from raven.cli.tui_commands import tui_app
 
 app.add_typer(tui_app, name="tui")
 
+from raven.cli.acp_commands import acp_app
+
+app.add_typer(acp_app, name="acp")
+
 from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
 
+from raven.cli.import_commands import import_app
+
+app.add_typer(import_app, name="import")
+
 
 def run() -> None:
-    """Console-script entry point.
-
-    Runs the Typer app, then hard-exits past CPython interpreter finalization
-    when a native runtime that segfaults at finalization is live (lancedb's
-    Rust/tokio background thread — see :mod:`raven.cli._exit`). Any command that
-    builds the agent loop starts that thread, so guarding here covers them all
-    at once. CliRunner invokes ``app`` directly and never reaches this wrapper,
-    so in-process test hosts keep normal exit semantics.
-    """
-    from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
+    """Console-script entry point."""
     from raven.config.loader import ConfigReadError
+    from raven.providers.auth import MissingCredentialsError
 
     try:
         app()
+    except MissingCredentialsError as exc:
+        # The gate is decided in `providers.auth` because three entry points ask
+        # it; printing and exiting is this one's idiom, so it happens here rather
+        # than there. Rendered once for every command, like ConfigReadError.
+        from raven.cli._helpers import console
+
+        console.print(f"[red]Error: {exc.summary}.[/red]")
+        if exc.remedy:
+            console.print(exc.remedy)
+        raise SystemExit(1) from exc
     except ConfigReadError as exc:
         # A config-write command (channels/provider/deep-research/onboard) hit an
         # unparseable config. The write layer already refused (file untouched);
@@ -167,13 +178,15 @@ def run() -> None:
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
         raise SystemExit(1) from exc
-    except SystemExit as exc:
-        code = exc.code
-        if not isinstance(code, int):
-            code = 0 if code is None else 1
-        if lancedb_finalization_hazard():
-            flush_and_hard_exit(code)
-        raise
+    finally:
+        # Every command loads the config, so any of them can be the one that
+        # migrates it -- `status`, `provider list`, `cron list`. Only `agent` and
+        # `gateway` say so up front, and an unsaid notice is lost rather than
+        # deferred: the watermark leaves the next load with nothing to report.
+        # So this is the catch-all for every other command.
+        from raven.cli._helpers import print_config_migration_notices
+
+        print_config_migration_notices()
 
 
 if __name__ == "__main__":

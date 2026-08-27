@@ -75,6 +75,8 @@ class _DictBackend:
         self,
         session_id: str,
         messages: list[dict[str, Any]],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self._sessions.setdefault(session_id, []).extend(messages)
 

@@ -73,8 +73,22 @@ def test_the_line_names_what_going_through_ops_buys():
         assert tool in line
 
 
+def test_the_line_covers_work_that_is_watched_rather_than_run():
+    """It used to describe only an experiment -- "ops_submit runs a round against
+    it", "a working directory per round". A campaign that watches a price runs no
+    rounds and needs no directory, so a loop given a watch task did not recognise
+    itself in the sign: measured 2026-08-21, it built its own monitor out of
+    write_file and cron while every on-call tool sat registered and unused."""
+    line = provenance_line()
+
+    assert "condition" in line, "the shape a watch declares"
+    assert "readings" in line, "what to read and when"
+    assert "looks" in line, "a budget that is not machine time"
+    assert "ops_check_later" in line, "coming back through the campaign, not a cron of your own"
+
+
 @pytest.mark.asyncio
-async def test_only_path_taking_tools_are_judged_and_only_once_a_turn(monkeypatch):
+async def test_only_path_taking_tools_are_judged_and_only_once_a_turn(monkeypatch, on_call_enabled):
     """A request that never reaches for a path never pays for the judgement."""
     from raven.agent.loop import main as loop_main
 
@@ -108,20 +122,71 @@ async def test_only_path_taking_tools_are_judged_and_only_once_a_turn(monkeypatc
     assert elsewhere == "x", "a path the owner never named gets nothing"
 
 
-@pytest.mark.asyncio
-async def test_a_call_that_already_names_a_machine_is_left_alone(monkeypatch):
+def _stub_loop(session: str = ""):
     from raven.agent.loop import main as loop_main
 
     class _Loop:
         model = "stub"
         _watched_verdict = None
+        _watched_session = session
         _WATCHED_TOOLS = loop_main.AgentLoop._WATCHED_TOOLS
         _note_watched_path = loop_main.AgentLoop._note_watched_path
 
         async def _llm_call_stream(self, messages, tools, model):  # noqa: ANN001
-            raise AssertionError("already on the ops path; nothing to judge")
+            class _R:
+                content = '{"watched": true, "paths": ["/srv/case"]}'
 
-    out = await _Loop()._note_watched_path(
+            return _R()
+
+    return _Loop()
+
+
+@pytest.mark.asyncio
+async def test_naming_a_machine_does_not_silence_the_line(monkeypatch, on_call_enabled):
+    """Naming a machine says the look is remote. It says nothing about whether
+    anything is being recorded, and it used to skip the judgement outright.
+
+    Measured 2026-08-21 on a watch task: ops_connections named the machine, every
+    look afterwards carried machine=, so the line never appeared once -- and the
+    loop went on to build its own monitor out of write_file and cron, never seeing
+    that an on-call path existed. The condition was a proxy that failed exactly
+    where the line was needed."""
+    out = await _stub_loop()._note_watched_path(
+        "exec", {"command": "ls /srv/case", "machine": "conn_box"}, "run.sh", "req")
+
+    assert "ops_declare" in out
+
+
+@pytest.mark.asyncio
+async def test_a_window_that_already_has_a_campaign_is_left_alone(
+    monkeypatch, tmp_path, on_call_enabled
+):
+    """The real test of "already on the ops path": something is being recorded.
+    Telling a loop that is driving a campaign to go and declare one is noise."""
+    import raven.agent.tools.ops as ops_mod
+    from raven.ops.window import bind_window
+
+    home = tmp_path / "ops"
+    home.mkdir()
+    monkeypatch.setattr(ops_mod, "_ops_home", lambda: home)
+    bind_window(home, "tui:w1", "watch-volt", pid=None)
+
+    out = await _stub_loop("tui:w1")._note_watched_path(
         "exec", {"command": "ls /srv/case", "machine": "conn_box"}, "run.sh", "req")
 
     assert out == "run.sh"
+
+
+@pytest.mark.asyncio
+async def test_a_command_gets_the_line_too(on_call_enabled):
+    """This is the tool that does most of the looking, and it never got the line.
+
+    ``re.findall`` on the command raised NameError -- the loop module had no
+    ``import re`` -- and the except around it turned that into one debug line, so
+    the judgement ran, was paid for, and its answer was thrown away. Found
+    2026-08-21 while fixing the machine= skip that had been hiding it.
+    """
+    out = await _stub_loop()._note_watched_path(
+        "exec", {"command": "tail -5 /srv/case/log.foam"}, "Time = 0.4", "req")
+
+    assert "ops_declare" in out

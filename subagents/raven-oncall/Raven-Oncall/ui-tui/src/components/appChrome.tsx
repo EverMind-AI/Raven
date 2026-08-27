@@ -295,6 +295,8 @@ export function StatusRule({
   sessionStartedAt,
   showCost,
   turnStartedAt,
+  updateAvailable,
+  updateCommand,
   t
 }: StatusRuleProps) {
   const pct = usage.context_percent
@@ -307,7 +309,10 @@ export function StatusRule({
       : ''
 
   const bar = usage.context_max ? ctxBar(pct) : ''
-  const leftWidth = Math.max(12, cols - cwdLabel.length - 3)
+  // When an update is available, the bottom-right slot shows the upgrade nudge
+  // in place of the cwd/branch label (dynamic, no extra line).
+  const rightLabel = updateAvailable ? `↑ Update available — run ${updateCommand || 'raven upgrade'}` : cwdLabel
+  const leftWidth = Math.max(12, cols - rightLabel.length - 3)
 
   return (
     <Box height={1}>
@@ -354,7 +359,7 @@ export function StatusRule({
       </Box>
 
       <Text color={t.color.border}> ─ </Text>
-      <Text color={t.color.label}>{cwdLabel}</Text>
+      <Text color={updateAvailable ? t.color.warn : t.color.label}>{rightLabel}</Text>
     </Box>
   )
 }
@@ -471,6 +476,8 @@ interface StatusRuleProps {
   statusColor: string
   t: Theme
   turnStartedAt?: null | number
+  updateAvailable?: boolean
+  updateCommand?: string
   usage: Usage
 }
 

@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file, redirect_terminal_fds_to_file
+from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
@@ -43,6 +43,44 @@ _UI_TUI_DIR = Path(__file__).resolve().parent.parent.parent / "ui-tui"
 _PACKAGED_DIST_ENTRY = Path(__file__).resolve().parent.parent / "ui-tui" / "dist" / "entry.js"
 
 _MIN_NODE_VERSION = (22, 0, 0)
+
+#: Read by the TUI when it launches a raven command of its own (``provider
+#: login``, ``onboard``). Named here because the child must be this install.
+_RAVEN_BIN_ENV = "RAVEN_BIN"
+
+
+def own_entry_point() -> Optional[Path]:
+    """The ``raven`` executable that started this process, if it can be named.
+
+    A console script is invoked by path, so ``argv[0]`` is the answer whenever
+    there is one; ``python -m raven`` leaves something else there, and the
+    executable's own directory holds the script in that case.
+    """
+    argv0 = Path(sys.argv[0])
+    if argv0.name.startswith("raven") and argv0.is_file():
+        return argv0.resolve()
+
+    sibling = Path(sys.executable).with_name("raven.exe" if os.name == "nt" else "raven")
+
+    return sibling if sibling.is_file() else None
+
+
+def child_env() -> dict[str, str]:
+    """Environment for the Node child, naming the raven it must call back into.
+
+    The TUI runs ``raven provider login`` for the user, and that writes a
+    credential. Resolved through PATH it can be a different install than the one
+    running -- one whose idea of where credentials live is its own, so the login
+    reports success and this process still sees an unauthenticated provider.
+
+    An explicit ``RAVEN_BIN`` is left alone: a developer pointing it somewhere
+    means it.
+    """
+    env = os.environ.copy()
+    if not env.get(_RAVEN_BIN_ENV) and (entry := own_entry_point()):
+        env[_RAVEN_BIN_ENV] = str(entry)
+
+    return env
 
 
 def resolve_dist_entry() -> Optional[Path]:
@@ -95,6 +133,13 @@ def _stdout_isatty() -> bool:
     return sys.stdout.isatty()
 
 
+def _is_windows() -> bool:
+    """Whether the host is Windows. A seam so tests can exercise the Windows
+    runtime-layout branch by patching this, instead of patching os.name — the
+    latter makes pathlib instantiate an unusable WindowsPath on POSIX hosts."""
+    return os.name == "nt"
+
+
 def apply_config_path(config: Optional[str]) -> None:
     """Point this process at a specific config file, if one was given.
 
@@ -130,14 +175,25 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     else:
         # Priority 2: active venv
         if venv := os.environ.get("VIRTUAL_ENV"):
-            if os.name == "nt":
+            if _is_windows():
                 candidates.append(str(Path(venv) / "Scripts" / "node.exe"))
             else:
                 candidates.append(str(Path(venv) / "bin" / "node"))
 
-        # Priority 3: PATH
-        if path_node := shutil.which("node"):
-            candidates.append(path_node)
+        # Priority 3: PATH — enumerate EVERY node on PATH, not just the first.
+        # shutil.which returns only the first hit, so a stale < 22 node earlier
+        # on PATH (e.g. an old /usr/local/bin/node or a version-manager shim)
+        # would otherwise shadow a newer one later on PATH (e.g. a Homebrew
+        # node 26). The version filter below then picks the first usable one.
+        exe = "node.exe" if _is_windows() else "node"
+        seen_path: set[str] = set()
+        for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+            if not path_dir:
+                continue
+            cand = os.path.join(path_dir, exe)
+            if cand not in seen_path and os.path.isfile(cand):
+                seen_path.add(cand)
+                candidates.append(cand)
 
         # Priority 4: Raven-managed private runtime installed by the one-line
         # installer into ~/.raven/runtime/. This is the zero-config fallback so
@@ -149,7 +205,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # (node-v22.x.y-win-x64/node.exe) — install.ps1 provisions the latter.
         runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
         if runtime_root.is_dir():
-            if os.name == "nt":
+            if _is_windows():
                 direct = runtime_root / "node" / "node.exe"
                 if direct.exists():
                     candidates.append(str(direct))
@@ -160,6 +216,11 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
                     candidates.append(str(direct))
                 candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
 
+    # Return the first candidate that meets the minimum, in priority order.
+    # Track the highest below-minimum candidate seen so that when nothing
+    # qualifies the caller can still report the real version ("found 20.20.1,
+    # need >= 22") instead of a bare "not found".
+    best_below_min: Optional[Tuple[str, Tuple[int, int, int]]] = None
     for node_path in candidates:
         if not Path(node_path).exists():
             continue
@@ -175,11 +236,14 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             if not match:
                 continue
             version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            return (node_path, version)
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             continue
+        if version >= _MIN_NODE_VERSION:
+            return (node_path, version)
+        if best_below_min is None or version > best_below_min[1]:
+            best_below_min = (node_path, version)
 
-    return (None, None)
+    return best_below_min if best_below_min is not None else (None, None)
 
 
 def run_subprocess(
@@ -286,7 +350,7 @@ def _spawn_with_rpc_pipes(
     for fd in (req_r, notif_w):
         os.set_inheritable(fd, False)
 
-    env = os.environ.copy()
+    env = child_env()
     # Inside the child these will appear as fd 3 / 4 (Popen remaps in order).
     env["RAVEN_RPC_FD_REQUEST"] = "3"
     env["RAVEN_RPC_FD_NOTIFY"] = "4"
@@ -336,8 +400,37 @@ async def _fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> No
         await emitter.emit(session_key, {"type": "cron.delivered", "payload": payload})
 
 
+async def _fanout_cron_missed(emitter, *, drops) -> None:
+    """Fan a ``cron.missed`` event out to every active TUI session.
+
+    Fired once, right after ``cron_service.start()`` dropped past-due one-shot
+    reminders. At that point the client has not called ``turn.subscribe`` yet
+    (server bring-up precedes the handshake), so with no active session the
+    event is queued on the emitter and flushed to the first subscription that
+    registers — unlike ``cron.delivered``, whose no-subscriber case is a
+    silent no-op because a job fire always happens after the client attached.
+    """
+    from datetime import datetime, timezone
+
+    items = [
+        {
+            "name": d.name,
+            "scheduled_at": datetime.fromtimestamp(d.at_ms / 1000, tz=timezone.utc).isoformat(),
+            "message": d.message,
+        }
+        for d in drops
+    ]
+    event = {"type": "cron.missed", "payload": {"count": len(items), "items": items}}
+    sessions = list(emitter._by_session.keys())
+    if not sessions:
+        emitter.queue_startup_event(event)
+        return
+    for session_key in sessions:
+        await emitter.emit(session_key, event)
+
+
 def _build_cron_callback_spine(base_on_cron, emitter):
-    """Wrap the spine cron callback so a delivering job's reply is fanned out as a
+    """Wrap the spine cron callback so a job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
     returns its reply (read back from the runner via ``readback_texts``); the cron
@@ -347,7 +440,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
 
     async def wrapped(job):
         response = await base_on_cron(job)
-        if job.payload.deliver and response:
+        if response:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -380,11 +473,13 @@ def _build_tui_agent_loop():
     """
     from pydantic import ValidationError
 
+    from raven.providers.auth import MissingCredentialsError
     from raven.tui_rpc.errors import InternalError
 
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.cli._cron_handler import chain_cron_activity_reset
         from raven.cli._helpers import load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
@@ -442,7 +537,10 @@ def _build_tui_agent_loop():
             registry=plugin_registry,
         )
 
+        from raven.providers.pool import ProviderPool
+
         agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             workspace=config.workspace_path,
             model=config.agents.defaults.model,
@@ -469,6 +567,11 @@ def _build_tui_agent_loop():
             plugin_tools=plugin_tools,
             # TUI is always a multi-turn interactive session.
             interactive=True,
+            # Anti-runaway reset: user turns arrive as (tui, default), the
+            # same pair CronTool.set_context binds into new jobs, so genuine
+            # TUI activity zeroes the silent-fire counters counted by this
+            # process's on_cron_job (no Sentinel hook in the TUI to chain).
+            on_user_inbound=chain_cron_activity_reset(cron),
         )
         agent_loop.configure_personalization(
             config.agents.defaults.enable_personalization,
@@ -483,6 +586,18 @@ def _build_tui_agent_loop():
         # scheduler and its reply is fanned out as a cron.delivered event.
 
         return agent_loop
+    except MissingCredentialsError as e:
+        # Not a crash: the install simply is not finished. Surfaced as the
+        # sentence that says which provider needs what, where the generic
+        # handler below reported `exception_message: "1"` -- `typer.Exit`
+        # stringified -- and put the real one in a log file.
+        from loguru import logger as _logger
+
+        _logger.warning("tui: provider not usable: {}", e.summary)
+        raise InternalError(
+            e.summary,
+            data={"reason": "missing_credentials", "provider": e.provider, "remedy": e.remedy},
+        ) from e
     except (*_TUI_INIT_CRASH_TYPES, ValidationError) as e:
         from loguru import logger as _logger
 
@@ -529,6 +644,7 @@ async def _run_rpc_server_until_done(
     """
     # Lazy import: keeps tui_commands importable without pulling tui_rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
+    from raven.tui_rpc.approval_broker import ApprovalBroker
     from raven.tui_rpc.confirm_broker import ConfirmBroker
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.methods import register_aligned_methods_except_system
@@ -560,11 +676,12 @@ async def _run_rpc_server_until_done(
     # which can only happen post-handshake / post-serve.
     server = RpcServer(dispatcher=dispatcher, sock=conn, auth_token=auth_token)
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
-    # ConfirmBroker shares the same send_frame sink; it lets a paused
-    # cli.dispatch (typer.confirm) emit a confirm.request and await the
-    # confirm.respond. cancel_all() in the finally fail-safes any
-    # pending confirm to its default when the connection drops.
+    # Prompt brokers share the gateway's send_frame sink but retain separate
+    # semantics. Shell approval is not a conversational confirmation: it binds
+    # one exact command to one turn, has dual deadlines, and always fails closed
+    # when the transport disappears.
     confirm_broker = ConfirmBroker(send_frame=server.send_frame)
+    approval_broker = ApprovalBroker(send_frame=server.send_frame)
     # QuestionBroker shares the same send_frame sink: the ask_user tool emits a
     # clarify.request and awaits clarify.respond, mirroring ConfirmBroker.
     question_broker = QuestionBroker(send_frame=server.send_frame)
@@ -590,16 +707,19 @@ async def _run_rpc_server_until_done(
     except RpcError as e:
         build_error = e
 
-    # Late-bind the QuestionBroker into the ask_user tool now that the loop
-    # (and its tool registry) exists; the broker itself was built up-front.
-    # ops_ask_owner takes one too: during a campaign it is the only route to the
-    # owner, and when nothing is running and nothing else is worth doing it waits
-    # here rather than posting into the void.
+    # Late-bind the QuestionBroker into the tools that ask the user mid-turn, now
+    # that the loop (and its tool registry) exists; the broker was built up-front.
+    # deep_research goes through the loop so a tool built later by promotion (a
+    # mid-session enable) inherits the broker too, not just the startup one.
+    # ops_ask_owner takes one as well: during a campaign it is the only route to
+    # the owner, and when nothing is running and nothing else is worth doing it
+    # waits here rather than posting into the void.
     if agent_loop is not None:
         for _name in ("ask_user", "ops_ask_owner"):
             _tool = agent_loop.tools.get(_name)
             if _tool is not None and hasattr(_tool, "set_broker"):
                 _tool.set_broker(question_broker)
+        agent_loop.set_deep_research_broker(question_broker)
 
     def _agent_loop_factory():
         if agent_loop is not None:
@@ -617,19 +737,18 @@ async def _run_rpc_server_until_done(
     turn_ids: dict[str, str] = {}
     turn_teardown = None
     if agent_loop is not None:
-        from types import SimpleNamespace
-
         from raven.cli._cron_handler import make_on_cron_job
 
         # Build the spine before wiring cron: a reminder submits a CRON turn
         # through this scheduler, captured non-streaming and read back via
         # cron_readback so the wrapper can fan it out as a cron.delivered event.
         cron_readback: dict[str, str] = {}
-        turn_scheduler, turn_hub, turn_ids, turn_teardown = build_tui(
+        turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_tui(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
             readback_texts=cron_readback,
+            approval_responder=approval_broker,
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -638,15 +757,18 @@ async def _run_rpc_server_until_done(
         # before cron.start() so an immediately-firing job has its callback.
         if agent_loop.cron_service is not None:
             base_on_cron = make_on_cron_job(
-                agent_loop,
-                turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
-                channel_manager=SimpleNamespace(enabled_channels=["tui"]),
                 default_channel="tui",
+                cron_service=agent_loop.cron_service,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
+            # start() dropped past-due one-shot reminders on this runner's
+            # partition; surface them as one cron.missed startup notice.
+            if agent_loop.cron_service.last_startup_drops:
+                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
+
             # On-call event ingress. Without it the only thing setting detection
             # latency is the agent's own ETA guess: a real campaign scheduled a
             # 90-minute recheck, its job finished 30 minutes later, and the
@@ -671,6 +793,7 @@ async def _run_rpc_server_until_done(
         dispatcher,
         emitter=emitter,
         agent_loop_factory=_agent_loop_factory,
+        approval_broker=approval_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=turn_scheduler,
@@ -678,102 +801,82 @@ async def _run_rpc_server_until_done(
         build_error=build_error,
     )
 
-    from raven.config.paths import get_logs_dir
+    serve_task = asyncio.create_task(server.serve_forever())
 
-    # everos embedded structlog uses PrintLogger which calls print() → writes
-    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
-    # no everos output can corrupt the full-screen TUI, starting before
-    # backend.start() (which may trigger lazy warns) through the end of stop().
-    # The Node child already inherited the real terminal fds at Popen time (before
-    # this function ran), so this dup2 does not affect the child's terminal.
-    async def _start_memory_backend() -> None:
-        # Bring up the memory backend off the render path: its everos/lancedb
-        # import (~2-3s) + lifespan must not block the handshake / first render.
-        # recall/store degrade to empty until it is ready.
-        try:
-            await agent_loop.backend.start()
-        except Exception:
-            from loguru import logger as _logger
+    try:
+        # Wait until EITHER handshake completes OR deadline expires OR child exits.
+        done, pending = await asyncio.wait(
+            {
+                asyncio.create_task(handshake_done.wait()),
+                asyncio.create_task(proc_done.wait()),
+            },
+            timeout=handshake_deadline_s,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+        # Drain cancelled tasks to suppress warnings.
+        for t in pending:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
 
-            _logger.exception("tui: memory backend start failed; continuing with degraded memory path")
-        # everos installs a root stdout StreamHandler during start(); strip it now
-        # (after the deferred start) so its records reach the file sink.
-        _strip_tty_stream_handlers()
+        if not handshake_done.is_set():
+            return False
+        # Handshake OK — start memory backend in background (may spawn
+        # EverOS server, up to 30s) so it doesn't block first render.
+        if agent_loop is not None and agent_loop.backend is not None:
 
-    with redirect_terminal_fds_to_file(get_logs_dir() / "tui.log"):
-        # Strip any tty handlers installed before serve; the deferred backend
-        # start strips again after it runs.
-        _strip_tty_stream_handlers()
-
-        serve_task = asyncio.create_task(server.serve_forever())
-        backend_start_task: asyncio.Task | None = None
-
-        try:
-            # Wait until EITHER handshake completes OR deadline expires OR child exits.
-            done, pending = await asyncio.wait(
-                {
-                    asyncio.create_task(handshake_done.wait()),
-                    asyncio.create_task(proc_done.wait()),
-                },
-                timeout=handshake_deadline_s,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in pending:
-                t.cancel()
-            # Drain cancelled tasks to suppress warnings.
-            for t in pending:
+            async def _start_backend() -> None:
                 try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            if not handshake_done.is_set():
-                return False
-            # Handshake OK (UI rendered) — bring up the memory backend now, in the
-            # background, so its heavy import + lifespan happens after render.
-            if agent_loop is not None and agent_loop.backend is not None:
-                backend_start_task = asyncio.create_task(_start_memory_backend())
-            # Continue serving until child exits.
-            await proc_done.wait()
-            return True
-        finally:
-            # Let the background backend start finish before stop() so stop never
-            # races a mid-flight start.
-            if backend_start_task is not None:
-                try:
-                    await backend_start_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            # Fail-safe any pending confirm so a paused dispatch's worker thread
-            # is released when the connection drops.
-            confirm_broker.cancel_all()
-            if ops_watcher_task is not None:
-                ops_watcher_task.cancel()
-            if agent_loop is not None and agent_loop.cron_service is not None:
-                try:
-                    agent_loop.cron_service.stop()
-                except Exception:
-                    pass
-            if turn_teardown is not None:
-                try:
-                    await turn_teardown()
-                except Exception:
-                    pass
-            # Release the embedded index lock so the next process can start.
-            if agent_loop is not None and agent_loop.backend is not None:
-                try:
-                    await agent_loop.backend.stop()
+                    await agent_loop.backend.start()  # type: ignore[union-attr]
                 except Exception:
                     from loguru import logger as _logger
 
                     _logger.exception(
-                        "tui: memory backend stop failed; continuing shutdown",
+                        "tui: memory backend start failed; continuing with degraded memory path",
                     )
-            serve_task.cancel()
+                _strip_tty_stream_handlers()
+
+            asyncio.create_task(_start_backend())
+
+        await proc_done.wait()
+        return True
+    finally:
+        # Release all pending UI waits before transport teardown. Approval
+        # cancellation is always denial, preserving fail-closed behavior on a
+        # disconnect; ordinary confirms retain their configured default.
+        confirm_broker.cancel_all()
+        approval_broker.cancel_all()
+        if ops_watcher_task is not None:
+            ops_watcher_task.cancel()
+        if agent_loop is not None and agent_loop.cron_service is not None:
             try:
-                await serve_task
-            except (asyncio.CancelledError, Exception):
+                agent_loop.cron_service.stop()
+            except Exception:
                 pass
+        if turn_teardown is not None:
+            try:
+                await turn_teardown()
+            except Exception:
+                pass
+        # Release the embedded index lock so the next process can start.
+        if agent_loop is not None and agent_loop.backend is not None:
+            try:
+                await agent_loop.drain_backend_stores()
+                await agent_loop.backend.stop()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception(
+                    "tui: memory backend stop failed; continuing shutdown",
+                )
+        serve_task.cancel()
+        try:
+            await serve_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 def _spawn_with_rpc_socket(
@@ -809,7 +912,7 @@ def _spawn_with_rpc_socket(
     host, port = server_sock.getsockname()[:2]
 
     token = secrets.token_hex(32)
-    env = os.environ.copy()
+    env = child_env()
     env[_RPC_SOCKET_ENV] = f"{host}:{port}"
     env[_RPC_TOKEN_ENV] = token
 
@@ -977,7 +1080,7 @@ def _print_node_help(out=None) -> None:
     msg = (
         "✗ TUI 启动失败：未找到 Node.js ≥ 22。\n"
         "  安装：https://nodejs.org/  或  brew install node@22  或  nvm install 22\n"
-        "  或：临时使用行式 REPL  ->  raven agent --legacy-repl\n"
+        '  或：一次性提问  ->  raven agent -m "..."\n'
     )
     typer.echo(msg, file=out)
 
@@ -1060,17 +1163,13 @@ def tui(
 
     apply_config_path(config)
 
-    # Startup gate: launch the onboarding wizard first when the required
-    # config (a provider key + default model) is missing. Skipped for the
-    # no-TTY diagnostic spawns (--check / --print-colors / --preview-colors).
+    # Startup gate: a config that cannot reach a model is settled before the TUI
+    # owns the terminal. Skipped for the no-TTY diagnostic spawns
+    # (--check / --print-colors / --preview-colors).
     if not (check or print_colors or preview_colors) and _stdout_isatty():
-        from raven.cli.onboard_commands import (
-            _is_config_populated,
-            ensure_configured_or_onboard,
-        )
+        from raven.cli.onboard_commands import ensure_ready_to_start
 
-        if not _is_config_populated():
-            ensure_configured_or_onboard()
+        ensure_ready_to_start()
 
     node_path, version = find_node()
     if node_path is None:
@@ -1082,6 +1181,14 @@ def tui(
             f"✗ Node 版本过低（找到 {ver_str}，需要 >= 22）。\n  请升级：nvm install 22  或  brew upgrade node\n",
         )
         raise typer.Exit(code=1)
+
+    # Refresh the cached latest-release version in the background (once per
+    # launch, throttled, best-effort) so the status bar can nudge
+    # `raven upgrade`. The gateway reads that cache when it builds the session
+    # info bundle.
+    from raven.cli.update_notice import maybe_refresh_async
+
+    maybe_refresh_async()
 
     # `--dev` runs tsx from the source tree, so it requires the ui-tui/ checkout.
     # The production path resolves a packaged or source-built bundle separately

@@ -102,10 +102,16 @@ export interface ConfigGetValueResponse {
 
 export interface ConfigSetResponse {
   applied?: boolean
+  // Does the asking conversation now run this model? A default-scoped switch
+  // moves the sessions that never chose one, so the scope alone cannot answer
+  // it and a client that guesses paints a model the conversation is not on.
+  applies_to_session?: boolean
   credential_warning?: string
   history_reset?: boolean
   info?: SessionInfo
   previous?: null | string
+  scope?: 'default' | 'session'
+  session_id?: string
   value?: string
   warning?: string
 }
@@ -117,12 +123,12 @@ export interface SetupStatusResponse {
 // ── Session lifecycle ────────────────────────────────────────────────
 
 export interface SessionCreateResponse {
-  info?: SessionInfo & { config_warning?: string; credential_warning?: string }
+  info?: SessionInfo & { config_notices?: string[]; config_warning?: string; credential_warning?: string }
   session_id: string
 }
 
 export interface SessionResumeResponse {
-  info?: SessionInfo
+  info?: SessionInfo & { config_notices?: string[] }
   message_count?: number
   messages: GatewayTranscriptMessage[]
   resumed?: string
@@ -336,11 +342,18 @@ export interface ToolsConfigureResponse {
 
 // ── Model picker ─────────────────────────────────────────────────────
 
+// A hand-written copy of the picker payload that predates the generated RPC
+// types. Kept because the test stubs build partial objects that the generated
+// shape, whose fields are required, rejects. Two declarations of one contract
+// drift, and the drift is silent: a field added to the schema but not here
+// arrives on the wire invisible to the component reading this type. The drift
+// test beside this file fails if a generated property is missing here.
 export interface ModelOptionProvider {
   auth_type?: string
   authenticated?: boolean
   is_current?: boolean
   key_env?: null | string
+  model_labels?: Record<string, { description?: string; label: string }>
   models?: string[]
   name: string
   needs_api_base?: boolean
@@ -353,6 +366,20 @@ export interface ModelOptionsResponse {
   model?: string
   provider?: string
   providers?: ModelOptionProvider[]
+}
+
+// One of the several url/key groups a provider section can carry. `api_key`
+// arrives redacted (`****set****` / `(empty)`) — the gateway never sends the
+// real one back, so there is nothing here to unmask.
+export interface ProviderEndpointInfo {
+  api_base?: null | string
+  api_key?: string
+  extra_headers?: null | Record<string, string>
+  label: string
+}
+
+export interface ModelEndpointsResponse {
+  endpoints?: ProviderEndpointInfo[]
 }
 
 // ── MCP ──────────────────────────────────────────────────────────────
@@ -487,6 +514,7 @@ export type GatewayEvent =
   | { payload: SessionInfo; session_id?: string; type: 'session.info' }
   | { payload?: { text?: string }; session_id?: string; type: 'thinking.delta' }
   | { payload?: undefined; session_id?: string; type: 'message.start' }
+  | { payload?: { index?: number }; session_id?: string; type: 'episode.start' }
   | { payload?: { kind?: string; text?: string }; session_id?: string; type: 'status.update' }
   | { payload?: { state?: 'idle' | 'listening' | 'transcribing' }; session_id?: string; type: 'voice.status' }
   | { payload?: { no_speech_limit?: boolean; text?: string }; session_id?: string; type: 'voice.transcript' }
@@ -529,12 +557,33 @@ export type GatewayEvent =
       type: 'clarify.request'
     }
   | {
+      payload: {
+        approval_id: string
+        command: string
+        conversation_id: string
+        description: string
+        expires_at: number
+        tool_call_id: string
+        turn_id: string
+      }
+      session_id?: string
+      type: 'approval.request'
+    }
+  | {
+      payload: {
+        approval_id: string
+        conversation_id: string
+        reason: string
+      }
+      session_id?: string
+      type: 'approval.closed'
+    }
+  | {
       payload: { conversation_id?: string; reason?: string; request_id?: string }
       session_id?: string
       type: 'clarify.cancel'
     }
   | { payload: { reason?: string; request_id?: string }; session_id?: string; type: 'confirm.cancel' }
-  | { payload: { command: string; description: string }; session_id?: string; type: 'approval.request' }
   | { payload: { request_id: string }; session_id?: string; type: 'sudo.request' }
   | { payload: { env_var: string; prompt: string; request_id: string }; session_id?: string; type: 'secret.request' }
   | { payload: { default: boolean; prompt: string; request_id: string }; session_id?: string; type: 'confirm.request' }

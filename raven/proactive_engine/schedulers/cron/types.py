@@ -33,6 +33,19 @@ class CronPayload:
     # whose subject overlaps a likely-Sentinel topic (e.g. birthday,
     # anniversary, recurring medication).
     topic_tag: str | None = None
+    # Which sub-agent instance this wake belongs to, as the agent's name and the
+    # instance handle. Set by a headless on-call shell handing a wake back to the
+    # window that is watching it, and by nothing else.
+    #
+    # The pair is what turns a wake into one direct-chat turn against that
+    # instance instead of a reminder the main agent reads out. That distinction
+    # is the whole point: an on-call wake's message is addressed to the agent
+    # holding the campaign ("call ops_tune_status, then decide"), and the main
+    # agent -- which has no ops tools -- can only paraphrase it. Routed this way
+    # the round runs in the instance that owns the campaign, and its own words
+    # land in the pane the operator is already looking at.
+    direct_agent: str | None = None
+    direct_handle: str | None = None
 
 
 @dataclass

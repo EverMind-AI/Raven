@@ -11,6 +11,10 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+pytest.importorskip("slack_sdk")
+
 from raven.channels.adapters.slack import parsing as sp
 from raven.channels.adapters.slack.channel import SlackChannel
 

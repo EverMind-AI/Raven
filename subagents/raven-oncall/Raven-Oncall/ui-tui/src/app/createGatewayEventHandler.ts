@@ -172,7 +172,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
   // Terminal statuses are never overwritten by late-arriving live events —
   // otherwise a stale `subagent.start` / `spawn_requested` can clobber a
-  // `failed` or `interrupted` terminal state (Copilot review #14045).
+  // `failed` or `interrupted` terminal state.
   const isTerminalStatus = (s: SubagentProgress['status']) => s === 'completed' || s === 'failed' || s === 'interrupted'
 
   const keepTerminalElseRunning = (s: SubagentProgress['status']) => (isTerminalStatus(s) ? s : 'running')
@@ -300,6 +300,10 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'message.start':
         turnController.startMessage()
+
+        return
+      case 'episode.start':
+        turnController.recordEpisodeStart(Number(ev.payload?.index ?? 0))
 
         return
       case 'status.update': {
@@ -575,8 +579,28 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
 
-        patchOverlayState({ approval: { command: String(ev.payload.command ?? ''), description } })
+        patchOverlayState({
+          approval: {
+            approvalId: String(ev.payload.approval_id ?? ''),
+            command: String(ev.payload.command ?? ''),
+            conversationId: String(ev.payload.conversation_id ?? ''),
+            description,
+            expiresAt: Number(ev.payload.expires_at) * 1000
+          }
+        })
         setStatus('approval needed')
+
+        return
+      }
+      case 'approval.closed': {
+        const approval = getOverlayState().approval
+
+        // Close notifications can be delayed past a subsequent request. Match
+        // the opaque id so an old backend timeout never clears the new overlay.
+        if (approval?.approvalId === String(ev.payload.approval_id ?? '')) {
+          patchOverlayState({ approval: null })
+          setStatus(statusFromBusy())
+        }
 
         return
       }

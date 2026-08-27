@@ -5,6 +5,7 @@
 
 import type { Msg } from '../types.js'
 
+import { groupTools } from '../domain/episodeSummary.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { boundedHistoryRenderText } from './text.js'
 
@@ -28,10 +29,22 @@ export const messageHeightKey = (msg: Msg) => {
 
   const introSig = msg.kind === 'intro' ? (msg.info?.version ?? '') : ''
 
+  // Episodes drive the height for `kind: 'episodes'`, so they must be part of
+  // the cache key — otherwise a stale height survives a step-count change.
+  const epSig =
+    msg.episodes
+      ?.map(
+        ep =>
+          `${ep.narration?.length ?? 0}:${ep.tools
+            .map(tool => (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length + 1 : 1))
+            .join(',')}`
+      )
+      .join('\u0001') ?? ''
+
   return [
     msg.role,
     msg.kind ?? '',
-    hashText([msg.text, msg.thinking ?? '', msg.tools?.join('\n') ?? '', todoSig, panelSig, introSig].join('\0'))
+    hashText([msg.text, msg.thinking ?? '', msg.tools?.join('\n') ?? '', todoSig, panelSig, introSig, epSig].join('\0'))
   ].join(':')
 }
 
@@ -75,6 +88,56 @@ export const estimatedMsgHeight = (
   }
 
   const bodyWidth = transcriptBodyWidth(cols, msg.role, userPrompt)
+
+  // An `episodes` message renders a whole step stream (reasoning rows, prose,
+  // tool rows, result previews) — none of which lives in `msg.text`. Estimating
+  // it from the text alone under-counted by a wide margin, which makes the
+  // virtualized transcript reserve too few rows and leave stale cells behind.
+  if (msg.kind === 'episodes') {
+    let h = 0
+    // episodeView spaces a step from the previous one with marginTop={1} when
+    // that previous step showed tool rows. Counting no row for it is what keeps
+    // this estimate low, and a low estimate is the stale-cell symptom.
+    let prevShowedTools = false
+
+    for (const ep of msg.episodes ?? []) {
+      const narration = (ep.narration ?? '').trim()
+
+      if (prevShowedTools) {
+        h++
+      }
+
+      prevShowedTools = ep.tools.length > 0
+
+      // A step with no narration collapses to a single summary row.
+      if (!narration) {
+        h++
+        continue
+      }
+
+      // reasoning row + blank line + wrapped prose
+      h += 2 + wrappedLines(narration, bodyWidth)
+
+      if (ep.tools.length) {
+        h++ // blank line above the tool block
+
+        for (const group of groupTools(ep.tools)) {
+          // A multi-call run adds a header row above its children.
+          h += group.length > 1 ? 1 : 0
+          for (const tool of group) {
+            // 1 row for the call + one row per reported result line.
+            h += 1 + (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length : 0)
+          }
+        }
+      }
+    }
+
+    if (msg.text) {
+      h += 1 + wrappedLines(msg.text, bodyWidth)
+    }
+
+    return Math.max(1, h)
+  }
   const text = msg.role === 'assistant' && limitHistory ? boundedHistoryRenderText(msg.text) : msg.text
   let h = wrappedLines(text || ' ', bodyWidth)
 

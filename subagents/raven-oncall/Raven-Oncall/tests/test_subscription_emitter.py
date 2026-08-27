@@ -266,3 +266,50 @@ async def test_closed_subscription_does_not_receive_new_events(
     await asyncio.sleep(COALESCE_WINDOW_S * 3)
     post_count = send_frame.call_count
     assert post_count == pre_count, f"closed sub received events after unregister: pre={pre_count} post={post_count}"
+
+
+# ---------------------------------------------------------------------------
+# startup-event buffer (queue_startup_event → flushed on first register)
+# ---------------------------------------------------------------------------
+
+
+async def test_startup_event_flushed_to_first_registration(
+    emitter: SubscriptionEmitter,
+    send_frame: AsyncMock,
+) -> None:
+    """An event queued before any subscription exists SHALL be delivered to
+    the first subscription that registers."""
+    event = {"type": "cron.missed", "payload": {"count": 1, "items": []}}
+    emitter.queue_startup_event(event)
+    await emitter.register("tui:default")
+    await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+    events = _collect_emitted_events(send_frame)
+    assert events == [event]
+
+
+async def test_startup_event_not_redelivered_to_later_registrations(
+    emitter: SubscriptionEmitter,
+    send_frame: AsyncMock,
+) -> None:
+    """The buffer is one-shot: a second registration (re-attach, session
+    switch) SHALL NOT receive the startup events again."""
+    emitter.queue_startup_event({"type": "cron.missed", "payload": {"count": 1, "items": []}})
+    sub_id = await emitter.register("tui:default")
+    await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    await emitter.unregister(sub_id)
+    first_count = len(_collect_emitted_events(send_frame))
+
+    await emitter.register("tui:other")
+    await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+    assert len(_collect_emitted_events(send_frame)) == first_count == 1
+
+
+async def test_register_without_startup_events_emits_nothing(
+    emitter: SubscriptionEmitter,
+    send_frame: AsyncMock,
+) -> None:
+    await emitter.register("tui:default")
+    await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    assert _collect_emitted_events(send_frame) == []

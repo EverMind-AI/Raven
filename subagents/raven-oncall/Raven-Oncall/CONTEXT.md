@@ -24,6 +24,51 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Model binding**:
+A model id together with the provider whose credential serves it, as one value
+(`raven/providers/binding.py`). The pairing is the point: a model id alone does
+not say which key reaches it, and updating one half is how one vendor's key ends
+up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
+entry and holds it in a context var for the whole turn tree, so everything under
+that turn -- the loop, the context engine's LLM-backed segments, the skill gate
+and rewriter, the consolidator, and any task the turn detaches -- reads the same
+pair. _Avoid_: "the current model" / "the active provider" for this; both name
+one half.
+
+**Session binding**:
+The model binding one conversation runs on. Sessions that never switched have no
+entry and resolve to the **default binding**; a switch writes only that
+session's entry, so it moves no other conversation and does not change what a
+new one starts on. Stored on the session record so it survives a restart.
+
+**Default binding**:
+What a session with no binding of its own runs on: `agents.defaults` from config,
+verbatim. Changed by a `scope="default"` switch, which leaves sessions that
+already chose their own model where they are.
+
+**Provider pool**:
+The one place a model id is resolved to the credential that serves it
+(`raven/providers/pool.py`), caching a provider per (vendor, model) and dropping
+the cache when the credentials behind it change. Also what turns a **subsystem
+pin** into a pair. Constructing a `ModelBinding` from an already-resolved pair
+happens in several places; deciding *which* provider a model id pairs with
+happens only here.
+
+**Subsystem pin**:
+A model configured for one subsystem rather than for the conversation, as a
+model and the provider serving it (`context.curator_model` +
+`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+halves because an id alone is ambiguous the moment a gateway is configured:
+`openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
+`claude-haiku-4-5` are both valid and name different credentials. With the
+provider set nothing is derived, and a named vendor without usable credentials
+is reported and dropped -- the subsystem then follows the conversation's model,
+because a bare pinned id sent on the conversation's key is exactly the
+mis-pairing above. With the provider unset the pin still binds: a configured
+gateway takes it (it serves whatever id it is handed, under its own
+credential), and only without one is the vendor guessed from the id. Unset out
+of the box -- no subsystem ships a vendor default.
+
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the
 agent's final response, including every LLM call and tool execution in between.
@@ -145,6 +190,26 @@ _Avoid_: using "Sentinel" as the name of the whole proactivity subsystem (stale 
 The time-driven trigger path inside the Proactive Engine: cron jobs and heartbeat.
 _Avoid_: conflating with Sentinel
 
+**Fire-at-origin**:
+The cron ownership rule: a job is claimed and delivered only by the runner that
+owns its creation-time channel binding (`payload.channel/to`) — the gateway for
+enabled IM channels, an open TUI session for `tui`.
+A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
+dropped at that runner's next startup); there is no trigger-time re-routing.
+_Avoid_: reintroducing fire-time channel selection (the retired
+`cron.forward_channels`) — bind the target at creation instead. The `cli`
+channel value is retired with the REPL; stored `cli`-bound jobs migrate to
+`tui` at load time.
+
+**Fixed-delay interval**:
+The scheduling contract for `--every` jobs: the next run is computed from the
+moment the previous fire **completed**, not from the moment it was due. A job
+that takes 15s to run therefore repeats every `interval + 15s`, and its clock
+drifts by design — the property being bought is that a slow run can never
+overlap itself or leave a backlog to catch up on.
+_Avoid_: calling this fixed-rate, or reading `--every 2m` as a promise to fire
+on the two-minute mark; calendar-anchored schedules are what `--cron` is for.
+
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
 proactive side of prediction).
@@ -206,6 +271,100 @@ cache-write / reasoning tokens plus the estimated USD cost.
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
 agent loop and the Curator.
 _Avoid_: conflating provider (vendor) with model (a model name a provider serves)
+
+A Provider is described along four independent axes -- identity, connection, routing,
+and what its models can do -- each with its own home. Mixing them in one record is what
+left per-model facts nowhere to live and per-provider facts stated in several places at
+once. The terms below name the pieces those axes are built from; they are properties of
+a model or of a connection, not four synonyms for Provider.
+
+**Model Ref**:
+The canonical way a model is written down: `provider/model`, naming whoever serves it.
+Usually that is the section it was configured under; where a Provider declares
+`skip_prefixes` it may instead be the gateway already named in the id
+(`openrouter/z-ai/glm-4.6` stored under `zai` keeps OpenRouter's name, because
+OpenRouter is what serves it). Produced by `providers/wire.py::stored_model_id`, which
+every surface that persists a choice goes through.
+_Avoid_: "model id" for the stored form when the sent form is also in play — say Model
+Ref or Wire Model.
+
+**Merge Key**:
+The identity of a Model Ref for comparison and de-duplication — the provider and the
+vendor's own id, spelling-folded. Two refs naming one model share a Merge Key whatever
+spelling either was written in.
+
+**Wire Model**:
+The form a Model Ref takes on the request: a LiteLLM route string, an Azure deployment
+name, or a Codex slug. Derived, never stored, and derived in one place
+(`providers/wire.py::wire_model`).
+_Avoid_: treating the stored and sent forms as one string — they differ per provider.
+
+**Auth Method**:
+One way of connecting to a Provider: what credential material it needs (as an AND of
+OR-groups), how that material is obtained, where it is kept, and how it is verified.
+A Provider may declare several and is usable when any one is satisfied.
+`providers/auth.py::credential_status` answers "is this Provider usable", and is the
+only place that may: seven surfaces once decided it independently and disagreed with
+each other on the two configurations that made the rewrite necessary.
+_Avoid_: "credential kind" for the whole shape — that names only the material.
+
+**Model Row**:
+One model as a person reads it: a Model Ref plus a label and a description, tagged with
+the source that supplied them. Display only — nothing shaping a request reads a Model
+Row (`providers/catalog.py`).
+_Avoid_: confusing it with what a model can *do*. Whether a request may carry
+`cache_control` blocks is a Prompt Cache Breakpoint question, not a Model Row one.
+
+**Model Overlay**:
+What a user states about a model no catalogue carries — a label and a description for a
+self-hosted deployment. Beats the catalogue for the fields it sets.
+
+**Prompt Cache Breakpoint**:
+An Anthropic-shaped `cache_control` marker placed on a request so the prefix before it is
+cached. Whether one may be placed is **(wire x model family)**: the wire has to have
+somewhere to carry the field (`ProviderSpec.supports_prompt_caching`, a property of the
+API being spoken) *and* the model's vendor has to be the one that reads it. A gateway
+accepting the field is not the same as its upstream honouring it -- OpenRouter carries it
+for every model it fronts and forwards it to vendors that bill the prompt twice.
+Decided once, in `providers/prompt_cache.py`, which every marker asks.
+_Avoid_: reading LiteLLM's per-model `supports_prompt_caching`, which answers "does this
+model cache at all" -- a different question, and the one that produced the doubled bill.
+
+**Token Rates**:
+What a model costs per token, and separately how much context it holds. Both are facts
+about a Provider's catalogue, so both are resolved in `providers/rates.py` rather than by
+whoever is about to report a number. The two are deliberately sourced differently: rates
+price a call after it happened, so the ladder may reach a community-maintained catalogue;
+a context window sizes trimming and therefore shapes the *next* request, so only the
+tables that also route may answer it. The window walks its own ladder
+(`effective_context_window`): an explicitly configured value wins outright, then the
+model's real window, then the module's documented fallback -- and a gauge that cannot
+resolve the real window reports 0 so the UI shows its empty state rather than a number
+that is nobody's.
+_Avoid_: "pricing" for the resolution -- that names the arithmetic on top
+(`token_wise/pricing.py`), which is a different module for a reason.
+
+**Configured provider**:
+`agents.defaults.provider`: which vendor's credential serves `agents.defaults.model`.
+Said by the user, derived by nothing -- every surface that changes the model writes the
+pair, and `config.set model` refuses a model without one. A config predating that rule
+carries the empty string until the loader resolves it once and writes the answer down
+(`config/loader.py::_migrate_auto_provider`); until then the vendor is derived from the
+id, which is the guess the field exists to end.
+_Avoid_: "pin" for this -- **Subsystem pin** above is a different thing (a model for one
+subsystem, not for the conversation). Also avoid reading it as a provider *signal*: a
+name says which section to ask about, never that the section holds credentials.
+
+**Provider Endpoint**:
+One url/key/headers group a provider section offers, of possibly several
+(`ProviderConfig.endpoints`, resolved through `providers/endpoints.py::provider_endpoints`
+whichever spelling the section used -- explicit list, Gemini's `api_key_list`, or the
+flat fields). Several endpoints on one section mean several accounts on the same vendor;
+`EndpointRotorProvider` spreads and fails over across them.
+_Avoid_: two same-sounding neighbors. Routing's `ModelEndpoint` (`RoutingConfig.models`)
+keys by *model* and picks a backend per request; a Provider Endpoint keys by *account*
+under one provider. And a bare `api_base` is one endpoint's address, not the endpoint --
+an endpoint is the whole credential group under a label.
 
 ### TUI-RPC
 
@@ -323,9 +482,30 @@ A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`end
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
-candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
+candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
+
+**SkillPolicy** (`skill_hub/policy.py`):
+The install-time safety decision both Hub install paths consult before any
+`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
+tool. `refusal_for_detail()` checks, in order: the operator blocklist
+(`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
+`min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
+score; a missing or malformed score passes), and an external home-dotdir lint over the
+skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
+candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
+Every install that passes is appended to a JSONL audit trail
+(`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
+`install_skip_reason()` is the separate operator-consent gate over the bundle download
+itself (`skillForge.autoInstall`: `auto` / `prompt` / `off`), consulted by both call sites
+right before `install()`, after all safety vetting. A consent decline is a **skip**, not a
+refusal: the already-vetted skill body still injects (and `read_skill` still works), only
+the on-disk bundle is withheld. Alongside the JSONL trail, a passing install stamps a
+one-time `.install-meta.json` into the skill directory (`write_install_meta`, first
+install wins) — the O(1) provenance source behind `raven skill list`'s Installed column.
+_Avoid_: calling an autoInstall skip a "refusal" or "block" — refusals are safety verdicts
+on the skill; a skip is withheld operator consent for the download.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
@@ -409,7 +589,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research) that also seeds the
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds the
 Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:

@@ -152,22 +152,16 @@ def test_set_default_model_creates_nested_structure_when_missing(cfg_path: Path)
 
 
 def test_update_cron_config_writes_into_empty_config(cfg_path: Path) -> None:
-    prev = update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+    prev = update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     assert prev is None
     data = _read(cfg_path)
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 def test_update_cron_config_returns_previous_value(cfg_path: Path) -> None:
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
-    prev = update_cron_config("forward_channels", ["feishu"], config_path=cfg_path)
-    assert prev == ["telegram"]
-    data = _read(cfg_path)
-    assert data["cron"]["forwardChannels"] == ["feishu"]
-
-
-def test_update_cron_config_default_timezone(cfg_path: Path) -> None:
-    update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
+    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
+    prev = update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
+    assert prev == "UTC"
     data = _read(cfg_path)
     assert data["cron"]["defaultTimezone"] == "America/Vancouver"
 
@@ -177,8 +171,12 @@ def test_update_cron_config_unknown_key_raises(cfg_path: Path) -> None:
         update_cron_config("nonexistent_key", "x", config_path=cfg_path)
 
 
+def test_update_cron_config_retired_forward_channels_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError, match="Unknown cron config key"):
+        update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+
+
 def test_reset_cron_config_removes_section(cfg_path: Path) -> None:
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
     update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     reset_cron_config(config_path=cfg_path)
     data = _read(cfg_path)
@@ -194,11 +192,11 @@ def test_update_cron_preserves_sibling_sections(cfg_path: Path) -> None:
             }
         )
     )
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
     assert data["providers"]["openai"]["apiKey"] == "sk-keep-me"
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 # ---------------------------------------------------------------------------
@@ -270,18 +268,16 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
         "memoryTopK": 5,
     }
     assert data["plugins"]["disabled"] == []
-    # plugins.config is never empty — it carries the everos-memory identity
-    # wiring (snake_case, verbatim pass-through to the plugin factory).
+    # plugins.config is never empty — it carries the everos-memory base_url
+    # (snake_case, verbatim pass-through to the plugin factory). Identity is
+    # NOT seeded here: it comes from ServiceLocator at plugin activation.
     assert data["plugins"]["config"]["everos-memory"] == {
-        "mode": "embedded",
-        "base_url": "http://localhost:1995",
-        "user_id": "default",
-        "agent_id": "default",
+        "base_url": "http://localhost:18791",
     }
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["weights"] == {
-        "local": 1.0,
+        "local": 0.96,
         "everos": 0.9,
         "hub": 0.85,
     }
@@ -293,15 +289,14 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     }
 
 
-def test_init_extension_defaults_plugin_identity_matches_memory(cfg_path: Path) -> None:
-    # The everos-memory user_id / agent_id must equal memory.userId / agentId,
-    # otherwise stored memory is stamped under one identity and recalled under
-    # another (silently empty recall).
+def test_init_extension_defaults_plugin_config_has_no_identity(cfg_path: Path) -> None:
+    # Regression guard: identity must not be duplicated into plugins.config
+    # anymore. A user editing memory.userId/agentId without also editing this
+    # copy used to silently split store from recall (see ServiceLocator docs).
     init_extension_block_defaults(config_path=cfg_path)
-    data = _read(cfg_path)
-    em = data["plugins"]["config"]["everos-memory"]
-    assert em["user_id"] == data["memory"]["userId"]
-    assert em["agent_id"] == data["memory"]["agentId"]
+    em = _read(cfg_path)["plugins"]["config"]["everos-memory"]
+    assert "user_id" not in em
+    assert "agent_id" not in em
 
 
 def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> None:

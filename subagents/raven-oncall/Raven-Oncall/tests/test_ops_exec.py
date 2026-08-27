@@ -54,7 +54,7 @@ async def test_an_explicit_cwd_wins(campaign):
     assert "cd /case/arena" in campaign.seen[0]
 
 
-async def test_the_command_is_capped_and_the_cap_is_not_an_argument(campaign):
+async def test_the_command_is_capped_and_the_cap_is_not_an_argument(campaign, on_call_enabled):
     await run_on_machine(campaign="beam", command="ls")
     assert f"timeout {_TIMEOUT_S} bash -c" in campaign.seen[0]
     assert "machine" in ExecTool(working_dir="/tmp").parameters["properties"]

@@ -1,10 +1,12 @@
 """File system tools: read, write, edit, list."""
 
 import difflib
+import mimetypes
 from pathlib import Path
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
+from raven.utils.helpers import detect_image_mime
 
 
 def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
@@ -66,7 +68,9 @@ class ReadFileTool(_FsTool):
     @property
     def description(self) -> str:
         return (
-            "Read the contents of a file. Returns numbered lines. Use offset and limit to paginate through large files."
+            "Read the contents of a file. Text files return numbered lines — use offset and limit to "
+            "paginate through large ones. Image files (PNG, JPEG, GIF, WebP, and other common formats) "
+            "return the picture itself, downscaled if needed."
         )
 
     @property
@@ -89,13 +93,64 @@ class ReadFileTool(_FsTool):
             "required": ["path"],
         }
 
-    async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str:
+    # Sniffed from the first bytes, not the extension — a .txt that is really a
+    # PNG must not be decoded as UTF-8, and vice versa.
+    _MAGIC_SNIFF_BYTES = 32
+
+    def _read_image(self, fp: Path, mime: str) -> ToolResult:
+        """Image branch: preprocess, then hand back text *and* an image block.
+
+        ``model_text`` is deliberately self-sufficient. Providers that cannot put
+        an image in a tool result never see ``blocks``, and the same text is what
+        lands in session history, so it carries the metadata and the path rather
+        than pointing at a picture that may not be there.
+        """
+        from raven.agent.tools import media
+
+        payload, out_mime, meta = media.prepare_image(fp.read_bytes(), mime)
+        summary = media.describe_image(fp, meta)
+        return ToolResult(
+            model_text=summary,
+            display_text=f"{fp.name} ({meta['width']}x{meta['height']}, ~{meta['tokens']} tok)",
+            blocks=[
+                media.text_block(summary),
+                media.image_block(media.to_data_uri(payload, out_mime)),
+            ],
+        )
+
+    async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
         try:
             fp = self._resolve(path)
             if not fp.exists():
                 return f"Error: File not found: {path}"
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
+
+            with fp.open("rb") as fh:
+                head = fh.read(self._MAGIC_SNIFF_BYTES)
+            sniffed = detect_image_mime(head)
+            mime = sniffed
+            if mime is None:
+                guessed = mimetypes.guess_type(fp.name)[0]
+                # Magic bytes only cover the four formats every target inlines, so
+                # a raster format Pillow can convert (BMP/TIFF/ICO) reaches this
+                # branch as an extension guess. A guess can be wrong both ways --
+                # .svg is XML with no Pillow decoder, a .png stub may hold text --
+                # so it is trusted provisionally and a decode failure falls back
+                # to the text path below rather than refusing to read the file.
+                if guessed and guessed.startswith("image/"):
+                    mime = guessed
+            if mime is not None:
+                from raven.agent.tools.media import ImageTooLargeError
+
+                try:
+                    return self._read_image(fp, mime)
+                except ImageTooLargeError as e:
+                    return f"Error: {e}"
+                except Exception as e:
+                    if sniffed is not None:
+                        return f"Error decoding image {path}: {e}"
+                    # An extension-only guess that would not decode: fall through.
 
             all_lines = fp.read_text(encoding="utf-8").splitlines()
             total = len(all_lines)
@@ -147,7 +202,10 @@ class WriteFileTool(_FsTool):
 
     @property
     def description(self) -> str:
-        return "Write content to a file at the given path. Creates parent directories if needed."
+        return (
+            "Write content to a file at the given path. Creates parent directories if needed. "
+            "Use mode=append to add to a file rather than replace it."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -156,14 +214,50 @@ class WriteFileTool(_FsTool):
             "properties": {
                 "path": {"type": "string", "description": "The file path to write to"},
                 "content": {"type": "string", "description": "The content to write"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["overwrite", "append"],
+                    "description": (
+                        "append adds to the end of the file; overwrite (default) replaces it. "
+                        "Use append to continue a file you have already started -- adding to "
+                        "one written earlier, or building up long content across several calls."
+                    ),
+                },
             },
             "required": ["path", "content"],
         }
 
-    async def execute(self, path: str, content: str, **kwargs: Any) -> str:
+    @property
+    def truncation_hint(self) -> str:
+        return (
+            "Arguments cut off by that limit are discarded whole rather than partly saved, "
+            "so write the content across several calls: mode=overwrite to start a file, "
+            "mode=append to continue one you have already begun."
+        )
+
+    @property
+    def incomplete_hint(self) -> str:
+        return (
+            "arguments cut off that way are discarded whole rather than partly saved, so "
+            "send the content across several calls -- mode=overwrite to start a file, "
+            "mode=append to continue one you have already begun."
+        )
+
+    async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:
+        if mode not in ("overwrite", "append"):
+            return f"Error: unknown mode '{mode}' for write_file. Use 'overwrite' or 'append'."
+        # An empty append is refused rather than treated as a no-op: it is what
+        # a call cut off before its content field looks like, and the one thing
+        # it must never silently become is an overwrite.
+        if mode == "append" and not content:
+            return "Error: write_file with mode=append needs content; refusing to append nothing."
         try:
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
+            if mode == "append":
+                with fp.open("a", encoding="utf-8") as handle:
+                    handle.write(content)
+                return f"Successfully appended {len(content)} bytes to {fp}"
             fp.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {fp}"
         except PermissionError as e:

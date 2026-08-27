@@ -152,7 +152,6 @@ def test_put_returns_empty_when_consumed_decision_present(tmp_path: Path):
     superseding it isn't a concern (user already picked or cancelled).
     Only un-consumed awaiting_confirm decisions matter."""
     store = PendingDecisionStore(tmp_path / "pending.json")
-    consumed = _make_decision(decision_id="dec_consumed", consumed=True, created_at_ms=_NOW_MS - 1000)
     # Bypass the lifecycle methods — direct hand-poke for setup
     store.put(_make_decision(decision_id="dec_temp"))
     store.mark_consumed("dec_temp", picked_option_id="opt_1", consumed_at_ms=_NOW_MS - 500)
@@ -191,7 +190,7 @@ async def test_discoverer_calls_policy_check_and_record_fired(memory_store, tmp_
 
     # NudgePolicy should now know about the fire (next check on same
     # session for a "nudge" with same content would be denied via dedup)
-    second_check = policy.check(
+    policy.check(
         "nudge",
         session_key="feishu:ou_xxx",
         # Use the same menu preview that TaskDiscoverer used internally

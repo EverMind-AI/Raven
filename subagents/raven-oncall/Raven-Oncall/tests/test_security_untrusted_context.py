@@ -46,6 +46,13 @@ def test_recalled_memory_is_fenced() -> None:
     assert "[END UNTRUSTED recalled memory #" in out
 
 
+def test_recalled_memory_multiline_hit_stays_one_bullet() -> None:
+    """The everos user profile recalls as prose, so a hit is not always one
+    line; unindented continuations read as text that escaped the list."""
+    out = render.render_recalled_memory([Memory(text="line one\nline two")])
+    assert "- line one\n  line two" in out
+
+
 def test_recalled_memory_empty_unchanged() -> None:
     assert render.render_recalled_memory(None) == ""
     assert render.render_recalled_memory([Memory(text="   ")]) == ""

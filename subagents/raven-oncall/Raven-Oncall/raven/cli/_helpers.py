@@ -27,70 +27,80 @@ console = Console()
 DEFAULT_PROBE_MESSAGE = "Hi! Say hello in one sentence."
 
 
-def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
-    """At REPL exit, list cron jobs pinned to channel="cli" that won't fire
-    while the REPL is down. Hint at the config knob that forwards them to
-    a durable channel at trigger time."""
-    from datetime import datetime
-
-    try:
-        jobs = cron_service.list_jobs()
-    except Exception:
-        return
-    now_ms = int(datetime.now().timestamp() * 1000)
-    pending = [
-        j
-        for j in jobs
-        if (j.payload.channel or "") == "cli" and j.state.next_run_at_ms and j.state.next_run_at_ms > now_ms
-    ]
-    if not pending:
-        return
-
-    console.print(f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]")
-    for j in pending:
-        fire = datetime.fromtimestamp(j.state.next_run_at_ms / 1000).strftime("%H:%M")
-        mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
-        console.print(f"   - '{j.name}' at {fire} (in {mins} min)")
-
-    if config.cron.forward_channels == []:
-        console.print(
-            "[dim]   Tip: cron.forward_channels is empty — these reminders will "
-            "be dropped silently when they fire. Run "
-            "`raven cron config set forward_channels '*'` to broadcast to "
-            "all enabled channels.[/dim]"
-        )
-
-
 def check_provider_credentials(config: Config) -> None:
     """Fail-fast when the configured provider is missing required credentials.
 
     Cheap (no litellm import), so it can run at startup even when the real
-    provider is built lazily. Kept in sync with the branches of make_provider.
+    provider is built lazily.
+
+    Raises ``MissingCredentialsError`` rather than printing and exiting: three entry
+    points call this, and only one of them is a terminal. Each renders the
+    failure in its own idiom -- the CLI as a red line and exit 1, the TUI as an
+    RPC error carrying the same sentence.
+
+    What counts as configured is `providers.auth`, the same declaration routing
+    and `provider list` consult. Deciding it here as well is what produced three
+    verdicts on one config: a Gemini section holding only `api_key_list` read as
+    configured in `provider list` and refused to start, and Azure with a key and
+    no address was routed and displayed as configured yet rejected here.
     """
+    from raven.providers.auth import MissingCredentialsError, credential_status
+    from raven.providers.registry import find_by_model, split_model_id
+
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
+    if not provider_name:
+        # Routing found no configured section, so name the provider the model id
+        # points at rather than reporting on nothing.
+        spec = find_by_model(model)
+        provider_name = spec.name if spec else split_model_id(model)[0]
+    if not provider_name:
+        raise MissingCredentialsError(
+            "no provider configured",
+            # A command, not a config path: the old text pointed at
+            # ~/.raven/config.json, the layout the CLI exists to hide.
+            remedy=(
+                "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
+                "Or run `raven onboard` for guided setup."
+            ),
+        )
 
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+    status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
+    if status.ok:
         return
-    if provider_name == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-        return
-    from raven.providers.registry import find_by_name
 
-    spec = find_by_name(provider_name)
-    if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
-        console.print("[red]Error: No API key configured.[/red]")
-        console.print("Set one in ~/.raven/config.json under providers section")
-        raise typer.Exit(1)
+    # A first run fails this check while naming a provider the user never chose:
+    # with nothing configured, routing falls back to the schema's default model,
+    # whose vendor then gets reported as the thing to go fix. Sending someone who
+    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
+    # so answer the wizard instead. Both halves are required -- a user who picked
+    # this model, or who has some other provider working, gets the specific
+    # verdict, which for the OAuth families names a sign-in rather than a key.
+    # Names come from the declared fields *and* the extras: an undeclared
+    # provider key is a supported shape, and `ProvidersConfig.get` is the only
+    # place allowed to resolve either kind, so route both through it rather than
+    # reading `__dict__` -- which sees no extras and would call a user whose one
+    # working credential lives there unconfigured.
+    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
+    if not chose_a_model and not any(
+        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
+    ):
+        raise MissingCredentialsError(
+            "no provider is configured yet -- run `raven onboard` for guided setup",
+            remedy="Already have a key? raven provider set <name> --api-key <key>",
+        )
+
+    raise MissingCredentialsError(
+        status.summary,
+        provider=provider_name,
+        remedy="Run `raven onboard` for guided setup.",
+    )
 
 
 def make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
+    from raven.providers.auth import MissingCredentialsError
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
@@ -101,49 +111,97 @@ def make_provider(config: Config):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+    from raven.providers.registry import endpoints_unsupported_reason, find_by_name
+
+    spec = find_by_name(provider_name) if provider_name else None
+    client = spec.client if spec else ""
+
+    if p and p.endpoints:
+        reason = endpoints_unsupported_reason(provider_name)
+        if reason:
+            raise MissingCredentialsError(reason, provider=provider_name or "")
+
+    if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
-    elif provider_name == "azure_openai":
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
+    elif client == "minimax_oauth":
+        from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
+
+        provider = MiniMaxOAuthProvider(
+            region="global" if provider_name == "minimax_global" else "cn",
             default_model=model,
         )
+    elif client == "azure":
+        provider = AzureOpenAIProvider(
+            api_key=p.effective_api_key,
+            api_base=p.api_base,
+            default_model=model,
+            deployment=getattr(p, "deployment", "") or "",
+            api_version=getattr(p, "api_version", "") or "2024-10-21",
+        )
     else:
+        from raven.providers.capabilities import wire_overrides
+        from raven.providers.endpoints import provider_endpoints
         from raven.providers.litellm_provider import LiteLLMProvider
         from raven.providers.registry import find_by_name
 
-        # OpenRouter routes qwen3.x-27B through providers that default to
-        # reasoning mode (e.g. AtlasCloud): every chat completion emits
-        # ~800 chain-of-thought tokens and takes ~30s wall — fatal for
-        # interactive use and for high-volume benchmark runs. The
-        # ``reasoning.enabled=false`` flag is OpenRouter-specific and
-        # forwards through LiteLLM's ``extra_body``.
-        extra_body = None
-        is_qwen = "qwen" in (model or "").lower()
-        if provider_name == "openrouter" and is_qwen:
-            extra_body = {"reasoning": {"enabled": False}}
-        elif is_qwen and (own := find_by_name(provider_name)) and (own.is_local or own.is_gateway):
-            # A self-hosted Qwen 3.x server needs the same thing said in vLLM's
-            # dialect. Without it the model spends its whole token budget inside
-            # the reasoning field and returns neither content nor a tool call --
-            # and until recently the loop retried that with a byte-identical
-            # prompt, so two LHTB tasks made no progress for an entire run.
-            extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-            extra_body=extra_body,
-        )
+        eps = provider_endpoints(p) if p else []
+        if len(eps) > 1:
+            from raven.providers.endpoint_rotor import EndpointRotorProvider
+
+            def make_inner(ep):
+                return LiteLLMProvider(
+                    api_key=ep.api_key,
+                    # ``ep.api_base`` already carries the section's flat address
+                    # when the endpoint named none of its own (see
+                    # ``provider_endpoints``); the fallback here is only for a
+                    # gateway/local provider whose *flat* address is also empty,
+                    # where ``get_api_base`` still has the spec's default to
+                    # offer.
+                    api_base=ep.api_base or config.get_api_base(model),
+                    default_model=model,
+                    extra_headers=ep.extra_headers,
+                    provider_name=provider_name,
+                    extra_body=wire_overrides(provider_name, model) or None,
+                    model_overrides=config.agents.defaults.model_overrides,
+                )
+
+            provider = EndpointRotorProvider(
+                eps,
+                make_inner,
+                default_model=model,
+                strategy=p.endpoint_strategy if p else "sticky",
+            )
+        elif eps:
+            extra_body = wire_overrides(provider_name, model) or None
+            provider = LiteLLMProvider(
+                api_key=eps[0].api_key,
+                # Same fallback as ``make_inner`` above: only reached when the
+                # flat address is empty too, for a gateway/local provider's
+                # spec default.
+                api_base=eps[0].api_base or config.get_api_base(model),
+                default_model=model,
+                extra_headers=eps[0].extra_headers,
+                provider_name=provider_name,
+                extra_body=extra_body,
+                model_overrides=config.agents.defaults.model_overrides,
+            )
+        else:
+            extra_body = wire_overrides(provider_name, model) or None
+            provider = LiteLLMProvider(
+                api_key=p.effective_api_key if p else None,
+                api_base=config.get_api_base(model),
+                default_model=model,
+                extra_headers=p.extra_headers if p else None,
+                provider_name=provider_name,
+                extra_body=extra_body,
+                model_overrides=config.agents.defaults.model_overrides,
+            )
 
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(
         temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
+        timeout=defaults.llm_call_timeout,
     )
     return provider
 
@@ -153,18 +211,25 @@ def make_lazy_provider(config: Config):
     call, so AgentLoop construction stays fast. Credentials are checked now
     (fail-fast preserved) and the real provider is pre-warmed in the background."""
     from raven.providers.base import GenerationSettings
+    from raven.providers.endpoints import provider_endpoints
     from raven.providers.lazy import LazyProvider
 
     check_provider_credentials(config)
     defaults = config.agents.defaults
+
+    p = config.get_provider(defaults.model)
+    eps = provider_endpoints(p) if p else []
+    initial_endpoint_label = eps[0].label if len(eps) > 1 else None
+
     provider = LazyProvider(
         factory=lambda: make_provider(config),
         default_model=defaults.model,
         generation=GenerationSettings(
             temperature=defaults.temperature,
-            max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
+            timeout=defaults.llm_call_timeout,
         ),
+        initial_endpoint_label=initial_endpoint_label,
     )
     provider.prewarm()
     return provider
@@ -286,13 +351,40 @@ def print_deprecated_memory_window_notice(config: Config) -> None:
         )
 
 
+def print_config_migration_notices() -> None:
+    """Tell the user about any config line a migration just changed for them.
+
+    The migrations run inside the loader, which has no terminal; this is the
+    place that does. Call it after the config is loaded and before the command
+    takes over the screen -- once printed, the notices are gone.
+
+    On stderr, because stdout is a command's answer and this is not part of it:
+    ``raven doctor --json`` and ``raven import --json`` are documented for
+    automation, and a line appended to their output is not a cosmetic problem
+    but an unparseable document. That is also where the rest of this class of
+    message already goes -- ``commands.run``'s own ConfigReadError branch and
+    the loader's malformed-config warning both use stderr -- so a future
+    ``--json`` command inherits the right behaviour without knowing about this.
+    """
+    from rich.console import Console
+
+    from raven.config.loader import drain_migration_notices
+
+    notices = drain_migration_notices()
+    if not notices:
+        return
+    err = Console(stderr=True)
+    for notice in notices:
+        err.print(f"[yellow]Config updated:[/yellow] {notice}")
+
+
 __all__ = [
     "DEFAULT_PROBE_MESSAGE",
-    "warn_about_pending_cli_reminders",
     "make_provider",
     "send_probe",
     "print_probe_troubleshooting",
     "load_runtime_config",
     "parse_fake_now",
     "print_deprecated_memory_window_notice",
+    "print_config_migration_notices",
 ]

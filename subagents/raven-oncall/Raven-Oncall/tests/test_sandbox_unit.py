@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from raven.sandbox import (
     DirectExecutor,
@@ -132,7 +133,7 @@ class TestSandboxConfigValidators:
         assert c.extra_volumes == [["/data", "/data", "ro"]]
 
     def test_extra_config_key_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SandboxConfig(unknown_key="x")  # extra="forbid"
 
     def test_aliases_accept_both_camel_and_snake(self):
@@ -284,7 +285,7 @@ class TestExecToolWithMockExecutor:
             restrict_to_workspace=True,
         )
         result = await tool.execute("cat ../../../etc/passwd", working_dir=str(tmp_path))
-        assert "blocked" in result
+        assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
@@ -294,8 +295,50 @@ class TestExecToolWithMockExecutor:
         executor = DirectMockExecutor()
         tool = ExecTool(executor=executor, working_dir=str(tmp_path))
         result = await tool.execute("rm -rf /important")
-        assert "blocked" in result
+        assert "blocked" in result.model_text
         assert len(executor.calls) == 0
+
+    # Host GUI automation (osascript / `open -a|-b`) is NOT a product default —
+    # it is opt-in via extra_deny_patterns (the proactivity-eval harness sets it
+    # because it runs the agent un-sandboxed on the operator's machine).
+    _GUI_DENY = [r"\bosascript\b", r"\bopen\s+-[ab]\b"]
+
+    async def test_extra_deny_patterns_block_host_gui_automation(self, tmp_path):
+        """With extra_deny_patterns set, osascript / `open -a|-b` are blocked
+        (non-sandboxed path), while opening a file and benign commands run."""
+        from raven.agent.tools.shell import ExecTool
+
+        async def run(cmd):
+            return await ExecTool(
+                executor=DirectMockExecutor(),
+                working_dir=str(tmp_path),
+                extra_deny_patterns=self._GUI_DENY,
+            ).execute(cmd)
+
+        for cmd in (
+            "osascript -e 'tell application \"Music\" to play'",
+            "open -a Music",
+            "open -b com.apple.Music",
+        ):
+            assert "blocked" in (await run(cmd)).model_text, f"should block: {cmd}"
+
+        for cmd in ("open notes.txt", "echo hi", "ls -la"):
+            assert "blocked" not in await run(cmd), f"should allow: {cmd}"
+
+        # Known accepted collateral: the security-broad ``\bosascript\b`` also
+        # trips when 'osascript' is a mere argument. Pinned so a future narrowing
+        # to command-position is a deliberate change, not an accident.
+        assert "blocked" in (await run("grep osascript /var/log/system.log")).model_text
+
+    async def test_gui_automation_not_blocked_by_product_default(self, tmp_path):
+        """Product default (no extra_deny_patterns): osascript is NOT blocked —
+        the GUI-automation block is eval-scoped, not shipped behaviour."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute("osascript -e x")
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
 
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""
@@ -981,25 +1024,33 @@ class TestConnectMcpSandboxGuard:
         with pytest.raises(SandboxInitError, match="stdio transport"):
             await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=executor)
 
-    async def test_stdio_no_executor_does_not_raise(self):
+    async def test_stdio_no_executor_does_not_raise(self, monkeypatch):
         """executor=None falls through to the normal stdio path (no guard triggered)."""
         from contextlib import AsyncExitStack
+
+        import mcp.client.stdio
 
         from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
 
+        reached = []
+
+        def fake_stdio_client(params):
+            reached.append(params.command)
+            raise RuntimeError("stdio_client reached — expected in test")
+
+        monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
+
         cfg = MagicMock()
         cfg.type = "stdio"
-        cfg.command = "true"
+        cfg.command = "mcp-server"
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # connect will fail at stdio_client level (not installed / not available) but
-        # that error is caught per-server and logged — it must NOT be a SandboxInitError.
-        try:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
-        except SandboxInitError:
-            pytest.fail("SandboxInitError should not be raised when executor=None")
+        # Guard should NOT raise; the transport error is caught per-server and logged.
+        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+
+        assert reached == ["mcp-server"]
 
     async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
@@ -1093,8 +1144,6 @@ class TestSubagentSandboxLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        original_build = None
-
         async def fake_build(cfg, workspace):
             return TrackingExecutor()
 
@@ -1119,14 +1168,17 @@ class TestSubagentSandboxLifecycle:
         subagent_mod.build_executor = _patched_build
         try:
             # Patch the inner method so the agent loop completes quickly
-            original_inner = manager._run_subagent_inner
-
-            async def _fast_inner(task_id, task, label, origin, executor):
+            async def _fast_inner(task_id, task, label, origin, executor, provider, model):
                 await manager._announce_result(task_id, label, task, "done", origin, "ok")
 
             manager._run_subagent_inner = _fast_inner
             await manager._run_subagent(
-                "t1", "test task", "test", {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"}
+                "t1",
+                "test task",
+                "test",
+                {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"},
+                manager.provider,
+                manager.model,
             )
         finally:
             subagent_mod.build_executor = original

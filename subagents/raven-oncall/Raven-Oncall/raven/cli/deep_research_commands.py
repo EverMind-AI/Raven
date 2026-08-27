@@ -17,6 +17,7 @@ from typing import Any, Optional
 import typer
 
 from raven.agent.tools.deep_research import DEFAULT_MODEL
+from raven.cli._tty_guard import die_if_not_tty
 from raven.config.update_tools import ConfigReadError, get_deep_research, reset_deep_research, set_deep_research
 
 SIGNUP_URL = "https://platform.miromind.ai/console/api-keys"
@@ -92,7 +93,7 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, _prompt_api_key, _require_questionary, _t, console
+    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, _require_questionary, _t, console
 
     if non_interactive:
         warnings.append("deep_research: skipped (non-interactive; pass --key to configure)")
@@ -142,7 +143,13 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
     )
 
     while True:
-        key = _prompt_api_key("deep_research")
+        key = _prompt_api_key(
+            "deep_research",
+            allow_back=True,
+            back_label=_t("empty ↵ to cancel", "留空回车取消"),
+        )
+        if key is _BACK:
+            return False  # empty submit cancels configuration
         res = _validate_key(key, current["api_base"])
         if res["ok"]:
             break
@@ -183,6 +190,7 @@ def enable_cmd(
     console = Console()
 
     if key is None and model is None and api_base is None:
+        die_if_not_tty("raven deep-research enable --key <key>")
         configure_deep_research(non_interactive=False)
         return
 
@@ -226,7 +234,7 @@ def get_cmd() -> None:
 
 @deep_research_app.command("reset")
 def reset_cmd() -> None:
-    """Clear deep_research config (disables the tool: no key -> not registered)."""
+    """Clear the deep_research key (new sessions start with the setup offer)."""
     from rich.console import Console
 
     console = Console()
@@ -235,4 +243,4 @@ def reset_cmd() -> None:
     except ConfigReadError as exc:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1) from exc
-    console.print("[green]✓[/green] deep_research reset (key cleared; tool will not register)")
+    console.print("[green]✓[/green] deep_research reset (key cleared; new sessions start with the setup offer)")

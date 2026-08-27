@@ -21,8 +21,10 @@ from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
+from raven.agent.tools.shell import ApprovalResponder, ExecTool
 from raven.spine import (
     Deliverable,
+    EpisodeStart,
     Origin,
     OriginPools,
     Reasoning,
@@ -69,15 +71,29 @@ class TuiTurnRunner(AgentTurnRunner):
         usages: dict[str, dict[str, Any]],
         turn_ids: dict[str, str],
         readback_texts: dict[str, str],
+        approval_responder: ApprovalResponder | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
         self._usages = usages
         self._turn_ids = turn_ids
         self._readback_texts = readback_texts
+        self._approval_responder = approval_responder
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = _conversation_id(req)
+        tools = getattr(self._loop, "tools", None)
+        exec_tool = tools.get("exec") if tools is not None else None
+        if isinstance(exec_tool, ExecTool):
+            # Approval capability is rebound for every turn. Only USER origin
+            # receives the TUI responder; CRON and other background origins can
+            # share this process but must still fail closed as non-interactive.
+            # The IDs bind any response to this exact conversation and turn.
+            exec_tool.start_approval_turn(
+                self._approval_responder if req.origin is Origin.USER else None,
+                conversation_id=cid,
+                turn_id=self._turn_ids.get(cid, ""),
+            )
         # A CRON turn is not a user turn: it runs non-streaming (one reply, not a
         # token stream) and its reply text is captured for the cron fan-out, which
         # delivers a cron.delivered event to every session (the cron:<job_id>
@@ -143,6 +159,7 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "name": out.name,
                             "arguments": out.arguments or {},
+                            "display": out.display,
                         },
                     },
                 )
@@ -164,6 +181,10 @@ class TuiOutlet:
             # reply uses, so message.complete finalizes it like any other text.
             if out.content:
                 await self._emitter.emit(cid, {"type": "token.delta", "payload": {"text": out.content}})
+        elif isinstance(out, EpisodeStart):
+            # Boundary marker; the TUI buckets this model call's reasoning +
+            # text + tools into one collapsible episode.
+            await self._emitter.emit(cid, {"type": "episode.start", "payload": {"index": out.index}})
         # Notice / MediaOut: eaten (no wire event today).
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
@@ -182,11 +203,11 @@ class TuiOutlet:
             {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str) -> None:
-        await self._emitter.emit(
-            conversation_id,
-            {"type": "error", "payload": {"code": code, "message": message, "reason": reason}},
-        )
+    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+        payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
+        if detail:
+            payload["detail"] = detail
+        await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
 
 
 def _make_tui_sink(
@@ -237,7 +258,13 @@ def _make_tui_sink(
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
             if not event.cancelled:
-                await outlet.emit_error(event.conversation_id, _TURN_FAILED_CODE, "turn_failed", "internal")
+                await outlet.emit_error(
+                    event.conversation_id,
+                    _TURN_FAILED_CODE,
+                    "turn_failed",
+                    "internal",
+                    event.error or "",
+                )
             return
         if isinstance(event, TurnStarted):
             # message.start is emitted by turn.send (it owns the turn_id).
@@ -254,6 +281,7 @@ def build_tui(
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
     readback_texts: dict[str, str] | None = None,
+    approval_responder: ApprovalResponder | None = None,
     user_pool: int = 1,
     system_pool: int = 1,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
@@ -268,7 +296,11 @@ def build_tui(
     ``readback_texts`` is the cron read-back map (conversation -> reply text): the
     runner stores a CRON turn's reply there so the cron fan-out can deliver it as a
     cron.delivered event. Pass the same dict the cron callback reads; defaults to a
-    private map when cron is not wired (e.g. tests)."""
+    private map when cron is not wired (e.g. tests).
+
+    ``approval_responder`` is an interactive capability, not a process-wide
+    permission. The runner binds it only to USER-origin turns and explicitly
+    revokes it for background origins."""
     hub = DeliveryHub()
     outlet = TuiOutlet(channel, emitter)
     hub.register(outlet)
@@ -277,7 +309,14 @@ def build_tui(
     if readback_texts is None:
         readback_texts = {}
     scheduler = Scheduler(
-        TuiTurnRunner(agent_loop, emitter, usages, turn_ids, readback_texts),
+        TuiTurnRunner(
+            agent_loop,
+            emitter,
+            usages,
+            turn_ids,
+            readback_texts,
+            approval_responder=approval_responder,
+        ),
         OriginPools(user=user_pool, system=system_pool),
         _make_tui_sink(hub, outlet, channel, turn_ids, usages, on_turn_end),
     )

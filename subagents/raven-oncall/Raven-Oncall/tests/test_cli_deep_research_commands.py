@@ -179,8 +179,49 @@ def test_configure_validation_fail_then_save(tmp_path: Path, monkeypatch):
 
 def test_configure_validation_fail_then_cancel(tmp_path: Path, monkeypatch):
     fail = {"ok": False, "status": "http_401", "model_ids": None, "error": "bad"}
-    p = _setup_interactive(monkeypatch, tmp_path, ["configure", "cancel"], validate=lambda *a, **k: fail)
+    _setup_interactive(monkeypatch, tmp_path, ["configure", "cancel"], validate=lambda *a, **k: fail)
     assert configure_deep_research(non_interactive=False, warnings=[]) is False  # cancelled, nothing written
+
+
+def test_configure_key_empty_submit_cancels(tmp_path: Path, monkeypatch):
+    """Empty submit at the key prompt (``_prompt_api_key`` returns ``_BACK``)
+    cancels configuration: returns False and writes nothing -- the missing
+    pre-key cancel path that used to force a Ctrl+C / whole-process exit."""
+    import raven.cli.onboard_commands as ob
+
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(ut, "get_config_path", lambda: p)
+    monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(["configure"]))
+
+    captured: dict = {}
+
+    def _fake_prompt(*a, **k):
+        captured.update(k)
+        return ob._BACK
+
+    monkeypatch.setattr(ob, "_prompt_api_key", _fake_prompt)
+
+    assert configure_deep_research(non_interactive=False, warnings=[]) is False
+    assert not p.exists() or "deepResearch" not in json.loads(p.read_text()).get("tools", {})
+    # the prompt is asked with a cancel-worded hint, not the default "go back"
+    assert captured.get("allow_back") is True
+    assert captured.get("back_label")
+
+
+def test_configure_reconfigure_key_empty_submit_cancels(tmp_path: Path, monkeypatch):
+    """Reconfigure path (already configured): empty submit at the key prompt
+    cancels and leaves the existing key untouched, instead of exiting raven --
+    the ``raven deep-research enable`` -> Reconfigure repro."""
+    import raven.cli.onboard_commands as ob
+
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(ut, "get_config_path", lambda: p)
+    ut.set_deep_research({"api_key": "sk-old", "model": "m"}, config_path=p)
+    monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(["reconfigure"]))
+    monkeypatch.setattr(ob, "_prompt_api_key", lambda *a, **k: ob._BACK)
+
+    assert configure_deep_research(non_interactive=False, warnings=[]) is False
+    assert json.loads(p.read_text())["tools"]["deepResearch"]["apiKey"] == "sk-old"  # unchanged
 
 
 def test_configure_validation_retry_then_ok(tmp_path: Path, monkeypatch):
@@ -190,9 +231,7 @@ def test_configure_validation_retry_then_ok(tmp_path: Path, monkeypatch):
         calls["n"] += 1
         return {"ok": calls["n"] > 1, "status": "http_401" if calls["n"] == 1 else "ok", "model_ids": [], "error": None}
 
-    p = _setup_interactive(
-        monkeypatch, tmp_path, ["configure", "retry", "mirothinker-1-7-deepresearch"], validate=_flaky
-    )
+    _setup_interactive(monkeypatch, tmp_path, ["configure", "retry", "mirothinker-1-7-deepresearch"], validate=_flaky)
     assert configure_deep_research(non_interactive=False, warnings=[]) is True
     assert calls["n"] == 2  # first validate failed, retry validated ok
 
@@ -220,6 +259,7 @@ def test_enable_with_api_base_flag_writes_it(tmp_path: Path, monkeypatch):
 
 def test_enable_no_flags_enters_interactive(monkeypatch):
     called: list = []
+    monkeypatch.setattr(drc, "die_if_not_tty", lambda *a, **k: None)  # CliRunner is never a TTY
     monkeypatch.setattr(drc, "configure_deep_research", lambda **k: called.append(k))
     assert runner.invoke(deep_research_app, ["enable"]).exit_code == 0
     assert called and called[0].get("non_interactive") is False
@@ -303,3 +343,17 @@ def test_configure_ctrl_c_at_validation_action_menu_exits(tmp_path: Path, monkey
     _setup_interactive(monkeypatch, tmp_path, ["configure", None], validate=lambda *a, **k: fail)
     with pytest.raises(typer.Exit):
         configure_deep_research(non_interactive=False, warnings=[])
+
+
+# ── non-TTY guard ──
+
+
+def test_deep_research_enable_nontty_no_traceback(tmp_path: Path, monkeypatch):
+    """No-flag ``enable`` in a non-interactive terminal exits 2 with a re-run
+    hint instead of the prompt_toolkit OSError traceback."""
+    monkeypatch.setattr(ut, "get_config_path", lambda: tmp_path / "config.json")
+    result = runner.invoke(deep_research_app, ["enable"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "Re-run with:" in result.output
+    assert "--key" in result.output

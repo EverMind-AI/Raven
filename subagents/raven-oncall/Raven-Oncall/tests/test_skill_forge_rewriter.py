@@ -97,3 +97,12 @@ async def test_analyze_finish_reason_error_defaults_to_retrieval() -> None:
     provider = _StubProvider(_Resp(content="", finish_reason="error"))
     result = await QueryRewriter(provider).analyze("q")
     assert result.need_retrieval is True
+
+
+async def test_analyze_names_no_model_of_its_own() -> None:
+    """The rewriter follows the conversation, so it sends the turn's provider
+    and no model at all -- which lands on that provider's default. Naming one
+    here is how a bare id ends up posted on another vendor's key."""
+    provider = _StubProvider(json.dumps({"need_retrieval": False}))
+    await QueryRewriter(provider).analyze("hello there")
+    assert "model" not in provider.calls[0]

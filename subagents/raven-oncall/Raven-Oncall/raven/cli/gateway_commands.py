@@ -22,6 +22,7 @@ from raven.cli._helpers import (
     load_runtime_config,
     make_provider,
     parse_fake_now,
+    print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
 from raven.cli._plugin_stack import maybe_build_memory_backend
@@ -51,7 +52,8 @@ def build_model_routing(config, provider):
 
     from raven.routing.router import ModelRouter
 
-    api_key = config.routing.api_key or config.providers.openrouter.api_key or ""
+    openrouter = config.providers.get("openrouter")
+    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
     if not api_key:
         console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
         return None, provider
@@ -63,35 +65,49 @@ def build_model_routing(config, provider):
     return router, provider
 
 
-_GATEWAY_IM_CHANNELS: tuple[str, ...] = (
-    "whatsapp",
-    "telegram",
-    "discord",
-    "feishu",
-    "mochat",
-    "dingtalk",
-    "email",
-    "slack",
-    "qq",
-    "matrix",
-    "wecom",
-    "weixin",
-)
+def _risk_banner(config) -> str | None:
+    """Startup banner for the dangerous default combo: no sandbox + a channel
+    open to anyone. Returns the banner text, or None when either leg is safe.
+
+    Printed, not gated: gateways run unattended, so blocking on a confirm
+    would strand headless restarts -- visibility is the fix here.
+    """
+    if getattr(config.tools.sandbox, "backend", None) != "none":
+        return None
+
+    open_channels = []
+    for name in type(config.channels).model_fields:
+        section = getattr(config.channels, name, None)
+        if section is None or not getattr(section, "enabled", False):
+            continue
+        if "*" in (getattr(section, "allow_from", None) or []):
+            open_channels.append(name)
+    if not open_channels:
+        return None
+
+    lines = [
+        "!! SECURITY WARNING: dangerous configuration combination",
+        "   - sandbox.backend = none (agent tools run with full host privileges)",
+    ]
+    for name in sorted(open_channels):
+        lines.append(f"   - channels.{name}.allow_from contains '*' (anyone can command this agent)")
+    lines.append("   Restrict senders:  raven channels set <name> --allow-from <id1,id2>")
+    lines.append("   Enable a sandbox:  set tools.sandbox.backend to 'auto' or 'boxlite' in your config")
+    return "\n".join(lines)
 
 
 def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
-    enabled IM channels only.
+    enabled IM channels only (field-driven via ``enabled_channel_names``, so a
+    channel added to ``ChannelsConfig`` is covered without touching this module).
 
-    The gateway owns cron jobs for its IM channels. It does NOT claim ephemeral
-    ``tui``/``cli`` jobs: those are fired by the interactive process that created
+    The gateway owns cron jobs for its IM channels. It does NOT claim
+    ``tui``/``cli`` jobs: those fire in the interactive process that created
     them (the TUI / ``raven agent`` session), so a TUI-set reminder always
-    delivers to the TUI rather than racing the gateway and being forwarded to an
-    IM channel. The trade-off is no cross-process fallback while that process is
-    down; restoring "fire at origin, hand off only after the origin exits" is a
-    deferred cron-delivery-ownership design, not this set.
+    delivers to the TUI rather than racing the gateway — fire-at-origin, no
+    trigger-time re-routing.
     """
-    return {name for name in _GATEWAY_IM_CHANNELS if getattr(getattr(config.channels, name, None), "enabled", False)}
+    return config.channels.enabled_channel_names()
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -172,10 +188,14 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
+        print_config_migration_notices()
         port = port if port is not None else config.gateway.port
 
         console.print(f"{__logo__} Starting Raven gateway on port {port}...")
         console.print(f"[dim]📝 Logs → {log_path}[/dim]")
+        banner = _risk_banner(config)
+        if banner is not None:
+            console.print(banner, style="bold red", markup=False)
         sync_workspace_templates(config.workspace_path)
         provider = make_provider(config)
         session_manager = SessionManager(config.workspace_path)
@@ -183,11 +203,10 @@ def register(app: typer.Typer) -> None:
         # Create cron service first (callback set after agent creation).
         #
         # Restrict to channels gateway has adapters for. This prevents the
-        # gateway from racing REPL and stealing cli-origin reminders that REPL
-        # can deliver but gateway can't (REPL stdout is owned by the REPL
-        # process, gateway has no cli channel). Without this, you'd see
-        # "Unknown channel: cli" warnings + lost REPL reminders when both
-        # processes are running.
+        # gateway from racing the TUI and stealing tui-bound reminders that
+        # the TUI can deliver but gateway can't (gateway has no tui outlet).
+        # Without this, you'd see "Unknown channel: tui" warnings + lost TUI
+        # reminders when both processes are running.
         cron_store_path = get_cron_dir() / "jobs.json"
         gateway_channels = _build_gateway_channels(config)
         cron = CronService(cron_store_path, allowed_channels=gateway_channels)
@@ -213,6 +232,13 @@ def register(app: typer.Typer) -> None:
             now_fn=parse_fake_now(fake_now),
         )
 
+        # Anti-runaway reset: genuine user activity on a (channel, chat_id)
+        # zeroes the silent-fire counters of the jobs bound to it. Chained
+        # after the Sentinel engagement hook, not replacing it.
+        from raven.cli._cron_handler import chain_cron_activity_reset
+
+        on_user_inbound = chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)
+
         # Gateway-side memory-backend wiring. Mirrors the REPL
         # bootstrap (cli/agent_commands.py). Returns ``None`` when no
         # plugin contributes the configured backend — AgentLoop falls
@@ -221,7 +247,10 @@ def register(app: typer.Typer) -> None:
         backend = maybe_build_memory_backend(config.workspace_path, ec_config)
 
         # Create agent with cron service
+        from raven.providers.pool import ProviderPool
+
         agent = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,
@@ -253,7 +282,7 @@ def register(app: typer.Typer) -> None:
             # gets a key and can receive a recovery block on its next call).
             interactive=True,
             response_modifier=sentinel_response_modifier,
-            on_user_inbound=sentinel_on_user_inbound,
+            on_user_inbound=on_user_inbound,
             backend=backend,
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
@@ -388,16 +417,24 @@ def register(app: typer.Typer) -> None:
                     send_max_retries=config.gateway.send_max_retries,
                 )
                 cron.on_job = make_on_cron_job(
-                    agent,
-                    gw_hub,
                     submit=gw_scheduler.submit,
                     readback_texts=gw_readback_texts,
-                    channel_manager=channels,
-                    session_manager=session_manager,
-                    default_channel="cli",
+                    default_channel="tui",
                     system_events=system_events,
                     wake=wake,
+                    cron_service=cron,
                 )
+                # Missed-reminder observer: past-due tui/cli one-shots whose
+                # session closed before firing surface once through the same
+                # system-event -> heartbeat wake path as cron completions.
+                # Needs the event-wake plumbing; without it there is no sink,
+                # so the observer stays off (as it does with notify_missed
+                # false). Wired before cron.start() — the start-time check is
+                # the first observation pass.
+                if system_events is not None and wake is not None and config.cron.notify_missed:
+                    from raven.cli._cron_handler import make_on_missed_foreign
+
+                    cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)
 
                 from raven.spine import ChatType, Origin, Source, TurnRequest
 
@@ -450,8 +487,9 @@ def register(app: typer.Typer) -> None:
                 # Deep research (channel/async) delivers its finished answer back
                 # via a deliver_text turn; wiring submit here (gateway only) is
                 # what flips the tool from its synchronous path to the async one.
-                if agent.deep_research_manager is not None:
-                    agent.deep_research_manager.set_submit(gw_scheduler.submit)
+                # Goes through the loop so a manager built later by promotion (a
+                # mid-session enable) inherits the handle too, not just this one.
+                agent.set_deep_research_submit(gw_scheduler.submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the
@@ -487,8 +525,12 @@ def register(app: typer.Typer) -> None:
                     await gw_hub.dispatch(_Text(content=body, source=source))
 
                 question_broker = QuestionBroker(send_frame=_question_to_channel)
+                # Wire the broker into the mid-turn askers. deep_research goes
+                # through the loop so a tool built later by promotion (a mid-session
+                # enable) inherits the broker too, not just the startup one.
                 if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
                     ask_tool.set_broker(question_broker)
+                agent.set_deep_research_broker(question_broker)
 
                 # Channel inbound runs through the spine: a permitted
                 # message is submitted as a USER turn. /stop and /restart are
@@ -591,6 +633,7 @@ def register(app: typer.Typer) -> None:
                 # spawned during AgentLoop teardown can complete.
                 if backend is not None:
                     try:
+                        await agent.drain_backend_stores()
                         await backend.stop()
                     except Exception:
                         _logger.exception(

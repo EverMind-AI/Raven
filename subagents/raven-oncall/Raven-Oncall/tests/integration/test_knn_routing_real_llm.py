@@ -77,7 +77,7 @@ def _build_memory(path: Path) -> None:
 async def test_knn_routing_end_to_end(tmp_path):
     from raven.agent.loop import AgentLoop
     from raven.config.schema import ModelEndpoint, RoutingConfig
-    from raven.providers.custom_provider import CustomProvider
+    from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.per_model_provider import PerModelProvider
     from raven.routing.knn_router import KNNModelRouter
     from raven.spine.message import ChatType, Source
@@ -104,7 +104,8 @@ async def test_knn_routing_end_to_end(tmp_path):
         min_memory_size=1,
     )
     router = KNNModelRouter(cfg, default_model=CHEAP)
-    provider = PerModelProvider(cfg.models, fallback=CustomProvider(api_key=key, api_base=OR_BASE, default_model=CHEAP))
+    fallback = LiteLLMProvider(api_key=key, api_base=OR_BASE, default_model=CHEAP, provider_name="custom")
+    provider = PerModelProvider(cfg.models, fallback=fallback)
 
     simple = "What is the capital of Japan? Answer in one word."
     hard = "Write a Python function using matrix exponentiation to compute the nth Fibonacci number in O(log n)."

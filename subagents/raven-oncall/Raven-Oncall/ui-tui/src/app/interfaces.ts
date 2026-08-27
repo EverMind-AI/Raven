@@ -87,7 +87,10 @@ export interface OverlayState {
   approval: ApprovalReq | null
   clarify: ClarifyReq | null
   confirm: ConfirmReq | null
-  modelPicker: boolean
+  // `'default'` is `/model --default` with no id: the picker is open and the
+  // selection it makes must change the new-session default, not this
+  // conversation. Plain `true` is the session-scoped open.
+  modelPicker: boolean | 'default'
   pager: null | PagerState
   picker: boolean
   secret: null | SecretReq
@@ -132,6 +135,12 @@ export interface UiState {
   status: string
   statusBar: StatusBarMode
   streaming: boolean
+  // Transcript rendering mode. 'legacy' = the flat thinking/tool panels;
+  // 'episodes' = one collapsible line per model call, and the default. Session
+  // scoped and runtime only: `/transcript legacy|episodes` switches it and it is
+  // deliberately never config-synced or persisted, so it stays an instant escape
+  // hatch that cannot get stuck in a config file.
+  transcript: 'episodes' | 'legacy'
   theme: Theme
   usage: Usage
 }

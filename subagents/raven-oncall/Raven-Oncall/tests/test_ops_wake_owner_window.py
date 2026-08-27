@@ -68,17 +68,17 @@ def test_naming_a_campaign_moves_its_pending_wake_to_this_window(tmp_path, monke
     job = CronJob(
         id="j3", name="ops:dambreak-legA:r1", enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1),
-        payload=CronPayload(kind="agent_turn", message="check",
+        payload=CronPayload(message="check",
                             campaign="dambreak-legA", owner="tui:closed",
                             owner_pid=closed),
         state=CronJobState(),
     )
 
     bind_window(tmp_path, "tui:closed", "dambreak-legA", pid=closed)
-    assert CronService._owner_is_elsewhere(job, os.getpid()) is True
+    assert CronService._owning_pid(job, os.getpid()) is not None
 
     bind_window(tmp_path, "tui:new", "dambreak-legA", pid=os.getpid())
-    assert CronService._owner_is_elsewhere(job, os.getpid()) is False
+    assert CronService._owning_pid(job, os.getpid()) is None
 
 
 def test_a_wake_for_a_campaign_nobody_named_still_waits(tmp_path, monkeypatch):
@@ -93,9 +93,9 @@ def test_a_wake_for_a_campaign_nobody_named_still_waits(tmp_path, monkeypatch):
     job = CronJob(
         id="j4", name="ops:fea-contact:r1", enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1),
-        payload=CronPayload(kind="agent_turn", message="check",
+        payload=CronPayload(message="check",
                             campaign="fea-contact", owner="tui:gone",
                             owner_pid=_dead_pid()),
         state=CronJobState(),
     )
-    assert CronService._owner_is_elsewhere(job, os.getpid()) is True
+    assert CronService._owning_pid(job, os.getpid()) is not None

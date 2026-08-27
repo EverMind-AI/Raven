@@ -40,12 +40,17 @@ def make_raven_call_fn(
     max_tokens: int = 8192,
     temperature: float = 0.0,
 ) -> CallFn:
+    from raven.config.loader import load_config
     from raven.providers.litellm_provider import LiteLLMProvider
 
+    defaults = load_config().agents.defaults
     provider = LiteLLMProvider(
         api_key=api_key,
         api_base=api_base,
-        default_model=model or _raven_default_model(),
+        default_model=model or defaults.model,
+        # The user's per-model overrides apply here too: a model that needs a
+        # particular temperature needs it whichever code path calls it.
+        model_overrides=defaults.model_overrides,
     )
 
     def call(messages: list) -> str:

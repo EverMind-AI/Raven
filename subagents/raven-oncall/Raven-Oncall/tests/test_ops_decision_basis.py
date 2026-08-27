@@ -143,8 +143,11 @@ async def test_check_later_refuses_without_a_fresh_reading(tmp_path: Path) -> No
         basis="last time I read 0.2904",
     )
 
-    assert out.startswith("REFUSED")
-    assert "0.2904" not in out
+    # A refusal, and one that leaves the turn open: nothing was scheduled, so
+    # closing the turn here would leave the campaign with no pending wake.
+    assert out.ends_turn is False
+    assert out.model_text.startswith("REFUSED")
+    assert "0.2904" not in out.model_text
 
 
 @pytest.mark.asyncio
@@ -195,3 +198,19 @@ def test_staleness_still_applies_when_there_are_no_readings() -> None:
     problems = basis_problems("loss went NaN", StateFacts(probe_seq=1), last_seq=1)
     assert len(problems) == 1
     assert "no observation has been recorded" in problems[0]
+
+
+def test_the_refusal_names_the_tool_that_takes_an_observation():
+    """Measured 2026-08-21 on a watch campaign: it hit this refusal, went and ran a
+    curl through exec -- which reads the world but records nothing, so the counter
+    did not move -- and hit it again. Two turns to learn an order that one clause
+    states. The rule "every branch names the tool that performs it" already governs
+    wake messages; this refusal had been left out of it."""
+    from raven.ops.state_claims import StateFacts, basis_problems
+
+    problems = basis_problems("the count has not moved", StateFacts(probe_seq=3), last_seq=3)
+
+    assert problems, "a decision resting on no new observation is refused"
+    said = " ".join(problems)
+    assert "ops_tune_status" in said
+    assert "exec" in said, "and why the thing it will reach for instead does not count"

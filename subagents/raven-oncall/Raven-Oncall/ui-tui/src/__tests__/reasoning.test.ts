@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
+import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import { cleanThinkingText } from '../lib/text.js'
 
 describe('splitReasoning', () => {
@@ -62,5 +62,20 @@ describe('cleanThinkingText', () => {
         '(¬_¬) synthesizing...**Resolving comments on GitHub**\n( ͡° ͜ʖ ͡°) musing...\nActual step\n٩(๑❛ᴗ❛๑)۶ contemplating...next step'
       )
     ).toBe('**Resolving comments on GitHub**\nActual step\nnext step')
+  })
+})
+
+describe('hasMeaningfulReasoning', () => {
+  it('rejects placeholder bursts that carry no words', () => {
+    // Some models emit reasoning_content that is only dots during a mechanical
+    // tool loop; showing that as thought is noise.
+    expect(hasMeaningfulReasoning('.\n.\n.')).toBe(false)
+    expect(hasMeaningfulReasoning('')).toBe(false)
+    expect(hasMeaningfulReasoning('   ')).toBe(false)
+  })
+
+  it('accepts words in any script', () => {
+    expect(hasMeaningfulReasoning('weighing the options')).toBe(true)
+    expect(hasMeaningfulReasoning('step 2')).toBe(true)
   })
 })

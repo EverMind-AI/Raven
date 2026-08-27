@@ -69,7 +69,7 @@ def _run_agent(message: str, session: str, root: Path) -> str:
     """Send one message through the real agent CLI (mock channel)."""
     env = {**os.environ, "EVEROS_ROOT": str(root)}
     proc = subprocess.run(
-        [str(_RAVEN), "agent", "-m", message, "-s", session, "--wait-skill-extract", "--no-markdown", "--logs"],
+        [str(_RAVEN), "agent", "-m", message, "-s", session, "--no-markdown", "--logs"],
         env=env,
         capture_output=True,
         text=True,

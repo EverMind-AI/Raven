@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -93,6 +94,29 @@ class AcpEmptyTurnError(RuntimeError):
 
 
 _RESULT_TEXT_CAP = 2000
+
+
+@asynccontextmanager
+async def _replay_dropped(router: Any, session_id: str) -> AsyncIterator[None]:
+    """Hold ``session_id`` with a sink that throws its frames away.
+
+    Attached rather than merely un-routed, because the router's fallback for an
+    unclaimed session is the resident sink and that is exactly what must not see
+    these. `detach` is identity-checked, so if the body has already handed the
+    session to a real sink this leaves it alone.
+    """
+    if router is None:
+        yield
+        return
+
+    async def _drop(method: str, params: dict[str, Any]) -> None:
+        logger.debug("acp agent: dropped replayed {} for session {!r}", method, session_id)
+
+    router.attach(session_id, _drop)
+    try:
+        yield
+    finally:
+        router.detach(session_id, _drop)
 
 
 class _TurnCollector:
@@ -505,6 +529,64 @@ class AcpAgentBackend:
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
         self._registry = registry or get_registry()
+        # Set by whichever manager dispatches through this backend; see
+        # ``bind_session_dir``. ``None`` until then, which is why the recorder is
+        # built lazily rather than in this constructor.
+        self._session_dir_for: Any = None
+        self._event_sink: Any = None
+
+    def _ensure_unprompted_recorder(self, connection: Any) -> None:
+        """Give this connection a resident sink, once.
+
+        Idempotent by an attribute on the connection rather than on this backend:
+        connections are pooled per agent and outlive any one backend instance, so
+        a flag here would stop re-attaching after a reconnect that cleared it.
+
+        Best-effort: a recorder that cannot be built costs the record of an
+        unprompted turn, which is what the situation was before it existed, and
+        must not cost the turn now being sent.
+        """
+        if getattr(connection, "_raven_unprompted", False):
+            return
+        try:
+            from raven.agent.acp.unprompted import UnpromptedRecorder
+
+            recorder = UnpromptedRecorder(
+                self.name,
+                self._registry,
+                self._session_dir_for,
+                # Read through self at call time, not captured: the recorder is
+                # built on the first prompt and the sink is re-bound on every
+                # dispatch, so a capture would freeze whichever manager happened
+                # to dispatch first.
+                emit=lambda session_key, event: (
+                    self._event_sink(session_key, event) if self._event_sink is not None else None
+                ),
+            )
+            connection.router.set_resident(recorder)
+            connection._raven_unprompted = True  # noqa: SLF001 - a marker on a pooled object
+        except Exception as exc:  # noqa: BLE001 - never at the cost of the turn being sent
+            logger.warning("acp agent {!r}: no unprompted-turn recorder: {}", self.name, exc)
+
+    def bind_event_sink(self, sink: Any) -> None:
+        """Take the dispatching manager's event emitter.
+
+        Same shape and same reasoning as ``bind_session_dir``: backends are
+        shared across managers, both managers' sinks reach the same subscription
+        emitter, and last-writer-wins is therefore correct.
+        """
+        self._event_sink = sink
+
+    def bind_session_dir(self, resolver: Any) -> None:
+        """Take the dispatching manager's session-directory rule.
+
+        Backends are shared -- the registry hands one instance to every manager --
+        so this is last-writer-wins, and correct for the same reason it is safe:
+        the resolver answers where a *session key* keeps its records, and two
+        managers looking at one session key mean the same directory. What differs
+        between them is which sessions they have, not where a session lives.
+        """
+        self._session_dir_for = resolver
 
     @property
     def is_stateful(self) -> bool:
@@ -575,7 +657,7 @@ class AcpAgentBackend:
             frames_start = journal.offset if journal is not None else None
 
             session_id, resumed = await self._open_session(
-                client, cwd=session_cwd, skey=skey, handle=handle, budget=budget
+                client, cwd=session_cwd, skey=skey, handle=handle, budget=budget, router=connection.router
             )
             if journal is not None:
                 # Inside the marked range on purpose, so the per-call copy of the
@@ -611,7 +693,14 @@ class AcpAgentBackend:
             # `_Connection.session_lock` for why two prompts cannot share one
             # session id.
             async with connection.session_lock(session_id):
-                connection.router.attach(session_id, collector)
+                await connection.router.take_over(session_id, collector)
+                # Once per connection, and here because this is where the pieces
+                # it needs are in hand. What it records is what the agent does
+                # when no run of raven's is attached -- an on-call wake, above
+                # all -- which before this was dropped at the router with a
+                # debug line. After the session's own take_over, so a turn that
+                # is starting owns the session before the resident sink exists.
+                self._ensure_unprompted_recorder(connection)
                 connection.elicitors.attach(session_id, elicitor)
                 connection.responders.attach(session_id, responder)
                 if self.can_steer or steer_offered(connection.initialize):
@@ -773,15 +862,28 @@ class AcpAgentBackend:
         # one first for the same reason it was budgeted first here.
         return await clamp_output(text, self.max_output_chars, agent=self.name, reserved=notice, sink=sink)
 
-    async def _open_session(self, client: Any, *, cwd: str, skey: str, handle: str, budget: float) -> tuple[str, bool]:
+    async def _open_session(
+        self, client: Any, *, cwd: str, skey: str, handle: str, budget: float, router: Any = None
+    ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
             if known is not None and (self._snapshot and self._snapshot.can_load):
                 try:
-                    await client.request(
-                        "session/load", {"sessionId": known, "cwd": cwd, "mcpServers": []}, timeout=budget
-                    )
+                    # `session/load` is not a getter: the agent answers it by
+                    # replaying the whole transcript as `session/update` frames
+                    # (see the fork's `raven/acp/replay.py`). No run is attached
+                    # to this session yet, so those frames would fall through to
+                    # the connection's resident sink -- the unprompted recorder --
+                    # and every resumed turn would log its own history as work
+                    # the agent did on its own account, and stream it to the pane
+                    # a second time. A sink that drops them holds the session for
+                    # the length of the call; the turn's collector takes it over
+                    # immediately after.
+                    async with _replay_dropped(router, known):
+                        await client.request(
+                            "session/load", {"sessionId": known, "cwd": cwd, "mcpServers": []}, timeout=budget
+                        )
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the

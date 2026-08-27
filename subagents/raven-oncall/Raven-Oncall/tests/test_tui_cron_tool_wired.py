@@ -85,6 +85,7 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
             self.allowed_channels = allowed_channels or set()
             self.on_job = None
             self.started = False
+            self.notify_user_active = MagicMock()
             type(self).instances.append(self)
 
         async def start(self):
@@ -165,3 +166,54 @@ def test_tui_cron_on_job_wired_in_run_not_build(patched_tui_build_deps) -> None:
 # cron now runs as a spine CRON turn and the reply is fanned out as
 # cron.delivered by ``_build_cron_callback_spine`` (covered in
 # test_tui_cron_delivered_event.py), so no bus publish / callback swap remains.
+
+
+# ---------------------------------------------------------------------------
+# Anti-runaway wiring: reset hook on the AgentLoop, count on the handler
+# ---------------------------------------------------------------------------
+
+
+def test_tui_on_user_inbound_resets_cron_counters(patched_tui_build_deps) -> None:
+    """The TUI AgentLoop's ``on_user_inbound`` chains the anti-runaway
+    reset: a genuine USER turn on (tui, default) — the same pair
+    CronTool.set_context binds into new jobs — zeroes silent-fire counts."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_build_deps["agent_loop_kwargs"]
+    hook = kwargs.get("on_user_inbound")
+    assert hook is not None, "TUI AgentLoop must wire the silent-fire reset hook"
+
+    cron = patched_tui_build_deps["cron_service_class"].instances[0]
+    hook(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        )
+    )
+    cron.notify_user_active.assert_called_once_with("tui", "default")
+
+    hook(
+        TurnRequest(
+            origin=Origin.CRON,
+            source=Source(channel="tui", chat_id="default", sender_id="cron", chat_type=ChatType.DM),
+            text="[Scheduled Task]",
+        )
+    )
+    cron.notify_user_active.assert_called_once()  # CRON turn must not reset
+
+
+def test_tui_run_loop_passes_cron_service_to_handler() -> None:
+    """The run loop's ``make_on_cron_job`` call must hand over the cron
+    service so recurring TUI fires are counted (anti-runaway). The wiring
+    lives in a closure with no import seam, so pin the source (same
+    pattern as the gateway /stop test)."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    assert "cron_service=agent_loop.cron_service," in src

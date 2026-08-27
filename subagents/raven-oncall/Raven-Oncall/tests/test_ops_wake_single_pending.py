@@ -129,7 +129,6 @@ def test_non_ops_reminder_is_untouched(tmp_path: Path) -> None:
         name="drink water",
         schedule=CronSchedule(kind="at", at_ms=svc._now_ms() + 600_000),
         message="hydrate",
-        deliver=True,
         channel="tui",
         to="default",
     )

@@ -33,6 +33,7 @@ class PageMount:
     # the page answers its own sessions without swallowing the IM round-trip.
     question_broker: Any
     teardown: Callable[[], Awaitable[None]]
+    direct_targets: dict[str, dict[str, str]]
 
 
 async def _standalone_serve_owner() -> tuple[int, int] | None:
@@ -170,6 +171,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         outlet=outlet,
         question_broker=stack.question_broker,
         teardown=teardown,
+        direct_targets=stack.direct_targets,
     )
 
 

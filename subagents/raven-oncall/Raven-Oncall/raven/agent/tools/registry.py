@@ -5,7 +5,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
 
@@ -45,13 +46,71 @@ class ToolRegistry:
         return [tool.to_schema() for tool in self._tools.values()]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
-    async def execute(self, name: str, params: dict[str, Any]) -> str:
-        """Execute a tool by name with given parameters."""
+    async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        run_meta: RunMeta | None = None,
+    ) -> str:
+        """Execute a tool by name with given parameters.
+
+        ``run_meta`` carries what happened around the call rather than what it
+        asks for -- today only whether it finished arriving, which changes what
+        a validation failure means. Keyword-only so the five call sites stay
+        self-describing and so a second field does not reorder anything.
+        """
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
         tool = self._tools.get(name)
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+
+        # Refused before dispatch, not after validation: a truncated call whose
+        # required fields happen to have arrived still validates, and running it
+        # executes an intent that was never fully transmitted. For write_file
+        # that is not merely an incomplete write -- `mode` is optional, so a cut
+        # before it arrives falls back to "overwrite" and silently replaces
+        # everything an earlier append had written, then reports success.
+        #
+        # The cost of being wrong here is one retry: a turn can end with a
+        # complete tool call and be cut in prose that follows it, which the
+        # non-streaming path cannot tell apart (see providers/truncation.py).
+        # A wasted turn is cheaper than a silent overwrite.
+        truncation = run_meta.truncation if run_meta else None
+        if truncation:
+            hint = tool.truncation_hint
+            return truncation.as_error(name) + (f" {hint}" if hint else "")
+        if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
+            # Two facts, two readings, and nothing here to choose between them.
+            # The arguments did not parse and nothing arrived after this call,
+            # which is the shape a cut leaves -- and equally the shape of a
+            # model writing bad JSON on its last call. Each reading gets its own
+            # branch rather than one being asserted: a model told to split up a
+            # call it merely misspelled goes looking for a size problem it does
+            # not have. Longer than a verdict, and the length is the point.
+            hint = tool.incomplete_hint
+            limit_branch = (
+                f"\n\nIf it was the output limit: {hint}"
+                if hint
+                else "\n\nIf it was the output limit: send this call again in a smaller form."
+            )
+            return (
+                f"Error: [incomplete arguments] The arguments for '{name}' did not parse, and it "
+                f"was the last call of the turn. Two things can cause that: the reply hit its "
+                f"output token limit part-way through writing this call, or the arguments were "
+                f"simply malformed. It was not run either way, and nothing here tells the two "
+                f"apart." + limit_branch + "\n\nIf the arguments were malformed: send the same "
+                "call again with well-formed arguments."
+            )
+        if run_meta and run_meta.arguments_repaired:
+            # Calls arrived after this one, so a cut cannot explain it: the
+            # model wrote bad JSON. Telling it to send the content in smaller
+            # pieces would send it after a problem it does not have.
+            return (
+                f"Error: [invalid arguments] The arguments for '{name}' were not valid JSON, "
+                f"so this call was not run. Send it again with well-formed arguments."
+            )
 
         # An argument the tool does not have is normally harmless -- it lands in
         # **kwargs and is ignored. ``machine`` is not harmless: it says WHERE, and a
@@ -87,9 +146,44 @@ class ToolRegistry:
             else:
                 result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
 
-            if isinstance(result, str) and result.startswith("Error"):
-                return result + _hint
-            return result
+            # Unwrap ToolResult here, at the boundary: `execute` promises model
+            # text to every caller, and only the agent loop wants the display
+            # string and multimodal blocks (which ride along on ToolOutput).
+            if isinstance(result, ToolResult):
+                model_text, display_text = result.model_text, result.display_text
+                retryable, abort_action = result.retryable, result.abort_action
+                blocks = result.blocks
+                ends_turn = result.ends_turn
+            else:
+                model_text, display_text = str(result), None
+                retryable, abort_action = True, False
+                blocks = None
+                ends_turn = None
+
+            if model_text.startswith("Error"):
+                # ``Error:`` describes presentation, not retry semantics.
+                # Policy-aware tools return explicit control metadata so the
+                # registry does not accidentally turn a security decision into
+                # the generic invitation to find an equivalent implementation.
+                #
+                # An error also replaces the result, so any blocks it came with
+                # are no longer what the model should be looking at.
+                suffix = _hint if retryable else ""
+                return ToolOutput(
+                    model_text + suffix,
+                    display_text,
+                    retryable=retryable,
+                    abort_action=abort_action,
+                    ends_turn=ends_turn,
+                )
+            return ToolOutput(
+                model_text,
+                display_text,
+                retryable=retryable,
+                abort_action=abort_action,
+                blocks=blocks,
+                ends_turn=ends_turn,
+            )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:

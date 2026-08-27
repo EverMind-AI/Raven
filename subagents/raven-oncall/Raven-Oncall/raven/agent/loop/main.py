@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import time
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,16 +15,29 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
+from raven.agent.loop.failure_streak import (
+    failure_class,
+    is_hard_tool_failure,
+    loop_break_nudge,
+)
 from raven.agent.loop.recovery import (
     EMPTY_RETRY_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
+    is_only_think_debris,
+    strip_think_blocks,
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
+from raven.agent.tools.base import ToolOutput
+from raven.agent.tools.deep_research import (
+    DeepResearchManager,
+    DeepResearchOfferTool,
+    DeepResearchTool,
+    deep_research_mode,
+)
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -51,13 +64,39 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import (
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    RunMeta,
+    ToolCallRequest,
+    send_max_tokens,
+)
+from raven.providers.binding import ModelBinding, active_binding, use_binding
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
+from raven.providers.rates import resolve_context_window
+from raven.providers.reasoning import split_orphan_think
+from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
-from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
+
+# How long a turn is willing to wait on plugin-side indexing before letting the
+# write finish on its own. A budget, not a deadline: the task keeps running.
+_STORE_TURN_BUDGET_S: float = 5.0
+# Outstanding detached writes past which a turn waits for one to land, so a slow
+# memory service cannot grow an unbounded queue behind a fast typist.
+_STORE_MAX_INFLIGHT: int = 4
+# Teardown's total budget for letting those writes finish.
+_STORE_DRAIN_BUDGET_S: float = 15.0
+
+_ABORTED_ACTION_REPLY = (
+    "The operation was not completed, and no alternative method will be attempted. "
+    "Would you like me to continue with the remaining parts of the task that do not "
+    "require this operation?"
+)
 
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
@@ -76,10 +115,11 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, ExecToolConfig
+    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
@@ -87,6 +127,7 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
+    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass
@@ -168,56 +209,37 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
-# Failure markers a plain retry would likely clear — these must NOT count toward
-# the tool-failure-loop streak (nudging on a 429 that self-heals is just noise).
-_TRANSIENT_FAILURE_MARKERS = (
-    "429",
-    "rate limit",
-    "timed out",
-    "timeout",
-    "no healthy upstream",
-    "502",
-    "503",
-)
-# Successful-but-empty results: the tool ran fine and just found nothing. A
-# repeated empty search is legitimate exploration, not a stuck dead call, so it
-# must NOT count toward the failure streak.
-_EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
+# Marks the synthetic user message that carries images a transport cannot put in
+# a tool result. Not persisted: the tool result above it already names the file
+# path, so the only thing this message would add to the transcript is a user turn
+# saying "[image]" that the user never sent -- misleading on resume and in
+# session export. Deliberately a different key from ``_recovery_synthetic``:
+# that one marks empty-response recovery scaffolding, and collapsing the two
+# would make either meaning impossible to reason about separately.
+_ATTACHED_IMAGE_KEY = "_attached_image"
 
 
-def _is_hard_tool_failure(result: object) -> bool:
-    """True for a deterministic tool failure (recurs on an identical retry).
+def _strip_inline_images(content: list[Any]) -> list[Any]:
+    """Replace inline base64 images with a text placeholder, for persistence.
 
-    False for success or a transient/retryable error. Used to decide whether a
-    repeated identical tool call is a stuck loop worth breaking.
+    Images live for exactly the turn that produced them. Keeping the bytes would
+    bloat the session JSONL by megabytes per picture, and every later turn would
+    replay them to the model — paying for an image nobody asked about again.
+
+    A *new* list is returned: the input is the live message the model is still
+    working from this turn, and `_save_turn` only shallow-copies the entry, so
+    mutating in place would pull the picture out from under the current request.
     """
-    s = str(result)
-    low = s.lower()
-    if any(m in low for m in _TRANSIENT_FAILURE_MARKERS):
-        return False
-    if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
-        return False
-    m = re.search(r"Exit code:\s*(-?\d+)", s)
-    if m:
-        return m.group(1) != "0"
-    # Real not-found failures (file / dir / path / old_text) all start with
-    # "Error:" or carry a non-zero exit code, so those are already covered; a
-    # bare "not found" scan would only risk flagging successful output that
-    # merely mentions the phrase.
-    return s.lstrip().startswith("Error") or "error:" in low[:80]
-
-
-def _loop_break_nudge(tool: str, n: int) -> str:
-    """Injected when the same tool fails deterministically N times running, so
-    the model stops repeating a dead approach instead of adapting."""
-    return (
-        f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
-        "Stop repeating it. If it is an external dependency (network/API/search), "
-        "complete what you can offline from local data and report what stayed blocked. "
-        "If it is a file or path error, re-examine the EXACT path before any retry — "
-        "do not call it again unchanged. Otherwise change approach: a different tool, "
-        "command, or strategy."
-    )
+    out: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            out.append(part)
+            continue
+        if is_inline_image(part):
+            out.append({"type": "text", "text": "[image]"})
+        else:
+            out.append(part)
+    return out
 
 
 def _capture_owner_instruction(session_key: str, content: str, origin: "Origin",
@@ -346,9 +368,18 @@ class AgentLoop:
     _TOOL_RESULT_MAX_CHARS = 16_000
     # Max emergency context shrinks per turn before a context overflow is fatal.
     _MAX_COMPRESS_RETRIES = 2
+    # Max image demotions per turn. One is enough: a refusal is deterministic for
+    # the model, and the first retry also caches the verdict, so a second attempt
+    # would mean the failure was never about images.
+    _MAX_IMAGE_DEMOTE_RETRIES = 1
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
+    # Image-bearing messages kept intact when emergency-shrinking. Tighter than
+    # the tool-result count because one image can cost 1568 tokens: the picture
+    # the model is currently reasoning about is worth keeping, older ones are the
+    # cheapest thing to give up.
+    _SHRINK_KEEP_RECENT_IMAGES = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -360,7 +391,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int = 65_536,
+        context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -380,6 +411,7 @@ class AgentLoop:
         now_fn: Callable | None = None,
         context_config: "ContextConfig | None" = None,
         runtime_config: "RuntimeConfig | None" = None,
+        provider_pool: "ProviderPool | None" = None,
         interactive: bool = True,
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 4,
@@ -435,16 +467,36 @@ class AgentLoop:
         # Returning None means "fall through to normal flow".
         self.decision_consumer = decision_consumer
         self.channels_config = channels_config
-        self.provider = provider
         self.workspace = workspace
-        self.model = model or provider.get_default_model()
+        # The model a turn runs on is per session, so it cannot live in two
+        # attributes on a process-wide loop. ``_default_binding`` is what a
+        # session starts on; ``provider``/``model`` below read whichever
+        # binding the running turn entered.
+        self._provider_pool = provider_pool
+        # An explicit window rides on the binding, which is what answers for it
+        # from here on -- every binding this loop makes carries it, so a session
+        # switching models cannot shake off a number the user pinned. No special
+        # case for 65536: the retired default the old bootstrap wrote to disk is
+        # cleared where it lives by ``config.loader``, so what arrives here is a
+        # real choice.
+        self._configured_window = context_window_tokens or None
+        self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
+        self._session_bindings: dict[str, ModelBinding] = {}
+        # Resolved lazily on the first tool result that carries an image. Keyed
+        # by model, not a single flag: the loop is a long-lived singleton and
+        # takes a per-call model (strategies rewrite it, and the model chain
+        # falls back), so one model's verdict must not answer for another's.
+        # Keyed by model but *computed from the provider*, so a rebuild that
+        # keeps the model id would keep serving the old transport's verdict --
+        # ``_forget_transport_verdicts`` is what the binding setters call.
+        self._image_tool_result_ok: dict[str, bool] = {}
+        self._vision_ok: dict[str, bool] = {}
         # This turn's answer to "is this work to run and watch", or None before it
         # has been asked. Lazily filled by _note_watched_path.
         self._watched_verdict: Any = None
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.context_window_tokens = context_window_tokens
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -470,6 +522,12 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
+        # Writes that outran their turn budget and are still running. Held so
+        # teardown can drain them instead of dropping whatever was slowest.
+        self._store_inflight: set[asyncio.Task] = set()
+        # Writes refused because indexing never caught up. Reported at teardown:
+        # a dropped write is a turn the user will not be able to recall.
+        self._store_dropped = 0
 
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
@@ -524,14 +582,24 @@ class AgentLoop:
             workspace,
             skill_forge_router_config,
         )
+        # Install-policy knobs for the use_skill tool (registered later in
+        # ``_register_builtin_tools``, which no longer sees these configs).
+        self._skill_min_safety = float(
+            getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
+        )
+        self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine" = build_context_engine(
             workspace=workspace,
             config=context_config,
             builder=self.context,
             provider=provider,
-            model=self.model,
-            context_window_tokens=context_window_tokens,
+            model=self._default_binding.model,
+            # The resolved window, not the constructor argument: unset (the
+            # common case) it is None there and the real size comes from the
+            # ladder in ``providers.rates``.
+            context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -541,6 +609,7 @@ class AgentLoop:
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
+            provider_pool=provider_pool,
         )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
@@ -576,7 +645,7 @@ class AgentLoop:
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
-            model=self.model,
+            model=self._default_binding.model,
             brave_api_key=brave_api_key,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
@@ -611,15 +680,22 @@ class AgentLoop:
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
             provider=provider,
-            model=self.model,
+            model=self._default_binding.model,
             sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
         )
 
         self._consolidation_tasks: set[asyncio.Task] = set()
+
+        # ``self.subagents``, ``self.context_engine`` and
+        # ``self.memory_consolidator`` were each handed ``provider`` earlier in
+        # this constructor. Inside a turn they read the turn's binding; the
+        # reference they hold is only the fallback for work that runs outside
+        # one, and ``set_default_binding`` is what keeps that fallback current.
+        # Add the call there when adding another holder.
 
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
@@ -675,6 +751,149 @@ class AgentLoop:
             if self.tools.has(name):
                 self.tools.unregister(name)
 
+    @property
+    def provider(self) -> LLMProvider:
+        """The provider of the binding the running turn entered.
+
+        A property, not an attribute: the model is per session now, so there
+        is no single answer to cache on the loop. Outside a turn (startup, a
+        one-shot CLI call) this is the configured default.
+        """
+        binding = active_binding()
+        return binding.provider if binding is not None else self._default_binding.provider
+
+    @property
+    def model(self) -> str:
+        """The model id of the binding the running turn entered."""
+        binding = active_binding()
+        return binding.model if binding is not None else self._default_binding.model
+
+    @property
+    def context_window_tokens(self) -> int:
+        """How much the binding of the running turn can hold.
+
+        A property for the same reason ``provider`` and ``model`` are: two
+        sessions can be on models of different sizes at once, so a single int
+        on the loop has no answer that is right for both. Outside a turn this
+        is the configured default's window.
+        """
+        binding = active_binding() or self._default_binding
+        return binding.context_window
+
+    @property
+    def provider_pool(self) -> "ProviderPool | None":
+        """Where a model id becomes a model id plus the credential for it."""
+        return self._provider_pool
+
+    @property
+    def default_binding(self) -> ModelBinding:
+        """What a session with no switch of its own runs on."""
+        return self._default_binding
+
+    def binding_for_session(self, session_key: str) -> ModelBinding:
+        """The binding this session runs on: its own switch, else the default.
+
+        A new session has no entry, so it starts on the configured default
+        rather than on whatever the last session switched to.
+        """
+        return self._session_bindings.get(session_key, self._default_binding)
+
+    def session_model(self, session_key: str) -> str:
+        """What to show this session's user, which is not the global default."""
+        return self.binding_for_session(session_key).model
+
+    def has_session_binding(self, session_key: str) -> bool:
+        """Did this session switch, or is it just following the default?
+
+        ``session_model`` cannot answer that -- it falls back to the default,
+        so it never returns None. Callers that must distinguish "chose this"
+        from "inherited this" ask here.
+        """
+        return session_key in self._session_bindings
+
+    def restore_session_model(self, session_key: str, model: str, provider_name: str | None = None) -> None:
+        """Put a resumed session back on the model it was last switched to.
+
+        Session overrides live in memory, so without this a restart moves every
+        switched session back to the default and the user's choice lasts
+        exactly as long as the process. The model comes from the session
+        record. A model that can no longer be built (a credential since
+        removed) leaves the session on the default rather than failing the
+        resume.
+        """
+        pool = self._provider_pool
+        if pool is None or not model:
+            return
+        try:
+            self.set_session_binding(session_key, pool.bind(model, provider_name))
+        except Exception as exc:
+            # Broad on purpose. Building a provider imports a vendor module and
+            # checks credentials, so the failures reachable here are open-ended
+            # -- ``MissingCredentialsError`` is one that did not exist when this
+            # guard was first written, and it escaped a tuple of three. A resume
+            # that lands on the default is a worse session; a resume that raises
+            # is no session at all.
+            logger.warning("session {!r} cannot resume on {!r} ({}); using the default", session_key, model, exc)
+
+    def set_session_binding(self, session_key: str, binding: ModelBinding) -> None:
+        """Switch one session, leaving every other session where it was.
+
+        Applied immediately and still safe mid-turn: a turn resolves its
+        binding once at ``run_turn`` entry and holds it in a context var for
+        its whole tree, including anything it detaches. So a switch during a
+        turn cannot move that turn -- it lands on the next one -- and no
+        parking is needed to arrange that.
+        """
+        self._session_bindings[session_key] = binding
+        self._forget_transport_verdicts()
+
+    def clear_session_binding(self, session_key: str) -> None:
+        """Drop a session's override so it follows the default again."""
+        self._session_bindings.pop(session_key, None)
+
+    def _forget_transport_verdicts(self) -> None:
+        """Drop the capability verdicts a new provider may answer differently.
+
+        Both caches key on a model id but are computed from the provider serving
+        it, so a rebuild that keeps the id keeps the old endpoint's answer. The
+        reachable case is an ``apiBase`` repointed at a box with different
+        capabilities, or a re-authenticated provider: the credentials
+        fingerprint changes, the pool builds a new provider, the model id does
+        not move -- and images stay dropped from tool results for the life of
+        the process, with nothing in the log to say why.
+
+        Cleared wholesale rather than per binding: the loop now holds several
+        providers at once, and the key does not say which one answered.
+        """
+        self._image_tool_result_ok.clear()
+        self._vision_ok.clear()
+
+    def set_default_binding(self, binding: ModelBinding) -> None:
+        """Change what new sessions start on.
+
+        Sessions that already switched keep their own binding; sessions that
+        never did pick this up on their next turn. Subsystem fallbacks are
+        re-pointed too, for the paths that run outside a turn and therefore
+        have no binding to read.
+        """
+        self._default_binding = binding
+        self._forget_transport_verdicts()
+        self.subagents.set_provider(binding.provider, binding.model)
+        self.context_engine.set_provider(binding.provider, binding.model)
+        self.memory_consolidator.set_provider(binding.provider, binding.model)
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Change the default binding, from a pair a caller already built.
+
+        No production caller today -- every switch path goes through the pool
+        and lands on ``set_default_binding`` or ``set_session_binding``. Kept as
+        the pair-free entry point for an embedder that has a provider in hand,
+        which is why it carries ``_configured_window`` forward: a window the
+        user pinned belongs to whatever they run, and building the binding
+        without it here would drop it the day this grows a caller.
+        """
+        self.set_default_binding(ModelBinding(provider, model, self._configured_window))
+
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
 
@@ -701,6 +920,7 @@ class AgentLoop:
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
+                extra_deny_patterns=self.exec_config.extra_deny_patterns,
             )
         )
         # A tool that cannot run must never be advertised: the model reaches for it,
@@ -734,76 +954,86 @@ class AgentLoop:
                         output_subdir=media.output_subdir,
                     )
                 )
-        # Deep research (MiroThinker) is opt-in: a paid, minute-scale HTTP engine
-        # registered only when a key is configured, so an unconfigured deploy
-        # never exposes a tool that errors on first call.
+        # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
+        # never a plain default tool. Two modes: ``real`` (key configured) is the
+        # working tool + async manager; ``offer`` (no key) is a same-named stand-in
+        # that, on a research query, asks the user deep-vs-regular and guides setup.
         self.deep_research_manager: DeepResearchManager | None = None
-        if DeepResearchTool.is_configured(self.deep_research_config):
-            self.deep_research_manager = DeepResearchManager(
-                self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy
-            )
-            self.tools.register(
-                DeepResearchTool(
-                    self.deep_research_config,
-                    workspace=self.workspace,
-                    proxy=self.web_proxy,
-                    manager=self.deep_research_manager,
-                )
-            )
+        # The async-delivery submit handle (gateway-wired, post-construction). Kept
+        # on the loop so a manager built later by promotion inherits it too, rather
+        # than only the startup manager -- see ``set_deep_research_submit``.
+        self._deep_research_submit: Callable[[Any], Any] | None = None
+        # The deep-vs-regular ask broker (transport-wired, post-construction). Kept
+        # on the loop for the same reason: a tool built later by promotion must
+        # inherit it, else it silently skips the ask -- see ``set_deep_research_broker``.
+        self._deep_research_broker: QuestionBroker | None = None
+        if deep_research_mode(self.deep_research_config) == "real":
+            self._register_real_deep_research(self.deep_research_config)
+        else:
+            self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
-        # ops_tune_launch (full-auto: one detached subprocess runs the whole
-        # search with a baked-in proposer) is intentionally NOT registered for the
-        # agent: with it on the menu the model picks the turnkey launch and never
-        # steers round by round. The agent-in-the-loop path is ops_submit +
-        # ops_check_later + ops_tune_status; full-auto stays reachable via the CLI.
-        self.tools.register(OpsTuneStatusTool())
-        self.tools.register(OpsSubmitTool(cron_service=self.cron_service))
-        self.tools.register(OpsCheckLaterTool(cron_service=self.cron_service))
-        self.tools.register(OpsNoteTool())
-        self.tools.register(OpsCampaignsTool())
-        self.tools.register(OpsConnectionsTool())
-        self.tools.register(OpsDeclareTool())
-        self.tools.register(OpsKillTool())
-        # Raw-output pair. ops_tune_status compresses a trial's progress to one
-        # line, which loses almost everything when a job writes many lines per
-        # step (measured on a solver: 18 lines a step, 2 of them informative), and
-        # it shows nothing at all for a finished trial whose backend reports no
-        # metrics. These two hand the lines and the outputs over unchanged.
-        self.tools.register(OpsOutputsTool())
-        # Reading and changing a case's configuration. These add no capability an
-        # agent lacks with a shell, only the record: three pre-registered readings
-        # are counted from the edit log and from nothing else, and without it "it
-        # did not change this" and "we cannot tell" are the same row.
-        self.tools.register(OpsEditCaseDictTool())
-        # What changed, as opposed to what is set. A case is derived from a known
-        # reference and only a few entries move; measured across seven watch rounds,
-        # every one read the settings one by one and none noticed the single entry
-        # that had been altered. The reference is the operator's legitimate
-        # possession -- the ML line's equivalent is "the score before fine-tuning".
-        self.tools.register(OpsCaseChangesTool())
-        # The two escalation paths out of a campaign. They exist as tools rather
-        # than as prompt text because the first real-task round proved the
-        # difference: an interruption contract written only into the task
-        # description was never evaluated once, and a report requirement written
-        # only in prose produced a final report with no baseline in it.
-        from raven.agent.tools.ops_escalation import OpsAskOwnerTool, OpsFinishTool
+        # The on-call surface, present only for an instance that has machines to
+        # run work on. Thirteen tools carry about 4800 tokens of schema into every
+        # turn; upstream's own budget test measured the room for history dropping
+        # from 130000 to 127933 when they were unconditional. See raven.ops.gate
+        # for why the connection registry is the key and why nothing can be locked
+        # out by it.
+        from raven.ops.gate import on_call_available
 
-        # The registry is handed over so the ask tool can delegate delivery to the
-        # messaging tool: the guard belongs in front of the existing door, not on
-        # a second one that leads nowhere.
-        self.tools.register(OpsAskOwnerTool(registry=self.tools))
-        # ops_finish files the result and closes the campaign in one call. They
-        # were two tools; measured on two arms of one task, one arm made the
-        # second call and one did not, and that campaign stayed open with the
-        # re-arm waking a loop that had already finished.
-        # The registry so it can deliver, and deliberately NO set_context: a wake
-        # turn's channel is "cron", which the front end does not subscribe to, so
-        # a tool that adopted the turn's channel would announce the result into
-        # the one place nobody reads. Left unset, delivery falls to the messaging
-        # tool's own default target -- which is how ops_ask_owner has been
-        # reaching tui:default all along.
-        self.tools.register(OpsFinishTool(cron_service=self.cron_service, registry=self.tools))
+        if on_call_available():
+            # ops_tune_launch (full-auto: one detached subprocess runs the whole
+            # search with a baked-in proposer) is intentionally NOT registered for the
+            # agent: with it on the menu the model picks the turnkey launch and never
+            # steers round by round. The agent-in-the-loop path is ops_submit +
+            # ops_check_later + ops_tune_status; full-auto stays reachable via the CLI.
+            self.tools.register(OpsTuneStatusTool())
+            self.tools.register(OpsSubmitTool(cron_service=self.cron_service))
+            self.tools.register(OpsCheckLaterTool(cron_service=self.cron_service))
+            self.tools.register(OpsNoteTool())
+            self.tools.register(OpsCampaignsTool())
+            self.tools.register(OpsConnectionsTool())
+            self.tools.register(OpsDeclareTool())
+            self.tools.register(OpsKillTool())
+            # Raw-output pair. ops_tune_status compresses a trial's progress to one
+            # line, which loses almost everything when a job writes many lines per
+            # step (measured on a solver: 18 lines a step, 2 of them informative), and
+            # it shows nothing at all for a finished trial whose backend reports no
+            # metrics. These two hand the lines and the outputs over unchanged.
+            self.tools.register(OpsOutputsTool())
+            # Reading and changing a case's configuration. These add no capability an
+            # agent lacks with a shell, only the record: three pre-registered readings
+            # are counted from the edit log and from nothing else, and without it "it
+            # did not change this" and "we cannot tell" are the same row.
+            self.tools.register(OpsEditCaseDictTool())
+            # What changed, as opposed to what is set. A case is derived from a known
+            # reference and only a few entries move; measured across seven watch rounds,
+            # every one read the settings one by one and none noticed the single entry
+            # that had been altered. The reference is the operator's legitimate
+            # possession -- the ML line's equivalent is "the score before fine-tuning".
+            self.tools.register(OpsCaseChangesTool())
+            # The two escalation paths out of a campaign. They exist as tools rather
+            # than as prompt text because the first real-task round proved the
+            # difference: an interruption contract written only into the task
+            # description was never evaluated once, and a report requirement written
+            # only in prose produced a final report with no baseline in it.
+            from raven.agent.tools.ops_escalation import OpsAskOwnerTool, OpsFinishTool
+
+            # The registry is handed over so the ask tool can delegate delivery to the
+            # messaging tool: the guard belongs in front of the existing door, not on
+            # a second one that leads nowhere.
+            self.tools.register(OpsAskOwnerTool(registry=self.tools, cron_service=self.cron_service))
+            # ops_finish files the result and closes the campaign in one call. They
+            # were two tools; measured on two arms of one task, one arm made the
+            # second call and one did not, and that campaign stayed open with the
+            # re-arm waking a loop that had already finished.
+            # The registry so it can deliver, and deliberately NO set_context: a wake
+            # turn's channel is "cron", which the front end does not subscribe to, so
+            # a tool that adopted the turn's channel would announce the result into
+            # the one place nobody reads. Left unset, delivery falls to the messaging
+            # tool's own default target -- which is how ops_ask_owner has been
+            # reaching tui:default all along.
+            self.tools.register(OpsFinishTool(cron_service=self.cron_service, registry=self.tools))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -837,7 +1067,18 @@ class AgentLoop:
             from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
 
             self.tools.register(
-                UseSkillTool(client=self._skill_hub_client, registry=skill_registry),
+                UseSkillTool(
+                    client=self._skill_hub_client,
+                    registry=skill_registry,
+                    min_safety=self._skill_min_safety,
+                    blocklist=self._skill_blocklist,
+                    auto_install=self._skill_auto_install,
+                    install_audit_path=(
+                        self.workspace / "skills" / "hub" / "installs.jsonl"
+                        if self._skill_hub_client is not None
+                        else None
+                    ),
+                ),
             )
             if self._skill_hub_client is not None:
                 self.tools.register(
@@ -901,6 +1142,119 @@ class AgentLoop:
             cache_dir=workspace / "skills" / "hub",
         )
 
+    def _supports_image_tool_result(self, model: str | None = None) -> bool:
+        """Cached per model: resolving the LiteLLM target parses the model string,
+        and this is asked once per tool call that returns an image.
+
+        A ``False`` learned from a refused request (see ``should_drop_tool_images``)
+        is written into the same cache, so a static table that guessed wrong stops
+        costing a wasted call after the first one.
+        """
+        key = model or self.model
+        if key not in self._image_tool_result_ok:
+            spec = None
+            try:
+                from raven.providers.registry import find_by_model
+
+                spec = find_by_model(key)
+            except Exception:
+                pass
+            self._image_tool_result_ok[key] = supports_image_tool_result(self.provider, key, spec)
+            logger.debug(
+                "image-in-tool-result support for {}: {}",
+                key,
+                self._image_tool_result_ok[key],
+            )
+        return self._image_tool_result_ok[key]
+
+    # The tool that can read an attachment for a model that cannot see it.
+    # Contributed by the EverOS plugin, so absent on a default install.
+    _DESCRIBE_TOOL = "understand_media"
+
+    def _describe_tool_name(self) -> str | None:
+        """The description tool's name if it is registered, else ``None``.
+
+        Checked rather than assumed: the note that replaces a picture points at
+        this tool, and pointing at one the model was never given is an
+        instruction it cannot follow.
+        """
+        return self._DESCRIBE_TOOL if self.tools.get(self._DESCRIBE_TOOL) else None
+
+    def _route_result_images(
+        self,
+        model_text: str,
+        blocks: list[dict[str, Any]] | None,
+        model: str,
+    ) -> tuple[str, list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+        """Decide how a tool result's pictures reach ``model``.
+
+        Returns the text the tool result carries, the blocks to put *in* it, and
+        the blocks to attach to a following user message. Exactly one of the last
+        two is ever populated.
+
+        Three outcomes, and the wording differs because the model's next move
+        differs. No vision at all: nothing follows, so the note must not promise
+        an attachment, and it names the description tool when one is registered.
+        Vision and a transport that carries images in a ``role="tool"`` message:
+        the blocks ride along untouched. Vision but a transport that cannot (every
+        OpenAI-style Chat Completions endpoint -- image is excluded from the tool
+        role at the schema level): the result carries text and the picture follows
+        in a user message, the shape OpenClaw uses.
+
+        A method rather than a branch inside the loop so it can be tested at all:
+        the loop reaches this point only through a live provider and a real tool
+        call, and the wrong choice here is silent -- the model answers about a
+        picture it never received.
+        """
+        if not blocks:
+            return model_text, blocks, None
+        if not self._supports_vision(model):
+            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
+        if self._supports_image_tool_result(model):
+            return model_text, blocks, None
+        attach = [b for b in blocks if b.get("type") == "image_url"]
+        return image_placeholder_text(blocks), None, attach
+
+    def _supports_vision(self, model: str | None = None) -> bool:
+        """Cached per model: whether this model can see a picture at all.
+
+        Asked once per turn and once per tool result that returns an image, and
+        the lookup joins the model string against the gateway catalogue -- same
+        reason the sibling probe above is cached.
+
+        Only a real verdict is cached. ``vision_verdict`` returns ``None`` while
+        the catalog has no answer -- a cold install, before the background warm
+        lands -- and that is optimism rather than knowledge: caching it would
+        freeze the guess for the life of this loop, which is the life of the
+        process, and the warm would then fill a table nothing re-reads. An
+        unknown model is re-asked each turn, which costs a dict lookup.
+
+        The verdict is the routed primary's. A fallback further down the chain is
+        sent the same message list, so a vision-capable primary with a blind
+        fallback hands the blind endpoint an image block it will refuse; that
+        refusal classifies as fatal and stops the chain rather than answering
+        blind. Pre-existing in the sibling probe too, and it needs the fallback
+        chain to be assembled per candidate to fix properly.
+        """
+        key = model or self.model
+        cached = self._vision_ok.get(key)
+        if cached is not None:
+            return cached
+
+        spec = None
+        try:
+            from raven.providers.registry import find_by_model
+
+            spec = find_by_model(key)
+        except Exception:
+            pass
+        verdict = vision_verdict(key, spec, self.provider)
+        logger.debug("vision support for {}: {}", key, verdict)
+        if verdict is None:
+            return True
+        self._vision_ok[key] = verdict
+        return verdict
+
     # ── Context engine helpers ──────────────────────────────────────────
 
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
@@ -916,7 +1270,29 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096)
+        # allow_fetch=False for the same reason construction passes it (see
+        # __init__): this runs per turn on the loop's own thread, and it only
+        # needs a number to reserve -- not the one a request will carry. The
+        # fallback under-reserves at worst; the importing tier costs seconds.
+        ceiling = send_max_tokens(
+            getattr(self.provider, "generation", None),
+            # The id a request will go out under, so the reservation matches the
+            # ceiling that request will carry rather than the stored name's.
+            getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
+            allow_fetch=False,
+        )
+        # The whole ceiling, not a share of it. Requests no longer name a
+        # ceiling, so the one that applies is the model's own -- whatever the
+        # vendor or LiteLLM's transformation fills in. Reserving less than that
+        # hands out a prompt the reply cannot coexist with: measured on this
+        # repo's default model, a share leaves the prompt 150000 of a 200000
+        # window against a reply allowed 64000, and the sum is refused at
+        # request time. `_emergency_shrink` only elides tool bodies, so a
+        # history grown on conversation gets no retry from that refusal.
+        #
+        # A share would be right again only if the request carried one, which
+        # is the trade the previous shape made and this one does not.
+        reserved_output = min(ceiling, self.context_window_tokens)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
@@ -967,8 +1343,15 @@ class AgentLoop:
         channel: str | None = None,
         chat_id: str | None = None,
         selected_skills: list[Any] | None = None,
+        model: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Ask the active context engine for the main-agent message window."""
+        """Ask the active context engine for the main-agent message window.
+
+        ``model`` is the id the request will actually reach (the router's pick,
+        when there is one). It decides whether an attachment is inlined as a
+        picture, so defaulting it to ``self.model`` would let the configured
+        model answer for a routed one.
+        """
         from raven.context_engine import TurnContext  # deferred — see module note
 
         # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
@@ -985,6 +1368,8 @@ class AgentLoop:
             turn=TurnContext(
                 current_message=current_message,
                 media=media,
+                can_see_images=self._supports_vision(model),
+                describe_tool=self._describe_tool_name(),
                 channel=channel,
                 chat_id=chat_id,
                 selected_skills=selected_skills,
@@ -1142,12 +1527,65 @@ class AgentLoop:
             return
         if not messages_slice:
             return
-        try:
-            await self.backend.store(session_key, messages_slice)
-        except Exception:
-            logger.exception(
-                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
-                session_key,
+
+        async def _store() -> None:
+            try:
+                await self.backend.store(session_key, messages_slice)  # type: ignore[union-attr]
+            except Exception:
+                logger.exception(
+                    "backend.store failed for session {}; turn data preserved in session log, "
+                    "plugin-side indexing skipped",
+                    session_key,
+                )
+
+        task = asyncio.create_task(_store())
+        self._store_inflight.add(task)
+        task.add_done_callback(self._store_inflight.discard)
+        # Deliberately not cancelled on timeout: the point is to stop *waiting*,
+        # not to abandon the write. A turn that indexes quickly still does so
+        # inline, which keeps ordering intact in the common case.
+        await asyncio.wait({task}, timeout=_STORE_TURN_BUDGET_S)
+
+        if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+            # Backpressure rather than unbounded growth: a service slow enough
+            # to accumulate this many outstanding writes is one whose queue
+            # should stop growing, not one to keep feeding.
+            #
+            # Bounded by the turn's own budget, and that bound is the whole
+            # point. Unbounded, this waited on the slowest outstanding write
+            # instead -- and since flush_every_turns defaults to 1, every
+            # interactive turn is a final flush carrying the six-minute
+            # extraction budget, so reaching the cap stalled a turn for
+            # minutes. That is the stall this method exists to remove.
+            await asyncio.wait(set(self._store_inflight), timeout=_STORE_TURN_BUDGET_S)
+            if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+                # Still saturated. The queue is what gives, not the turn: this
+                # write is dropped and said out loud at teardown, rather than
+                # held open behind writes that are already over their time.
+                task.cancel()
+                self._store_inflight.discard(task)
+                self._store_dropped += 1
+                logger.warning(
+                    "backend.store dropped for session {}: {} writes still in flight after {}s",
+                    session_key,
+                    len(self._store_inflight),
+                    _STORE_TURN_BUDGET_S,
+                )
+
+    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> None:
+        """Let detached writes finish before the process goes away.
+
+        Writes that outran their turn budget are still in flight. Exiting on top
+        of them loses exactly the turns that were slowest to index, which is a
+        silent and biased kind of data loss.
+        """
+        pending = {t for t in self._store_inflight if not t.done()}
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
+        if self._store_dropped:
+            logger.warning(
+                "{} turn(s) were not indexed: the memory service never caught up",
+                self._store_dropped,
             )
 
     def _collect_injected_skill_ids(
@@ -1314,6 +1752,64 @@ class AgentLoop:
                 self._mcp_stack = None
             raise
 
+    def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
+        """Build the working deep_research tool (+ async manager) and register it.
+        Shared by initial registration and mid-session promotion."""
+        self.deep_research_manager = DeepResearchManager(cfg, workspace=self.workspace, proxy=self.web_proxy)
+        # Inherit the gateway's async-delivery handle if it was wired before this
+        # manager existed (i.e. a promotion after startup), so a channel keeps the
+        # async path instead of falling back to a blocking synchronous run.
+        if self._deep_research_submit is not None:
+            self.deep_research_manager.set_submit(self._deep_research_submit)
+        tool = DeepResearchTool(cfg, workspace=self.workspace, proxy=self.web_proxy, manager=self.deep_research_manager)
+        # Inherit the deep-vs-regular ask broker too, else the promoted tool would
+        # silently skip the ask and run the paid engine unprompted.
+        if self._deep_research_broker is not None:
+            tool.set_broker(self._deep_research_broker)
+        self.tools.register(tool)
+
+    def set_deep_research_submit(self, submit: Callable[[Any], Any]) -> None:
+        """Wire the async-delivery submit handle (gateway only). Stored on the loop
+        and applied to the current manager, so a later promotion inherits it too."""
+        self._deep_research_submit = submit
+        if self.deep_research_manager is not None:
+            self.deep_research_manager.set_submit(submit)
+
+    def set_deep_research_broker(self, broker: QuestionBroker) -> None:
+        """Wire the deep-vs-regular ask broker (TUI/gateway). Stored on the loop and
+        applied to the currently-registered deep_research tool, so a tool built
+        later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""
+        self._deep_research_broker = broker
+        if (tool := self.tools.get("deep_research")) is not None and hasattr(tool, "set_broker"):
+            tool.set_broker(broker)
+
+    def _maybe_promote_deep_research(self) -> None:
+        """Swap the offer stand-in for the working tool once a key appears on disk,
+        so a mid-session ``raven deep-research enable`` is picked up on the next
+        turn without a restart. Called from ``run_turn`` before the per-turn tool
+        wiring, so the promoted tool gets this turn's stream callback and routing.
+
+        Re-reads config (the in-memory copy is fixed at startup); a corrupt config
+        must not fail the turn, so a read error just skips promotion. The promoted
+        manager inherits the gateway's async-delivery handle via
+        ``set_deep_research_submit``, so a channel keeps the async path."""
+        if not isinstance(self.tools.get("deep_research"), DeepResearchOfferTool):
+            return
+        from raven.config.loader import ConfigReadError
+        from raven.config.schema import DeepResearchToolConfig
+        from raven.config.update_tools import get_deep_research
+
+        try:
+            cfg = DeepResearchToolConfig(**get_deep_research(redact=False))
+        except ConfigReadError as exc:
+            logger.warning("deep_research: skipping promotion, config unreadable: {}", exc)
+            return
+        if not DeepResearchTool.is_configured(cfg):
+            return
+        self.deep_research_config = cfg
+        self._register_real_deep_research(cfg)
+        logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
+
     @staticmethod
     def _task_statement(session: Any, content: str) -> str:
         """The statement driving this turn.
@@ -1339,6 +1835,10 @@ class AgentLoop:
         # One judgement per turn, so it is cleared where a turn begins. Left over
         # from the previous turn it would answer about the wrong request.
         self._watched_verdict = None
+        # Which window this is, kept for the watched-path judgement: it has to ask
+        # whether this window already has a campaign, and only the session key can
+        # say which window it is.
+        self._watched_session = session_key or f"{channel}:{chat_id}"
         for name in ("message", "spawn", "cron", "deep_research", "ops_submit", "ops_check_later"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -1358,6 +1858,18 @@ class AgentLoop:
                         tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
+        # ops_ask_owner is deliberately absent from the list above: adopting the
+        # turn's channel would deliver a wake turn's question to "cron", which no
+        # front end subscribes to. But it also arms the wake that brings the
+        # campaign back when nobody answers, and THAT needs routing -- so it gets
+        # the context through a door of its own, leaving delivery as it was.
+        #
+        # Without this the wake was requested on every ask and armed on none:
+        # ``_schedule_ops_wake`` refuses without a channel, and the refusal is a
+        # returned string, not an error. Measured 2026-08-26 -- a blocking question
+        # with every trial terminal and no wake in either store.
+        if (ask := self.tools.get("ops_ask_owner")) is not None and hasattr(ask, "set_wake_context"):
+            ask.set_wake_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
 
     _WATCHED_TOOLS = {"list_dir": "path", "read_file": "path", "grep": "path",
                       "find": "path", "exec": "command"}
@@ -1369,18 +1881,46 @@ class AgentLoop:
 
         Lazily, and once per turn: a request that never reaches for a path never
         pays for the judgement, and a turn that reaches for twenty pays once.
-        Skipped entirely for a tool that names a machine already -- that call is
-        on the ops path -- and for a window watching a campaign, where the answer
-        is known and recorded.
+        Skipped for a window that already has a campaign, where the answer is
+        known and recorded.
 
         Placed on the result rather than before the call because the result is the
         only channel measured to change the next move: 2026-08-19, the same fact
         at the top of the turn was read, written into the reasoning, and ignored,
         while a fact arriving in a tool result was acted on.
+
+        It used to be skipped for any call that named a machine, on the reasoning
+        that such a call is already on the ops path. That is a proxy, and it fails
+        exactly where the line is needed. Measured 2026-08-21 on a watch task:
+        ops_connections named the machine, every look afterwards carried
+        ``machine=``, and the line therefore never appeared once -- the loop went
+        on to build its own monitor out of write_file and cron, never seeing that
+        an on-call path existed. Naming a machine says the look is remote. It says
+        nothing about whether anything is being recorded.
         """
         key = self._WATCHED_TOOLS.get(name)
-        if not key or args.get("machine"):
+        if not key:
             return result
+        # An instance with no machines registered cannot be doing work-to-watch,
+        # and the judgement is one model call per turn that touches a path --
+        # which is nearly every turn. Measured against upstream: unconditional,
+        # it consumed a scripted provider reply that a logging test was counting
+        # on, and added its own tokens to a usage total that summed the calls.
+        from raven.ops.gate import on_call_available
+
+        if not on_call_available():
+            return result
+        # Already recording something: the question this line asks has been
+        # answered for this window, and asking again would tell a loop that is
+        # driving a campaign to go and declare one.
+        try:
+            from raven.agent.tools.ops import _ops_home
+            from raven.ops.window import campaign_for_window
+
+            if campaign_for_window(_ops_home(), getattr(self, "_watched_session", "")):
+                return result
+        except Exception:  # noqa: BLE001 -- an unreadable binding is not a reason to go quiet
+            pass
         subject = str(args.get(key) or "")
         if not subject:
             return result
@@ -1396,6 +1936,11 @@ class AgentLoop:
                 )
             if not verdict.watched:
                 return result
+            # The paths inside a command. This line raised NameError until
+            # 2026-08-21 -- the module had no `import re` -- and the except below
+            # swallowed it into one debug line, so the nudge had never once
+            # reached an exec call, which is the tool that does most of the
+            # looking. The judgement had run and been paid for every time.
             hits = re.findall(r"(/[^\s'\"|;&>]+)", subject) if key == "command" else [subject]
             if any(verdict.claims(h) for h in hits):
                 return result + watched.provenance_line()
@@ -1405,10 +1950,25 @@ class AgentLoop:
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
-        """Remove <think>…</think> blocks that some models embed in content."""
+        """Remove <think>…</think> blocks that some models embed in content.
+
+        Paired blocks are removed. What is left is then checked for being
+        nothing but tag debris: when a backend inlines its reasoning and the
+        turn is cut off inside it, content arrives as a lone closing tag with
+        no opener to pair against, so the substitution above finds nothing and
+        an eleven-character string reads as a real answer. Recovery is skipped
+        and the tag is what the user sees.
+
+        The check is on residue, not on vendor spellings -- it does not matter
+        which prefix a backend picked. Text that merely mentions a tag keeps
+        its other words and is returned untouched.
+        """
         if not text:
             return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+        cleaned = strip_think_blocks(text)
+        if is_only_think_debris(cleaned):
+            return None
+        return cleaned or None
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
@@ -1449,7 +2009,9 @@ class AgentLoop:
         else:
             fresh = prompt_t
 
-        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write) or 0.0
+        # Left as None for a plan-billed provider: the field is optional all the
+        # way to the status bar, which renders it only when it is a number.
+        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write)
         return UsageSnapshot(
             model=model,
             input_tokens=fresh,
@@ -1491,38 +2053,95 @@ class AgentLoop:
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
+        had_error = False
+        error_content: str | None = None
+        error_classification: ErrorClassification | None = None
+        upstream_finish_reason: str | None = None
 
-        async for delta in self.provider.chat_stream(
-            messages=messages,
-            tools=tools,
-            model=model,
-        ):
-            reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
-                reasoning_buf.append(reasoning_delta)
-                if on_reasoning_delta is not None:
-                    await on_reasoning_delta(reasoning_delta)
-            if delta.content:
-                content_buf.append(delta.content)
-                if on_token_delta is not None:
-                    await on_token_delta(delta.content)
-            if delta.tool_call_delta:
-                _merge_tool_call_fragments(
-                    tool_call_slots,
-                    delta.tool_call_delta,
-                )
-            if delta.usage is not None:
-                final_usage = delta.usage
+        # aclosing() guarantees the async generator (and its underlying stream)
+        # is closed when a TimeoutError from the per-chunk idle cap unwinds the
+        # loop, so a stalled stream terminates with a structured error instead
+        # of hanging or leaking the connection. The stream path has no retry
+        # (see docstring), so the error surfaces as the turn's response.
+        try:
+            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+                async for delta in stream:
+                    if delta.finish_reason == "error":
+                        # A non-streaming provider's chat() error, replayed
+                        # through the fallback as its single terminal delta.
+                        # Its content is the error text, not a token to render
+                        # or accumulate -- surface it via error_classification
+                        # instead of the normal success collation below.
+                        had_error = True
+                        error_content = delta.content
+                        error_classification = delta.error_classification
+                        if delta.usage is not None:
+                            final_usage = delta.usage
+                        continue
+                    if delta.finish_reason:
+                        upstream_finish_reason = delta.finish_reason
+                    reasoning_delta = getattr(delta, "reasoning_content", None)
+                    if reasoning_delta:
+                        reasoning_buf.append(reasoning_delta)
+                        if on_reasoning_delta is not None:
+                            await on_reasoning_delta(reasoning_delta)
+                    if delta.content:
+                        content_buf.append(delta.content)
+                        if on_token_delta is not None:
+                            await on_token_delta(delta.content)
+                    if delta.tool_call_delta:
+                        _merge_tool_call_fragments(
+                            tool_call_slots,
+                            delta.tool_call_delta,
+                        )
+                    if delta.usage is not None:
+                        final_usage = delta.usage
+        except TimeoutError:
+            return LLMResponse(
+                content="".join(content_buf),
+                finish_reason="error",
+                error_classification=self.provider.classify_error(TimeoutError()),
+            )
+
+        if had_error:
+            return LLMResponse(
+                content=error_content,
+                finish_reason="error",
+                error_classification=error_classification,
+                usage=final_usage or {},
+            )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+
+        # No ceiling passed: the provider resolves its own after the loop has
+        # handed over the request, so the number this turn carried is not
+        # knowable here. Nothing is compared against it, so nothing is missing.
+        sent_max_tokens, truncated = flag_truncation(
+            finish_reason=upstream_finish_reason,
+            usage=final_usage,
+            tool_calls=tool_calls,
+        )
+
+        finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
+
+        content = "".join(content_buf)
+        reasoning_content = "".join(reasoning_buf) or None
+        # getattr because the loop accepts duck-typed providers (test stubs and
+        # thin adapters implement just chat/chat_stream); absent means the
+        # LLMProvider default, False.
+        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
+        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning
 
         return LLMResponse(
-            content="".join(content_buf),
+            content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
-            reasoning_content="".join(reasoning_buf) or None,
+            reasoning_content=reasoning_content,
+            truncated=truncated,
+            max_tokens=sent_max_tokens,
         )
 
     @classmethod
@@ -1536,13 +2155,14 @@ class AgentLoop:
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
         """
+        messages, elided = cls._elide_older_images(messages)
+
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            return messages, 0
+            return messages, elided
         elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
         shrunk: list[dict] = []
-        elided = 0
         for i, m in enumerate(messages):
             if i in elide and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
@@ -1552,6 +2172,94 @@ class AgentLoop:
             else:
                 shrunk.append(m)
         return shrunk, elided
+
+    @staticmethod
+    def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
+        """Move images out of tool results into a following user message.
+
+        The recovery for an endpoint that refuses a picture in ``role="tool"``.
+        Produces exactly the message list a ``False`` capability verdict would
+        have built in the first place, so the retry lands on the already-tested
+        placeholder path rather than inventing a third shape.
+
+        A run of consecutive tool messages is one batch answering one assistant
+        message, so the pictures pulled out of it are attached once after the last
+        of them -- putting one between two tool results leaves a tool_call
+        unanswered where the API checks the sequence (measured, see the batching
+        comment in the tool loop).
+
+        Returns ``(new_messages, num_demoted)``; ``0`` means no tool result
+        carried an image, so the refusal was about something else and the caller
+        should not retry.
+        """
+        out: list[dict] = []
+        pending: list[dict] = []
+        demoted = 0
+
+        def flush() -> None:
+            if pending:
+                out.append({"role": "user", "content": list(pending), _ATTACHED_IMAGE_KEY: True})
+                pending.clear()
+
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "tool":
+                flush()
+                out.append(m)
+                continue
+            if not isinstance(content, list):
+                out.append(m)
+                continue
+            images = [p for p in content if is_image_part(p)]
+            if not images:
+                out.append(m)
+                continue
+            clean = dict(m)
+            clean["content"] = image_placeholder_text(content)
+            out.append(clean)
+            pending.extend(images)
+            demoted += len(images)
+        flush()
+        return out, demoted
+
+    @classmethod
+    def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
+        """Drop inline images from all but the most recent image-bearing message.
+
+        Run before the tool-text pass because an image is by far the densest
+        thing in the window -- one costs up to 1568 tokens, which is more than
+        most tool outputs -- so dropping a stale picture buys more room than
+        eliding several text results, and costs less of what the model still
+        needs.
+
+        Not restricted to ``role="tool"``: when the endpoint cannot carry an
+        image in a tool result the picture is attached to a following ``user``
+        message instead, and that message would otherwise be untouchable here.
+        """
+        bearing = [
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), list) and any(is_inline_image(p) for p in m["content"])
+        ]
+        if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
+            return messages, 0
+
+        target = set(bearing[: -cls._SHRINK_KEEP_RECENT_IMAGES] if cls._SHRINK_KEEP_RECENT_IMAGES else bearing)
+        out: list[dict] = []
+        elided = 0
+        for i, m in enumerate(messages):
+            if i not in target:
+                out.append(m)
+                continue
+            clean = dict(m)
+            # New list: the caller's messages may still be referenced elsewhere.
+            clean["content"] = [
+                {"type": "text", "text": "[image elided to fit the context window]"} if is_inline_image(p) else p
+                for p in m["content"]
+            ]
+            out.append(clean)
+            elided += 1
+        return out, elided
 
     async def _synthesize_final_on_exhaustion(
         self,
@@ -1620,6 +2328,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         totals_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
@@ -1649,9 +2358,12 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
-        # Tool-failure-loop break (#1b): track consecutive same-tool hard
-        # failures across iterations; nudge once per fresh streak, bounded/turn.
-        loop_fail_tool: str | None = None
+        # Image-demotion recovery: bound per turn, same reason.
+        image_demote_retries = 0
+        # Tool-failure-loop break (#1b): track consecutive hard failures of the
+        # same tool *with the same kind of error* across iterations; nudge once
+        # per fresh streak, bounded/turn.
+        loop_fail_key: tuple[str, str] | None = None
         loop_fail_streak = 0
         loop_nudges = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
@@ -1686,6 +2398,11 @@ class AgentLoop:
                 self.max_iterations,
                 effective_model,
             )
+
+            # Mark the episode boundary (one per model call) so an outlet can
+            # group this call's reasoning + text + tools into a single step.
+            if on_episode_start is not None:
+                await on_episode_start(iteration - 1)
 
             # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
             # iteration's LLM call. Media-carrying injects keep their file
@@ -1772,9 +2489,19 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # Real window from the model's provider table when LiteLLM lags
-                # (e.g. OpenRouter); otherwise the configured default.
-                context_max = resolve_context_window(call_model) or self.context_window_tokens
+                # An explicitly configured window always wins over the live
+                # table -- that is what setting it means. Otherwise the live
+                # window from the model's provider table (e.g. OpenRouter,
+                # when LiteLLM lags) answers instead; unknown to that table
+                # too, 0 tells the UI to show its empty state rather than a
+                # number that isn't this model's.
+                if self._configured_window:
+                    context_max = self._configured_window
+                else:
+                    # Off the event loop: allow_fetch=True here can hit the
+                    # network for up to 10s on an OpenRouter model with both
+                    # caches expired. See rates._fetch_openrouter_models.
+                    context_max = await asyncio.to_thread(resolve_context_window, call_model) or 0
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens
@@ -1809,7 +2536,35 @@ class AgentLoop:
                     )
                     continue
 
+            # Image-in-tool-result refused: this endpoint takes a picture only in
+            # a user message. Rebuild onto the placeholder path -- the shape a
+            # False capability verdict would have produced -- and retry this
+            # iteration. Also cache the verdict so the rest of the process stops
+            # paying for the attempt: the static table in `capabilities` guessed
+            # wrong, and this is how it self-corrects.
+            if (
+                response.finish_reason == "error"
+                and cls_ is not None
+                and cls_.should_drop_tool_images
+                and image_demote_retries < self._MAX_IMAGE_DEMOTE_RETRIES
+            ):
+                demoted_messages, demoted = self._demote_tool_images(messages)
+                if demoted > 0:
+                    messages = demoted_messages
+                    self._image_tool_result_ok[call_model or effective_model] = False
+                    image_demote_retries += 1
+                    iteration -= 1  # the refused call did no work; don't bill it
+                    logger.warning(
+                        "Endpoint refused {} image(s) in a tool result; moved them "
+                        "to a user message and retrying ({}/{})",
+                        demoted,
+                        image_demote_retries,
+                        self._MAX_IMAGE_DEMOTE_RETRIES,
+                    )
+                    continue
+
             if response.has_tool_calls:
+                abort_action = False
                 # What it said while reaching for a tool, in the log and not only
                 # on screen. Without it a trace shows the moves and not the reason,
                 # and a wrong first move -- 2026-08-19, iteration 1 went straight to
@@ -1828,6 +2583,20 @@ class AgentLoop:
                         await on_progress(said)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
+                # Images this transport cannot carry inside a tool result.
+                # Collected across the whole batch and attached once *after* the
+                # last tool result: a user message sitting between two tool
+                # results leaves an assistant tool_call unanswered at the point
+                # the API validates the sequence. Measured on gpt-4o, 2026-07-31,
+                # two tool calls with the picture from the first:
+                #   tool(c1), user, tool(c2) -> 400 "An assistant message with
+                #     'tool_calls' must be followed by tool messages responding
+                #     to each 'tool_call_id'"
+                #   tool(c1), tool(c2), user -> 200, and the model named the
+                #     image's colour
+                # Anthropic accepts both, so this only bites on Chat Completions
+                # -- which is the only transport that takes this path at all.
+                pending_images: list[dict[str, Any]] = []
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1837,7 +2606,7 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                for tool_call in response.tool_calls:
+                for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -1845,29 +2614,65 @@ class AgentLoop:
                     # second emit here would double it.
                     emit_tool_event = on_tool_event is not None and tool_call.name != "message"
                     if emit_tool_event:
+                        _tool = self.tools.get(tool_call.name)
                         await on_tool_event(
                             "start",
                             {
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                # Tool-authored call label; None -> UI derives one.
+                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
+                    if tool_call.name == "exec":
+                        exec_tool = self.tools.get("exec")
+                        if isinstance(exec_tool, ExecTool):
+                            exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    result = await self._note_watched_path(
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    # Only the model-facing text is annotated. Rebuilt rather than
+                    # replaced because the registry hands back a ToolOutput -- a str
+                    # carrying display_text and the control flags -- and returning a
+                    # plain str here would drop the transcript row's display string
+                    # and any multimodal blocks with it.
+                    noted = await self._note_watched_path(
                         tool_call.name, tool_call.arguments, str(result), request_text
                     )
-                    if getattr(self.tools.get(tool_call.name), "ends_turn", False):
+                    if noted != str(result):
+                        result = ToolOutput(
+                            noted,
+                            getattr(result, "display_text", None),
+                            retryable=getattr(result, "retryable", True),
+                            abort_action=getattr(result, "abort_action", False),
+                            blocks=getattr(result, "blocks", None),
+                            ends_turn=getattr(result, "ends_turn", None),
+                        )
+                    # The call's own answer wins over the tool's default. A tool
+                    # whose point is to say "and now we wait" has not waited when
+                    # it refused, and closing the turn on a refusal leaves nothing
+                    # arranged and nothing decided (see ToolResult.ends_turn).
+                    closes = getattr(result, "ends_turn", None)
+                    if closes is None:
+                        closes = getattr(self.tools.get(tool_call.name), "ends_turn", False)
+                    if closes:
                         turn_closed_by_tool = True
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    result_str = str(result)
-                    preview = result_str.replace("\n", " ")[:200]
+                    # The registry already unwrapped any ToolResult: `result` is
+                    # the model-facing text, with the optional display string
+                    # riding along on it (ToolOutput). The model always gets the
+                    # model text; the UI preview prefers the display string.
+                    model_text = str(result)
+                    display_src = getattr(result, "display_text", None) or model_text
+                    # The log stays one line; the UI event keeps newlines so a
+                    # tool that reports several items (e.g. ask_user's
+                    # question -> answer pairs) renders one row each.
+                    preview = display_src[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
                         duration_ms,
-                        preview,
+                        preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
                         await on_tool_event(
@@ -1875,19 +2680,66 @@ class AgentLoop:
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
-                                "truncated": len(result_str) > 200,
+                                "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
+                    model_text, blocks, attach_blocks = self._route_result_images(
+                        model_text, getattr(result, "blocks", None), call_model or effective_model
+                    )
+                    if blocks:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, model_text, blocks
+                        )
+                    else:
+                        # Keep the long-standing 4-arg call for text results so no
+                        # existing caller or test double sees a signature change.
+                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if attach_blocks:
+                        pending_images.extend(attach_blocks)
+                    if getattr(result, "abort_action", False):
+                        abort_action = True
+                        # A single assistant message may contain several parallel
+                        # tool calls (for example ``rm`` followed by a Python
+                        # fallback). Once policy terminates the action, none of
+                        # the siblings may execute. We must nevertheless append
+                        # one result for every advertised call id: OpenAI-style
+                        # providers reject conversation history containing an
+                        # assistant tool call without its matching tool result.
+                        for skipped_call in response.tool_calls[tool_call_index + 1 :]:
+                            messages = self.context.add_tool_result(
+                                messages,
+                                skipped_call.id,
+                                skipped_call.name,
+                                (
+                                    "Error: Tool call was not executed because a prior safety "
+                                    "decision terminated this action."
+                                ),
+                            )
+                        break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(result):
-                        if tool_call.name == loop_fail_tool:
+                    if is_hard_tool_failure(model_text):
+                        failure_key = (tool_call.name, failure_class(model_text))
+                        if failure_key == loop_fail_key:
                             loop_fail_streak += 1
                         else:
-                            loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                            loop_fail_key, loop_fail_streak = failure_key, 1
                     else:
-                        loop_fail_tool, loop_fail_streak = None, 0
+                        loop_fail_key, loop_fail_streak = None, 0
+
+                if abort_action:
+                    # A normal tool result starts another model iteration. That
+                    # is specifically unsafe here: the next plan can translate
+                    # the rejected operation into an equivalent interpreter,
+                    # script, or tool call. Finish the turn in runtime code and
+                    # expose only the non-destructive continuation question.
+                    # Streaming callers need the explicit callback because no
+                    # final model response exists to generate token deltas.
+                    messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
+                    final_content = _ABORTED_ACTION_REPLY
+                    if on_token_delta is not None:
+                        await on_token_delta(_ABORTED_ACTION_REPLY)
+                    break
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
@@ -1902,9 +2754,16 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
+                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak, loop_fail_key[1])
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # After the nudge above, which needs the last message to still be
+                # the tool result it appends to. Also after the abort_action
+                # branch, which ends the turn in runtime code -- there is no
+                # further model call to show a picture to, so an aborted action
+                # deliberately drops it rather than leaving it dangling.
+                if pending_images:
+                    messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -2028,8 +2887,13 @@ class AgentLoop:
         # was retired on feature/integrate-everos; the after-turn pipeline —
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
-        if any(m.get("_recovery_synthetic") for m in messages):
-            messages = [m for m in messages if not m.get("_recovery_synthetic")]
+        # Attached-image messages are dropped here for the same reason and at the
+        # same point: the returned list feeds persistence, ``after_turn``
+        # extraction and ``backend.store`` alike, so filtering once upstream of
+        # all three is the only place that covers them.
+        _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+        if any(any(m.get(k) for k in _transient) for m in messages):
+            messages = [m for m in messages if not any(m.get(k) for k in _transient)]
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
         # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
@@ -2089,25 +2953,6 @@ class AgentLoop:
             except Exception:
                 logger.exception("on_turn_complete callback failed")
 
-    async def await_pending_extractions(
-        self,
-        flush_session_id: str | None = None,
-        *,
-        wait: bool = True,
-    ) -> None:
-        """No-op retained for CLI / batch-mode call-site compatibility.
-
-        Previously this flushed the local skill-extraction buffer and
-        blocked on its in-flight tasks. That embedded pipeline was
-        removed — case-to-skill distillation now lives in the
-        :class:`MemoryBackend` plugin (``backend.store`` /
-        ``backend.feedback``), which the after-turn pipeline drives
-        directly. Kept so ``raven agent`` callers don't need changing;
-        the ``flush_session_id`` / ``wait`` knobs are inert.
-        """
-        del flush_session_id, wait
-        return None
-
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
         if self._mcp_stack:
@@ -2134,6 +2979,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         totals_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
@@ -2346,17 +3192,12 @@ class AgentLoop:
             content,
             context_messages,
         )
-        initial_messages = await self._assemble_context_messages(
-            session=session,
-            session_key=key,
-            current_message=content,
-            media=media_paths if media_paths else None,
-            channel=channel,
-            chat_id=chat_id,
-            selected_skills=selected_skills or None,
-        )
-
         # ── Model routing (EcoClaw-style) ────────────────────────────────────
+        # Ahead of assembly, not after it: assembly decides whether an
+        # attachment is inlined as a picture or described in text, and that
+        # question is about the model the request will actually reach. Routing
+        # needs only ``content``, so asking first costs nothing and stops one
+        # model's verdict from shaping a message another model receives.
         routed_model: str | None = None
         fallback_models: list[str] = []
         if self.router is not None:
@@ -2365,6 +3206,17 @@ class AgentLoop:
                 logger.info("Router: {} → {}", self.model, routed_model)
             if fallback_models:
                 logger.info("Router fallback chain: {}", fallback_models)
+
+        initial_messages = await self._assemble_context_messages(
+            session=session,
+            session_key=key,
+            current_message=content,
+            media=media_paths if media_paths else None,
+            channel=channel,
+            chat_id=chat_id,
+            selected_skills=selected_skills or None,
+            model=routed_model,
+        )
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
@@ -2378,6 +3230,7 @@ class AgentLoop:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
+            on_episode_start=on_episode_start,
             usage_sink=usage_sink,
             totals_sink=totals_sink,
             drain=drain,
@@ -2472,8 +3325,20 @@ class AgentLoop:
             role, content = entry.get("role"), entry.get("content")
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
+            if entry.get(_ATTACHED_IMAGE_KEY):
+                # Already filtered upstream; kept because this is the last gate
+                # before a write that cannot be undone, unlike the code above it.
+                continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if role == "tool" and isinstance(content, list):
+                # A multimodal tool result. Images must never reach the JSONL:
+                # a single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The char cap below cannot catch
+                # it either — it guards `str` content only.
+                content = _strip_inline_images(content)
+                entry["content"] = content
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
@@ -2485,20 +3350,16 @@ class AgentLoop:
                     else:
                         continue
                 if isinstance(content, list):
-                    filtered = []
-                    for c in content:
-                        if (
-                            c.get("type") == "text"
+                    filtered = [
+                        c
+                        for c in _strip_inline_images(content)
+                        if not (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
                             and isinstance(c.get("text"), str)
                             and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        ):
-                            continue  # Strip runtime context from multimodal messages
-                        if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
-                            "data:image/"
-                        ):
-                            filtered.append({"type": "text", "text": "[image]"})
-                        else:
-                            filtered.append(c)
+                        )
+                    ]
                     if not filtered:
                         continue
                     entry["content"] = filtered
@@ -2517,13 +3378,51 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
+        """Bind the turn to its session's model; see ``_run_turn`` for the turn.
+
+        This is where a session's model becomes the one thing everything under
+        the turn reads: the loop's own ``provider``/``model``, the context
+        engine's LLM-backed segments, the skill gate and rewriter, the
+        consolidator, and anything the turn detaches (a subagent inherits the
+        context it was created in).
+
+        Resolving once here is also what makes a mid-turn switch harmless
+        without any parking. The binding is captured before the first read and
+        held for the tree, so a switch that lands while this turn runs is
+        simply not visible to it -- it takes effect on the session's next
+        turn. Turns from other sessions run under their own binding
+        concurrently, which is the point.
+        """
+        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        with use_binding(self.binding_for_session(session_key)):
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
+
+    async def _run_turn(
+        self,
+        req: TurnRequest,
+        emit: Emit,
+        drain: Drain,
+        *,
+        stream: bool = True,
+        inline_tool_stream: bool = False,
+        usage_sink: dict[str, Any] | None = None,
+        text_sink: dict[str, Any] | None = None,
+    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
-        (executor / debug server / MCP up, then idle). A spine runner wraps this
-        method to satisfy the TurnRunner protocol.
+        (executor / debug server / MCP up, then idle). A spine runner calls the
+        public ``run_turn`` to satisfy the TurnRunner protocol.
 
         ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
         wires it True so the reply goes out as StreamDelta and dissolves (b2 — no
@@ -2552,6 +3451,7 @@ class AgentLoop:
         """
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
+            EpisodeStart,
             MediaOut,
             Notice,
             NoticeKind,
@@ -2599,6 +3499,9 @@ class AgentLoop:
             if text:
                 await emit(Reasoning(content=text))
 
+        async def on_episode(index: int) -> None:
+            await emit(EpisodeStart(index=index))
+
         async def on_tool(phase: str, info: dict[str, Any]) -> None:
             if phase == "start":
                 await emit(
@@ -2607,6 +3510,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        display=info.get("display"),
                     )
                 )
             else:
@@ -2662,6 +3566,11 @@ class AgentLoop:
 
             message_tool.set_send_callback(_route_to_stream)
 
+        # Pick up a mid-session `deep-research enable` before the wiring below, so
+        # a promoted working tool gets THIS turn's stream callback and (in
+        # _process_message) routing context -- not just the next turn's.
+        self._maybe_promote_deep_research()
+
         # deep_research (streaming surfaces only): stream its progress live and
         # deliver its finished answer inline, so the tool returns a compact
         # receipt and the model relays instead of re-emitting/rewriting. Progress
@@ -2705,6 +3614,7 @@ class AgentLoop:
                 on_token_delta=on_token if stream else None,
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
+                on_episode_start=on_episode if stream else None,
                 usage_sink=usage_sink,
                 totals_sink=totals_sink,
                 origin=req.origin,
@@ -2788,22 +3698,33 @@ def _merge_tool_call_fragments(
 
 
 def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
+    """Convert accumulator slots into final ToolCallRequest list.
+
+    A slot whose arguments do not parse is flagged on that call, not on the
+    turn: an unparseable blob is evidence about one call, and reducing it to
+    "something in this turn failed" would leave the loop guessing which. An
+    incomplete JSON blob is also the one piece of evidence that needs no
+    cooperation from the backend, which matters where a backend reports a
+    clean stop on a cut-off reply.
+    """
     result: list[ToolCallRequest] = []
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
+        repaired = False
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             args = {"_raw_arguments": args_text}
+            repaired = True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
+                run_meta=RunMeta(arguments_repaired=True) if repaired else None,
             )
         )
     return result

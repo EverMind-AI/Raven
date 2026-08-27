@@ -72,7 +72,10 @@ class PbenchDriver(BenchmarkDriver):
         self._agent_name = (agent_name or "raven").lower()
         self._context_mode = context_mode
         self._synthesizer_name = synthesizer_name
-        self._prompts_dir = prompts_dir or (_RUNNERS_DIR / "prompts")
+        # Default: the uniform minimal template (the results-table setup).
+        # Pass prompts_dir=runners/prompts for the legacy persona templates
+        # (ablation reproduction only — see FINDINGS-ablation-20260722.md).
+        self._prompts_dir = prompts_dir or (_RUNNERS_DIR / "prompts" / "uniform")
         self._prompt_template: dict[str, str] | None = None
         self._synthesizer = None
         if context_mode == "warm":
@@ -86,7 +89,12 @@ class PbenchDriver(BenchmarkDriver):
             import prompts_loader
 
             fname = self._PROMPT_BY_AGENT.get(self._agent_name, "raven_agent.yaml")
-            self._prompt_template = prompts_loader.load_prompt(self._prompts_dir / fname)
+            path = self._prompts_dir / fname
+            if not path.exists():
+                # Agent-agnostic prompt dir (e.g. prompts/uniform/): one
+                # shared template instead of three identical copies.
+                path = self._prompts_dir / "uniform_agent.yaml"
+            self._prompt_template = prompts_loader.load_prompt(path)
         return self._prompt_template
 
     # ---- samples ----

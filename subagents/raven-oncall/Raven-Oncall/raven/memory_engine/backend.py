@@ -127,17 +127,33 @@ class MemoryBackend(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
-    ) -> None:
-        """Persist a session slice.
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Persist a session slice. Returns whether it landed.
 
         ``messages`` follows the AgentLoop ``{"role", "content", ...}``
         shape — the existing list-of-dicts form the codebase already
         produces, so adapters don't need a conversion step. Backends
-        that want to chunk / deduplicate / extract are free to; the
-        Protocol is fire-and-forget per call.
+        that want to chunk / deduplicate / extract are free to.
 
-        Raises on transport / auth errors so AgentLoop can surface
-        them; the host does **not** silently swallow store failures.
+        ``metadata`` is an optional dict for caller-supplied context
+        that does not fit the message list.  Callers may pass
+        backend-specific fields such as ``app_id``, ``project_id``,
+        or ``is_final``; normal AgentLoop turns leave it ``None``.
+        Backends that do not consume metadata ignore it silently.
+
+        Does not raise on transport / auth errors; it reports them.
+        The two callers want opposite things from a failed write. A
+        turn loses one turn's memory and gets a fresh chance on the
+        next, so it discards the answer and never blocks on indexing.
+        A bulk import marks a source done in its resume state, so a
+        write silently treated as landed erases the only record that
+        the source is still pending -- it must check.
+
+        Discarding the return value therefore stays valid; what is no
+        longer valid is *assuming* a write landed because nothing was
+        raised.
         """
         ...
 

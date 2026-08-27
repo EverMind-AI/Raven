@@ -53,6 +53,18 @@ def _make_fake_app() -> typer.Typer:
     def boom() -> None:
         raise click.UsageError("bad arg")
 
+    # A real two-token subcommand, so the space-splitting test has something to
+    # split: hermes sends `/channels status` as command="channels status".
+    channels = typer.Typer(no_args_is_help=False)
+
+    @channels.command("status")
+    def channels_status() -> None:
+        import raven.cli.commands as ec_commands
+
+        ec_commands.console.print("channels: ok")
+
+    fake.add_typer(channels, name="channels")
+
     return fake
 
 
@@ -87,18 +99,9 @@ async def test_slash_exec_routes_to_cli_dispatch_status(fake_app_patch):
 
 async def test_slash_exec_routes_channels_status_with_space(fake_app_patch):
     """``/channels status`` arrives as command="channels status" — needs split."""
-
-    # Add a channels-status fake command to verify dispatch routing.
-    @fake_app_patch.command(name="channels-status")
-    def _channels_status() -> None:  # pragma: no cover (registered for routing)
-        import raven.cli.commands as ec_commands
-
-        ec_commands.console.print("channels: ok")
-
-    # The real path uses the EC CLI's `channels status` (already whitelisted).
-    # We use the patched echo as a stand-in to keep the test isolated.
-    result = await slash_exec({"command": "echo hello-tui", "session_id": "sid-abc"})
-    assert "hello-tui" in result["output"]
+    result = await slash_exec({"command": "channels status", "session_id": "sid-abc"})
+    assert "channels: ok" in result["output"], f"two-token subcommand did not run; got {result!r}"
+    assert result.get("warning") in (None, "")
 
 
 async def test_slash_exec_shlex_quoted_args(fake_app_patch):

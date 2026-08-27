@@ -146,7 +146,6 @@ class RavenDriver:
         *,
         fake_now: str | None = None,
         session_id: str = "cli:direct",
-        wait_skill_extract: bool = False,
     ) -> AgentResponse:
         """Run ``raven agent --message <m> [--fake-now ...]`` once.
 
@@ -160,10 +159,6 @@ class RavenDriver:
         cmd.extend(["--session", session_id])
         cmd.append("--no-markdown")
         cmd.append("--no-logs")
-        if wait_skill_extract:
-            cmd.append("--wait-skill-extract")
-        else:
-            cmd.append("--no-wait-skill-extract")
         if fake_now:
             cmd.extend(["--fake-now", fake_now])
         return self._run(cmd)

@@ -14,10 +14,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import pytest
 from typer.testing import CliRunner
-
-pytest.importorskip("raven.plugin.memory.everos")
 
 
 def _make_runner_args(tmp_path: Path, config: dict[str, Any]) -> list[str]:
@@ -60,7 +57,7 @@ class TestActiveBackend:
         )
         assert result.exit_code == 0, result.stdout
         assert "everos-memory" in result.stdout
-        assert "1.0.0" in result.stdout
+        assert "1.1.0" in result.stdout
         assert "bundled" in result.stdout
 
     def test_shows_active_backend_with_track_ids(

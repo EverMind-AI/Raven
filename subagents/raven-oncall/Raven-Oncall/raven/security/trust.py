@@ -17,6 +17,7 @@ unguessable, so embedded fake markers don't escape the fence.
 from __future__ import annotations
 
 import secrets
+from typing import Any
 
 
 def wrap_untrusted(text: str, *, source: str) -> str:
@@ -41,3 +42,29 @@ def wrap_untrusted(text: str, *, source: str) -> str:
         f"{body}\n"
         f"[END UNTRUSTED {source} #{nonce}]"
     )
+
+
+def wrap_untrusted_blocks(blocks: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
+    """Fence the text parts of a multimodal content block list.
+
+    A text fence cannot contain pixels: an image block carries no delimiter for
+    injected instructions to break out of, and rewriting its bytes would corrupt
+    the picture. So images pass through untouched and the fence goes on the text
+    parts, which is where an attacker-supplied string could otherwise be read as
+    an instruction.
+
+    That leaves instructions *rendered into* an image unfenced. Nothing at this
+    layer can catch those -- the model reads them as pixels. The defense for
+    those is the same one that already applies to text: privileged actions
+    (``exec``, ``write_file``, outbound messages) are gated by policy regardless
+    of what the model just looked at.
+    """
+    if not blocks:
+        return blocks
+    out: list[dict[str, Any]] = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            out.append({**block, "text": wrap_untrusted(block["text"], source=source)})
+        else:
+            out.append(block)
+    return out

@@ -38,7 +38,10 @@ def test_locked_append_concurrent_writers_lose_nothing(tmp_path: Path):
     """Two processes appending concurrently: every line lands, and the
     lines of one locked_append call stay contiguous (turn-block invariant)."""
     path = tmp_path / "s.jsonl"
-    procs = [multiprocessing.Process(target=_append_worker, args=(str(path), w)) for w in range(WRITERS)]
+    # spawn, not the Linux default fork: pytest leaves the parent multi-threaded,
+    # and forking from there segfaults the interpreter at exit.
+    ctx = multiprocessing.get_context("spawn")
+    procs = [ctx.Process(target=_append_worker, args=(str(path), w)) for w in range(WRITERS)]
     for p in procs:
         p.start()
     for p in procs:

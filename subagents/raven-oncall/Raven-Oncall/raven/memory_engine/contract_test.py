@@ -103,6 +103,14 @@ class MemoryBackendContractTests:
         )
         assert isinstance(hits, list)
 
+    async def test_store_accepts_metadata(self, backend) -> None:
+        """``store`` with metadata must not raise."""
+        await backend.store(
+            "contract-metadata",
+            [{"role": "user", "content": "test"}],
+            metadata={"app_id": "test", "project_id": "test", "is_final": True},
+        )
+
     async def test_feedback_accepts_arbitrary_signals(self, backend) -> None:
         """No-op feedback is valid; any dict must be tolerated."""
         await backend.feedback({"unknown_signal": "should not crash"})

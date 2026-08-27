@@ -22,6 +22,9 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 ### §1.1 Top rule: don't add comments unless necessary
 
+- Every new code file must document its purpose in English with an appropriate
+  module docstring or equivalent file-level documentation. Inline comments
+  still follow the necessity rules below.
 - Match the style of surrounding lines. If neighboring code has no comments, **don't** add one to your new line.
 - Comment **only** when:
   - the logic is non-obvious;
@@ -137,11 +140,12 @@ self.logger = logger.bind(channel=self.name)
 
 **scope** — a top-level subpackage of `raven/`. See the `Repo layout` section of `README.md` for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
 
-**subject** — lowercase start; ≤ 72 chars; no trailing period; English.
+**subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 
 **footer** (optional):
-- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public;
-- `Closes #123` — auto-closes the issue on merge.
+- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public.
+
+A closing keyword does not belong here: squash-merge drops individual commit bodies, so only the PR description can close an issue (§3.3, §3.7).
 
 ### §3.1.1 Top rule: the whole message is English (subject + body + footer)
 
@@ -149,7 +153,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 
 | Part | Rule |
 |---|---|
-| subject | English, lowercase start, ≤ 72 chars, no period |
+| subject | English, lowercase start, no period; whole header ≤ 100 chars |
 | body | **All English**; when citing a non-English plan / discussion, **translate** it, don't paste |
 | punctuation | **ASCII-only** — not just no full-width punctuation (`：`,`，`,`。`,`「」`,`""` …) but also no em-dash `—`, curly quotes, or ellipsis `…` (all non-ASCII, all rejected by CI); no `§`-numbering, no non-English path names; the latin part of a §N.M anchor is fine |
 | trailer | `Co-authored-by: ...` is ASCII by format |
@@ -169,6 +173,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 feat(cli): rename cron show/remove to get/delete
 fix(channels): default allow_from to ['*'] instead of deny-all
 refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
+feat(importer): add EverOS HTTP backend
 ```
 
 ❌ Bad:
@@ -230,50 +235,20 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 
 After pushing a new feature branch, **proactively ask** whether to open the PR with `gh pr create` — don't leave the user to do it in the web UI.
 
-**Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Title length may relax to ≤ 90 chars** (the 72 limit is for `git log --oneline` wrapping; web-UI titles don't wrap) — but shorter is better.
+**Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Length:** the title plus the ` (#NN)` GitHub appends on squash must keep the header ≤ 100 chars — CI validates the title as that prospective squash header, so a title that passes will not fail commit-lint after merge. Shorter is better.
 
 **Description must be all English** (same as §3.1.1): no other languages / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist).
 
-**Description structure: use the repo PR template** at `.github/pull_request_template.md` if present (`gh pr create` picks it up automatically); otherwise fill the structure below into `--body` by hand (all English):
-
-```markdown
-## Change description
-
-> Description here
-
-## Type of change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Document
-- [ ] Others
-
-## Related issues (if there is)
-
-> Fix [#1]()
-
-## Checklists
-
-### Development
-
-- [ ] Lint rules pass locally
-- [ ] Application changes have been tested thoroughly
-- [ ] Automated tests covering modified code pass
-
-### Security
-
-- [ ] Security impact of change has been considered
-- [ ] Code follows security best practices and guidelines
-
-### Code review
-
-- [ ] Pull request has a descriptive title and context useful to a reviewer. Screenshots or screencasts are attached as necessary
-```
+**Description structure:** the sections come from `.github/pull_request_template.md` — read that file, do not work from a copy. `gh pr create` fills it in for you; writing `--body` by hand means reproducing its headings exactly.
 
 Filling rules:
-- `Change description` — the PR's overall goal + key decisions (summarize the phase evolution for multi-commit PRs);
-- `Type of change` — check what applies;
+- `Summary` — the PR's overall goal + key decisions (summarize the phase evolution for multi-commit PRs);
+- `Type` — one box, mirroring the commit type (`feat`→Feature, `fix`→Fix, `docs`→Docs, `refactor`→Refactor, `ci`/`build`→CI / tooling, else Other). The checkbox is not a fresh judgement call;
+- `Verification` — the exact commands you ran and their result, not a claim that you ran them;
+- `Risk` — user-visible behaviour changes, and how to roll back;
+- `Related Issues` — `Fixes #NNN` for what this closes (repeat the keyword per issue: `Fixes #NNN, fixes #MMM`), a bare `#NNN` to reference without closing, `N/A` when there is none;
 - check only the boxes you actually satisfied — leave the rest blank and explain in the description; never blanket-check;
-- anything the template doesn't cover but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Change description`.
+- anything the template has no section for but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Summary`.
 
 **Trailer** (with §3.3):
 - squash-merge → GitHub auto-collects each commit's `Co-authored-by` into the squash commit, so keep the trailer in your commit and **don't add it to the PR description** (that duplicates it);

@@ -28,8 +28,7 @@ export const STUB_SESSION_INFO: SessionInfo = {
   model: 'claude-sonnet-4-6',
   skills: {},
   tools: {},
-  // Raven Agent fork: independent version line, "X commits behind" semantic n/a.
-  update_behind: null
+  update_available: null
 }
 
 export const STUB_SESSION_LIST_ITEM: SessionListItem = {
@@ -76,7 +75,7 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
   provider: 'anthropic',
   providers: [
     {
-      auth_type: 'api_key',
+      auth_type: 'key',
       authenticated: true,
       is_current: true,
       key_env: 'ANTHROPIC_API_KEY',
@@ -87,7 +86,7 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
       total_models: 1
     },
     {
-      auth_type: 'api_key',
+      auth_type: 'key',
       authenticated: false,
       is_current: false,
       key_env: 'OPENAI_API_KEY',
@@ -99,7 +98,7 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
       warning: 'paste OPENAI_API_KEY to activate'
     },
     {
-      auth_type: 'api_key',
+      auth_type: 'endpoint',
       authenticated: false,
       is_current: false,
       key_env: null,

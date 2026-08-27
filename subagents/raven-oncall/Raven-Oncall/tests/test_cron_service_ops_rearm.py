@@ -48,13 +48,12 @@ def _add_ops_wake(svc: CronService, *, name: str = f"ops:{CAMPAIGN}:r1") -> str:
         name=name,
         schedule=CronSchedule(kind="at", at_ms=_soon(svc)),
         message=f"[Ops campaign '{CAMPAIGN}' round 0 due] Call ops_tune_status(...)",
-        deliver=True,
         channel="tui",
         to="default",
         delete_after_run=True,
         dedup=False,
     )
-    # Force it due, persisted: _on_timer reloads from disk.
+    # Force it due, persisted: _process_due reloads from disk.
     for j in svc._store.jobs:
         if j.id == job.id:
             j.state.next_run_at_ms = 1
@@ -71,7 +70,7 @@ def _events(cdir: Path) -> list[dict]:
 
 async def _run_one_wake(svc: CronService, on_job) -> None:
     svc.on_job = on_job
-    await svc._on_timer()
+    await svc._process_due()
 
 
 async def test_wake_that_advanced_nothing_is_rearmed(tmp_path: Path, monkeypatch) -> None:
@@ -102,7 +101,6 @@ async def test_wake_that_scheduled_its_own_next_turn_is_left_alone(tmp_path: Pat
             name=f"ops:{CAMPAIGN}:recheck",
             schedule=CronSchedule(kind="at", at_ms=svc._now_ms() + 600_000),
             message="next look",
-            deliver=True,
             channel="tui",
             to="default",
             delete_after_run=True,
@@ -185,7 +183,6 @@ async def test_non_ops_job_is_untouched(tmp_path: Path, monkeypatch) -> None:
         name="drink water",
         schedule=CronSchedule(kind="at", at_ms=_soon(svc)),
         message="hydrate",
-        deliver=True,
         channel="tui",
         to="default",
         delete_after_run=True,
@@ -245,7 +242,6 @@ async def test_a_next_look_scheduled_through_the_generic_tool_stops_the_rearm(
             name="check the dambreak run",
             schedule=CronSchedule(kind="at", at_ms=svc._now_ms() + 3_600_000),
             message="check the dambreak run",
-            deliver=True,
             channel="tui",
             to="default",
             delete_after_run=True,
@@ -271,7 +267,6 @@ async def test_a_job_scheduled_before_the_turn_does_not_stop_the_rearm(
         name="water the plants",
         schedule=CronSchedule(kind="at", at_ms=svc._now_ms() + 7_200_000),
         message="water the plants",
-        deliver=True,
         channel="tui",
         to="default",
         delete_after_run=True,
@@ -285,3 +280,80 @@ async def test_a_job_scheduled_before_the_turn_does_not_stop_the_rearm(
 
     assert "wake_rearmed" in [e.get("kind") for e in _events(cdir)]
     assert [j.name for j in svc._store.jobs if j.name.startswith(f"ops:{CAMPAIGN}:")]
+
+
+async def test_a_next_look_written_by_another_process_stops_the_rearm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The producer every other test in this file cannot model: a child process.
+
+    Under ``wake_shell`` the turn is not a callback that shares this service's
+    memory -- it is ``raven agent -m`` in its own process, and the wake it
+    schedules reaches jobs.json and nothing else. The tests above all add through
+    the same ``svc``, so the new job appears in ``self._store`` for free and the
+    "did the turn schedule its own next look?" check finds it. That made the
+    check look correct while it was reading a snapshot taken when the job was
+    claimed, one whole turn before the turn could have scheduled anything.
+
+    Measured 2026-08-25 on cantilever-limit-load, twice: the turn submitted round
+    2 and scheduled 'r3'; the check read the pre-turn snapshot, saw nothing, and
+    re-armed -- and ``add_job``, which does reload, then deleted r3 as the
+    campaign's stale pending job. The loop replaced its own next look with one
+    ten minutes out and logged "turn ended with no campaign action" one line
+    after that turn's own submit.
+
+    A second CronService on the same store is the child process: separate
+    in-memory store, same file, same lock.
+    """
+    cdir = _use_ops_home(monkeypatch, tmp_path / "ops")
+    svc = CronService(tmp_path / "jobs.json", allowed_channels={"tui"})
+    _add_ops_wake(svc)
+
+    async def scheduled_next_from_another_process(job) -> None:
+        child = CronService(tmp_path / "jobs.json", allowed_channels={"tui"})
+        child.add_job(
+            campaign=CAMPAIGN,
+            name=f"ops:{CAMPAIGN}:r2",
+            schedule=CronSchedule(kind="at", at_ms=child._now_ms() + 300_000),
+            message="round 1 due",
+            channel="tui",
+            to="default",
+            delete_after_run=True,
+            dedup=False,
+        )
+
+    await _run_one_wake(svc, scheduled_next_from_another_process)
+
+    svc._store = None
+    pending = [j for j in svc._load_store().jobs if j.enabled]
+    assert [j.name for j in pending] == [f"ops:{CAMPAIGN}:r2"], (
+        "the turn's own next look must survive, not be replaced by a re-arm"
+    )
+    assert pending[0].payload.message == "round 1 due"
+    assert "wake_rearmed" not in [e.get("kind") for e in _events(cdir)]
+
+
+async def test_an_inattentive_turn_in_another_process_is_still_rearmed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The other side of the reload: reading the file must not make the wake that
+    just ran count as its own next look.
+
+    ``_writeback_after_run`` is what removes a fired one-shot, and it runs after
+    this check -- so on disk the job is still there and still enabled, tagged with
+    this very campaign. Counting it would suppress every re-arm the mechanism
+    exists to make, turning the 2026-08-06 incident back on while the file-read
+    fix made it look addressed.
+    """
+    cdir = _use_ops_home(monkeypatch, tmp_path / "ops")
+    svc = CronService(tmp_path / "jobs.json", allowed_channels={"tui"})
+    _add_ops_wake(svc)
+
+    async def did_nothing_in_another_process(job) -> None:
+        CronService(tmp_path / "jobs.json", allowed_channels={"tui"})._load_store()
+
+    await _run_one_wake(svc, did_nothing_in_another_process)
+
+    assert "wake_rearmed" in [e.get("kind") for e in _events(cdir)]
+    svc._store = None
+    assert [j.name for j in svc._load_store().jobs if j.enabled] == [f"ops:{CAMPAIGN}:rearm1"]

@@ -1,0 +1,218 @@
+"""The model selector, as the protocol's stable configuration surface.
+
+``session/set_config_option`` is the channel, and the important thing about that
+sentence is what it replaces: ``session/set_model`` does not exist in the stable
+schema, and neither does ``models.availableModels``. Both appear in older
+material and in some clients' expectations; an agent that waited for either would
+never be asked to switch a model. The stable form is a generic option list where
+one entry carries ``category: "model"``.
+
+Two facts about raven shape what is offered here, and both are stated in the
+option's own ``description`` rather than only in a document, because the schema
+declares that field as text for the client to display:
+
+* **The switch is scoped to the calling session.** ``set_model`` sends the
+  session id and no ``scope``, so ``config.set`` binds that session and leaves
+  ``agents.defaults`` alone; a connection with two sessions open no longer
+  changes both. The protocol's shape says otherwise, which is why it is said
+  where a person will read it.
+* **A running turn is not interrupted.** It keeps the binding it entered with,
+  so the change takes effect on that session's next turn. Nothing refuses the
+  call. A refusal the runtime does still make -- a value it will not write --
+  travels out with its own code instead of being flattened.
+
+Both read the other way round before v0.1.13 moved the model onto a per-session
+binding, and the description outlived the behaviour it described for a while
+afterwards. Whatever this file says here has to match ``MODEL_DESCRIPTION``,
+because that string is the copy a person actually sees.
+
+Only ``category: "model"`` is exposed. Raven has other hot-changeable config, but
+a selector for each would put a settings panel in an editor's session menu, and
+the ones worth exposing there are the ones a person changes mid-conversation.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from loguru import logger
+
+MODEL_OPTION_ID = "model"
+
+# Said in the option itself, not just in the compatibility matrix: the schema
+# declares ``description`` as text for the client to display, and this is the
+# caveat a person needs at the moment they pick.
+MODEL_DESCRIPTION = (
+    "The model this agent answers with. The change applies to this session only, "
+    "so other sessions on this connection keep theirs, and it takes effect on the "
+    "session's next turn if one is running."
+)
+
+# A dropdown built from every configured provider's catalogue. Past this the list
+# stops being a menu; providers with hundreds of ids exist, and a client
+# rendering all of them is a client nobody can pick from.
+MAX_MODELS_PER_PROVIDER = 40
+
+Call = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+async def model_option(call: Call) -> dict[str, Any] | None:
+    """The ``SessionConfigOption`` for the model, or ``None`` if there is none.
+
+    ``None`` rather than an empty selector when no provider is configured: an
+    option whose list is empty is a dropdown a person can open and not choose
+    from, which reads as a broken menu rather than as "set this up first".
+    """
+    try:
+        options = await call("model.options", {})
+    except Exception as exc:
+        # A missing or failing model surface is not a reason to fail the
+        # handshake or the session it was asked during.
+        logger.debug("acp: the model catalogue is unavailable: {}", exc)
+        return None
+
+    current = _current_value(options)
+    groups = _groups(options, current_provider=_provider_of(options))
+    if current and not _contains(groups, current):
+        # A dropdown whose current value is not among its options renders with
+        # nothing selected. That happens for real reasons -- a model configured by
+        # hand, one newer than the bundled catalogue -- so it is added rather than
+        # hidden.
+        groups.insert(0, {"group": "current", "name": "Current", "options": [{"value": current, "name": current}]})
+    if not groups:
+        # Nothing configured and nothing in use. Checked *after* the current value
+        # is considered, because a working installation whose credentials come
+        # from the environment reports no provider as "authenticated" -- returning
+        # early on the group list alone hid the model that was actually running.
+        return None
+    return {
+        "id": MODEL_OPTION_ID,
+        "name": "Model",
+        "description": MODEL_DESCRIPTION,
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": groups,
+    }
+
+
+async def set_model(call: Call, *, session_id: str, value: Any) -> None:
+    """Apply a model selection, letting the runtime's own refusals through.
+
+    ``session_id`` is what scopes the switch to this session: ``config.set``
+    sends no ``scope``, so a call carrying a session id writes that session's
+    binding and leaves every other session alone.
+
+    The leading segment of the value is the provider, and it is sent as its own
+    field because ``config.set model`` requires one -- a model id does not name
+    whose credential serves it, and deriving it from the prefix is the
+    mis-routing the wire format exists to prevent. The value the client sends
+    back is one this module emitted, so the split is on a shape we wrote.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("the model value must be a non-empty string")
+    provider, _, model = value.partition("/")
+    if not model:
+        raise ValueError("the model value must name its provider as '<provider>/<model>'")
+    await call(
+        "config.set",
+        {"key": MODEL_OPTION_ID, "value": model, "provider": provider, "session_id": session_id},
+    )
+
+
+def _provider_of(options: Any) -> str:
+    if not isinstance(options, dict):
+        return ""
+    provider = options.get("provider")
+    return provider if isinstance(provider, str) else ""
+
+
+def _current_value(options: Any) -> str:
+    if not isinstance(options, dict):
+        return ""
+    model = options.get("model")
+    provider = options.get("provider")
+    if not isinstance(model, str) or not model:
+        return ""
+    return _qualified(provider, model)
+
+
+def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]:
+    """One group per usable provider, each holding its models.
+
+    "Usable" is ``authenticated`` **or** being the provider currently in use.
+    The second half is not a courtesy: ``authenticated`` reports whether raven's
+    own config holds a credential, and a working installation can be running on
+    one from the environment -- measured, on a machine where every provider
+    reported ``authenticated: false`` while ``anthropic/claude-opus-4-5`` was
+    answering. Filtering on that flag alone hid every model that worked.
+
+    A provider that is neither is left out: its ids would be selectable and every
+    selection would fail on a missing credential, which is a dropdown that lies
+    about what it can do.
+    """
+    if not isinstance(options, dict):
+        return []
+    groups: list[dict[str, Any]] = []
+    for entry in options.get("providers") or ():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("authenticated") and entry.get("slug") != current_provider:
+            continue
+        slug = entry.get("slug")
+        if not isinstance(slug, str) or not slug:
+            continue
+        labels = entry.get("model_labels") if isinstance(entry.get("model_labels"), dict) else {}
+        models = [m for m in (entry.get("models") or ()) if isinstance(m, str) and m][:MAX_MODELS_PER_PROVIDER]
+        if not models:
+            continue
+        groups.append(
+            {
+                "group": slug,
+                "name": entry.get("name") if isinstance(entry.get("name"), str) and entry.get("name") else slug,
+                "options": [_option(slug, model, labels.get(model)) for model in models],
+            }
+        )
+    return groups
+
+
+def _qualified(provider: str, model: str) -> str:
+    """A model id with the slug of the credential that serves it in front.
+
+    Unconditional, and deliberately not ``stored_model_id``. That function is
+    for what gets *persisted*, so it declines to prefix an id already carrying a
+    prefix the provider accepts (``skip_prefixes``) and rewrites a slug to its
+    canonical spelling. Both are right for storage and lossy here, because this
+    string is the only thing carrying the choice back: ten (provider, prefix)
+    pairs in the registry leave a leading segment that is not the slug --
+    ``zai`` reached through ``openrouter/`` keeps ``openrouter``, and
+    ``ollama_chat`` becomes ``ollama-chat`` -- so ``set_model`` would send the
+    wrong provider or one that does not exist. Billing the wrong account is the
+    failure ``config.set model``'s required-provider rule exists to prevent.
+
+    The doubled-looking value that follows for an already-qualified id is
+    cosmetic: the protocol treats it as opaque, the displayed name is the bare
+    tail, and ``_set_model`` runs it through ``stored_model_id`` anyway, which
+    lands on the identical id every other surface stores.
+    """
+    if not provider:
+        return model
+    return f"{provider}/{model}"
+
+
+def _option(slug: str, model: str, label: Any) -> dict[str, Any]:
+    # The label is the visible name, and the bare tail is the fallback: showing
+    # ``anthropic/claude-opus-5`` inside a group already headed "Anthropic" says
+    # the same word twice.
+    option: dict[str, Any] = {"value": _qualified(slug, model), "name": model.rpartition("/")[2] or model}
+    if isinstance(label, str) and label and label != model:
+        option["description"] = label
+    return option
+
+
+def _contains(groups: list[dict[str, Any]], value: str) -> bool:
+    return any(option.get("value") == value for group in groups for option in group.get("options", ()))
+
+
+__all__ = ["MAX_MODELS_PER_PROVIDER", "MODEL_DESCRIPTION", "MODEL_OPTION_ID", "model_option", "set_model"]

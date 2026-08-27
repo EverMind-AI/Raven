@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.methods.turn import (
@@ -64,7 +65,7 @@ async def test_turn_subscribe_rejects_missing_session_key(
     emitter: SubscriptionEmitter,
 ) -> None:
     """Missing required ``session_key`` → validation error."""
-    with pytest.raises(Exception):  # noqa: BLE001
+    with pytest.raises(ValidationError):
         await turn_subscribe({}, emitter=emitter)
 
 

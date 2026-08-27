@@ -78,9 +78,39 @@ class _SessionRouter:
     def __init__(self, agent: str) -> None:
         self._agent = agent
         self._sinks: dict[str, SessionSink] = {}
+        self._resident: SessionSink | None = None
+
+    def set_resident(self, sink: SessionSink | None) -> None:
+        """The sink for updates that belong to no run of raven's own.
+
+        Every sink above is attached for one run and detached when it ends, which
+        reads the stream as request/response: a session is only spoken about while
+        raven is waiting to be answered. An agent that acts between prompts breaks
+        that -- an on-call loop wakes on its own schedule, works, and says what it
+        did with nobody having asked. Those updates arrived, found no sink, and
+        were dropped as a late usage report.
+        """
+        self._resident = sink
 
     def attach(self, session_id: str, sink: SessionSink) -> None:
         self._sinks[session_id] = sink
+
+    async def take_over(self, session_id: str, sink: SessionSink) -> None:
+        """Attach ``sink``, after letting the resident one finish what it holds.
+
+        A run taking a session over ends whatever the agent was saying on its own
+        account. Left buffered, that would be spliced onto the *next* unprompted
+        turn -- two rounds in one row, with a prompted turn sitting between them
+        in the log and neither reading as what happened.
+        """
+        resident = self._resident
+        flush = getattr(resident, "flush", None) if resident is not None else None
+        if callable(flush):
+            try:
+                await flush(session_id)
+            except Exception as exc:  # noqa: BLE001 - a record must not block the turn
+                logger.warning("acp agent {!r}: could not flush before takeover: {}", self._agent, exc)
+        self.attach(session_id, sink)
 
     def detach(self, session_id: str, sink: SessionSink) -> None:
         """Remove ``sink`` only if it is still the one attached.
@@ -96,6 +126,11 @@ class _SessionRouter:
     async def dispatch(self, method: str, params: dict[str, Any]) -> None:
         session_id = params.get("sessionId")
         sink = self._sinks.get(session_id) if isinstance(session_id, str) else None
+        if sink is None and isinstance(session_id, str) and self._resident is not None:
+            # A run of raven's own always wins: while one is attached these
+            # updates are its turn's, and handing them to both would transcribe
+            # the same work twice.
+            sink = self._resident
         if sink is None:
             # Not an error: an agent may notify about a session raven has already
             # finished with (a late usage_update), and a connection-level

@@ -31,8 +31,9 @@ def home(tmp_path: Path, monkeypatch):
 
 def _args(**over):
     base = dict(campaign="beam", objective="how much load the beam carries",
-                metric="collapse_load", goal="max", connection="conn_ok",
-                staged_case="/srv/case", command="bash {job_dir}/run.sh")
+                objective_kind="optimize", metric="collapse_load", goal="max",
+                connection="conn_ok", staged_case="/srv/case",
+                command="bash {job_dir}/run.sh")
     base.update(over)
     return base
 
@@ -48,9 +49,13 @@ async def test_a_declaration_records_the_whole_setup_and_runs_nothing(home) -> N
     assert meta["connection"] == "conn_ok"
     assert meta["backend"] == "process", "a command is run by the process backend"
     assert meta["staged_case"] == "/srv/case"
-    assert meta["objective"] == {"metric": "collapse_load", "direction": "max"}
+    assert meta["objective"] == {
+        "kind": "optimize", "metric": "collapse_load", "direction": "max",
+    }
     assert meta["seed_config"] == {"nx": 80, "inc": 0.05}
-    assert meta["budget"] == {"unit": "minute", "total": 25.0, "overlap": "additive"}
+    assert meta["budget"] == {
+        "unit": "minute", "total": 25.0, "overlap": "additive", "meter": "compute",
+    }, "the meter says who reads the spend, and machine time is the default"
     assert not (home / "beam" / "ledger.json").exists(), "declaring must not start anything"
 
 
@@ -80,14 +85,98 @@ async def test_no_budget_is_stated_rather_than_defaulted(home) -> None:
 
 
 @pytest.mark.asyncio
-async def test_declaring_over_an_existing_campaign_is_refused(home) -> None:
+def _ledger(cdir, *statuses) -> None:
+    """A ledger holding one record per status given."""
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "ledger.json").write_text(
+        json.dumps({"version": 1, "records": {
+            f"t{i}": {"idem_key": f"t{i}", "status": s, "campaign": cdir.name}
+            for i, s in enumerate(statuses)}}),
+        encoding="utf-8",
+    )
+
+
+def _events(cdir) -> list[dict]:
+    p = cdir / "events.jsonl"
+    return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+
+@pytest.mark.asyncio
+async def test_a_declaration_nothing_depends_on_yet_can_be_corrected(home) -> None:
+    """Measured 2026-08-21: an OpenFOAM command used ``source``, round 0 died on it
+    (``sh: source: not found``), and the task was unrecoverable -- with nothing
+    recorded and 150 core-minutes unspent -- because a second declaration was
+    refused for moving a target under results that did not exist.
+    """
+    await OpsDeclareTool().execute(**_args(command="source /opt/env && bash run.sh"))
+    _ledger(home / "beam", "failed")
+
+    out = await OpsDeclareTool().execute(**_args(command="bash -c '. /opt/env && bash run.sh'"))
+
+    assert not out.startswith("REFUSED"), out
+    meta = json.loads((home / "beam" / "meta.json").read_text(encoding="utf-8"))
+    assert meta["command"] == "bash -c '. /opt/env && bash run.sh'"
+
+
+@pytest.mark.asyncio
+async def test_correcting_it_leaves_a_line_between_the_two_setups(home) -> None:
+    """The failed rounds stay in the ledger and were run under the old command, so
+    the change itself has to be readable months later."""
+    await OpsDeclareTool().execute(**_args(command="bash old.sh"))
+    _ledger(home / "beam", "failed")
+
+    await OpsDeclareTool().execute(**_args(command="bash new.sh"))
+
+    amended = [e for e in _events(home / "beam") if e.get("kind") == "declaration_amended"]
+    assert len(amended) == 1
+    assert amended[0]["changed"]["command"] == {"was": "bash old.sh", "now": "bash new.sh"}
+
+
+@pytest.mark.asyncio
+async def test_a_declaration_with_results_under_it_is_refused(home) -> None:
     await OpsDeclareTool().execute(**_args())
+    _ledger(home / "beam", "succeeded", "failed")
     before = (home / "beam" / "meta.json").read_text(encoding="utf-8")
 
     out = await OpsDeclareTool().execute(**_args(metric="something_else"))
 
-    assert out.startswith("REFUSED") and "ops_ask_owner" in out
+    assert out.startswith("REFUSED") and "already has results" in out
     assert (home / "beam" / "meta.json").read_text(encoding="utf-8") == before
+
+
+@pytest.mark.asyncio
+async def test_a_declaration_with_a_round_in_flight_is_refused(home) -> None:
+    """The running round is using the current setup; amending now would leave the
+    ledger half under one and half under another."""
+    await OpsDeclareTool().execute(**_args())
+    _ledger(home / "beam", "running")
+
+    out = await OpsDeclareTool().execute(**_args(command="bash other.sh"))
+
+    assert out.startswith("REFUSED") and "running against the current" in out
+    assert "ops_kill" in out
+
+
+@pytest.mark.asyncio
+async def test_a_concluded_campaign_is_refused(home) -> None:
+    """Its report states the conditions; changing them behind it makes the two
+    disagree."""
+    await OpsDeclareTool().execute(**_args())
+    (home / "beam" / "concluded.json").write_text("{}", encoding="utf-8")
+
+    out = await OpsDeclareTool().execute(**_args(command="bash other.sh"))
+
+    assert out.startswith("REFUSED") and "concluded" in out
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_ledger_is_not_permission_to_rewrite(home) -> None:
+    await OpsDeclareTool().execute(**_args())
+    (home / "beam" / "ledger.json").write_text("{not json", encoding="utf-8")
+
+    out = await OpsDeclareTool().execute(**_args(command="bash other.sh"))
+
+    assert out.startswith("REFUSED") and "could not be read" in out
 
 
 @pytest.mark.asyncio

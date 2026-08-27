@@ -54,7 +54,7 @@ def _job(name: str, message: str) -> CronJob:
         id="j1",
         name=name,
         schedule=CronSchedule(kind="at", at_ms=1),
-        payload=CronPayload(message=message, deliver=True, channel="tui", to="default"),
+        payload=CronPayload(message=message, channel="tui", to="default"),
     )
 
 

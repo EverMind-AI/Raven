@@ -45,8 +45,7 @@ _STUB_CASES = [
     ("skills.reload", "skills.reload not supported", True),
     # reload.env
     ("reload.env", "reload.env not supported", True),
-    # approval / sudo / secret response (3)
-    ("approval.respond", "approval.respond not supported", True),
+    # sudo / secret response
     ("sudo.respond", "sudo.respond not supported", True),
     ("secret.respond", "secret.respond not supported", True),
     # NOTE: ``commands.catalog`` was promoted to a real handler in

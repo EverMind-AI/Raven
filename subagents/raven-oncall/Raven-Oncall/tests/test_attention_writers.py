@@ -75,7 +75,11 @@ def routine_store(tmp_path: Path) -> RoutineStore:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run rather than get_event_loop().run_until_complete: the latter
+    # only works when some earlier test happened to leave a current loop behind,
+    # so this file passed in a full run and failed on its own, and it raises
+    # outright from Python 3.12 on, where get_event_loop no longer creates one.
+    return asyncio.run(coro)
 
 
 # ===========================================================================
