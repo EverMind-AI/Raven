@@ -53,6 +53,16 @@ repos:
         pass_filenames: false
         files: '^subagents/'
 
+      # Not gated on a path list: this reads both the forks and the trunk, and the
+      # set it reads is the registry inside the script, which no `files:` pattern
+      # here can follow. It parses six files and returns in well under a second.
+      - id: vendored-invariants
+        name: vendored subagents carry this trunk's fixes
+        entry: python3 scripts/check_vendored_invariants.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: ui-rpc-contract
         name: ui rpc contract in sync
         entry: bash -c '[ -d ui/node_modules ] || exit 0; npm run gen:check --prefix ui'

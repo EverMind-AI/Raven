@@ -504,6 +504,9 @@ async def test_dr_mode_slims_tools_and_segments(workspace):
         model="stub",
         restrict_to_workspace=True,
         dr_flow=DRFlowConfig(enabled=True),
+        # web_search is withheld without a key; this asserts the tool surface,
+        # not configuredness.
+        brave_api_key="test-key",
     )
     assert sorted(agent.tools.names()) == ["web_fetch", "web_search"]
     # DR mode drops the product identity: eight of its instructions named tools no
@@ -553,6 +556,9 @@ async def test_repeat_notice_follows_the_flow_switch(workspace, flow_enabled, ex
         model="stub",
         restrict_to_workspace=True,
         dr_flow=DRFlowConfig(enabled=flow_enabled),
+        # web_search is withheld without a key; this asserts the tool surface,
+        # not configuredness.
+        brave_api_key="test-key",
     )
     assert agent.tools.get("web_search").repeat_notice is expected
 
@@ -663,6 +669,9 @@ async def test_chat_mode_keeps_full_surface(workspace):
         workspace=workspace,
         model="stub",
         restrict_to_workspace=True,
+        # web_search is withheld without a key; this asserts the tool surface,
+        # not configuredness.
+        brave_api_key="test-key",
     )
     names = set(agent.tools.names())
     assert {"message", "spawn", "read_file", "web_search"} <= names

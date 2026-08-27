@@ -591,6 +591,9 @@ def _loop(workspace, dr_flow, disabled=None):
         restrict_to_workspace=True,
         dr_flow=dr_flow,
         disabled_tools=disabled,
+        # web_search is withheld without a key; this asserts the tool surface,
+        # not configuredness.
+        brave_api_key="test-key",
     )
 
 

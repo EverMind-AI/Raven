@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -27,6 +27,7 @@ help:
 	@echo "  check-commits  Validate Conventional Commit subjects"
 	@echo "  check-pr-title Validate the PR title in PR_TITLE"
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
+	@echo "  check-vendored-invariants Validate vendored subagents carry this trunk's fixes"
 	@echo "  beta           Build this checkout and publish it to the beta channel"
 	@echo "  ci             Run the local CI gate"
 	@echo "  clean          Remove generated caches and build output"
@@ -42,7 +43,7 @@ install: install-deps
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
-lint: lint-python lint-ui lint-tui lint-bridge check-vendored-subagents
+lint: lint-python lint-ui lint-tui lint-bridge check-vendored-subagents check-vendored-invariants
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
@@ -127,3 +128,6 @@ clean:
 
 check-vendored-subagents:
 	@python3 scripts/check_vendored_subagents.py
+
+check-vendored-invariants:
+	@python3 scripts/check_vendored_invariants.py

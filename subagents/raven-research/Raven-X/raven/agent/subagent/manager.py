@@ -187,14 +187,18 @@ class SubagentManager:
                     executor=executor,
                 )
             )
-        tools.register(
-            WebSearchTool(
-                api_key=self.brave_api_key,
-                proxy=self.web_proxy,
-                corpus_endpoint=self.web_corpus_endpoint,
-                containment=self.benchmark_containment,
-            )
+        # Withheld without a key, same as the main loop: a sub-agent that reaches
+        # for a search it cannot run reports the failure to its caller, and that
+        # text ends up in the parent turn. A configured corpus endpoint is the
+        # second source, and needs no key.
+        web_search = WebSearchTool(
+            api_key=self.brave_api_key,
+            proxy=self.web_proxy,
+            corpus_endpoint=self.web_corpus_endpoint,
+            containment=self.benchmark_containment,
         )
+        if web_search.api_key or web_search.corpus_endpoint:
+            tools.register(web_search)
         tools.register(
             WebFetchTool(
                 api_key=self.jina_api_key,

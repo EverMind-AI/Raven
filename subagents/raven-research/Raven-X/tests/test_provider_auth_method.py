@@ -436,6 +436,9 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
         "raven/agent/loop/main.py",
+        # The nested sub-agent's tool set, built from the same web_search key
+        # as the main loop above and withheld on the same condition.
+        "raven/agent/subagent/manager.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
