@@ -156,6 +156,42 @@ def inherit_llm(config: dict, host: dict) -> str:
     return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
+def sweep_stale_renders() -> None:
+    """Remove rendered configs whose launcher is gone.
+
+    Each file is named for the pid of the launcher that wrote it, and that
+    launcher outlives the agent it starts in both modes, so a live pid is the
+    one thing that says "some run still holds this".
+
+    Liveness rather than age, because age is wrong in the `--acp` mode this
+    launcher gained: the host tears a served session down by SIGKILLing its
+    process group, which leaves no chance to clean up from inside, so
+    `_serve_acp`'s own `finally` never runs -- the promise in its comment is one
+    the process cannot keep. The 24-hour sweep it fell back on was sized for a
+    stranding that only happened when something went wrong; under ACP that
+    stranding is how every session ends.
+
+    No age fallback was kept beside the liveness test, though a recycled pid can
+    hold a stranded file past its welcome. Removing a config once it is old
+    enough would take it out from under a session that has simply been up a long
+    time, which is the worse of the two failures. `raven-research` sweeps the
+    same file name in the same directory on liveness alone and says the same
+    thing in its own docstring; two launchers disagreeing about when this file
+    may be removed would be worse than either rule.
+
+    Failures are ignored per file: this is hygiene running ahead of a run, and
+    it must never be what stops one.
+    """
+    for stale in STATE_ROOT.glob(".config.rendered.*.json"):
+        try:
+            pid = int(stale.name.split(".")[3])
+            os.kill(pid, 0)
+        except (IndexError, ValueError, ProcessLookupError):
+            stale.unlink(missing_ok=True)
+        except (PermissionError, OSError):
+            continue
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
 
@@ -193,11 +229,7 @@ def render_config(source: Path) -> Path:
         log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
 
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    # The normal path deletes this in a `finally`; only a SIGKILL strands one, so
-    # sweep anything far older than a run could still be using.
-    for stale in STATE_ROOT.glob(".config.rendered.*.json"):
-        if time.time() - stale.stat().st_mtime > 86400:
-            stale.unlink(missing_ok=True)
+    sweep_stale_renders()
 
     rendered = STATE_ROOT / f".config.rendered.{os.getpid()}.json"
     # Create it unreadable to anyone else before a single secret byte is in it.
@@ -206,6 +238,16 @@ def render_config(source: Path) -> Path:
         json.dump(config, stream, indent=2, ensure_ascii=False)
     return rendered
 
+
+_EXIT_TIMEOUT = 124
+"""Exit code for a run the launcher killed on its own deadline.
+
+GNU ``timeout``'s convention, and its own code rather than 1 because the two
+are different terminal states: 1 is the agent reporting a config or credential
+error, or finishing without committing an answer -- both of which say the run
+*ran*. A kill says nothing about the work at all, and a caller that folds it
+into the same code has no way back to that distinction.
+"""
 
 _LOG_FILE: Path | None = None
 _VERBOSE = False
@@ -533,6 +575,7 @@ def main() -> int:
     )
 
     started = time.time()
+    timed_out = False
     try:
         proc = subprocess.run(
             argv,
@@ -544,6 +587,11 @@ def main() -> int:
         rc: int | None = proc.returncode
         stderr_tail = (proc.stderr or "").strip().splitlines()[-5:]
     except subprocess.TimeoutExpired:
+        # Its own flag rather than `rc is None` read back at each later branch:
+        # what the launcher owes the caller after a kill differs from what it
+        # owes after an exit, and recovering that distinction from a sentinel
+        # exit code is how the two came to be conflated below.
+        timed_out = True
         rc, stderr_tail = None, ["timed out"]
     finally:
         config.unlink(missing_ok=True)
@@ -562,23 +610,54 @@ def main() -> int:
     answer = None
     if transcript is not None and transcript.is_file():
         answer = extract_answer(transcript, pre_lines)
+    elif timed_out:
+        # Not "no transcript found": after a kill the absence is a consequence
+        # of the kill, and reporting it as the finding is what put "no
+        # transcript" in front of a user whose run had actually timed out.
+        log("[run] no transcript: killed before the agent wrote one")
     else:
         log("[run] no transcript found")
+    # Held before the fallbacks below overwrite `answer` with a sentence about
+    # the run: only a value that came out of the transcript is the agent's own
+    # answer, and only that one can be described as having been committed.
+    committed = answer is not None
     log(f"[run] answer_chars={len(answer or '')}")
 
     changes = describe_changes(workspace) if (workspace / ".git").exists() else ""
     if changes:
         log(f"[run] {changes.splitlines()[0]}")
 
-    if answer is None:
-        reason = "timed out" if rc is None else "no answer was committed"
-        log(f"[run] FAILED: {reason}")
+    if answer is None and timed_out:
+        # A terminal state of its own, with its own exit code: the run was cut
+        # short, which is not the same claim as the agent having finished
+        # without an answer, and only the caller can decide whether to rerun it
+        # with a longer deadline or take the work elsewhere.
+        log(f"[run] TIMEOUT: killed after {args.timeout}s with nothing committed")
         if not args.keep_going:
-            print(f"FAILED: Raven-Code produced no answer ({reason}). See {_LOG_FILE}", flush=True)
+            print(
+                f"TIMEOUT: Raven-Code was killed after {args.timeout}s before it committed an answer. "
+                f"See {_LOG_FILE}",
+                flush=True,
+            )
+            return _EXIT_TIMEOUT
+        answer = f"(killed after {args.timeout}s with nothing committed)"
+    elif answer is None:
+        log("[run] FAILED: no answer was committed")
+        if not args.keep_going:
+            print(f"FAILED: Raven-Code produced no answer (no answer was committed). See {_LOG_FILE}", flush=True)
             return 1
-        answer = f"(no answer committed: {reason})"
+        answer = "(no answer committed)"
 
     out = [answer]
+    if timed_out and committed:
+        # The answer above is the agent's own -- it reached the transcript
+        # before the kill landed, and `--wait-skill-extract` alone means the
+        # process routinely outlives the answer it already committed. But the
+        # run did not finish, so whatever it would have done next is gone.
+        # Returning 0 without saying so is how a timed-out run reported as a
+        # clean success. The `--keep-going` case says it in `answer` instead:
+        # there is no committed answer there for this line to qualify.
+        out.append(f"\n--- timed out: killed after {args.timeout}s, after this answer was committed")
     if changes:
         out.append(f"\n--- {changes}")
     print("\n".join(out), flush=True)
