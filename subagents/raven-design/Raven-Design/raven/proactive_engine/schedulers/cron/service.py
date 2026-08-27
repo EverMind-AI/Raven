@@ -1,0 +1,960 @@
+"""Cron service for scheduling agent tasks."""
+
+import asyncio
+import json
+import os
+import sys
+import time
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+import uuid
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Coroutine, Iterator
+
+from loguru import logger
+
+from raven.proactive_engine.schedulers.cron.types import (
+    CronJob,
+    CronJobState,
+    CronPayload,
+    CronSchedule,
+    CronStartupDrop,
+    CronStore,
+)
+
+# Stale-claim TTL — if a claim is older than this, another process may steal
+# it (the original process likely crashed mid-job).
+_CLAIM_TTL_MS = 30 * 60 * 1000
+
+# Cap the sleep-until-next-wake so the wake loop runs at least this often.
+# This is how we pick up jobs written to jobs.json by a peer process — the
+# tick reloads the store on mtime change. Without this cap, a gateway parked
+# on a far-future wake would miss a sooner job added by a peer.
+_MAX_WAKE_INTERVAL_S = 30.0
+
+# Backoff after a failed tick so a persistent error cannot spin the loop.
+_ERROR_BACKOFF_S = 5.0
+
+# Grace before a past-due foreign one-shot counts as "missed" — its owning
+# session may just be slow (a long agent turn) rather than closed.
+_MISSED_GRACE_MS = 5 * 60 * 1000
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
+    """Compute next run time in ms."""
+    if schedule.kind == "at":
+        return schedule.at_ms if schedule.at_ms and schedule.at_ms > now_ms else None
+
+    if schedule.kind == "every":
+        if not schedule.every_ms or schedule.every_ms <= 0:
+            return None
+        return now_ms + schedule.every_ms
+
+    if schedule.kind == "cron" and schedule.expr:
+        try:
+            from zoneinfo import ZoneInfo
+
+            from croniter import croniter
+
+            # Use caller-provided reference time for deterministic scheduling
+            base_time = now_ms / 1000
+            tz = ZoneInfo(schedule.tz) if schedule.tz else datetime.now().astimezone().tzinfo
+            base_dt = datetime.fromtimestamp(base_time, tz=tz)
+            cron = croniter(schedule.expr, base_dt)
+            next_dt = cron.get_next(datetime)
+            return int(next_dt.timestamp() * 1000)
+        except Exception:
+            return None
+
+    return None
+
+
+def _validate_schedule_for_add(schedule: CronSchedule, now_ms: int) -> None:
+    """Validate schedule fields that would otherwise create non-runnable jobs."""
+    if schedule.tz and schedule.kind != "cron":
+        raise ValueError("tz can only be used with cron schedules")
+
+    if schedule.kind == "cron" and schedule.tz:
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(schedule.tz)
+        except Exception:
+            raise ValueError(f"unknown timezone '{schedule.tz}'") from None
+
+    # A schedule with no next run would be stored as a job that silently never
+    # fires (a false success to the caller). _compute_next_run is the single
+    # source of truth for "runnable", so reject any kind it maps to None here.
+    if _compute_next_run(schedule, now_ms) is None:
+        if schedule.kind == "at":
+            raise ValueError("at time is in the past")
+        if schedule.kind == "every":
+            raise ValueError("every_seconds must be positive")
+        if schedule.kind == "cron":
+            raise ValueError(f"invalid cron expression '{schedule.expr}'")
+        raise ValueError(f"schedule kind '{schedule.kind}' is not runnable")
+
+
+class CronService:
+    """Service for managing and executing scheduled jobs."""
+
+    def __init__(
+        self,
+        store_path: Path,
+        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
+        *,
+        allowed_channels: set[str] | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ):
+        """``allowed_channels`` restricts which jobs this service will claim.
+
+        Set to e.g. ``{"tui"}`` in the TUI so it doesn't steal Feishu /
+        Telegram reminders that gateway should deliver. ``None`` (default)
+        means any channel — use that in gateway where ChannelManager can
+        route replies to any configured channel.
+
+        Jobs with empty/None ``payload.channel`` are always claimable —
+        they predate the channel attribution field.
+        """
+        self.store_path = store_path
+        # Sibling file for fcntl advisory locking (survives atomic rename of
+        # the data file, lets concurrent processes coordinate claim ticks).
+        self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
+        self.on_job = on_job
+        self.allowed_channels = allowed_channels
+        # Missed-reminder observer (gateway wires this): called with the
+        # past-due foreign one-shots on start and once per wake-loop pass.
+        # Read-only towards the store — the callback must not mutate jobs.
+        self.on_missed_foreign: Callable[[list[CronJob]], None] | None = None
+        self._store: CronStore | None = None
+        # Nanosecond precision: float st_mtime collapses writes ~238ns apart
+        # into one value, serving a stale cache after an external rewrite.
+        self._last_mtime: int = 0
+        self._loop_task: asyncio.Task | None = None
+        self._wake_event = asyncio.Event()
+        # Job ids whose claim-skip was already logged (one INFO line per job,
+        # not one per tick). Cleared per job on successful claim.
+        self._skip_logged: set[str] = set()
+        self._running = False
+        # Remember whether fcntl is usable — degrade to lock-less on Windows.
+        self._can_lock = sys.platform != "win32"
+        # Optional fake-clock injection for benchmark harnesses (longrun).
+        # When provided, all internal time reads route through this callable
+        # so newly created jobs' next_run_at_ms aligns with simulated time
+        # rather than real wall-clock.
+        self._now_fn = now_fn
+        # Past-due one-shot reminders dropped by the last start() recompute,
+        # kept so the embedding process can surface them to the user (the
+        # drop itself only leaves a warning log).
+        self.last_startup_drops: list[CronStartupDrop] = []
+
+    def _now_ms(self) -> int:
+        """Return current time in ms, honouring fake-clock injection."""
+        if self._now_fn is not None:
+            return int(self._now_fn().timestamp() * 1000)
+        return int(time.time() * 1000)
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Exclusive advisory lock on the jobs-file sibling. No-op on Windows."""
+        if not self._can_lock:
+            yield
+            return
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a") as lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+
+    def _load_store(self) -> CronStore:
+        """Load jobs from disk. Reloads automatically if file was modified externally."""
+        if self._store and self.store_path.exists():
+            mtime = self.store_path.stat().st_mtime_ns
+            if mtime != self._last_mtime:
+                logger.info("Cron: jobs.json modified externally, reloading")
+                self._store = None
+        if self._store:
+            return self._store
+
+        if self.store_path.exists():
+            try:
+                data = json.loads(self.store_path.read_text(encoding="utf-8"))
+                jobs = []
+                for j in data.get("jobs", []):
+                    channel = j["payload"].get("channel")
+                    if channel == "cli":
+                        # The "cli" delivery channel is retired (the REPL was
+                        # removed); the TUI is the interactive surface now.
+                        # Persisted on the next save.
+                        logger.info("migrated legacy cli-bound job {} to tui", j["id"])
+                        channel = "tui"
+                    jobs.append(
+                        CronJob(
+                            id=j["id"],
+                            name=j["name"],
+                            enabled=j.get("enabled", True),
+                            schedule=CronSchedule(
+                                kind=j["schedule"]["kind"],
+                                at_ms=j["schedule"].get("atMs"),
+                                every_ms=j["schedule"].get("everyMs"),
+                                expr=j["schedule"].get("expr"),
+                                tz=j["schedule"].get("tz"),
+                            ),
+                            payload=CronPayload(
+                                message=j["payload"].get("message", ""),
+                                channel=channel,
+                                to=j["payload"].get("to"),
+                                topic_tag=j["payload"].get("topicTag"),
+                            ),
+                            state=CronJobState(
+                                next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
+                                last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
+                                last_status=j.get("state", {}).get("lastStatus"),
+                                last_error=j.get("state", {}).get("lastError"),
+                                claimed_by_pid=j.get("state", {}).get("claimedByPid"),
+                                claimed_at_ms=j.get("state", {}).get("claimedAtMs"),
+                                silent_fire_count=j.get("state", {}).get("silentFireCount", 0),
+                            ),
+                            created_at_ms=j.get("createdAtMs", 0),
+                            updated_at_ms=j.get("updatedAtMs", 0),
+                            delete_after_run=j.get("deleteAfterRun", False),
+                            silent_fire_limit=j.get("silentFireLimit", 12),
+                        )
+                    )
+                self._store = CronStore(jobs=jobs)
+            except Exception as e:
+                logger.warning("Failed to load cron store: {}", e)
+                self._store = CronStore()
+        else:
+            self._store = CronStore()
+
+        return self._store
+
+    def _save_store(self) -> None:
+        """Save jobs to disk."""
+        if not self._store:
+            return
+
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            "version": self._store.version,
+            "jobs": [
+                {
+                    "id": j.id,
+                    "name": j.name,
+                    "enabled": j.enabled,
+                    "schedule": {
+                        "kind": j.schedule.kind,
+                        "atMs": j.schedule.at_ms,
+                        "everyMs": j.schedule.every_ms,
+                        "expr": j.schedule.expr,
+                        "tz": j.schedule.tz,
+                    },
+                    "payload": {
+                        "message": j.payload.message,
+                        "channel": j.payload.channel,
+                        "to": j.payload.to,
+                        "topicTag": j.payload.topic_tag,
+                    },
+                    "state": {
+                        "nextRunAtMs": j.state.next_run_at_ms,
+                        "lastRunAtMs": j.state.last_run_at_ms,
+                        "lastStatus": j.state.last_status,
+                        "lastError": j.state.last_error,
+                        "claimedByPid": j.state.claimed_by_pid,
+                        "claimedAtMs": j.state.claimed_at_ms,
+                        "silentFireCount": j.state.silent_fire_count,
+                    },
+                    "createdAtMs": j.created_at_ms,
+                    "updatedAtMs": j.updated_at_ms,
+                    "deleteAfterRun": j.delete_after_run,
+                    "silentFireLimit": j.silent_fire_limit,
+                }
+                for j in self._store.jobs
+            ],
+        }
+
+        # Atomic write (temp + rename) so concurrent readers never see a
+        # partially-flushed file. The temp name is pid-unique: a shared name
+        # lets two processes steal each other's temp between write and rename
+        # (unlocked start() saves, and every save on Windows where the flock
+        # degrades to a no-op) — the loser crashes on FileNotFoundError.
+        tmp = self.store_path.with_name(f"{self.store_path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self.store_path)
+        self._last_mtime = self.store_path.stat().st_mtime_ns
+
+    async def start(self) -> None:
+        """Start the cron service."""
+        self._running = True
+        # Under the store lock: two runners starting at once both rewrite the
+        # shared file here, and an unlocked load/recompute/save pair can lose
+        # the other runner's update.
+        with self._locked():
+            self._load_store()
+            self._recompute_next_runs()
+            self._save_store()
+        self._check_missed_foreign()
+        self._loop_task = asyncio.create_task(self._run_loop())
+        logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
+
+    def stop(self) -> None:
+        """Stop the cron service."""
+        self._running = False
+        if self._loop_task:
+            self._loop_task.cancel()
+            self._loop_task = None
+
+    def _owns_channel(self, channel: str | None) -> bool:
+        """Whether this runner's partition covers ``channel``.
+
+        Falsy channel (legacy, pre-attribution) and ``allowed_channels is
+        None`` both mean yes; otherwise membership decides.
+        """
+        return not channel or self.allowed_channels is None or channel in self.allowed_channels
+
+    def _recompute_next_runs(self) -> None:
+        """Recompute next run times for enabled jobs this runner may own.
+
+        Past-due one-shot 'at' reminders are dropped — we don't re-deliver
+        reminders missed while the service was down (matches iOS /
+        Slack / Google Calendar behavior). A warning log records each
+        drop so users can audit via gateway logs, and the drops are kept
+        on ``last_startup_drops`` so the embedding process can surface a
+        missed-reminders notice to the user.
+
+        Recurring ('every', 'cron') jobs just advance to the next future
+        run — missed intervals are skipped, not backfilled.
+
+        Both the drop and the recompute are scoped to this runner's
+        partition: another runner's jobs pass through exactly as loaded, so
+        e.g. a gateway restart never drops a past-due TUI reminder that the
+        TUI process may still handle.
+        """
+        if not self._store:
+            return
+        now = self._now_ms()
+        dropped: list[CronStartupDrop] = []
+        kept = []
+        for job in self._store.jobs:
+            if not job.enabled or not self._owns_channel(job.payload.channel):
+                kept.append(job)
+                continue
+            next_run = _compute_next_run(job.schedule, now)
+            if job.schedule.kind == "at" and next_run is None:
+                dropped.append(
+                    CronStartupDrop(
+                        name=job.name,
+                        message=job.payload.message,
+                        at_ms=job.schedule.at_ms or 0,
+                    )
+                )
+                continue
+            job.state.next_run_at_ms = next_run
+            kept.append(job)
+        self._store.jobs = kept
+        self.last_startup_drops = dropped
+        if dropped:
+            logger.warning(
+                "Cron: dropped {} past-due one-shot reminder(s) on startup: {}",
+                len(dropped),
+                "; ".join(f"{d.name!r} ({(now - d.at_ms) // 1000}s late)" for d in dropped),
+            )
+
+    def _get_next_wake_ms(self) -> int | None:
+        """Get the earliest next run time across all jobs."""
+        if not self._store:
+            return None
+        times = [j.state.next_run_at_ms for j in self._store.jobs if j.enabled and j.state.next_run_at_ms]
+        return min(times) if times else None
+
+    def _signal_wake(self) -> None:
+        """Wake the run loop after a job mutation.
+
+        Safe without a running loop: CLI-process services never start the
+        loop, and setting an un-awaited Event is just a flag.
+        """
+        self._wake_event.set()
+
+    async def _run_loop(self) -> None:
+        """Persistent wake loop: process due jobs, then wait for the next
+        wake (earliest claimable run, capped) or a mutation signal.
+
+        Process-then-wait order means an event set during processing stays
+        set and is consumed on the next iteration — a wake is never lost.
+        The loop task is never cancelled by job mutations (the old
+        cancel-and-rearm timer cancelled in-flight executions, skipping the
+        post-run writeback and double-firing one-shot jobs); only stop()
+        cancels it.
+        """
+        while self._running:
+            try:
+                await self._process_due()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Cron: wake tick failed; continuing in {}s", _ERROR_BACKOFF_S)
+                await asyncio.sleep(_ERROR_BACKOFF_S)
+            self._check_missed_foreign()
+            delay = self._compute_wake_delay()
+            try:
+                await asyncio.wait_for(self._wake_event.wait(), timeout=delay)
+            except (asyncio.TimeoutError, TimeoutError):
+                pass
+            self._wake_event.clear()
+
+    def _may_claim(self, job: CronJob, now: int) -> tuple[bool, str | None]:
+        """Whether this runner may claim ``job`` right now.
+
+        Not claimable when a live peer holds the claim (fresh within
+        _CLAIM_TTL_MS) or when the job's channel falls outside this runner's
+        ``allowed_channels`` partition. Jobs with an empty/None channel
+        predate channel attribution and stay claimable by any process.
+        Each skip is logged once per job id (reset on successful claim).
+        """
+        reason: str | None = None
+        cb = job.state.claimed_by_pid
+        ca = job.state.claimed_at_ms
+        if cb is not None and cb != os.getpid() and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+            reason = f"claimed by live peer pid {cb}"
+        elif not self._owns_channel(job.payload.channel):
+            reason = f"channel '{job.payload.channel}' is outside this runner's partition"
+        if reason is None:
+            return True, None
+        if job.id not in self._skip_logged:
+            logger.info("Cron: not claiming job '{}' ({}): {}", job.name, job.id, reason)
+            self._skip_logged.add(job.id)
+        return False, reason
+
+    def _compute_wake_delay(self) -> float:
+        """Seconds until the earliest pending run this runner may claim.
+
+        Capped at _MAX_WAKE_INTERVAL_S (peer-write poll), floored at 0.
+        Jobs this runner cannot claim (foreign partition, live peer claim)
+        are excluded so a due-but-unclaimable job cannot busy-loop us.
+        """
+        store = self._load_store()
+        now = self._now_ms()
+        times = [
+            j.state.next_run_at_ms
+            for j in store.jobs
+            if j.enabled and j.state.next_run_at_ms and self._may_claim(j, now)[0]
+        ]
+        if not times:
+            return _MAX_WAKE_INTERVAL_S
+        delay_s = (min(times) - now) / 1000
+        return min(max(delay_s, 0.0), _MAX_WAKE_INTERVAL_S)
+
+    async def _process_due(self) -> None:
+        """Run due jobs once.
+
+        Claim phase (under exclusive lock): reload from disk, pick due jobs
+        this runner may claim, stamp them with this pid+now, save. Execution
+        phase (lock released): run each claimed job; then reacquire the lock
+        to write post-run state and clear the claim.
+        """
+        my_pid = os.getpid()
+        with self._locked():
+            # Force reread — peer process may have mutated in the meantime.
+            self._store = None
+            self._load_store()
+            if not self._store:
+                return
+
+            now = self._now_ms()
+            my_jobs: list[CronJob] = []
+            for j in self._store.jobs:
+                if not (j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms):
+                    continue
+                if not self._may_claim(j, now)[0]:
+                    continue
+                j.state.claimed_by_pid = my_pid
+                j.state.claimed_at_ms = now
+                self._skip_logged.discard(j.id)
+                my_jobs.append(j)
+            if my_jobs:
+                self._save_store()
+
+        for job in my_jobs:
+            await self._execute_job(job)
+            # Shielded so a stop() mid-writeback cannot skip the post-run
+            # flush (claim would leak and one-shots could re-fire).
+            await asyncio.shield(self._writeback_after_run(job, my_pid))
+
+    async def _writeback_after_run(self, job: CronJob, my_pid: int) -> None:
+        """Post-run flush + clear claim, under lock so a concurrent reader
+        observes the complete updated job record.
+
+        Callers await this through asyncio.shield: when the outer awaiter is
+        already cancelled (stop() mid-writeback), a failure here has no one
+        left to observe it, so log before letting it propagate.
+        """
+        try:
+            self._writeback_locked(job, my_pid)
+        except Exception:
+            logger.exception("Cron: post-run writeback failed for job '{}' ({})", job.name, job.id)
+            raise
+
+    def _writeback_locked(self, job: CronJob, my_pid: int) -> None:
+        with self._locked():
+            # Reload + patch our job in case peer wrote intervening state.
+            self._store = None
+            self._load_store()
+            if self._store is None:
+                return
+            for j in self._store.jobs:
+                if j.id == job.id and j.state.claimed_by_pid == my_pid:
+                    j.state.claimed_by_pid = None
+                    j.state.claimed_at_ms = None
+                    j.state.last_run_at_ms = job.state.last_run_at_ms
+                    j.state.last_status = job.state.last_status
+                    j.state.last_error = job.state.last_error
+                    # A store-side disable is sticky: record_fire's auto-disable
+                    # (or a user disabling mid-run) lands between claim and this
+                    # writeback, and the in-memory copy must not resurrect it.
+                    j.enabled = j.enabled and job.enabled
+                    j.state.next_run_at_ms = job.state.next_run_at_ms if j.enabled else None
+                    j.updated_at_ms = job.updated_at_ms
+                    break
+            # Handle "at"-kind delete_after_run (_execute_job removed from
+            # our local store; reflect on the reloaded store).
+            if job.schedule.kind == "at" and job.delete_after_run:
+                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+            self._save_store()
+
+    async def _execute_job(self, job: CronJob) -> None:
+        """Execute a single job."""
+        start_ms = self._now_ms()
+        logger.info("Cron: executing job '{}' ({})", job.name, job.id)
+
+        try:
+            if self.on_job:
+                await self.on_job(job)
+
+            job.state.last_status = "ok"
+            job.state.last_error = None
+            logger.info("Cron: job '{}' completed", job.name)
+
+        except Exception as e:
+            job.state.last_status = "error"
+            job.state.last_error = str(e)
+            logger.error("Cron: job '{}' failed: {}", job.name, e)
+
+        job.state.last_run_at_ms = start_ms
+        job.updated_at_ms = self._now_ms()
+
+        # Handle one-shot jobs
+        if job.schedule.kind == "at":
+            if job.delete_after_run:
+                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+            else:
+                job.enabled = False
+                job.state.next_run_at_ms = None
+        elif job.enabled:
+            job.state.next_run_at_ms = _compute_next_run(job.schedule, self._now_ms())
+        else:
+            # Recurring job that was force-fired while disabled (CLI
+            # `cron run --force`). Don't advance next_run_at_ms — the
+            # job is still disabled, and a future-dated next-run combined
+            # with enabled=False would mislead `cron list` output.
+            job.state.next_run_at_ms = None
+
+    # ========== Public API ==========
+
+    def record_fire(self, job_id: str) -> bool:
+        """Increment silent_fire_count for a recurring job; auto-disable when
+        it crosses silent_fire_limit. Called by the delivery handler
+        (make_on_cron_job) right after a successful cron fire. Returns True
+        if the job was auto-disabled this call.
+
+        One-shot 'at' jobs are ignored (they cannot run away). The store
+        write persists the count, but the caller executing the job must
+        also flip its in-memory job.enabled on a True return —
+        _writeback_after_run patches enabled/next_run from the in-memory
+        job and would otherwise clobber the disable written here.
+        """
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            for j in store.jobs:
+                if j.id != job_id:
+                    continue
+                if j.schedule.kind not in ("every", "cron"):
+                    return False
+                j.state.silent_fire_count += 1
+                limit = j.silent_fire_limit
+                disabled = False
+                if limit is not None and limit > 0 and j.state.silent_fire_count >= limit:
+                    j.enabled = False
+                    j.state.next_run_at_ms = None
+                    disabled = True
+                    logger.warning(
+                        "Cron: auto-disabled job '{}' ({}) — {} silent fires without user activity (limit={})",
+                        j.name,
+                        j.id,
+                        j.state.silent_fire_count,
+                        limit,
+                    )
+                self._save_store()
+                return disabled
+            return False
+
+    def notify_user_active(self, channel: str | None = None, to: str | None = None) -> int:
+        """Reset silent_fire_count for jobs matching (channel, to) — call
+        whenever a genuine user-originated message arrives so recently-
+        firing crons don't decay toward auto-disable. ``None`` on the call
+        side matches every job; a falsy channel/to on the JOB side is a
+        wildcard too — legacy pre-attribution jobs are claimable by any
+        runner, so symmetrically any user activity resets them (otherwise
+        their counter could only ever climb and unfairly auto-disable).
+        Returns count of jobs whose state was reset."""
+        reset = 0
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            for j in store.jobs:
+                if not j.enabled or j.state.silent_fire_count == 0:
+                    continue
+                if channel is not None and j.payload.channel and j.payload.channel != channel:
+                    continue
+                if to is not None and j.payload.to and j.payload.to != to:
+                    continue
+                j.state.silent_fire_count = 0
+                reset += 1
+            if reset > 0:
+                self._save_store()
+        return reset
+
+    def list_jobs(self, include_disabled: bool = False) -> list[CronJob]:
+        """List all jobs."""
+        store = self._load_store()
+        jobs = store.jobs if include_disabled else [j for j in store.jobs if j.enabled]
+        return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
+
+    def list_missed_foreign_oneshots(self, grace_ms: int = _MISSED_GRACE_MS) -> list[CronJob]:
+        """Read-only: one-shot 'at' jobs owned by another partition whose
+        fire time is more than ``grace_ms`` in the past — their owning
+        session (tui / cli) was closed before they could fire.
+
+        Foreign jobs are exactly the ones this runner may never claim or
+        clean up (partition rules), so observing is the only way the
+        gateway can tell the user a reminder was stranded. A job with a
+        fresh peer claim is excluded: the owning process is delivering it
+        right now. Falsy channels (legacy, pre-attribution) are never
+        foreign.
+        """
+        store = self._load_store()
+        now = self._now_ms()
+        missed: list[CronJob] = []
+        for j in store.jobs:
+            if j.schedule.kind != "at" or not j.enabled:
+                continue
+            if self._owns_channel(j.payload.channel):
+                continue
+            at_ms = j.schedule.at_ms
+            if at_ms is None or now - at_ms < grace_ms:
+                continue
+            cb, ca = j.state.claimed_by_pid, j.state.claimed_at_ms
+            if cb is not None and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+                continue
+            missed.append(j)
+        return missed
+
+    def _check_missed_foreign(self) -> None:
+        """Feed past-due foreign one-shots to the observer, best-effort.
+        A callback failure must never break start() or the wake loop."""
+        if self.on_missed_foreign is None:
+            return
+        try:
+            missed = self.list_missed_foreign_oneshots()
+            if missed:
+                self.on_missed_foreign(missed)
+        except Exception:
+            logger.exception("Cron: missed-foreign observer failed; continuing")
+
+    def add_job(
+        self,
+        name: str,
+        schedule: CronSchedule,
+        message: str,
+        channel: str | None = None,
+        to: str | None = None,
+        delete_after_run: bool = False,
+        topic_tag: str | None = None,
+    ) -> CronJob:
+        """Add a new job, or update an existing job with the same
+        (schedule, channel, to) triple — agents often re-register the
+        same recurring reminder with slightly different wording across
+        conversations; without dedup the user gets N near-identical
+        fires per scheduled tick.
+
+        Two cross-kind dedup layers also apply (in order):
+
+        1. **Message-equal dedup**: if any existing enabled job for the
+           same (channel, to) has a *byte-identical* ``payload.message``,
+           return it. Catches the case where the LLM creates the same
+           reminder N times across the simulation horizon (e.g. a
+           medication-reminder string appearing as both an ``at`` shot
+           today and a ``cron_expr`` recurring tomorrow — identical
+           text, different fire times).
+
+        2. **Time-window dedup**: if any existing enabled job for the
+           same (channel, to) is scheduled to fire within 15 minutes of
+           this new schedule's next fire (regardless of schedule kind),
+           return it. Catches the case where the LLM creates both a
+           recurring ``cron_expr`` AND a same-day ``at`` shot for the
+           same intent (e.g. "daily 8:00 take meds" + "today 8:00 take
+           meds").
+        """
+        # One ``now`` snapshot for both validation and storage: the validate
+        # predicate and the stored next_run must agree on "now", or a boundary
+        # ``at`` (at ~ now) could pass validation yet store next_run=None. Taken
+        # before the lock so an invalid schedule fails fast without contending it.
+        now = self._now_ms()
+        _validate_schedule_for_add(schedule, now)
+        with self._locked():
+            # Reload under lock so we don't clobber a concurrent writer's add.
+            self._store = None
+            store = self._load_store()
+
+            # L7: topic_tag dedup — strictest, runs first. If the new
+            # request carries a topic_tag, any existing enabled job for the
+            # same (channel, to, topic_tag) is treated as a duplicate. This
+            # catches the caregiver-style failure mode where the LLM
+            # creates near-identical med-reminder crons with subtly
+            # different schedule offsets (11:20 + 11:30) or message
+            # wording — message-equal dedup and 15min window dedup both
+            # miss them. The topic_tag IS the identity for "what topic
+            # is this reminder about", so two crons with the same
+            # topic_tag are by definition the same logical reminder.
+            # Update the existing job's message/schedule in-place rather
+            # than spawn a parallel one.
+            if topic_tag:
+                for j in store.jobs:
+                    if not j.enabled:
+                        continue
+                    if j.payload.channel != channel or j.payload.to != to:
+                        continue
+                    if j.payload.topic_tag != topic_tag:
+                        continue
+                    logger.info(
+                        "Cron: topic_tag dedup — existing job '{}' ({}) "
+                        "has topic_tag='{}'; updating message + schedule "
+                        "in place (kinds={}/{})",
+                        j.name,
+                        j.id,
+                        topic_tag,
+                        j.schedule.kind,
+                        schedule.kind,
+                    )
+                    j.payload.message = message
+                    j.name = name
+                    j.schedule = schedule
+                    j.state.next_run_at_ms = _compute_next_run(schedule, now)
+                    j.updated_at_ms = now
+                    self._save_store()
+                    self._signal_wake()
+                    return j
+
+            # Message-equal dedup (covers same-intent reminders the LLM
+            # re-asks for across days, possibly with different schedule
+            # kinds). Stricter than time-window: byte-equality on full
+            # message text → false-positive rate ~0.
+            for j in store.jobs:
+                if not j.enabled:
+                    continue
+                if j.payload.channel != channel or j.payload.to != to:
+                    continue
+                if j.payload.message != message:
+                    continue
+                if j.state.next_run_at_ms is None or j.state.next_run_at_ms <= now:
+                    continue
+                logger.info(
+                    "Cron: skipped duplicate add — existing job '{}' "
+                    "({}) has identical message (same channel/to, "
+                    "kinds={}/{})",
+                    j.name,
+                    j.id,
+                    j.schedule.kind,
+                    schedule.kind,
+                )
+                self._signal_wake()
+                return j
+
+            # Cross-kind time-window dedup (covers caregiver-style
+            # "expr + at for the same intent" double-add). Window is
+            # generous (15min) because two genuinely-distinct reminders
+            # less than 15min apart are almost always an LLM mistake;
+            # the rare legitimate case (two distinct meds at 8:00 and
+            # 8:10) loses one fire — acceptable trade-off given the
+            # spam alternative.
+            new_next = _compute_next_run(schedule, now)
+            if new_next is not None:
+                for j in store.jobs:
+                    if not j.enabled:
+                        continue
+                    if j.payload.channel != channel or j.payload.to != to:
+                        continue
+                    existing_next = j.state.next_run_at_ms
+                    if existing_next is None:
+                        continue
+                    if abs(existing_next - new_next) <= 15 * 60 * 1000:
+                        logger.info(
+                            "Cron: skipped duplicate add — existing job '{}' "
+                            "({}) fires within 15min of new request "
+                            "(same channel/to, kinds={}/{})",
+                            j.name,
+                            j.id,
+                            j.schedule.kind,
+                            schedule.kind,
+                        )
+                        self._signal_wake()
+                        return j
+
+            # Dedup: same recurring schedule + same channel + same recipient
+            # → update message in place rather than create a duplicate.
+            existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to)
+            if existing is not None:
+                existing.payload.message = message
+                existing.name = name
+                existing.updated_at_ms = now
+                # Recompute next_run_at_ms only if the existing job already
+                # fired or was disabled — otherwise keep its scheduled fire.
+                if not existing.enabled or existing.state.next_run_at_ms is None:
+                    existing.enabled = True
+                    existing.state.next_run_at_ms = _compute_next_run(schedule, now)
+                self._save_store()
+                logger.info(
+                    "Cron: updated existing job '{}' ({}) with new message (dedup on schedule+channel+to)",
+                    existing.name,
+                    existing.id,
+                )
+                self._signal_wake()
+                return existing
+
+            job = CronJob(
+                id=str(uuid.uuid4())[:8],
+                name=name,
+                enabled=True,
+                schedule=schedule,
+                payload=CronPayload(
+                    message=message,
+                    channel=channel,
+                    to=to,
+                    topic_tag=topic_tag,
+                ),
+                state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
+                created_at_ms=now,
+                updated_at_ms=now,
+                delete_after_run=delete_after_run,
+            )
+            store.jobs.append(job)
+            self._save_store()
+        self._signal_wake()
+        logger.info("Cron: added job '{}' ({})", name, job.id)
+        return job
+
+    @staticmethod
+    def _find_duplicate_schedule(
+        jobs: list[CronJob],
+        schedule: CronSchedule,
+        channel: str | None,
+        to: str | None,
+    ) -> CronJob | None:
+        """Return an existing enabled job whose (schedule, channel, to)
+        matches — used by add_job for dedup. ``at`` jobs (one-shot) are
+        only deduped if their at_ms is identical (same instant)."""
+        for j in jobs:
+            if not j.enabled:
+                continue
+            if j.payload.channel != channel or j.payload.to != to:
+                continue
+            s = j.schedule
+            if s.kind != schedule.kind:
+                continue
+            if schedule.kind == "cron" and s.expr == schedule.expr and s.tz == schedule.tz:
+                return j
+            if schedule.kind == "every" and s.every_ms == schedule.every_ms:
+                return j
+            if schedule.kind == "at" and s.at_ms == schedule.at_ms:
+                return j
+        return None
+
+    def remove_job(self, job_id: str) -> bool:
+        """Remove a job by ID."""
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            before = len(store.jobs)
+            store.jobs = [j for j in store.jobs if j.id != job_id]
+            removed = len(store.jobs) < before
+            if removed:
+                self._save_store()
+        if removed:
+            self._signal_wake()
+            logger.info("Cron: removed job {}", job_id)
+        return removed
+
+    def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
+        """Enable or disable a job."""
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            for job in store.jobs:
+                if job.id == job_id:
+                    job.enabled = enabled
+                    job.updated_at_ms = self._now_ms()
+                    if enabled:
+                        job.state.next_run_at_ms = _compute_next_run(job.schedule, self._now_ms())
+                        # Re-enabling is deliberate user engagement with this
+                        # job: without a counter reset, one auto-disabled at
+                        # the limit would re-disable on its very next fire.
+                        job.state.silent_fire_count = 0
+                    else:
+                        job.state.next_run_at_ms = None
+                    self._save_store()
+                    self._signal_wake()
+                    return job
+        return None
+
+    async def run_job(self, job_id: str, force: bool = False) -> bool:
+        """Manually run a job through the same execute/writeback path the
+        wake loop uses, so a test-fire cannot diverge from real scheduling."""
+        # Pick the target job under lock, then run it lock-free so we don't
+        # block concurrent cron activity during a slow agent turn.
+        my_pid = os.getpid()
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            target = next((j for j in store.jobs if j.id == job_id), None)
+            if target is None or (not force and not target.enabled):
+                return False
+            target.state.claimed_by_pid = my_pid
+            target.state.claimed_at_ms = self._now_ms()
+            self._save_store()
+
+        await self._execute_job(target)
+        await asyncio.shield(self._writeback_after_run(target, my_pid))
+        self._signal_wake()
+        return True
+
+    def status(self) -> dict:
+        """Get service status."""
+        store = self._load_store()
+        return {
+            "enabled": self._running,
+            "jobs": len(store.jobs),
+            "next_wake_at_ms": self._get_next_wake_ms(),
+        }

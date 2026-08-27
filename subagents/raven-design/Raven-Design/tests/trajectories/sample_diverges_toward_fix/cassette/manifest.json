@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "attempt_id": "trace-1a02235c9cb-80345359",
+  "session_key": "cli:sample-divergence",
+  "time_range": {
+    "start": "2026-08-21T02:45:45.547129+00:00",
+    "end": "2026-08-21T02:45:45.689327+00:00"
+  },
+  "raven_version": "0.1.12",
+  "minimized": {
+    "source_span_count": 7,
+    "span_count": 4,
+    "artifact_count": 7,
+    "llm_calls": 2,
+    "tool_calls": 1,
+    "turns": 1,
+    "session": "omitted"
+  }
+}

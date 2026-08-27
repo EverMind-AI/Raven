@@ -23,7 +23,7 @@ multi-turn semantics are per-agent and only documented there.
 | `.env` | The real secrets. Mode 600, never committed |
 | `.gitignore` | The per-folder exclusion list - the enforceable form of "what ships" |
 
-The four folders differ only in the names - and, since the 2026-08-25 swap,
+The five folders differ only in the names - and, since the 2026-08-25 swap,
 in `raven-research`'s transport: its manifest is `kind: "acp"` (the launcher
 serves the Agent Client Protocol on stdio instead of answering one question per
 process; see its own README). The layout contract above is unchanged.
@@ -31,6 +31,7 @@ process; see its own README). The layout contract above is unchanged.
 | Folder | Roster name | Checkout | `.env` prefix | `uv` extra |
 |---|---|---|---|---|
 | `raven-code/` | `Raven-Code` | `Raven-main/` | `CODE_` | - |
+| `raven-design/` | `Raven-Design` | `Raven-Design/` | `DESIGN_` | - |
 | `raven-oncall/` | `Raven-Oncall` | `Raven-Oncall/` | `ONCALL_` | - |
 | `raven-research/` | `Raven-Research` | `Raven-X/` | `RESEARCH_` | - |
 | `raven-ppt/` | `Raven-PPT` | `Raven-PPT/` | `PPT_` | `ppt` |
@@ -99,7 +100,7 @@ is the model the folder is tuned for: inheritance brings the host's
 `agents.defaults.model` along with its credentials, so without one the folder
 answers on whatever this raven answers on.
 
-All four are tuned for models served through OpenRouter, so a raven that already
+All five are tuned for models served through OpenRouter, so a raven that already
 has an OpenRouter key needs no second copy: the wizard reuses that one and asks
 nothing. It reads `providers.openrouter` specifically - a key in `custom` belongs
 to whatever private gateway that section points at, and spending it against

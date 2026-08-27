@@ -1,0 +1,4 @@
+interface:
+  display_name: "交互解释器与仿真"
+  short_description: "构建可信、模型驱动、反馈一致且可验证的交互解释器与科学仿真"
+  default_prompt: "使用 $build-interactive-explainers 把主题构建成模型真实、反馈一致、可验证且限制清楚的交互解释器。"

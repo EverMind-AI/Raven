@@ -1,0 +1,4 @@
+interface:
+  display_name: "产品与工具界面"
+  short_description: "构建对象、状态、工作流与恢复路径真实可用的专业界面"
+  default_prompt: "使用 $build-product-and-tool-interfaces 构建对象、状态、输入输出与恢复路径都真实可用的专业工作界面。"

@@ -387,6 +387,7 @@ class CliAgentBackend:
         agent_id: str | None,
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        runtime_env: dict[str, str] | None = None,
     ) -> tuple[str, str]:
         fd, prompt_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".prompt.txt")
         try:
@@ -409,7 +410,7 @@ class CliAgentBackend:
             # while a sub-agent writing back to "the host's store" writes into
             # ~/.raven. The hand-off lands in a file nobody reads and the wake
             # simply never arrives.
-            env = {**env_base, **_host_home_env(), **self.env}
+            env = {**env_base, **_host_home_env(), **(runtime_env or {}), **self.env}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -498,8 +499,12 @@ class CliAgentBackend:
         model: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        # The parent's provider/model are accepted and ignored: this backend
-        # shells out to an agent that authenticates and picks a model itself.
+        runtime_env: dict[str, str] = {}
+        if model:
+            runtime_env["RAVEN_PARENT_MODEL"] = model
+        reasoning_effort = getattr(getattr(provider, "generation", None), "reasoning_effort", None)
+        if reasoning_effort:
+            runtime_env["RAVEN_PARENT_REASONING_EFFORT"] = str(reasoning_effort)
         handle = instance or task_id
         # Re-checked rather than trusted: `streams` is what the manager reads to
         # decide whether to offer the hook, and a caller driving this backend
@@ -530,6 +535,7 @@ class CliAgentBackend:
                     attempts=attempts,
                     on_delta=sink,
                     notice_sink=on_delta,
+                    runtime_env=runtime_env,
                 )
                 return output
             except Exception as exc:
@@ -583,6 +589,7 @@ class CliAgentBackend:
         attempts: list[dict[str, Any]],
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
+        runtime_env: dict[str, str] | None = None,
     ) -> str:
         skey = session_key or "default"
         cwd = self.cwd or str(workspace)
@@ -613,6 +620,7 @@ class CliAgentBackend:
                     attempts=attempts,
                     on_delta=on_delta,
                     notice_sink=notice_sink,
+                    runtime_env=runtime_env,
                 )
 
         return await self._attempt(
@@ -627,6 +635,7 @@ class CliAgentBackend:
             attempts=attempts,
             on_delta=on_delta,
             notice_sink=notice_sink,
+            runtime_env=runtime_env,
         )
 
     async def _run_stateful(
@@ -641,6 +650,7 @@ class CliAgentBackend:
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
+        runtime_env: dict[str, str] | None = None,
     ) -> str:
         """Resume this handle's session, or mint one.
 
@@ -677,6 +687,7 @@ class CliAgentBackend:
                     attempts=attempts,
                     on_delta=on_delta,
                     notice_sink=notice_sink,
+                    runtime_env=runtime_env,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -712,6 +723,7 @@ class CliAgentBackend:
             attempts=attempts,
             on_delta=on_delta,
             notice_sink=notice_sink,
+            runtime_env=runtime_env,
         )
 
     async def _attempt(
@@ -728,9 +740,19 @@ class CliAgentBackend:
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
+        runtime_env: dict[str, str] | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
-        stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id, attempts, on_delta=on_delta)
+        stdout, stderr = await self._exec(
+            template,
+            task,
+            task_id,
+            cwd,
+            agent_id,
+            attempts,
+            on_delta=on_delta,
+            runtime_env=runtime_env,
+        )
 
         jsonl_id: str | None = None
         jsonl_reply: str | None = None

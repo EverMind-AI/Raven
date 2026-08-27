@@ -1,0 +1,1 @@
+{"content": "", "tool_calls": [{"id": "c1", "name": "marker", "arguments": {"note": "hi"}}], "finish_reason": "tool_calls", "usage": {}, "reasoning_content": null}

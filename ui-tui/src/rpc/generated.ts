@@ -3349,6 +3349,10 @@ export interface SettingsEverosSetParams {
    * Drop the section; refused for llm and embedding.
    */
   clear?: boolean;
+  /**
+   * Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one.
+   */
+  borrow_from?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4349,6 +4353,23 @@ export interface KnowledgeDocumentsIndexParams {
  */
 export interface KnowledgeDocumentsIndexResult {
   document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsDeleteParams".
+ */
+export interface KnowledgeDocumentsDeleteParams {
+  document_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsDeleteResult".
+ */
+export interface KnowledgeDocumentsDeleteResult {
+  /**
+   * False when there was no such document, which is not an error: two clicks on one row answer the same way.
+   */
+  removed: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

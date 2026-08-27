@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ZERO_SHA = "0" * 40
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -62,6 +62,15 @@ APP_SOURCE_PREFIXES = (
     "ui/",
     "ui-tui/",
     "ui-webui/",
+)
+ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
+RAVEN_DESIGN_SKILL_PREFIX = (
+    "subagents",
+    "raven-design",
+    "Raven-Design",
+    "raven",
+    "memory_engine",
+    "skills",
 )
 
 
@@ -142,9 +151,21 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if not candidate.is_file():
             continue
         extension = candidate.suffix.lower()
-        if extension in BLOCKED_ASSET_EXTENSIONS:
+        if extension in BLOCKED_ASSET_EXTENSIONS and not _is_allowed_skill_reference_image(path, extension):
             violations.append(BlockedAssetViolation(path=path, extension=extension))
     return violations
+
+
+def _is_allowed_skill_reference_image(path: str, extension: str) -> bool:
+    parts = PurePosixPath(path).parts
+    prefix_length = len(RAVEN_DESIGN_SKILL_PREFIX)
+    return (
+        extension in ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS
+        and ".." not in parts
+        and len(parts) >= prefix_length + 3
+        and parts[:prefix_length] == RAVEN_DESIGN_SKILL_PREFIX
+        and parts[prefix_length + 1] == "references"
+    )
 
 
 def changed_paths(revision_range: str) -> list[str]:

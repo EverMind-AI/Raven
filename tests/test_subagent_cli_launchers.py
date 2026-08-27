@@ -23,9 +23,9 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The two launchers whose main() shares one shape: run the agent under a
+# The three launchers whose main() shares one shape: run the agent under a
 # subprocess timeout, then read the answer back out of the transcript.
-_ONE_SHOT = ("raven-code", "raven-oncall")
+_ONE_SHOT = ("raven-code", "raven-design", "raven-oncall")
 
 
 def _load(folder: str):

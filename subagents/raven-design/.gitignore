@@ -1,0 +1,23 @@
+# Secrets and rendered runtime configs.
+.env
+.config.rendered.*.json
+.config.rendered.*.migrations.json
+/config.migrations.json
+
+# Local install records.
+subagents-backup-*.json
+config.json.bak-*
+*.tar.gz
+
+# Per-run state and real task transcripts.
+/runs/
+/sessions/
+/cache/
+/cron/
+/ledger/
+/logs/
+/traces/
+__pycache__/
+
+# Rebuilt locally because its scripts contain absolute checkout paths.
+Raven-Design/.venv/

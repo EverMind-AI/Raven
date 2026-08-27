@@ -265,6 +265,43 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     assert out == "yes/agent"
 
 
+async def test_cli_backend_exposes_parent_model_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _clear_login_env_cache: None,
+) -> None:
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin:/bin\0", b""),
+    )
+    script = tmp_path / "show_parent_model.sh"
+    script.write_text(
+        'printf "%s/%s" "$RAVEN_PARENT_MODEL" "$RAVEN_PARENT_REASONING_EFFORT"\n',
+        encoding="utf-8",
+    )
+
+    class Provider:
+        generation = type("Generation", (), {"reasoning_effort": "max"})()
+
+    backend = CliAgentBackend(
+        name="binding-check",
+        command=f"sh {script}",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+
+    output = await backend.run(
+        "task",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=Provider(),
+        model="gpt-5.6-sol",
+    )
+
+    assert output == "gpt-5.6-sol/max"
+
+
 async def test_cli_backend_does_not_leak_ravens_own_env_into_the_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
 ) -> None:
@@ -769,27 +806,41 @@ def _make_agent_loop(tmp_path: Path, third_party: list | None = None):
     )
 
 
-def test_dag_tool_is_registered_even_with_every_configured_agent_disabled(tmp_path: Path) -> None:
+@pytest.fixture
+def agent_loop_factory(tmp_path: Path):
+    loops = []
+
+    def make(third_party: list | None = None):
+        loop = _make_agent_loop(tmp_path, third_party)
+        loops.append(loop)
+        return loop
+
+    yield make
+    for loop in loops:
+        loop.context.skills.stop_file_watcher()
+
+
+def test_dag_tool_is_registered_even_with_every_configured_agent_disabled(agent_loop_factory) -> None:
     # The old gate withheld the tool when the roster would be empty. The roster is
     # never empty now -- the built-in rows are always on the table -- so the gate
     # would only be withholding graph orchestration from every default install.
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
-    loop = _make_agent_loop(tmp_path, [off])
+    loop = agent_loop_factory([off])
     assert loop.tools.get("run_subagent_dag") is not None
 
 
-def test_dag_tool_registered_when_at_least_one_agent_is_enabled(tmp_path: Path) -> None:
+def test_dag_tool_registered_when_at_least_one_agent_is_enabled(agent_loop_factory) -> None:
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
-    loop = _make_agent_loop(tmp_path, [on, off])
+    loop = agent_loop_factory([on, off])
     assert loop.tools.get("run_subagent_dag") is not None
 
 
-def test_a_hot_apply_refreshes_one_table_that_both_consumers_read(tmp_path: Path) -> None:
+def test_a_hot_apply_refreshes_one_table_that_both_consumers_read(agent_loop_factory) -> None:
     # The point of the shared registry: applying once cannot leave the spawn
     # manager and the graph tool disagreeing, which two independently-refreshed
     # maps could.
-    loop = _make_agent_loop(tmp_path, [])
+    loop = agent_loop_factory([])
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     loop.apply_agents([on])
     tool = loop.tools.get("run_subagent_dag")
@@ -798,15 +849,18 @@ def test_a_hot_apply_refreshes_one_table_that_both_consumers_read(tmp_path: Path
     assert tool.registry is loop.subagents.registry
 
 
-def test_apply_agents_keeps_the_dag_tool_registered(tmp_path: Path) -> None:
-    loop = _make_agent_loop(tmp_path, [])
+def test_apply_agents_keeps_the_dag_tool_registered(agent_loop_factory) -> None:
+    loop = agent_loop_factory([])
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     loop.apply_agents([on])
     assert loop.tools.get("run_subagent_dag") is not None
 
 
 @pytest.mark.parametrize("registered_at", ["construction", "hot_apply"])
-def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(tmp_path: Path, registered_at: str) -> None:
+def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(
+    agent_loop_factory,
+    registered_at: str,
+) -> None:
     """A backgrounded run is only bounded, stoppable, reportable and pausable
     because the host handed the tool these five hooks. A construction site that
     forgets one loses a guarantee silently -- an unbudgeted run, one `/stop`
@@ -815,9 +869,9 @@ def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(tmp_path: Pa
     """
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     if registered_at == "construction":
-        loop = _make_agent_loop(tmp_path, [on])
+        loop = agent_loop_factory([on])
     else:
-        loop = _make_agent_loop(tmp_path, [])
+        loop = agent_loop_factory([])
         loop.apply_agents([on])
 
     tool = loop.tools.get("run_subagent_dag")
@@ -3409,7 +3463,7 @@ async def test_two_spawns_on_one_handle_do_not_lose_each_others_turns(tmp_path: 
     assert [m["content"] for m in state.load()] == ["first", "second"]
 
 
-def test_the_registered_dag_tool_can_reach_a_human_for_the_confirm_gate(tmp_path: Path) -> None:
+def test_the_registered_dag_tool_can_reach_a_human_for_the_confirm_gate(agent_loop_factory) -> None:
     """The gate is only a gate if the tool the *model* calls has an asker.
 
     It did not: the asker was built as a closure inside the playbook wiring, which
@@ -3418,7 +3472,7 @@ def test_the_registered_dag_tool_can_reach_a_human_for_the_confirm_gate(tmp_path
     invites it for "publishing, sending, spending" -- dispatched every node and
     reported that a human had approved something no human saw.
     """
-    loop = _make_agent_loop(tmp_path, [])
+    loop = agent_loop_factory([])
     tool = loop.tools.get("run_subagent_dag")
 
     assert tool is not None

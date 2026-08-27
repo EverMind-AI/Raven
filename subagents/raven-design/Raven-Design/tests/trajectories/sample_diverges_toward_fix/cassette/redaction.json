@@ -1,0 +1,23 @@
+{
+  "redacted_at": "2026-08-21T02:45:45.703677+00:00",
+  "raven_version": "0.1.12",
+  "exact_replacements": {},
+  "pattern_replacements": {},
+  "residual_findings": [
+    {
+      "category": "high-entropy",
+      "sample": "rgence\\n\\ntidy the workspace [reco***ness]\"}], \"tools\": [{\"type\": \"func",
+      "file": "artifacts/024545556000-trace-1a02235c9cb-80345359-cli-sample-divergence-llm.input-19f22e6889.json",
+      "count": 1
+    },
+    {
+      "category": "high-entropy",
+      "sample": "relative to the search root, most***fied first. Noise directories (.gi",
+      "file": "artifacts/024545556000-trace-1a02235c9cb-80345359-cli-sample-divergence-llm.input-19f22e6889.json",
+      "count": 2
+    }
+  ],
+  "skipped_binaries": [],
+  "config_secrets_loaded": true,
+  "binary_policy": "non-UTF-8 files are excluded from the redacted copy (cannot be verified clean)"
+}
