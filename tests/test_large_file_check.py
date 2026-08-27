@@ -92,6 +92,47 @@ def test_allows_blocked_extensions_inside_application_source(tmp_path: Path) -> 
     assert violations == []
 
 
+def test_allows_only_jpg_raven_design_skill_reference_images(tmp_path: Path) -> None:
+    prefix = "subagents/raven-design/Raven-Design/raven/memory_engine/skills/example"
+    paths = [
+        f"{prefix}/references/benchmark.jpg",
+        f"{prefix}/references/nested/benchmark.jpg",
+        f"{prefix}/references/benchmark.png",
+        f"{prefix}/assets/benchmark.jpg",
+        "subagents/other/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg",
+        "docs/benchmark.jpg",
+    ]
+    for path in paths:
+        candidate = tmp_path / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(b"x")
+
+    violations = check_large_files.find_blocked_asset_files(paths, root=tmp_path)
+
+    assert violations == [
+        check_large_files.BlockedAssetViolation(path=f"{prefix}/references/benchmark.png", extension=".png"),
+        check_large_files.BlockedAssetViolation(path=f"{prefix}/assets/benchmark.jpg", extension=".jpg"),
+        check_large_files.BlockedAssetViolation(
+            path="subagents/other/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg",
+            extension=".jpg",
+        ),
+        check_large_files.BlockedAssetViolation(path="docs/benchmark.jpg", extension=".jpg"),
+    ]
+
+
+def test_raven_design_skill_reference_images_still_obey_size_limit(tmp_path: Path) -> None:
+    path = "subagents/raven-design/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg"
+    candidate = tmp_path / path
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"x" * 1025)
+
+    violations = check_large_files.find_oversized_files([path], max_bytes=1024, root=tmp_path)
+
+    assert violations == [
+        check_large_files.FileSizeViolation(path=path, size=1025, limit=1024),
+    ]
+
+
 def test_still_blocks_report_assets_that_merely_mention_an_app_tree(tmp_path: Path) -> None:
     shot = tmp_path / "docs" / "ui-webui-overview.png"
     shot.parent.mkdir(parents=True)

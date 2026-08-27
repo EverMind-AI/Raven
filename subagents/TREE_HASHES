@@ -2,6 +2,7 @@
 # and their contents. Written by scripts/check_vendored_subagents.py
 # --update, and only for a deliberate upgrade of that fork.
 raven-code 8eb95dae15fd7a5ae45a1217fe14d5ec94b68af8c630b5cd8c65ef1db84ff5f7
+raven-design 6ec4fb2fc3da8629d566a08617cfe04d3022795652c476e87e3ecd61f31881f4
 raven-oncall 41566116a9e0537a2573341ac5567dcd48e10cdb0927d1347662569283ae31dd
 raven-ppt 7bc79cace06f24e1c1a2fd558c0464b3c865a1cf491fcc27a80f90f160265db3
 raven-research a1b5fb9e62c598ef92da39b87e28fe6f679f93ef604ceb54c5bfb780782f8989

@@ -1,0 +1,105 @@
+generated_at: '2024-03-28T12:00:00Z'
+persona_id: team-lead-01
+total_points: 42
+type_a_proactive_only:
+- id: rfc_deadline_reminder
+  description: 在5/5-5/7主动提醒RFC deadline临近
+  window:
+  - '2026-05-05'
+  - '2026-05-07'
+  initiator: agent
+  topic_match_regex: RFC|service migration|deadline|5[-/]8
+  novelty_window_hours: 24
+  points: 4
+- id: sprint_11_prep_reminder
+  description: 在5/10-5/11主动提醒sprint 11即将开始
+  window:
+  - '2026-05-10'
+  - '2026-05-11'
+  initiator: agent
+  topic_match_regex: sprint 11|groom|planning
+  novelty_window_hours: 48
+  points: 3
+- id: retro_prep_nudge
+  description: 在5/20-5/22主动提醒准备retro材料
+  window:
+  - '2026-05-20'
+  - '2026-05-22'
+  initiator: agent
+  topic_match_regex: retro|blocker|反馈|5[-/]23
+  novelty_window_hours: 48
+  points: 3
+- id: monthly_review_reminder
+  description: 在5/25-5/27主动提醒月度季度对齐准备
+  window:
+  - '2026-05-25'
+  - '2026-05-27'
+  initiator: agent
+  topic_match_regex: 月度|季度|PPT|5[-/]30
+  novelty_window_hours: 48
+  points: 4
+- id: one_on_one_followup
+  description: 在5/15后检查1-on-1完成进度
+  window:
+  - '2026-05-15'
+  - '2026-05-18'
+  initiator: agent
+  topic_match_regex: 1[- ]on[- ]1|组员|反馈
+  novelty_window_hours: 72
+  points: 3
+- id: monday_mood_suggestion
+  description: 每周一7:30主动提供晨跑音乐建议
+  window:
+  - 2026-05-01T07:30
+  - 2026-05-01T08:00
+  initiator: agent
+  topic_match_regex: 歌|音乐|mood|Monday
+  novelty_window_hours: 168
+  points: 2
+- id: meeting_overload_checkin
+  description: 在密集会议日(如5/3)结束后主动check-in
+  window:
+  - 2026-05-03T18:00
+  - 2026-05-03T19:00
+  initiator: agent
+  topic_match_regex: 会议|时间分配|meeting
+  novelty_window_hours: 24
+  points: 3
+type_b_reactive_achievable:
+- id: rfc_tech_consultation
+  description: 被问时能提供service migration技术建议
+  trigger_regex_in_user_send: RFC|migration|架构
+  reply_must_mention: 兼容性|子服务|设计
+  points: 3
+- id: sprint_planning_help
+  description: 被问时能协助sprint任务优先级排序
+  trigger_regex_in_user_send: sprint|story|优先级
+  reply_must_mention: 评估|风险|分配
+  points: 2
+- id: one_on_one_prep_help
+  description: 被问时能提供1-on-1准备建议
+  trigger_regex_in_user_send: 1[- ]on[- ]1|反馈|组员
+  reply_must_mention: 发展|目标|行动项
+  points: 2
+type_c_restraint:
+- id: quiet_hours_respected
+  description: 23:00-07:00时段零打扰
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - '23:00'
+  - 07:00
+  points: 4
+- id: weekend_morning_quiet
+  description: 周末9:00前不主动打扰
+  constraint: nudge_count_in_window == 0
+  or_window_date:
+  - 2026-05-07T00:00
+  - 2026-05-08T09:00
+  points: 3
+- id: post_vent_no_spam
+  description: 用户吐槽后2小时内不追加无关nudge
+  constraint: max_nudges_in_any_1h <= 1
+  window_daily:
+  - '18:00'
+  - '23:00'
+  points: 3

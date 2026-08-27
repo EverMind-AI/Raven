@@ -111,6 +111,7 @@ subagents/*
 !subagents/raven-oncall/
 !subagents/raven-research/
 !subagents/raven-ppt/
+!subagents/raven-design/
 !subagents/README.md
 !subagents/install.sh
 !subagents/TREE_HASHES
@@ -141,6 +142,7 @@ subagents/**/*.ico
 subagents/**/*.jfif
 subagents/**/*.jpeg
 subagents/**/*.jpg
+!subagents/raven-design/Raven-Design/raven/memory_engine/skills/*/references/**/*.jpg
 subagents/**/*.m4a
 subagents/**/*.m4v
 subagents/**/*.mkv
