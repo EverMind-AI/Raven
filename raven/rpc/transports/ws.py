@@ -50,7 +50,27 @@ _AUTH_PAGE = """<!DOCTYPE html>
 })();
 </script></body></html>"""
 
-_COOKIE_NAME = "raven_session"
+_COOKIE_BASE = "raven_session"
+
+
+def cookie_name(port: int) -> str:
+    """The session cookie's name for a gateway on `port`.
+
+    The port has to be IN THE NAME because cookies are scoped to a host and
+    ignore the port entirely: two `raven serve` instances on 127.0.0.1 both
+    setting `raven_session` write the same jar entry, so whichever
+    authenticated last owns it and the other one's page starts sending a value
+    that gateway never minted.
+
+    What that looks like from the outside is worse than a sign-out, because it
+    is silent. A WebSocket is authorized once, when it connects, so the open
+    page keeps streaming while every new HTTP request it makes is refused: the
+    file viewer answers 401 and a delivery the agent has just written shows up
+    on the shelf as lost. Naming the cookie for the port gives each instance
+    its own jar entry, and a browser can hold as many as the user is running.
+    """
+    return f"{_COOKIE_BASE}_{port}"
+
 
 _COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60
 """How long a browser keeps the session cookie.
@@ -139,7 +159,7 @@ class WsGateway:
         reachable here, but a credential check that short-circuits on the
         first wrong byte is not worth keeping when the fix is free.
         """
-        cookie = request.cookies.get(_COOKIE_NAME)
+        cookie = request.cookies.get(cookie_name(self.port))
         if cookie is not None and secrets.compare_digest(cookie, self.session_cookie):
             return True
         header = request.headers.get("X-Raven-Token")
@@ -183,7 +203,7 @@ class WsGateway:
             raise web.HTTPForbidden(reason="invalid or used nonce")
         resp = web.json_response({"ok": True})
         resp.set_cookie(
-            _COOKIE_NAME,
+            cookie_name(self.port),
             self.session_cookie,
             httponly=True,
             samesite="Strict",

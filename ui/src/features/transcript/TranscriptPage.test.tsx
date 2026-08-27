@@ -830,7 +830,10 @@ describe("the turn's delivered files and file changes", () => {
   })
 
   it('leaves a delivered file the tile cannot reach on its kind, not a miniature', async () => {
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false }))
+    /* 404, not a bare `ok: false`: which refusal it was decides whether the
+       tile calls the file lost at all, so the status is now part of the case
+       rather than left off it. */
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 404 }))
     act(() => {
       mount.history([
         { role: 'user', text: 'run the radar', timestamp: iso(Date.now() - 9000) },
@@ -955,6 +958,95 @@ describe("the turn's delivered files and file changes", () => {
     expect($('.atile .mt')?.textContent).toBe('en:gui.arts.missing')
     expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(true)
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not call a delivery lost because the gateway refused the question', async () => {
+    /* 401 is what a page gets once a second `raven serve` takes over the
+       session cookie -- cookies ignore the port, so the two instances share one
+       jar entry. The file is on disk and the agent has just written it; saying
+       "lost" here sent the reader looking for a file that never went anywhere.
+       404 and 410 still mean gone; nothing else does. */
+    const probe = vi.fn(async () => ({ ok: false, status: 401 }))
+    vi.stubGlobal('fetch', probe)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'deliver it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.pdf']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    expect(probe).toHaveBeenCalled()
+    expect($('.atile .mt')?.textContent).not.toBe('en:gui.arts.missing')
+    expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('does not call an image lost because the gateway refused to serve it', async () => {
+    /* The tile's own probe is not the only question asked about an image: the
+       <img> asks again, and gets the same 401. Its onError said "lost" without
+       asking why, so the exact case this draws the line for -- a second
+       `raven serve` taking over the cookie -- stayed broken for pictures while
+       it was fixed for documents. */
+    const probe = vi.fn(async () => ({ ok: false, status: 401 }))
+    vi.stubGlobal('fetch', probe)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'chart it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['chart.png']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    const image = $('.atile img') as HTMLImageElement
+    expect(image).toBeTruthy()
+    await act(async () => { image.dispatchEvent(new Event('error')) })
+    await act(async () => { await Promise.resolve() })
+
+    expect($('.atile .mt')?.textContent).not.toBe('en:gui.arts.missing')
+    expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(false)
+    /* And it does not keep a broken picture on screen either. */
+    expect($('.atile .pic')?.className).toBe('pic none')
+  })
+
+  it('calls an image lost when the picture is gone and the status agrees', async () => {
+    const probe = vi.fn(async () => ({ ok: true, status: 200 }))
+    vi.stubGlobal('fetch', probe)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'chart it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['chart.png']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    probe.mockResolvedValue({ ok: false, status: 404 } as never)
+    const image = $('.atile img') as HTMLImageElement
+    await act(async () => { image.dispatchEvent(new Event('error')) })
+    await act(async () => { await Promise.resolve() })
+
+    expect($('.atile .mt')?.textContent).toBe('en:gui.arts.missing')
+  })
+
+  it('still calls it lost when the deliverable really is gone', async () => {
+    const probe = vi.fn(async () => ({ ok: false, status: 410 }))
+    vi.stubGlobal('fetch', probe)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'deliver it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.pdf']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+
+    expect($('.atile .mt')?.textContent).toBe('en:gui.arts.missing')
   })
 
   it('shows a skeleton while a delivery preview is still loading', async () => {

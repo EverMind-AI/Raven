@@ -34,6 +34,48 @@ async def gateway_client(tmp_path: Path):
         await client.close()
 
 
+async def test_two_gateways_do_not_share_one_cookie_entry(tmp_path: Path) -> None:
+    """Two instances on one host must not write the same jar entry.
+
+    Cookies are scoped to a host and ignore the port, so a fixed name means the
+    second `raven serve` a browser authenticates to overwrites the first's
+    session. Nothing announces it: a WebSocket is authorized when it connects,
+    so the first page keeps streaming while every new HTTP request it makes is
+    refused -- the file viewer answers 401, and a file the agent has just
+    delivered is drawn on the shelf as lost.
+    """
+    from raven.rpc.transports.ws import cookie_name
+
+    first, second = WsGateway(), WsGateway()
+    servers = [TestServer(build_app(g, None)) for g in (first, second)]
+    clients = [TestClient(s) for s in servers]
+    for client, server, gateway in zip(clients, servers, (first, second), strict=True):
+        await client.start_server()
+        gateway.port = server.port
+    try:
+        assert first.port != second.port
+        assert cookie_name(first.port) != cookie_name(second.port)
+
+        # Each hands out its own entry, so a jar holding both keeps both.
+        jar = {}
+        for client, gateway in zip(clients, (first, second), strict=True):
+            resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()})
+            name = cookie_name(gateway.port)
+            assert name in resp.cookies, f"{name} not set by the gateway on {gateway.port}"
+            jar[name] = resp.cookies[name].value
+
+        # And the browser presenting that whole jar is authorized by both --
+        # which is what a shared name cannot do, since one value would have
+        # replaced the other before either request was made.
+        for client, gateway in zip(clients, (first, second), strict=True):
+            client.session.cookie_jar.clear()
+            client.session.cookie_jar.update_cookies(jar)
+            assert (await client.get("/file?path=")).status != 401
+    finally:
+        for client in clients:
+            await client.close()
+
+
 # ---------------------------------------------------------------------------
 # who may reach the authenticated surface
 # ---------------------------------------------------------------------------
@@ -46,8 +88,10 @@ async def test_rpc_socket_rejects_a_client_with_no_credential(gateway_client) ->
 
 
 async def test_rpc_socket_rejects_a_wrong_cookie(gateway_client) -> None:
-    _, client = gateway_client
-    client.session.cookie_jar.update_cookies({"raven_session": "not-the-cookie"})
+    from raven.rpc.transports.ws import cookie_name
+
+    gateway, client = gateway_client
+    client.session.cookie_jar.update_cookies({cookie_name(gateway.port): "not-the-cookie"})
     resp = await client.get("/rpc")
     assert resp.status == 401
 
@@ -134,7 +178,9 @@ async def test_the_browser_cookie_is_not_the_shared_secret(gateway_client) -> No
     nonce = gateway.mint_nonce()
     resp = await client.post("/auth/exchange", json={"nonce": nonce})
 
-    cookie = resp.cookies["raven_session"].value
+    from raven.rpc.transports.ws import cookie_name
+
+    cookie = resp.cookies[cookie_name(gateway.port)].value
     assert cookie == gateway.session_cookie
     assert cookie != gateway.session_token
 
@@ -372,7 +418,9 @@ async def test_the_sign_in_cookie_outlives_the_browser_session(gateway_client) -
     gateway, client = gateway_client
     resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()})
 
-    morsel = resp.cookies["raven_session"]
+    from raven.rpc.transports.ws import cookie_name
+
+    morsel = resp.cookies[cookie_name(gateway.port)]
     assert int(morsel["max-age"]) == _COOKIE_MAX_AGE_S
     # Still the same hardening it had; the lifetime is the only thing added.
     assert morsel["httponly"]
