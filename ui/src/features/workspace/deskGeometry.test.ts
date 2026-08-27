@@ -8,6 +8,8 @@ import {
   DESK_ANCHOR_GAP,
   DESK_DEFAULT_HEIGHT,
   DESK_DEFAULT_WIDTH,
+  DESK_MAX_SIZE,
+  DESK_MIN_SIZE,
   defaultGeometry,
   workspaceColumnCount,
   workspaceTransitionWidth,
@@ -42,6 +44,17 @@ describe('desk placement', () => {
     expect(at.x + at.w).toBe(right)
     expect(at.y).toBe(42 + DESK_ANCHOR_GAP)
     expect(at.detached).toBe(false)
+  })
+
+  /* Not the minimum. The desk opens at a size a reader can read a tab in, and
+     the minimum is only what they are allowed to shrink it to -- the two were
+     the same number and the shelf came up showing three of however many rows
+     it held. */
+  it('opens larger than it can be shrunk to, on both axes', () => {
+    expect(DESK_DEFAULT_WIDTH).toBeGreaterThan(DESK_MIN_SIZE)
+    expect(DESK_DEFAULT_HEIGHT).toBeGreaterThan(DESK_MIN_SIZE)
+    expect(DESK_DEFAULT_WIDTH).toBeLessThanOrEqual(DESK_MAX_SIZE)
+    expect(DESK_DEFAULT_HEIGHT).toBeLessThanOrEqual(DESK_MAX_SIZE)
   })
 
   it('snaps a dragged desk back to that same place', () => {
