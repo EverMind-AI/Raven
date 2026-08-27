@@ -4213,7 +4213,15 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   border-bottom: 1px solid var(--line-soft); }
 .desk-pane > header > svg { width: 15px; height: 15px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+/* Centred rather than left to each child's own rules: one of these buttons
+   holds an inline <svg>, which sits on the text baseline with the descender
+   space still under it, and the other holds the "x" character, which sits
+   where the font puts it. Measured, the icon rode 1.5px higher than the x --
+   two controls side by side in the same header, visibly off one another.
+   The line-height is the last quarter pixel of it: centring alone leaves the
+   line box's half-leading behind. */
 .desk-pane > header button { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent;
+  display: grid; place-items: center; line-height: 1;
   color: var(--faint); font-size: 16px; cursor: pointer; }
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
