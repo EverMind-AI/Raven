@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import os
 import posixpath
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,6 +27,172 @@ from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.base import ToolResult
 from raven.config.schema import ThirdPartyCliSubagentConfig
+
+#: How long a drain waits for a cancelled background run to finish. Generous
+#: against the work (a node's subprocess teardown is milliseconds) and short
+#: against the alternative, which is an unbounded wait inside loop close.
+_DRAIN_TIMEOUT_S = 10.0
+
+#: How long the failure path gives a run to land after its sub-agent tree has
+#: been killed, before declaring the task unreachable. Only spent on failures.
+_KILL_GRACE_S = 2.0
+
+
+def _discover_child_pids() -> list[int]:
+    """The pids of this process's direct children, without external binaries.
+
+    ``/proc`` is the Linux answer and needs nothing installed -- the GitLab
+    test image has no procps, so a `pgrep`-only discovery silently reaps
+    nothing there. ``pgrep -P`` covers the other POSIX boxes; where neither
+    exists this returns nothing and the detach below still bounds loop close.
+    """
+    children = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
+    if children.exists():
+        try:
+            return [int(x) for x in children.read_text(encoding="utf-8").split()]
+        except (OSError, ValueError):
+            return []
+    import shutil
+    import subprocess
+
+    pgrep = shutil.which("pgrep")
+    if not pgrep:
+        return []
+    try:
+        out = subprocess.run([pgrep, "-P", str(os.getpid())], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in out.stdout.split():
+        try:
+            pids.append(int(line.strip()))
+        except ValueError:
+            continue
+    return pids
+
+
+def _kill_direct_children() -> None:
+    """SIGKILL every process group this worker's children lead, else the child.
+
+    Raven starts CLI launchers with `start_new_session=True`, so a launcher is
+    its group's leader and its pid doubles as the group's pgid; killing only
+    the launcher leaks Codex-style workers that stay in (or reparent from) that
+    group -- the topology `CliAgentBackend._kill_process_group` documents. A
+    child that is not a leader has no group of its own, so `killpg` raises and
+    the plain kill covers it; our own process group is never touched because
+    only child pids are sent.
+
+    A wedged DAG run can hold a live sub-agent process even though its own task
+    is unreachable, so the failure path has to reap the tree itself; where
+    discovery finds nothing this degrades to a no-op, and the detach still
+    bounds loop close.
+    """
+    import signal
+
+    for pid in _discover_child_pids():
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def _detach_from_loop_close(tasks: "list[asyncio.Task]") -> None:
+    """Drop the wedged tasks from the loop's registry so teardown cannot wait.
+
+    ``Runner.close()`` gathers ``asyncio.tasks.all_tasks(loop)`` with no
+    timeout, and a task suspended on a future whose cancellation was swallowed
+    never answers that gather. Nothing in-process can terminate such a task --
+    not cancel, not killing its child -- so taking it out of the registry is
+    the one way to bound loop close. ``_scheduled_tasks`` is the CPython 3.12
+    name for that registry; the assertion in
+    ``test_a_run_that_ignores_cancellation_fails_named_instead_of_hanging``
+    fails loudly if a Python bump renames it, instead of silently hanging.
+    """
+    import asyncio.tasks as _tasks
+
+    registry = _tasks._scheduled_tasks
+    for task in tasks:
+        registry.discard(task)
+        # Without this, every detached task prints "Task was destroyed but it
+        # is pending!" at interpreter shutdown -- noise on top of a failure
+        # that already names the run. The same flag asyncio itself sets for
+        # the internal tasks it expects to be abandoned.
+        task._log_destroy_pending = False
+
+
+async def drain_dag_runs(
+    tools: "list[SubAgentDagTool]",
+    *,
+    timeout: float = _DRAIN_TIMEOUT_S,
+    kill_grace: float = _KILL_GRACE_S,
+) -> None:
+    """Stop every background run these tools started, or say which would not.
+
+    Sets each run's cancel event before cancelling the task: the event is the
+    cooperative path the runner checks between nodes, and reaching a node
+    boundary is far cheaper than unwinding a subprocess mid-setup.
+
+    A run still pending after the timeout is a failure, and the failure path is
+    a ladder in the one order that can help. The sub-agent tree is killed
+    first -- a run wedged mid-spawn is the shape that leaks its child, and a
+    dead child is the only thing that resolves the awaits that can be
+    resolved. A short grace then lets those land. Anything still standing is
+    suspended on a future that cannot resolve, so it is detached from loop
+    close before the failure is raised: otherwise ``Runner.close()`` gathers
+    it again, unbounded, and the suite hangs before the message is ever shown.
+    """
+    pending: list[asyncio.Task] = []
+    for tool in tools:
+        for event in list(tool._cancels.values()):
+            event.set()
+        pending.extend(tool._runs.values())
+    if not pending:
+        return
+
+    for task in pending:
+        task.cancel()
+    _, stalled = await asyncio.wait(pending, timeout=timeout)
+    if not stalled:
+        return
+
+    _kill_direct_children()
+    # The first timed-out set is the diagnostic: it names what actually
+    # ignored cancellation. The post-grace set is only for the detach, because
+    # a task that landed during grace -- which is what the kill is for -- is
+    # gone from it, and building the message from it would report "...: "
+    # with no run named.
+    _, still_running = await asyncio.wait(list(stalled), timeout=kill_grace)
+    if still_running:
+        _detach_from_loop_close(list(still_running))
+    names = ", ".join(sorted(t.get_name() for t in stalled))
+    pytest.fail(f"background DAG run(s) ignored cancellation for {timeout}s: {names}")
+
+
+@contextlib.asynccontextmanager
+async def draining_dag_runs():
+    """Drain every ``SubAgentDagTool`` built inside the block.
+
+    Tracks constructions rather than asking each test to hand its tools over:
+    the tools are built by helpers and inside the calls under test, and a drain
+    that depends on remembering to register one is a drain that silently stops
+    covering the next test somebody writes.
+    """
+    created: list[SubAgentDagTool] = []
+    real_init = SubAgentDagTool.__init__
+
+    def _tracking_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        created.append(self)
+
+    SubAgentDagTool.__init__ = _tracking_init  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        SubAgentDagTool.__init__ = real_init  # type: ignore[method-assign]
+        await drain_dag_runs(created)
 
 
 def _by_name(mapping):
@@ -681,6 +850,26 @@ class TestBackgroundRun:
     """The default shape: the call returns as soon as the graph is accepted and
     the outcome comes back as an announced turn, the way a spawn's does."""
 
+    @pytest.fixture(autouse=True)
+    async def _drain_background_runs(self):
+        """Finish the background runs these tests start, before the loop closes.
+
+        ``execute`` returns as soon as the graph is accepted, so every test here
+        leaves a real task running ``cat`` as a sub-agent -- a process that never
+        exits on its own. pytest-asyncio then closes the loop through
+        ``_cancel_all_tasks``, which cancels every pending task and gathers them;
+        cancellation has to travel down through ``_run_and_announce`` ->
+        ``_run_group`` -> ``_run_node`` to a subprocess still being set up, and
+        when it is caught mid-setup the gather never returns. Observed on a full
+        run: three workers idle and one parked in that frame for over an hour.
+
+        Draining here cancels while the loop is still healthy and, crucially,
+        bounds the wait: a run that will not die becomes a named failure instead
+        of a suite that hangs with no indication of which test did it.
+        """
+        async with draining_dag_runs():
+            yield
+
     @staticmethod
     def _tool(tmp_path: Path, announce: Any = None) -> SubAgentDagTool:
         return SubAgentDagTool(
@@ -688,6 +877,159 @@ class TestBackgroundRun:
             agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
             announce=announce,
         )
+
+    async def test_the_fixture_drains_a_run_the_test_leaves_in_flight(self, tmp_path: Path) -> None:
+        """The contract the class rests on, asserted from both sides.
+
+        A test that only checked "nothing is in flight afterwards" would pass in
+        the state where the run never started, which is the shape that hides a
+        broken drain.
+        """
+        tool = self._tool(tmp_path)
+        tool.set_context("web", "default", "web:drain")
+
+        await tool.execute(
+            task_summary="run the graph under test",
+            nodes=[{"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}],
+        )
+        assert tool._runs, "execute must leave a background run in flight for this to be worth draining"
+
+        await drain_dag_runs([tool])
+
+        assert not tool._runs
+
+    async def test_a_run_that_ignores_cancellation_fails_named_instead_of_hanging_loop_close(self) -> None:
+        """The timeout path must bound loop close, not just the drain's own wait.
+
+        A task that suppresses CancelledError is chandler.zhang's repro shape:
+        ``pytest.fail`` alone leaves it in the loop's registry, and
+        ``Runner.close()`` then gathers it again without a timeout -- the
+        failure message never surfaces. Reproduced with this exact shape before
+        the fix: the drain timed out, raised, and ``asyncio.run`` hung in
+        ``Runner.close()`` until a watchdog killed it.
+        """
+
+        async def _ignores_cancellation() -> None:
+            while True:
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    continue
+
+        fake = SimpleNamespace(_cancels={}, _runs={})
+        fake._runs["wedged"] = asyncio.create_task(_ignores_cancellation(), name="dag-wedged")
+        await asyncio.sleep(0)  # let the task enter its first sleep, as a real run has
+
+        with pytest.raises(pytest.fail.Exception, match="wedged"):
+            await drain_dag_runs([fake], timeout=0.1, kill_grace=0.1)
+
+        # The contract loop close depends on: a task the drain gave up on is no
+        # longer anywhere Runner.close() will look.
+        assert fake._runs["wedged"] not in asyncio.all_tasks()
+
+    async def test_the_failure_path_reaps_a_subagent_child_left_running(self) -> None:
+        """Killing the tree is part of the ladder, not theatre.
+
+        A wedged run's sub-agent is an orphaned child of the worker; failing
+        without killing it leaks a live process per failure. ``sleep`` stands in
+        for it because it is the one child command every POSIX box has.
+        """
+        import subprocess as _sp
+
+        child = _sp.Popen(["sleep", "300"])
+        try:
+            fake = SimpleNamespace(_cancels={}, _runs={})
+            fake._runs["wedged"] = asyncio.create_task(self._noop_wedge(), name="dag-wedged")
+            await asyncio.sleep(0)
+
+            with pytest.raises(pytest.fail.Exception):
+                await drain_dag_runs([fake], timeout=0.1, kill_grace=0.1)
+
+            assert child.poll() is not None, "the wedged run's child must be dead before the failure is raised"
+        finally:
+            if child.poll() is None:
+                child.kill()
+
+    async def test_the_failure_path_reaps_the_whole_launcher_process_group(self) -> None:
+        """Raven's launcher topology, not just a leaf process.
+
+        CLI sub-agents are spawned with `start_new_session=True`, so the
+        launcher doubles as its group's leader and Codex-style workers live
+        inside that group: killing the launcher alone leaves them running. The
+        leaf test above covers the non-leader branch; this one covers the group.
+        """
+        import subprocess as _sp
+
+        launcher = _sp.Popen(["sh", "-c", "sleep 300 & wait"], start_new_session=True)
+        pgid = launcher.pid
+        try:
+            fake = SimpleNamespace(_cancels={}, _runs={})
+            fake._runs["wedged"] = asyncio.create_task(self._noop_wedge(), name="dag-wedged")
+            await asyncio.sleep(0)
+
+            with pytest.raises(pytest.fail.Exception):
+                await drain_dag_runs([fake], timeout=0.1, kill_grace=0.1)
+
+            # Reaping the launcher is what lets its killed worker reparent to
+            # init and be reaped; until then the dead worker is a zombie that
+            # still holds the group, so a bare signal-0 probe would read the
+            # group as alive and the test would pass on the very bug it
+            # exists to catch.
+            launcher.wait(timeout=5)
+            import time as _time
+
+            deadline = _time.monotonic() + 5
+            while _time.monotonic() < deadline:
+                try:
+                    os.killpg(pgid, 0)
+                except ProcessLookupError:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("the launcher's process group outlived the drain")
+        finally:
+            try:
+                os.killpg(pgid, 9)
+            except ProcessLookupError:
+                pass
+
+    async def test_the_failure_message_names_the_run_that_landed_during_grace(self) -> None:
+        """The diagnostic must come from the first timed-out set, not the second.
+
+        The grace period exists so a task whose awaited child was killed can
+        land. When it does, the post-grace set is empty -- and a diagnostic
+        built from that set loses the very run the failure exists to name,
+        leaving "... ignored cancellation for Xs: " with a blank after the
+        colon.
+        """
+
+        async def _lands_when_its_child_dies() -> None:
+            proc = await asyncio.create_subprocess_exec("sleep", "300")
+            while True:
+                try:
+                    await proc.wait()
+                    return
+                except asyncio.CancelledError:
+                    # Swallow the drain's cancel: only the child kill lets
+                    # proc.wait() return, which is the grace path under test.
+                    continue
+
+        fake = SimpleNamespace(_cancels={}, _runs={})
+        fake._runs["landing"] = asyncio.create_task(_lands_when_its_child_dies(), name="dag-landing")
+        # One generous first timeout so the task has spawned its child before
+        # the kill runs; the spawn itself takes milliseconds.
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(pytest.fail.Exception, match="dag-landing"):
+            await drain_dag_runs([fake], timeout=1.0, kill_grace=2.0)
+
+    async def _noop_wedge(self) -> None:
+        """A task that ignores cancellation, shared by the failure-path tests."""
+        while True:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                continue
 
     async def test_the_call_returns_before_the_graph_does(self, tmp_path: Path) -> None:
         announces = _Announces()
