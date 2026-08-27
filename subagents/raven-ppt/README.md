@@ -65,7 +65,7 @@ config file's own parent. `PPT_STATE_ROOT` moves it; the default is:
 
 ```
 ~/.raven/workspace/subagent_sessions/raven-ppt/
-|- .config.rendered.json    config + the key, mode 600, outside any published tree
+|- .config.rendered.<pid>.json   config + the key, mode 600, one per launcher
 `- jobs/<job>/              one directory per run
    |- materials/            the named source files, copied in
    |- deck/                 the agent's own working directories
@@ -283,8 +283,16 @@ and ships as-is. `.env.example` is the template - copy it, fill it, `chmod 600`.
 
 The config loader reads no key from the environment, so the key has to be in the
 config file by the time the CLI loads it. `run.py` merges `.env` into
-`.config.rendered.json` under the state root, mode 600 - deliberately outside
-this folder, so the file that carries the key is not in a published tree.
+`.config.rendered.<pid>.json` under the state root, mode 600 - deliberately
+outside this folder, so the file that carries the key is not in a published
+tree. One per launcher rather than one fixed name, because two deck runs can
+overlap and a shared name would be emptied under the first run's child; each
+launch sweeps the ones whose pid is gone.
+
+A `.config.rendered.json` left by an earlier version is not swept: one fixed
+name shared by every past run says nothing about who is still reading it, and a
+server started before the rename resolved its config from that exact path. It
+stays gitignored and mode 600; remove it by hand once no such server is left.
 
 **Search and page reading are inherited, not configured here.** Two optional
 keys reach `web_search` and page fetching: a Serper key at
@@ -324,7 +332,7 @@ What a real run leaves, verified rather than assumed:
 
 | Path | Mode | Why it is right |
 |---|---|---|
-| `$PPT_STATE_ROOT/.config.rendered.json` | `600` | The only file here that holds the key |
+| `$PPT_STATE_ROOT/.config.rendered.<pid>.json` | `600` | The only file here that holds the key |
 | `subagents/raven-ppt/.env` | `600` | Same, and `subagents/install.sh` creates it that way from the template |
 | `jobs/<job>/`, `materials/`, `out/` | `755` | Traversable, so anything that reads the deck can reach it |
 | the deck, the staged material, `launcher.log` | `644` | The deck is delivered to a caller who has to be able to open it |

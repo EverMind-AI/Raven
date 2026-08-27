@@ -1,5 +1,9 @@
 # Secrets. `.env.example` is the published template; `.env` never ships.
 .env
+.config.rendered.*.json
+# The pre-pid name is still ignored. A checkout can already hold one, with the
+# keys in it, precisely because an earlier revision ignored it -- dropping the
+# pattern would make that file untracked and eligible for the next `git add -A`.
 .config.rendered.json
 
 # The config loader's own bookkeeping: it writes `<config>.migrations.json`
