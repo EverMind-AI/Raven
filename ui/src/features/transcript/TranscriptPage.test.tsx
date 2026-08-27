@@ -2307,6 +2307,17 @@ describe('transcript island, delegated calls', () => {
     expect(rows.join(' | ')).not.toContain('gui.deleg.self')
   })
 
+  it('titles a spawn row by prompt_template under either argument spelling', () => {
+    /* task_summary is required on every call the model makes today, so this
+       fallback only fires for a transcript recorded before that field existed.
+       `task` named the request then; `prompt_template` is the current name for
+       the same argument, read alongside `task` rather than instead of it so
+       those old transcripts keep rendering. */
+    expect(store.actLabel('spawn', { prompt_template: 'follow this: {{ ref:plan.md }}', subagent: 'raven' }))
+      .toBe('follow this: {{ ref:plan.md }}')
+    expect(store.actLabel('spawn', { task: 'dig further', subagent: 'raven' })).toBe('dig further')
+  })
+
   /* Open the dag card, wherever the step put it: a sealed step of one call folds
      behind a summary row and an unsealed one does not, and this is about the card
      rather than about the fold. Found through its own detail block, whose row is

@@ -16,11 +16,12 @@ from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent_dag import DagValidationError, parse_dag_spec
-from raven.agent.subagent_dag._store import read_session_nodes
-from raven.agent.subagent_dag.backend import LocalFileBackend
-from raven.agent.subagent_dag.runner import DagRunResult, run_dag
-from raven.agent.subagent_dag.tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
+from raven.agent.subagent.dag_graph import parse_dag_spec
+from raven.agent.subagent.dag_runner import DagRunResult, run_dag
+from raven.agent.subagent.dag_store import read_session_nodes
+from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
+from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.base import ToolResult
 from raven.config.schema import ThirdPartyCliSubagentConfig
 
@@ -60,7 +61,7 @@ def _isolated_record_tasks() -> None:
     behind that would poison every later test asserting on the same set.
     Clearing it around each test makes those assertions test-local instead.
     """
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
 
     runner_mod._RECORD_TASKS.clear()
     yield
@@ -983,7 +984,7 @@ class TestBackgroundRun:
         only to the model -- so without a terminal event the graph reads as
         still running for as long as the tab stays open.
         """
-        import raven.agent.subagent_dag.tool as tool_mod
+        import raven.agent.subagent.dag_tool as tool_mod
 
         events: list[tuple[str, dict]] = []
 
@@ -1030,7 +1031,7 @@ class TestBackgroundRun:
         the manager's index -- and `CancelledError` is not an `Exception`, so
         the collapse path above does not see it.
         """
-        import raven.agent.subagent_dag.tool as tool_mod
+        import raven.agent.subagent.dag_tool as tool_mod
 
         events: list[tuple[str, dict]] = []
         drawn = asyncio.Event()
@@ -1077,7 +1078,7 @@ class TestBackgroundRun:
         exception -- which reaches the agent a turn later as a message of its
         own, unattributable to any of the graphs it has in flight.
         """
-        import raven.agent.subagent_dag.tool as tool_mod
+        import raven.agent.subagent.dag_tool as tool_mod
 
         async def _boom(*a, **kw):
             raise RuntimeError("backend exploded")
@@ -1849,7 +1850,15 @@ async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
         subagents_root="/hist",
     )
     assert result.summary["completed"] == 1
-    assert "A SPAWN RECORD" in backend.files[f"/hist/mas_dag/{result.run_id}/n.prompt.md"].decode()
+    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/n.prompt.md"].decode()
+    # Fenced as a file read, which is what it is -- the label follows the kind of
+    # reference, not the directory the file turned out to sit in. Asserted
+    # structurally, not against a second wrap_untrusted call, since the fence
+    # mints a fresh nonce each time.
+    lines = prompt.splitlines()
+    assert lines[0].startswith("[BEGIN UNTRUSTED file ")
+    assert lines[1] == "A SPAWN RECORD"
+    assert lines[2].startswith("[END UNTRUSTED file ")
 
 
 @pytest.mark.parametrize(
@@ -2003,8 +2012,15 @@ async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> Non
 
     assert second.summary["completed"] == 1
     prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
-    assert "OUT[plan]:draft it" in prompt
-    assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
+    # A node's output is sub-agent-authored by construction, so the content
+    # form arrives fenced; the path form beside it is unaffected -- a path
+    # needs no fence. Asserted structurally, not against a second
+    # wrap_untrusted call, since the fence mints a fresh nonce each time.
+    lines = prompt.splitlines()
+    assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
+    assert lines[1] == "OUT[plan]:draft it"
+    assert lines[2].startswith("[END UNTRUSTED subagent ")
+    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
 
 
 async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
@@ -2034,8 +2050,15 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
 
     assert second.summary["completed"] == 1
     prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
-    assert "OUT[plan]:draft it" in prompt
-    assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
+    # A node's output is sub-agent-authored by construction, so the content
+    # form arrives fenced; the path form beside it is unaffected -- a path
+    # needs no fence. Asserted structurally, not against a second
+    # wrap_untrusted call, since the fence mints a fresh nonce each time.
+    lines = prompt.splitlines()
+    assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
+    assert lines[1] == "OUT[plan]:draft it"
+    assert lines[2].startswith("[END UNTRUSTED subagent ")
+    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
 
 
 async def test_a_cross_run_dependency_neither_blocks_nor_unterminals_a_node() -> None:
@@ -2191,20 +2214,26 @@ async def test_depends_on_an_id_no_run_has_produced_is_still_refused() -> None:
 async def test_there_is_no_run_qualifier_on_a_node_reference() -> None:
     # A node id already names one node per conversation, so a run qualifier
     # would only ever restate what the id says -- and could contradict it.
-    # Pinning a run is the ``ref:@runs/`` file form's job.
-    with pytest.raises(DagValidationError, match="unrecognized placeholder"):
-        await _run(
-            [
-                {
-                    "id": "build",
-                    "subagent": "x",
-                    "node_summary": "build off a run-qualified reference",
-                    "prompt_template": "{{ @runs/some-run/plan.output }}",
-                }
-            ],
-            _InMemBackend(),
-            "/hist/mas_dag",
-        )
+    # Pinning a run is the ``ref:@runs/`` file form's job. This shape matches
+    # no known placeholder, so it is not resolved as a node reference -- it
+    # passes through into the prompt as ordinary text instead.
+    backend = _InMemBackend()
+    result = await _run(
+        [
+            {
+                "id": "build",
+                "subagent": "x",
+                "node_summary": "build off a run-qualified reference",
+                "prompt_template": "{{ @runs/some-run/plan.output }}",
+            }
+        ],
+        backend,
+        "/hist/mas_dag",
+    )
+
+    assert result.summary["completed"] == 1
+    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/build.prompt.md"].decode()
+    assert "{{ @runs/some-run/plan.output }}" in prompt
 
 
 async def test_a_node_input_rejects_a_run_key() -> None:
@@ -2342,8 +2371,15 @@ async def test_a_node_input_takes_another_runs_output() -> None:
         "/hist/mas_dag",
     )
     prompt = backend.files[f"/hist/mas_dag/{result.run_id}/build.prompt.md"].decode()
-    assert "OUT[plan]:draft it" in prompt
-    assert f"path=/hist/mas_dag/{first.run_id}/plan.out.md" in prompt
+    # A node's output is sub-agent-authored by construction, so the content
+    # form arrives fenced; the path form beside it is unaffected -- a path
+    # needs no fence. Asserted structurally, not against a second
+    # wrap_untrusted call, since the fence mints a fresh nonce each time.
+    lines = prompt.splitlines()
+    assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
+    assert lines[1] == "OUT[plan]:draft it"
+    assert lines[2].startswith("[END UNTRUSTED subagent ")
+    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
 
 
 async def test_a_node_input_may_also_name_a_dependency_of_this_graph() -> None:
@@ -2672,7 +2708,9 @@ async def test_a_missing_file_reads_the_same_for_both_ref_forms(node_id: str, te
     )
     entry = result.files[0]
     assert entry["status"] == "failed"
-    assert entry["error"].startswith(f"{template} points at '/w/gone.md', which does not exist"), entry["error"]
+    assert entry["error"].startswith(f"{template} points at '/w/gone.md', which is not a file it can read"), entry[
+        "error"
+    ]
 
 
 async def test_a_cancellation_on_the_run_started_publish_is_covered_too() -> None:
@@ -2788,7 +2826,7 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
     run-scoped set that this run's own cancellation branch reaps, that poller
     would keep running with nothing left to stop it.
     """
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
     from raven.agent.subagent_memory import EverosIdentity
 
     poller_started = asyncio.Event()
@@ -2999,9 +3037,19 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         **common,
     )
     prompt = (root / second.run_id / "consumer.prompt.md").read_text(encoding="utf-8")
-    assert prompt.count("OUT[seed]:make it") == 2
-    assert f"path={root / first.run_id / 'seed.out.md'}" in prompt
-    assert prompt.count("[BEGIN UNTRUSTED subagent") == 2
+    # `{{ seed.output }}` and `{{ inputs.p }}` are different raw placeholders,
+    # so render_prompt resolves -- and fences -- them separately, with
+    # unrelated nonces; `seed.output_path` is a path form, so the line between
+    # them is unaffected. Asserted structurally, not against a second
+    # wrap_untrusted call, since the fence mints a fresh nonce each time.
+    lines = prompt.splitlines()
+    assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
+    assert lines[1] == "OUT[seed]:make it"
+    assert lines[2].startswith("[END UNTRUSTED subagent ")
+    assert lines[3] == f"path={root / first.run_id / 'seed.out.md'}"
+    assert lines[4].startswith("input=[BEGIN UNTRUSTED subagent ")
+    assert lines[5] == "OUT[seed]:make it"
+    assert lines[6].startswith("[END UNTRUSTED subagent ")
 
     # The index on disk carries both runs, with the outcome that makes 'seed'
     # readable at all.
@@ -3046,7 +3094,7 @@ class _PublishingExec(_FakeExec):
 
     async def run(self, task: str, **kw) -> str:
         from raven.agent.subagent import activity
-        from raven.agent.subagent_dag._store import node_live_key
+        from raven.agent.subagent.dag_store import node_live_key
 
         self.seen_live.append(activity.live(node_live_key(self.run_id, kw["task_id"])))
         activity.note_transcript([{"role": "tool", "name": "read", "content": "file body"}])
@@ -3090,7 +3138,7 @@ async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
 
     # The run id is minted inside run_dag, so the backend cannot know it in
     # advance -- it is read back out of the store the runner writes to.
-    import raven.agent.subagent_dag.runner as runner_mod
+    import raven.agent.subagent.dag_runner as runner_mod
 
     mint = runner_mod.make_run_id
     minted: list[str] = []
@@ -3187,7 +3235,7 @@ async def test_a_node_with_no_instance_is_indexed_under_its_node_id() -> None:
 
 async def test_the_live_index_does_not_outlive_the_node() -> None:
     from raven.agent.subagent import activity
-    from raven.agent.subagent_dag._store import node_live_key
+    from raven.agent.subagent.dag_store import node_live_key
 
     spec = parse_dag_spec(
         {
@@ -3836,13 +3884,13 @@ async def _drain_record_tasks() -> None:
     discards itself from that set as it finishes, and iterating a set something
     else is concurrently mutating is a bug waiting to happen.
     """
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
 
     await asyncio.gather(*list(runner_mod._RECORD_TASKS))
 
 
 async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
     from raven.agent.subagent_memory import EverosIdentity
 
     async def _fake_record(**kwargs: Any) -> None:
@@ -3863,7 +3911,7 @@ async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest
 async def test_a_node_without_an_everos_identity_schedules_no_memory_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
 
     calls: list[Any] = []
 
@@ -3879,7 +3927,7 @@ async def test_a_node_without_an_everos_identity_schedules_no_memory_task(
 async def test_a_node_schedules_no_memory_task_without_everos_for(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
 
     calls: list[Any] = []
 
@@ -3896,7 +3944,7 @@ async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypa
     """The runner is the only place `node.instance` can reach the recorder, and
     every stateful node now has one -- minted by the tool when the author named
     none."""
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
     from raven.agent.subagent_memory import EverosIdentity
 
     seen: dict[str, Any] = {}
@@ -3917,7 +3965,7 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
     """A `trace` node's record is primed with the same turn the log records,
     under the session id the host mints from this run and this node."""
     from raven.agent import subagent_memory as memory_mod
-    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent import dag_runner as runner_mod
     from raven.agent.subagent_memory import EverosIdentity
 
     primed: list[tuple[str, list[dict]]] = []

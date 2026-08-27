@@ -19,7 +19,7 @@ from raven.utils.helpers import safe_path_segment
 # Subtrees of agent home the agent must not be able to adopt as a working
 # directory: it would then write artifacts over its own memory and skills.
 # ``sessions`` covers the subagent history too -- it lives under each session's
-# own directory there (raven/agent/subagent_history.py).
+# own directory there (raven/agent/subagent/history.py).
 _PROTECTED_SUBTREES = ("user_memory", "skills", "sessions")
 
 _CURRENT: ContextVar[Path | None] = ContextVar("raven_session_workdir", default=None)

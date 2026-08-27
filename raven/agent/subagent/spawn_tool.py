@@ -2,86 +2,23 @@
 
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.agent.subagent.history import dag_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
-from raven.agent.subagent_dag._errors import DagValidationError
-from raven.agent.subagent_dag._paths import RUNS_PREFIX, check_confined
+from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.prompt_capabilities import check_path_placeholders
+from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_placeholders import parse_placeholders
+from raven.agent.subagent.prompt_render import needs_a_graph, node_form_refusal, render_template
 from raven.agent.tools.base import Tool
-from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
     from raven.agent.subagent import SubagentManager
     from raven.agent.subagent.backends import AgentMeta
-
-
-_INPUTS_HEADING = (
-    "Inputs handed to you with this task. They are the material to work from; if one is "
-    "missing or empty, say so in your answer rather than inventing what it would have said."
-)
-
-
-class SpawnInputError(ValueError):
-    """An ``inputs`` entry cannot be turned into material for the sub-agent."""
-
-
-def _block(key: str, source: Path | None, text: str) -> str:
-    read_from = f" (read from {source})" if source is not None else ""
-    return f"--- input '{key}'{read_from} ---\n{text}\n--- end input '{key}' ---"
-
-
-def _read_input_file(key: str, path: str, roots: tuple[str, ...]) -> str:
-    """Read one ``{"file": ...}`` input, confined to the roots a dispatch may reach.
-
-    The contents are fenced as untrusted data: the likeliest file here is an
-    earlier spawn's ``out.md``, which is sub-agent-authored, and any other one
-    may hold whatever a run fetched. The same rule a DAG node's references
-    follow -- the caller's own ``task`` is the instruction, injected material is
-    data.
-
-    The ``@runs/`` form is refused rather than resolved: it addresses a DAG run
-    history, and a spawn has none, so resolving it would land on a directory
-    that never exists and report a missing file instead of a wrong reference.
-    """
-    if path.startswith(RUNS_PREFIX):
-        raise SpawnInputError(
-            f"input {key!r} path {path!r} names a DAG run history, which a spawn does not have -- "
-            "give the file's own path, such as the out.md in an earlier call's `Record:` directory"
-        )
-    try:
-        check_confined(path, what=f"input '{key}' file", roots=roots)
-    except DagValidationError as exc:
-        raise SpawnInputError(str(exc)) from exc
-    resolved = Path(path) if Path(path).is_absolute() else Path(roots[0]) / path
-    try:
-        text = resolved.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        raise SpawnInputError(f"input {key!r} file {path!r} could not be read: {exc.strerror or exc}") from exc
-    return _block(key, resolved, wrap_untrusted(text, source="file"))
-
-
-def _resolve_input(key: str, spec: Any, roots: tuple[str, ...]) -> str:
-    if isinstance(spec, dict):
-        if "file" not in spec:
-            raise SpawnInputError(f'input {key!r} must be a string or {{"file": <path>}}')
-        return _read_input_file(key, str(spec["file"]), roots)
-    return _block(key, None, str(spec))
-
-
-def _with_inputs(task: str, inputs: Any, roots: tuple[str, ...]) -> str:
-    """Place the resolved ``inputs`` before ``task``.
-
-    Resolved here rather than handed to the backend as paths: a sub-agent the
-    roster tags ``[no-local-files]`` has no way to open one, and a spawn's whole
-    prompt is the single string the backend receives.
-    """
-    if not isinstance(inputs, dict):
-        raise SpawnInputError("`inputs` must be an object keyed by input name")
-    blocks = [_resolve_input(key, spec, roots) for key, spec in inputs.items()]
-    return "\n\n".join([_INPUTS_HEADING, *blocks, task])
 
 
 @dataclass(frozen=True)
@@ -165,7 +102,6 @@ class SpawnTool(Tool):
         agents = self._agents()
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
-            from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 
             listing = format_agent_listing(agents)
             base += (
@@ -189,16 +125,17 @@ class SpawnTool(Tool):
             base += (
                 " If you are about to issue several spawns for one task, that is a DAG: use "
                 "`run_subagent_dag` instead, so the independent parts run concurrently and each "
-                "step's output reaches the next through a file."
+                "step's output reaches the next without a turn of yours in between."
             )
             # The result carries this path; without a word here the agent has a
             # directory it does not know the use of.
             base += (
                 " The result names a `Record:` directory holding this call's prompt and output. "
-                "Its `out.md` is what to pass as a later call's `inputs` to hand this run's work "
-                "to the next sub-agent. It may also hold `memory.json` -- what the sub-agent "
-                "concluded for itself, rather than the answer it gave you -- written after the "
-                "call, so absence is normal."
+                "Its `out.md` is what to hand a follow-up task -- reference it with "
+                "`{{ ref:<that directory>/out.md }}` instead of restating the result from memory. "
+                "The directory may also hold `memory.json` -- what the sub-agent concluded for "
+                "itself, rather than the answer it gave you -- written after the call, so absence "
+                "is normal."
             )
         return base
 
@@ -214,20 +151,28 @@ class SpawnTool(Tool):
                     "the sub-agent never does, so write it for them -- no ids, no internal shorthand."
                 ),
             },
-            "task": {
+            "prompt_template": {
                 "type": "string",
-                "description": "The task for the subagent to complete",
+                "minLength": 1,
+                "description": (
+                    "The task for the subagent. Placeholders: {{ ref:<path> }} / "
+                    "{{ ref_path:<path> }} inject a file's contents / its path; "
+                    "{{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input. Paths resolve "
+                    "under the working directory and this conversation's sub-agent history, so "
+                    "the `Record:` directory of an earlier spawn is readable: hand its "
+                    "`out.md` to the next task with {{ ref:<record dir>/out.md }} rather than "
+                    "restating it. The _path forms need a sub-agent the roster tags "
+                    "[local-files]; for a [no-local-files] one use the contents forms. "
+                    "Nothing is added around an injected value -- no heading, no label, no source "
+                    "path -- so write in the template itself what the material is and where it "
+                    "came from. Every key in `inputs` must be referenced by a placeholder."
+                ),
             },
             "inputs": {
                 "type": "object",
                 "description": (
-                    "Optional: the material this task works from, per key -- a literal string, or "
-                    '{"file": <path>} for a file. Each one is read now and placed before `task`, so a '
-                    "sub-agent that cannot open local files still receives the contents. This is how "
-                    "one sub-agent's work reaches the next: hand over the out.md in the earlier call's "
-                    "`Record:` directory instead of retyping its result into `task`. Paths resolve "
-                    "inside the session working directory and this conversation's sub-agent history; "
-                    "anything else is refused and nothing is dispatched."
+                    'Per-key literal string or {"file": <path>}. {{ inputs.<k> }} injects the '
+                    "text, {{ inputs.<k>.path }} the file path."
                 ),
             },
         }
@@ -258,7 +203,9 @@ class SpawnTool(Tool):
         return {
             "type": "object",
             "properties": props,
-            "required": ["task_summary", "task", "subagent"] if names else ["task_summary", "task"],
+            "required": (
+                ["task_summary", "prompt_template", "subagent"] if names else ["task_summary", "prompt_template"]
+            ),
         }
 
     def _is_stateful(self, agent: str | None) -> bool:
@@ -292,13 +239,82 @@ class SpawnTool(Tool):
         return (
             f"Error: sub-agent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
             f"each run starts a fresh session regardless.{alt} Call spawn again without `instance`, "
-            f"putting whatever context the run needs into `task`."
+            f"putting whatever context the run needs into `prompt_template`."
+        )
+
+    async def _render(self, template: str, inputs: dict[str, Any], subagent: str | None, session_key: str) -> str:
+        """``template`` with its file and input references resolved, as dispatched.
+
+        Gates before it renders: a ``_path`` form aimed at a sub-agent the roster
+        tags [no-local-files] is refused here, the way the DAG surface has always
+        refused it, rather than reaching that agent as a path it cannot open and
+        coming back as a confident answer about a file it never read.
+
+        The parse is its own step ahead of the gate so a grammar error is raised
+        in its own words instead of being caught by the gate and re-labelled a
+        capability refusal. An unknown ``subagent`` is not pre-judged -- the
+        dispatcher raises on it -- so a name with no roster row reads as
+        permissive here, matching how the DAG gate treats one.
+
+        References resolve against the turn's working directory and this
+        conversation's sub-agent history, the same two roots a DAG node reads, so
+        an earlier spawn's ``Record:`` directory is nameable. Text read from
+        under the history root was written by a sub-agent, and comes back fenced
+        (:func:`~raven.agent.subagent.prompt_render.render_template`).
+
+        Args:
+            template (`str`):
+                The caller's ``prompt_template``.
+            inputs (`dict[str, Any]`):
+                The caller's ``inputs``, keyed as ``inputs.<key>`` names them.
+            subagent (`str | None`):
+                The agent this task is aimed at, whose capabilities gate it.
+            session_key (`str`):
+                The conversation this spawn was made from, which decides whose
+                sub-agent history the references may reach.
+
+        Returns:
+            `str`:
+                The text to dispatch.
+
+        Raises:
+            `DagValidationError`:
+                On a path form aimed at a [no-local-files] sub-agent, a
+                malformed placeholder, an undefined input key, a reference to
+                another task's output, or a file reference that is missing or
+                escapes both roots.
+        """
+        meta = next((a for a in self._agents() if a.name == subagent), None)
+        placeholders = parse_placeholders(template)
+        # Ahead of the gate: a spawn has no graph, so a placeholder naming a node
+        # is refused for that rather than for the capability it also happens to
+        # need. The gate speaking first pointed the model at `{{ <id>.output }}`,
+        # which this surface refuses on the next turn -- two turns to learn one
+        # thing, and the first answer was advice that cannot work here.
+        for ph in placeholders:
+            if needs_a_graph(ph, inputs):
+                raise node_form_refusal(ph.raw)
+        check_path_placeholders(
+            placeholders,
+            subagent or GENERIC_AGENT,
+            reads_local_files=True if meta is None else meta.reads_local_files,
+        )
+        sdir = self._manager.session_dir_for(session_key)
+        history = str(session_history_root(sdir))
+        cwd = str(workdir.current() or self._manager.workspace)
+        return await render_template(
+            template,
+            inputs,
+            backend=LocalFileBackend(),
+            cwd=cwd,
+            runs_root=str(dag_root(sdir)),
+            roots=(cwd, history),
         )
 
     async def execute(
         self,
         task_summary: str,
-        task: str,
+        prompt_template: str | None = None,
         subagent: str | None = None,
         instance: str | None = None,
         inputs: dict[str, Any] | None = None,
@@ -306,44 +322,47 @@ class SpawnTool(Tool):
     ) -> str:
         """Spawn a subagent to execute the given task.
 
-        ``agent`` is accepted from ``kwargs`` because that is what this parameter
-        was called until the field was unified on ``subagent``. Left to fall into
-        ``kwargs`` it would be swallowed and ``subagent`` would stay ``None``,
-        which ``SubagentManager.spawn`` resolves to the generic built-in row --
-        so the old spelling would run the task on a different agent than the one
-        it named, and report success. A rejection would be honest too, but this
-        is a rename we made: doing what the call plainly means costs three lines.
+        ``agent`` and ``task`` are accepted from ``kwargs`` as the old spellings of
+        ``subagent`` and ``prompt_template``. ``ToolRegistry.execute`` validates the
+        schema's ``required`` list before ``execute`` runs, so a model call omitting
+        either new name never reaches this fallback -- it serves callers that bypass
+        the registry (direct and programmatic calls, and this repo's own tests) and a
+        call that sends both spellings, where the new name wins.
         """
+        org = self._cur()
+        # Cleared first, ahead of every return below: an earlier stateful call
+        # whose metadata went uncollected (no tool-event sink on this channel)
+        # must not have its handle popped and reported as this call's own,
+        # whether this call goes on to dispatch or is refused at any step below.
+        self._pending.pop(org.session_key, None)
         subagent = subagent or kwargs.pop("agent", None)
+        template = prompt_template or kwargs.pop("task", None)
+        if not template:
+            return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
         if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
-        org = self._cur()
-        # Before the handle is minted and before anything is dispatched: an input
-        # the caller named and this call could not read is the one case where
-        # running anyway produces exactly the failure this parameter exists to
-        # stop -- a sub-agent working from material that never arrived. The roots
-        # are resolved only when there is something to resolve against them:
-        # deriving them reaches for the session directory.
-        authored_task: str | None = None
-        if inputs:
-            try:
-                rendered = _with_inputs(task, inputs, self._manager.reference_roots(org.session_key))
-            except SpawnInputError as exc:
-                return f"Error: {exc}"
-            authored_task, task = task, rendered
+        if inputs is not None and not isinstance(inputs, dict):
+            return (
+                "Error: `inputs` must be an object keyed by input name -- "
+                '{"<key>": "<text>"} or {"<key>": {"file": "<path>"}}.'
+            )
+        # Rendered before anything is minted or dispatched: a template naming a
+        # file the sub-agent cannot be given is a correctable mistake in the
+        # call, and every one of them has to come back as advice rather than as
+        # a run that started on a prompt with a hole in it.
+        try:
+            task = await self._render(template, inputs or {}, subagent, org.session_key)
+        except DagValidationError as exc:
+            detail = str(exc).rstrip()
+            if detail and detail[-1] not in ".!?":
+                detail += "."
+            return f"Error: {detail} Call spawn again with the corrected prompt_template."
         # Minted rather than left empty so every run of a resumable sub-agent is
         # addressable afterwards. Filling the field the model would have filled
         # is what keeps the rest of the dispatch path unchanged.
         minted = not instance and self._is_stateful(subagent)
         if minted:
-            from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-
             instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
-        # Cleared before the call rather than only on the stateless path: an earlier
-        # stateful call whose metadata went uncollected (no tool-event sink on this
-        # channel) must not have its handle popped and reported as this call's own,
-        # and that is just as true when this call is refused below.
-        self._pending.pop(org.session_key, None)
         result = await self._manager.spawn(
             task=task,
             task_summary=task_summary,
@@ -354,7 +373,10 @@ class SpawnTool(Tool):
             instance=instance,
             instance_auto=minted,
             workspace=workdir.current(),
-            authored_task=authored_task,
+            # The unrendered template, not `task`: the completion announcement
+            # shows this verbatim with no truncation, and `task` may have
+            # inlined a whole file through `{{ ref:<path> }}`.
+            authored_task=template,
             tool_call_id=self._tool_call_id.get(),
         )
         # Published only once the manager has taken the spawn. A refusal (delegation

@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so work whose steps are reading files, editing code or running commands is never a DAG, however many steps it has - do that yourself. For work that does clear that bar, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand a large artifact to the next (it can pass by file instead of through your context), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call.
+description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so work whose steps are reading files, editing code or running commands is never a DAG, however many steps it has - do that yourself. For work that does clear that bar, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -23,16 +23,16 @@ time:
 - **Independence** — can two or more steps run at the same time? Independent nodes are
   scheduled concurrently, up to the shared sub-agent cap
   (`max_concurrent_subagents` — `spawn` draws on the same allowance).
-- **Artifact size** — does a step hand a large result to the next one? A node's output
-  is written to a file the downstream node reads, so it never passes through your
-  context.
+- **Handoff** — does a step hand its result to the next one? A node's output is written
+  to a file the downstream node reads, and the graph wires that handoff itself. A single
+  `spawn` can pass a result by file too — its `Record:` directory holds an `out.md` a
+  later `{{ ref: }}` reads — but only across a turn of yours; a graph needs none.
 - **Specialism** — do the steps want different sub-agents? The tool's own description
   lists the roster and what each one is for.
 
 If any of the three holds, express the whole task as **one** `run_subagent_dag` call
-rather than dispatching sub-agents one at a time. A fourth property comes free once
-you do: every node's prompt and output is persisted, so intermediate steps stay
-readable afterwards.
+rather than dispatching sub-agents one at a time. Persistence is not one of the reasons:
+every node's prompt and output is written to disk, and so is every `spawn`'s.
 
 If none of the three holds, the graph buys you nothing — dispatch the work as a single
 `spawn`, which is the right call exactly when the task is genuinely one sub-agent doing

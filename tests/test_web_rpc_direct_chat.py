@@ -126,7 +126,7 @@ async def test_the_web_channel_reads_history_through_the_live_loop(tmp_path) -> 
     seen: list[str] = []
 
     class _Manager:
-        def _session_dir(self, session_key: str):
+        def session_dir_for(self, session_key: str):
             seen.append(session_key)
             return tmp_path
 

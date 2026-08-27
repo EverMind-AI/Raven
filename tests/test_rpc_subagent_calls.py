@@ -8,7 +8,7 @@ The listing tests drive a **real** ``SubagentManager.spawn`` rather than writing
 the record by hand. The reader and the writer live in different modules and were
 written for different designs, so a fixture shaped like the record would only
 assert my idea of it: the directory names, the status vocabulary and the epoch
-stamps all come from ``raven/agent/subagent_history.py``, and a test that mints
+stamps all come from ``raven/agent/subagent/history.py``, and a test that mints
 its own cannot notice when they change.
 """
 
@@ -274,7 +274,7 @@ def test_both_methods_are_registered(workspace: Path) -> None:
 
 
 def _call_dir_on_disk(workspace: Path, call_id: str) -> Path:
-    from raven.agent.subagent_history import spawn_root
+    from raven.agent.subagent.history import spawn_root
     from raven.session.manager import SessionManager
 
     return spawn_root(SessionManager(workspace).session_dir(SESSION)) / call_id
@@ -562,12 +562,12 @@ async def test_an_unreadable_usage_report_does_not_fail_the_run(workspace: Path)
 # Written as run dirs rather than by running a graph: run_dag needs configured
 # third-party agents and a workspace backend, and what is under test here is the
 # reader over `graph.json` + `manifest.json`, whose shape comes from
-# raven/agent/subagent_dag/_store.py.
+# raven/agent/subagent/dag_store.py.
 # ---------------------------------------------------------------------------
 
 
 def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None, nodes: list[dict] | None = None) -> Path:
-    from raven.agent.subagent_history import dag_root
+    from raven.agent.subagent.history import dag_root
     from raven.session.manager import SessionManager
 
     run = dag_root(SessionManager(workspace).session_dir(SESSION)) / run_id

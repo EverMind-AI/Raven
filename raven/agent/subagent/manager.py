@@ -27,10 +27,10 @@ from raven.agent.subagent.direct_chat import (
     DirectChatRecord,
     DirectTurnMeta,
 )
+from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
-from raven.agent.subagent_history import SpawnRecord, session_history_root
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
     EverosIdentity,
@@ -148,7 +148,7 @@ class SubagentManager:
         self.workspace = workspace
         # SessionManager.session_dir, so a call record lands beside the
         # transcript of the session that made it -- including the sessions
-        # whose group only the manager can resolve (raven/agent/subagent_history.py).
+        # whose group only the manager can resolve (raven/agent/subagent/history.py).
         self.session_dir = session_dir
         self._fallback_sessions: Any = None
         # Spine submit, late-bound (the scheduler pins its home loop at
@@ -563,6 +563,14 @@ class SubagentManager:
         branches this used to be spread across. The name is unchanged from what
         those branches produced, so existing instance-registry rows and
         direct-chat records still resolve.
+
+        ``authored_task`` is what the completion announcement shows on its
+        ``Task:`` line in place of ``task`` itself; omitted, the announcement
+        falls back to ``task``. Kept apart because a caller may render file
+        references into ``task`` before dispatch (the spawn tool's
+        ``{{ ref:<path> }}``), and that line is concatenated into the host's
+        context verbatim with no truncation -- showing the rendered text there
+        would re-inject the whole file.
         """
         agent = agent or GENERIC_AGENT
         if self._paused:
@@ -723,7 +731,7 @@ class SubagentManager:
         """
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
 
-        session_dir = self._session_dir(session_key)
+        session_dir = self.session_dir_for(session_key)
         effective_workspace = workspace or self.workspace
         task_id = str(uuid.uuid4())[:8]
         state = self.instance_state(session_key, agent, handle)
@@ -920,7 +928,7 @@ class SubagentManager:
         name = agent or GENERIC_AGENT
         if not self._is_replayed(name):
             return None
-        return InstanceState(instance_state_path(self._session_dir(session_key), name, handle))
+        return InstanceState(instance_state_path(self.session_dir_for(session_key), name, handle))
 
     @trace.instrument("subagent.run", extract=semconv.subagent)
     async def _run_subagent(
@@ -975,8 +983,14 @@ class SubagentManager:
             return ()
         return ((str(self.workspace), "/agent-home", "rw"),)
 
-    def _session_dir(self, session_key: str) -> Path:
+    def session_dir_for(self, session_key: str) -> Path:
         """The metadata directory of the session a spawn was made from.
+
+        Part of the manager's surface rather than a private helper because a
+        caller outside it needs the very directory the records land in: the
+        spawn tool resolves a prompt's file references against this session's
+        sub-agent history, and a second derivation of the same path would be
+        free to disagree with the one that wrote the records.
 
         Falls back to a slug-less ``SessionManager`` when no resolver was
         injected -- the gateway's grouping, and the right answer for a manager
@@ -1008,7 +1022,7 @@ class SubagentManager:
         """
         roots = [str(workdir.current() or self.workspace)]
         if self.session_dir is not None or (Path(self.workspace) / "sessions").is_dir():
-            roots.append(str(session_history_root(self._session_dir(session_key))))
+            roots.append(str(session_history_root(self.session_dir_for(session_key))))
         return tuple(roots)
 
     async def _run_subagent_inner(
@@ -1030,7 +1044,7 @@ class SubagentManager:
         # effective_workspace: the record has to outlive whatever the working
         # directory is pointed at.
         record = SpawnRecord.open(
-            self._session_dir(session_key or ""),
+            self.session_dir_for(session_key or ""),
             task_id=task_id,
             task=task,
             meta={
@@ -1228,6 +1242,9 @@ class SubagentManager:
         so subagent completion is event-driven end-to-end. Do NOT also
         enqueue a heartbeat SystemEvent here — that would process the same
         fact twice (double LLM cost, risk of double-notifying the user).
+
+        The ``Task:`` line shows ``origin["authored_task"]`` when the spawn
+        carried one, ``task`` otherwise -- see ``spawn`` for why.
         """
         # "ok" says the backend returned, not that the work was carried out: the
         # cli backend derives it from a zero exit status alone, and nothing here
@@ -1249,6 +1266,9 @@ class SubagentManager:
             else ""
         )
         record_line = f"\n\nRecord: {record_dir}" if record_dir else ""
+        # The template, not the rendered prompt: a rendered `ref` can inline a
+        # whole file, and this line is concatenated verbatim with no truncation,
+        # so the file would be re-injected into the host's context in full.
         asked = origin.get("authored_task") or task
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 

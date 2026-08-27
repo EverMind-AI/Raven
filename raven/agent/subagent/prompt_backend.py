@@ -30,4 +30,9 @@ class LocalFileBackend:
         p.write_bytes(data)
 
     async def file_exists(self, path: str) -> bool:
-        return Path(path).exists()
+        # `is_file`, not `exists`: every caller is asking whether there is a file
+        # here to read, and a directory answering yes sent `{{ ref:<dir> }}` past
+        # the existence check into `read_bytes`, which raised IsADirectoryError
+        # out of the tool instead of returning the shaped advice a mistyped
+        # reference gets. The RPC-side backend already agreed on `is_file`.
+        return Path(path).is_file()

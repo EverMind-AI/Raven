@@ -33,13 +33,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
+from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.direct_chat import direct_root
+from raven.agent.subagent.history import dag_root, spawn_root
 from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent.tool_vocabulary import normalize_row
-from raven.agent.subagent_dag.live import live_run_ids
-from raven.agent.subagent_history import dag_root, spawn_root
 from raven.rpc.methods.session import _wire_tool_calls
 
 if TYPE_CHECKING:
@@ -78,13 +78,13 @@ def _session_dir(agent_loop_factory: "AgentLoopFactory | None", session_key: str
 
     Routed through the manager so this resolves a session exactly the way the
     code that wrote the records did, rather than as a second derivation that
-    could drift (see ``SubagentManager._session_dir``).
+    could drift (see ``SubagentManager.session_dir_for``).
     """
     manager = _manager(agent_loop_factory)
     if manager is None:
         return None
     try:
-        return manager._session_dir(session_key)
+        return manager.session_dir_for(session_key)
     except Exception:
         return None
 
@@ -259,7 +259,7 @@ async def instances_list(
         get_registry().list_instances(session_key),
         live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
         # Every graph tool, not just the registered one -- see
-        # ``raven.agent.subagent_dag.live``.
+        # ``raven.agent.subagent.dag_live``.
         active_run_ids=(lambda: live_run_ids(loop)),
     )
     return {

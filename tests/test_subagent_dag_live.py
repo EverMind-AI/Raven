@@ -1,4 +1,4 @@
-"""Live-run questions about a graph (raven/agent/subagent_dag/live.py).
+"""Live-run questions about a graph (raven/agent/subagent/dag_live.py).
 
 Both answers are advisory -- they decide whether a row draws as running and
 whether a stop button reports anything -- and both are invoked lazily, only for a
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.subagent_dag.live import cancel_run, live_run_ids
+from raven.agent.subagent.dag_live import cancel_run, live_run_ids
 
 
 class _Tool:

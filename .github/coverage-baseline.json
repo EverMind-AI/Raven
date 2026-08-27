@@ -272,6 +272,78 @@
       "line_percent": 98.113208,
       "statements": 106
     },
+    "raven/agent/subagent/dag_capabilities.py": {
+      "branch_percent": 100.0,
+      "branches": 20,
+      "covered_branches": 20,
+      "covered_lines": 40,
+      "line_percent": 100.0,
+      "statements": 40
+    },
+    "raven/agent/subagent/dag_graph.py": {
+      "branch_percent": 90.0,
+      "branches": 60,
+      "covered_branches": 54,
+      "covered_lines": 106,
+      "line_percent": 96.363636,
+      "statements": 110
+    },
+    "raven/agent/subagent/dag_projection.py": {
+      "branch_percent": 0.0,
+      "branches": 8,
+      "covered_branches": 0,
+      "covered_lines": 1,
+      "line_percent": 8.333333,
+      "statements": 12
+    },
+    "raven/agent/subagent/dag_reader.py": {
+      "branch_percent": 88.461538,
+      "branches": 26,
+      "covered_branches": 23,
+      "covered_lines": 73,
+      "line_percent": 92.405063,
+      "statements": 79
+    },
+    "raven/agent/subagent/dag_render.py": {
+      "branch_percent": 85.294118,
+      "branches": 34,
+      "covered_branches": 29,
+      "covered_lines": 70,
+      "line_percent": 94.594595,
+      "statements": 74
+    },
+    "raven/agent/subagent/dag_resume.py": {
+      "branch_percent": 100.0,
+      "branches": 10,
+      "covered_branches": 10,
+      "covered_lines": 22,
+      "line_percent": 100.0,
+      "statements": 22
+    },
+    "raven/agent/subagent/dag_runner.py": {
+      "branch_percent": 90.909091,
+      "branches": 66,
+      "covered_branches": 60,
+      "covered_lines": 198,
+      "line_percent": 93.838863,
+      "statements": 211
+    },
+    "raven/agent/subagent/dag_store.py": {
+      "branch_percent": 88.888889,
+      "branches": 18,
+      "covered_branches": 16,
+      "covered_lines": 91,
+      "line_percent": 94.791667,
+      "statements": 96
+    },
+    "raven/agent/subagent/dag_tool.py": {
+      "branch_percent": 96.875,
+      "branches": 64,
+      "covered_branches": 62,
+      "covered_lines": 259,
+      "line_percent": 97.003745,
+      "statements": 267
+    },
     "raven/agent/subagent/direct_chat.py": {
       "branch_percent": 100.0,
       "branches": 18,
@@ -279,6 +351,14 @@
       "covered_lines": 103,
       "line_percent": 96.261682,
       "statements": 107
+    },
+    "raven/agent/subagent/history.py": {
+      "branch_percent": 91.666667,
+      "branches": 12,
+      "covered_branches": 11,
+      "covered_lines": 64,
+      "line_percent": 92.753623,
+      "statements": 69
     },
     "raven/agent/subagent/instance_state.py": {
       "branch_percent": 100.0,
@@ -320,103 +400,7 @@
       "line_percent": 92.105263,
       "statements": 190
     },
-    "raven/agent/subagent/test_state.py": {
-      "branch_percent": 83.333333,
-      "branches": 6,
-      "covered_branches": 5,
-      "covered_lines": 64,
-      "line_percent": 98.461538,
-      "statements": 65
-    },
-    "raven/agent/subagent_dag/__init__.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 10,
-      "line_percent": 100.0,
-      "statements": 10
-    },
-    "raven/agent/subagent_dag/_capabilities.py": {
-      "branch_percent": 100.0,
-      "branches": 20,
-      "covered_branches": 20,
-      "covered_lines": 40,
-      "line_percent": 100.0,
-      "statements": 40
-    },
-    "raven/agent/subagent_dag/_errors.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 1,
-      "line_percent": 100.0,
-      "statements": 1
-    },
-    "raven/agent/subagent_dag/_graph.py": {
-      "branch_percent": 90.0,
-      "branches": 60,
-      "covered_branches": 54,
-      "covered_lines": 106,
-      "line_percent": 96.363636,
-      "statements": 110
-    },
-    "raven/agent/subagent_dag/_paths.py": {
-      "branch_percent": 100.0,
-      "branches": 10,
-      "covered_branches": 10,
-      "covered_lines": 27,
-      "line_percent": 100.0,
-      "statements": 27
-    },
-    "raven/agent/subagent_dag/_placeholders.py": {
-      "branch_percent": 95.0,
-      "branches": 20,
-      "covered_branches": 19,
-      "covered_lines": 38,
-      "line_percent": 97.435897,
-      "statements": 39
-    },
-    "raven/agent/subagent_dag/_projection.py": {
-      "branch_percent": 0.0,
-      "branches": 8,
-      "covered_branches": 0,
-      "covered_lines": 1,
-      "line_percent": 8.333333,
-      "statements": 12
-    },
-    "raven/agent/subagent_dag/_reader.py": {
-      "branch_percent": 88.461538,
-      "branches": 26,
-      "covered_branches": 23,
-      "covered_lines": 73,
-      "line_percent": 92.405063,
-      "statements": 79
-    },
-    "raven/agent/subagent_dag/_render.py": {
-      "branch_percent": 85.294118,
-      "branches": 34,
-      "covered_branches": 29,
-      "covered_lines": 70,
-      "line_percent": 94.594595,
-      "statements": 74
-    },
-    "raven/agent/subagent_dag/_resume.py": {
-      "branch_percent": 100.0,
-      "branches": 10,
-      "covered_branches": 10,
-      "covered_lines": 22,
-      "line_percent": 100.0,
-      "statements": 22
-    },
-    "raven/agent/subagent_dag/_store.py": {
-      "branch_percent": 88.888889,
-      "branches": 18,
-      "covered_branches": 16,
-      "covered_lines": 91,
-      "line_percent": 94.791667,
-      "statements": 96
-    },
-    "raven/agent/subagent_dag/backend.py": {
+    "raven/agent/subagent/prompt_backend.py": {
       "branch_percent": 50.0,
       "branches": 2,
       "covered_branches": 1,
@@ -424,29 +408,45 @@
       "line_percent": 94.444444,
       "statements": 18
     },
-    "raven/agent/subagent_dag/runner.py": {
-      "branch_percent": 90.909091,
-      "branches": 66,
-      "covered_branches": 60,
-      "covered_lines": 198,
-      "line_percent": 93.838863,
-      "statements": 211
+    "raven/agent/subagent/prompt_errors.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 1,
+      "line_percent": 100.0,
+      "statements": 1
     },
-    "raven/agent/subagent_dag/tool.py": {
-      "branch_percent": 96.875,
-      "branches": 64,
-      "covered_branches": 62,
-      "covered_lines": 259,
-      "line_percent": 97.003745,
-      "statements": 267
+    "raven/agent/subagent/prompt_paths.py": {
+      "branch_percent": 100.0,
+      "branches": 10,
+      "covered_branches": 10,
+      "covered_lines": 27,
+      "line_percent": 100.0,
+      "statements": 27
     },
-    "raven/agent/subagent_history.py": {
-      "branch_percent": 91.666667,
-      "branches": 12,
-      "covered_branches": 11,
+    "raven/agent/subagent/prompt_placeholders.py": {
+      "branch_percent": 95.0,
+      "branches": 20,
+      "covered_branches": 19,
+      "covered_lines": 38,
+      "line_percent": 97.435897,
+      "statements": 39
+    },
+    "raven/agent/subagent/spawn_tool.py": {
+      "branch_percent": 100.0,
+      "branches": 14,
+      "covered_branches": 14,
+      "covered_lines": 65,
+      "line_percent": 100.0,
+      "statements": 65
+    },
+    "raven/agent/subagent/test_state.py": {
+      "branch_percent": 83.333333,
+      "branches": 6,
+      "covered_branches": 5,
       "covered_lines": 64,
-      "line_percent": 92.753623,
-      "statements": 69
+      "line_percent": 98.461538,
+      "statements": 65
     },
     "raven/agent/tools/__init__.py": {
       "branch_percent": 100.0,
@@ -615,14 +615,6 @@
       "covered_lines": 120,
       "line_percent": 96.0,
       "statements": 125
-    },
-    "raven/agent/tools/spawn.py": {
-      "branch_percent": 100.0,
-      "branches": 14,
-      "covered_branches": 14,
-      "covered_lines": 65,
-      "line_percent": 100.0,
-      "statements": 65
     },
     "raven/agent/tools/tool_index.py": {
       "branch_percent": 100.0,

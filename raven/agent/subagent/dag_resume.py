@@ -31,7 +31,7 @@ async def read_run_reconciled(
             gets overlaid ``interrupted``.
         live_runs (`Callable[[], set[str]] | None`):
             Liveness across *every* graph tool, which is what a caller holding
-            the agent loop can supply (``subagent_dag.live.live_run_ids``). The
+            the agent loop can supply (``subagent.dag_live.live_run_ids``). The
             fourth consumer of this question and the one that was missed: the two
             ``subagents.*`` readers and the web cancel were routed through the
             loop, this one kept reading the tool, so a backgrounded playbook run
@@ -45,7 +45,7 @@ async def read_run_reconciled(
 
     Returns:
         `dict`:
-            The manifest-shaped payload from :func:`_reader.read_run`, with
+            The manifest-shaped payload from :func:`dag_reader.read_run`, with
             per-node status/timestamps and the summary recomputed from the
             overlay when the run had not finalized.
     """

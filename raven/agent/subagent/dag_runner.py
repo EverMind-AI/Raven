@@ -21,12 +21,10 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.instances import get_registry, hold_handle
-from raven.agent.subagent_dag._capabilities import AgentCapabilities
-from raven.agent.subagent_dag._errors import DagValidationError
-from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
-from raven.agent.subagent_dag._render import render_prompt
-from raven.agent.subagent_dag._store import (
+from raven.agent.subagent.dag_capabilities import AgentCapabilities
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
+from raven.agent.subagent.dag_render import render_prompt
+from raven.agent.subagent.dag_store import (
     DagRunStore,
     SessionNodes,
     index_guard,
@@ -34,6 +32,8 @@ from raven.agent.subagent_dag._store import (
     node_live_key,
     read_session_nodes,
 )
+from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
     EverosIdentity,
@@ -163,7 +163,7 @@ async def run_dag(
     against, so it has to be where the user's files are. ``run_root`` is this
     session's DAG history root, where the prompt/output records are written --
     an audit trail that outlives whatever the working directory is pointed at
-    (raven/agent/subagent_history.py).
+    (raven/agent/subagent/history.py).
 
     They are both reference roots, though, not just the one: ``run_root``
     resolves ``{{ ref:@runs/<run_id>/... }}``, which is the short way for a
@@ -184,16 +184,17 @@ async def run_dag(
     ``workdir.py`` keeps those three out of the agent's file surface as
     ``_PROTECTED_SUBTREES``, and a DAG graph is LLM-authored and auto-run, so a
     root that spanned them would render their contents into a third-party
-    sub-agent's prompt. See :func:`._paths.check_confined`.
+    sub-agent's prompt. See
+    :func:`raven.agent.subagent.prompt_paths.check_confined`.
 
     Node ids are unique across the session, not just across this graph: the
     session index under ``run_root`` is read before validation, so a graph
     reusing an id an earlier run already took is refused, and one naming a node
     an earlier run *completed* resolves to that run's output, needing no
     ``depends_on`` entry for it. Such an entry is allowed and satisfied on
-    sight; ``_graph.graph_deps`` is what keeps it out of the scheduling below,
+    sight; ``dag_graph.graph_deps`` is what keeps it out of the scheduling below,
     which only knows this run's statuses. Those two are separate questions --
-    see :class:`._store.SessionNodes`.
+    see :class:`.dag_store.SessionNodes`.
 
     ``semaphore`` caps how many nodes dispatch at once. Pass one in to share the
     cap with everything else that runs a sub-agent -- concurrent runs, and
@@ -597,7 +598,7 @@ async def _add_node_to_instance_log(
         return []
     handle = getattr(node, "instance", None) or node.id
     try:
-        from raven.agent.subagent_history import add_turn_to_instance_log
+        from raven.agent.subagent.history import add_turn_to_instance_log
 
         return add_turn_to_instance_log(
             Path(subagents_root).parent,

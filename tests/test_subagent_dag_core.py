@@ -1,6 +1,6 @@
 """Ported DAG core (req4/P3): graph validation, placeholders, render, store.
 
-Covers the provider-agnostic core of raven.agent.subagent_dag (no agentscope);
+Covers the provider-agnostic core of the sub-agent DAG subsystem (no agentscope);
 render/store are exercised over a tiny in-memory duck-typed backend.
 """
 
@@ -8,27 +8,21 @@ from __future__ import annotations
 
 import json
 import posixpath
+from pathlib import Path
 
 import pytest
 
-from raven.agent.subagent_dag import (
-    AgentCapabilities,
-    DagReadError,
-    DagRunStore,
-    DagValidationError,
-    SessionNodes,
-    check_confined,
-    make_run_id,
-    parse_dag_spec,
-    parse_placeholders,
-    read_node,
-    read_run,
-    render_prompt,
-    split_reference,
-    validate_and_order,
-    validate_capabilities,
-)
-from raven.agent.subagent_dag.tool import _NODE_SCHEMA
+from raven.agent.subagent.dag_capabilities import validate_capabilities
+from raven.agent.subagent.dag_graph import parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_reader import DagReadError, read_node, read_run
+from raven.agent.subagent.dag_render import render_prompt
+from raven.agent.subagent.dag_store import DagRunStore, SessionNodes, make_run_id
+from raven.agent.subagent.dag_tool import _NODE_SCHEMA
+from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.prompt_capabilities import AgentCapabilities
+from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_paths import check_confined, split_reference
+from raven.agent.subagent.prompt_placeholders import parse_placeholders
 
 # --- graph ---------------------------------------------------------------
 
@@ -283,6 +277,45 @@ def test_path_placeholders_are_rejected_for_an_agent_that_cannot_read_files(
     assert "no-local-files" in message
     assert suggested in message  # names the content form to switch to
     assert "run_subagent_dag again" in message
+
+
+def test_a_grammar_error_surfaces_unwrapped_by_the_capability_gate() -> None:
+    """A malformed placeholder is the parser's error, not the path-placeholder
+    gate's. Calling ``validate_capabilities`` directly, with no earlier grammar
+    pass, must not catch it and dress it in advice for an unrelated capability
+    fault -- the shape a future caller with no such pass would hit too."""
+    spec = _spec(
+        {"id": "a", "subagent": "x", "prompt_template": "upstream"},
+        {"id": "b", "subagent": "x", "prompt_template": "{{ ref: }}", "depends_on": ["a"]},
+    )
+    with pytest.raises(DagValidationError) as exc:
+        validate_capabilities(spec, _STATELESS_BOXED)
+
+    message = str(exc.value)
+    assert message == "empty path in '{{ ref: }}'"
+    assert "no-local-files" not in message
+    assert "run_subagent_dag again" not in message
+
+
+def test_the_capability_refusal_keeps_mains_exact_wording() -> None:
+    """A genuine capability refusal, by contrast, still carries the DAG's
+    advice -- and the generalized gate must land on the byte-for-byte string
+    the single-function version raised, since this message is model-facing."""
+    spec = _spec(
+        {"id": "a", "subagent": "x", "prompt_template": "upstream"},
+        {"id": "b", "subagent": "x", "prompt_template": "read {{ a.output_path }}", "depends_on": ["a"]},
+    )
+    with pytest.raises(DagValidationError) as exc:
+        validate_capabilities(spec, _STATELESS_BOXED)
+
+    assert str(exc.value) == (
+        "node 'b' passes local file paths to sub-agent 'x', which the roster "
+        "tags [no-local-files]: it cannot open them, so the path would reach "
+        "it as meaningless text. Replace each with the content form "
+        "({{ a.output_path }} -> use {{ a.output }}), or move the node to a "
+        "sub-agent tagged [local-files]. Then call run_subagent_dag again "
+        "with the corrected graph."
+    )
 
 
 def test_content_placeholders_are_fine_for_an_agent_that_cannot_read_files() -> None:
@@ -675,7 +708,7 @@ async def test_a_runs_reference_is_refused_when_no_history_root_is_known() -> No
 )
 async def test_a_path_placeholder_naming_a_missing_file_is_refused(template: str, extra: dict) -> None:
     node = _one_node(template, **extra)
-    with pytest.raises(DagValidationError, match="does not exist"):
+    with pytest.raises(DagValidationError, match="is not a file it can read"):
         await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})
 
 
@@ -931,3 +964,63 @@ async def test_a_cross_run_upstream_is_named_with_its_own_run() -> None:
         session_nodes=SessionNodes(owner={"earlier": "run1"}, state={"earlier": "completed"}),
     )
     assert "/hist/mas_dag/run1/earlier.memory.json" in rendered
+
+
+def _node_with_inputs(template: str, inputs: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "a",
+        "subagent": "x",
+        "node_summary": "carry material into the prompt",
+        "prompt_template": template,
+        "inputs": inputs,
+    }
+
+
+def test_a_graph_declaring_an_input_no_placeholder_names_is_refused() -> None:
+    """The graph gate, so nothing is dispatched.
+
+    A node used to validate and render with the declared material simply absent
+    from its prompt: the sub-agent worked from what was left, and the run still
+    read as finished. `validate_and_order` is where a graph is refused whole, so
+    it is where this belongs -- the renderer would already be mid-run.
+    """
+    spec = parse_dag_spec(
+        {
+            "task_summary": "declare material and never reference it",
+            "nodes": [_node_with_inputs("do the task", {"silently_lost": "important material"})],
+        }
+    )
+
+    with pytest.raises(DagValidationError, match="node 'a' input 'silently_lost' is declared but never referenced"):
+        validate_and_order(spec)
+
+
+async def test_the_renderer_refuses_it_too_whoever_called(tmp_path: Path) -> None:
+    """The same question at the second gate.
+
+    `render_prompt` has its own interpolation loop and never reaches the shared
+    renderer's, so a caller that skips validation -- which the tests here do
+    routinely -- would still drop the material silently.
+    """
+    spec = parse_dag_spec(
+        {
+            "task_summary": "declare material and never reference it",
+            "nodes": [_node_with_inputs("do the task", {"silently_lost": "important material"})],
+        }
+    )
+
+    with pytest.raises(DagValidationError, match="declared but never referenced"):
+        await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path), output_paths={})
+
+
+async def test_a_referenced_input_still_renders_where_it_is_named(tmp_path: Path) -> None:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "reference the material",
+            "nodes": [_node_with_inputs("use {{ inputs.brief }} now", {"brief": "keep it short"})],
+        }
+    )
+
+    assert validate_and_order(spec) == ["a"]
+    rendered = await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path), output_paths={})
+    assert rendered == "use keep it short now"

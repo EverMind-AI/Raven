@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """Root-confinement guard for author-provided DAG file references."""
 
+import os
 import posixpath
 
-from ._errors import DagValidationError
+from raven.agent.subagent.prompt_errors import DagValidationError
 
 # Prefix that aims a reference at this session's DAG run history instead of the
 # session working directory. The run dirs sit under the session's metadata
-# directory (raven/agent/subagent_history.py), which is a protected subtree no
+# directory (raven/agent/subagent/history.py), which is a protected subtree no
 # working directory can ever be aimed at -- so a relative path from the workdir
 # never reaches one, and without this prefix a graph has no short way to name an
 # earlier run's output at all.
@@ -54,8 +55,12 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
     ``[no-local-files]`` backend has. This root is inside the session that
     submitted the graph, which is the material it is already working on.
 
-    Containment is lexical, so a symlink inside a root that points outside it is
-    still followed at read time.
+    Containment is decided on the path the reference resolves to on disk, not on
+    the string the author wrote: a symlink inside a root can name a target
+    outside every one of them, and the read follows the link. Both sides go
+    through ``realpath``, so a root reached through a symlink still contains its
+    own files. That makes this a local-filesystem question -- every caller reads
+    through a local backend today; a remote one would have to ask its own side.
 
     ``roots`` is optional because the two callers know different things: the
     tool checks a graph before dispatching anything and knows both roots, while
@@ -85,9 +90,12 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
 
     base = posixpath.normpath(roots[0])
     resolved = posixpath.normpath(relative if posixpath.isabs(relative) else posixpath.join(base, relative))
-    if not any(_within(resolved, candidate) for candidate in roots):
+    physical = os.path.realpath(resolved)
+    if not any(within(physical, os.path.realpath(candidate)) for candidate in roots):
         # Only name the resolved path when it says something the given one does
-        # not -- for an absolute reference the two are the same string.
+        # not -- for an absolute reference the two are the same string. The
+        # physical path is deliberately not shown: it can name a directory the
+        # author was never entitled to learn about.
         where = f"'{path}'" if resolved == path else f"'{path}' (-> '{resolved}')"
         raise DagValidationError(
             f"{what} path {where} is outside the session workdir and its sub-agent history",
@@ -104,7 +112,13 @@ def _check_shape(path: str, relative: str, *, what: str, root: str) -> None:
         )
 
 
-def _within(child: str, root: str) -> bool:
-    """Whether ``child`` is ``root`` or sits under it, comparing text only."""
+def within(child: str, root: str) -> bool:
+    """Whether ``child`` is ``root`` or sits under it, comparing text only.
+
+    Text only, and given already-resolved paths by ``check_confined`` -- it
+    supplies the containment half, and its caller supplies the resolution. Kept
+    public because a caller comparing two paths it has resolved itself should
+    use the same rule rather than writing a second one.
+    """
     normalized = posixpath.normpath(root)
     return child == normalized or child.startswith(normalized.rstrip("/") + "/")

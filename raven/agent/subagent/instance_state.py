@@ -5,7 +5,7 @@ keeps only its id. The built-in in-process sub-agent and an OpenAI-compatible
 HTTP agent have no such store, so Raven keeps their message list here and
 replays it on the next turn -- which is what makes those two kinds resumable.
 
-Sits beside the audit record (``raven/agent/subagent_history.py``) but is a
+Sits beside the audit record (``raven/agent/subagent/history.py``) but is a
 different thing: this file is mutable resume state and gets overwritten, while
 a record directory is append-only evidence. Keeping them in one file would let
 a single interrupted write destroy both.

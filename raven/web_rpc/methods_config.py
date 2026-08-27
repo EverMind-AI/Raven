@@ -134,12 +134,12 @@ def register_config_methods(
       the session has a subagent in flight.
     """
     from raven.agent.subagent.backends import agent_meta
+    from raven.agent.subagent.dag_live import cancel_run, live_run_ids
+    from raven.agent.subagent.dag_resume import read_run_reconciled
     from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
     from raven.agent.subagent.presets import third_party_subagent_presets
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
     from raven.agent.subagent.test_state import TestStateStore
-    from raven.agent.subagent_dag._resume import read_run_reconciled
-    from raven.agent.subagent_dag.live import cancel_run, live_run_ids
     from raven.agent.workdir import validate_override
     from raven.config.loader import get_config_path
     from raven.config.schema import SubagentsConfig

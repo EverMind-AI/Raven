@@ -4,12 +4,13 @@
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
-from ._errors import DagValidationError
-from ._paths import check_confined
-from ._placeholders import parse_placeholders
-from ._store import RUNNING, UNRECORDED, SessionNodes
+from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, SessionNodes
+from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_paths import check_confined
+from raven.agent.subagent.prompt_placeholders import parse_placeholders
+from raven.agent.subagent.prompt_render import check_inputs_referenced
 
-# A node id becomes a path component (``<id>.prompt.md``; ``_reader.py`` re-checks
+# A node id becomes a path component (``<id>.prompt.md``; ``dag_reader.py`` re-checks
 # it with its own copy of this charset before joining a web-supplied id into a
 # path), so it stays a closed set.
 _ID_PATTERN = r"^[A-Za-z0-9_-]+$"
@@ -206,11 +207,12 @@ def validate_and_order(
             history (``<session_dir>/subagents/``). Passed by the caller
             that knows them, so a graph naming an unreachable file is
             refused before any node is dispatched rather than failing
-            the node that reads it. See :func:`._paths.check_confined`
-            for what ``None`` falls back to.
+            the node that reads it. See
+            :func:`raven.agent.subagent.prompt_paths.check_confined` for what
+            ``None`` falls back to.
         session_nodes (`SessionNodes | None`):
             What this session's earlier runs did with each node id
-            (``_store.read_session_nodes``). Node ids are unique per
+            (``dag_store.read_session_nodes``). Node ids are unique per
             session, so this both refuses a graph that reuses one and
             makes an earlier run's *completed* node addressable by id
             alone.
@@ -330,6 +332,7 @@ def _validate_refs(
     """
     declared_deps = set(node.depends_on)
     known = session_nodes or SessionNodes()
+    check_inputs_referenced(node.prompt_template, node.inputs, prefix=f"node '{node.id}' ")
     for ph in parse_placeholders(node.prompt_template):
         if ph.kind in ("output", "output_path"):
             _check_output_ref(node, ph, declared_deps, known)

@@ -376,10 +376,10 @@ async def test_chat_resumes_the_built_in_subagent(tmp_path, monkeypatch):
     # Both turns left a record, and the state file grew rather than reset.
     from raven.agent.subagent.direct_chat import direct_root
 
-    root = direct_root(manager._session_dir("s1"), "raven", "notes")
+    root = direct_root(manager.session_dir_for("s1"), "raven", "notes")
     assert len([p for p in root.iterdir() if p.is_dir()]) == 2
 
-    stored = InstanceState(instance_state_path(manager._session_dir("s1"), "raven", "notes")).load()
+    stored = InstanceState(instance_state_path(manager.session_dir_for("s1"), "raven", "notes")).load()
     assert [m["content"] for m in stored if m["role"] == "user"] == ["first", "second"]
 
 
@@ -388,7 +388,7 @@ async def test_chat_does_not_write_the_main_transcript(tmp_path, monkeypatch):
     manager = _direct_chat_manager(tmp_path, monkeypatch)
     await manager.chat(session_key="s1", agent="raven", handle="notes", text="hi")
 
-    transcript = manager._session_dir("s1").parent / "s1.jsonl"
+    transcript = manager.session_dir_for("s1").parent / "s1.jsonl"
     assert not transcript.exists()
 
 
@@ -401,7 +401,7 @@ async def test_chat_records_a_failure(tmp_path, monkeypatch):
 
     from raven.agent.subagent.direct_chat import direct_root
 
-    root = direct_root(manager._session_dir("s1"), "raven", "notes")
+    root = direct_root(manager.session_dir_for("s1"), "raven", "notes")
     call_dir = next(p for p in root.iterdir() if p.is_dir())
     assert json.loads((call_dir / "meta.json").read_text())["status"] == "failed"
     assert (call_dir / "error.md").exists()
@@ -447,7 +447,7 @@ async def test_chat_with_a_disabled_agent_raises_and_records_nothing(tmp_path, m
 
     assert registry.list_instances("s1") == []
 
-    root = direct_root(manager._session_dir("s1"), "removed-agent", "notes")
+    root = direct_root(manager.session_dir_for("s1"), "removed-agent", "notes")
     assert not root.exists()
 
 
@@ -483,7 +483,7 @@ async def test_create_instance_writes_no_record_directory(tmp_path, monkeypatch)
 
     created = await manager.create_instance(session_key="s1", agent="raven")
 
-    assert not direct_root(manager._session_dir("s1"), "raven", created.handle).exists()
+    assert not direct_root(manager.session_dir_for("s1"), "raven", created.handle).exists()
 
 
 @pytest.mark.asyncio
@@ -1368,7 +1368,7 @@ async def test_direct_turns_join_the_instances_own_conversation(tmp_path, monkey
     await manager.chat(session_key="s1", agent="raven", handle="notes", text="first")
     await manager.chat(session_key="s1", agent="raven", handle="notes", text="second")
 
-    path = transcript_path(manager._session_dir("s1"), "raven", "notes")
+    path = transcript_path(manager.session_dir_for("s1"), "raven", "notes")
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     assert rows[0]["_type"] == "metadata"

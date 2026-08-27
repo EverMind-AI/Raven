@@ -5,7 +5,7 @@ The graph the main agent writes for "train me a model and watch it" is
 on. Nothing checked that, so the shape of the failure was: the coding node runs
 to completion, the on-call node is dispatched, and only then -- minutes in, with
 the code already written -- does the registry turn out to be empty. This asks
-first, next to the capability checks, for the reason ``_capabilities`` gives: a
+first, next to the capability checks, for the reason ``dag_capabilities`` gives: a
 rejected graph must cost zero sub-agent runs.
 
 The machine also belongs *before* the coding node and not only in front of the

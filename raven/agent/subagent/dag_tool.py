@@ -1,4 +1,12 @@
-"""The native ``run_subagent_dag`` Raven tool (req4).
+"""The ``run_subagent_dag`` tool: orchestrate a graph of sub-agent tasks.
+
+This subsystem lives beside the single-call ``spawn`` surface and shares its
+prompt-template layer (``prompt_*`` modules), but stays otherwise independent
+of Raven's kernel: it carries its own graph model, ready-set scheduler, and
+on-disk run store, is exposed as an ordinary optional Raven tool, and is NOT
+routed through ``Origin.SUBAGENT`` or the spine scheduler. It is deliberately
+absent from ``subagent/__init__.py`` -- re-exporting it there would make every
+``SubagentManager`` import pull in the graph model, the store, and the runner.
 
 Exposes the decoupled DAG subsystem to the main agent as an ordinary Raven
 ``Tool`` (string in / string out). It resolves each node's agent through the
@@ -33,21 +41,20 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_machines import refusal as machines_refusal
+from raven.agent.subagent.dag_machines import unnamed_machine
+from raven.agent.subagent.dag_machines import verdict_for_async as machines_verdict_async
+from raven.agent.subagent.dag_machines import with_facts as with_machine_facts
+from raven.agent.subagent.dag_reader import read_node as _read_node
+from raven.agent.subagent.dag_reader import read_run as _read_run
+from raven.agent.subagent.dag_runner import ProgressPublisher, run_dag
+from raven.agent.subagent.dag_store import SessionNodes, index_guard, make_run_id, read_index, read_session_nodes
+from raven.agent.subagent.history import dag_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
-from raven.agent.subagent_dag import DagNodeSpec, SubAgentDagSpec, make_run_id, parse_dag_spec
-from raven.agent.subagent_dag._capabilities import AgentCapabilities, validate_capabilities
-from raven.agent.subagent_dag._errors import DagValidationError
-from raven.agent.subagent_dag._graph import validate_and_order
-from raven.agent.subagent_dag._machines import refusal as machines_refusal
-from raven.agent.subagent_dag._machines import unnamed_machine
-from raven.agent.subagent_dag._machines import verdict_for_async as machines_verdict_async
-from raven.agent.subagent_dag._machines import with_facts as with_machine_facts
-from raven.agent.subagent_dag._reader import read_node as _read_node
-from raven.agent.subagent_dag._reader import read_run as _read_run
-from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_index, read_session_nodes
-from raven.agent.subagent_dag.backend import LocalFileBackend
-from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
-from raven.agent.subagent_history import dag_root, session_history_root
+from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
 from raven.agent.tools.base import Tool, ToolResult
 
@@ -442,7 +449,7 @@ class SubAgentDagTool(Tool):
 
         The directory comes from ``SessionManager.session_dir`` so it tracks the
         transcript's group even where this process would have chosen another
-        (raven/agent/subagent_history.py). Falls back to a slug-less manager --
+        (raven/agent/subagent/history.py). Falls back to a slug-less manager --
         the gateway's grouping -- when no resolver was injected.
         """
         return str(dag_root(self._session_dir_for(session_key)))
@@ -468,7 +475,7 @@ class SubAgentDagTool(Tool):
         ``<session_dir>/subagents/`` -- the second directory a node's file
         reference may resolve into, holding this conversation's DAG runs and
         ``spawn`` records. Narrower than agent home deliberately: see
-        :func:`._paths.check_confined`.
+        :func:`raven.agent.subagent.prompt_paths.check_confined`.
 
         ``None`` rather than a path when no resolver is injected and no
         ``sessions/`` exists, because building a ``SessionManager`` to find out
@@ -485,7 +492,7 @@ class SubAgentDagTool(Tool):
 
         The live progress events are not replayed anywhere, so this is the only
         way a consumer that missed them (a reloaded browser tab) can rebuild the
-        graph. Serves in-flight runs too -- see :func:`_reader.read_run`.
+        graph. Serves in-flight runs too -- see :func:`dag_reader.read_run`.
         """
         return await _read_run(self._backend, self._run_root(session_key), run_id)
 
@@ -775,7 +782,7 @@ class SubAgentDagTool(Tool):
             # leaves this process: an agent that runs work on the owner's
             # machines is asked whether it has one, and a graph whose work has
             # nowhere to go is refused while the owner is still here to be asked.
-            # Silent when nothing could be established -- see _machines.
+            # Silent when nothing could be established -- see dag_machines.
             if verdict := await machines_verdict_async([n.subagent for n in spec.nodes]):
                 if verdict.usable == 0:
                     raise DagValidationError(machines_refusal(verdict))

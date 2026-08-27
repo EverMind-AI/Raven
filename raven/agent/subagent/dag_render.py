@@ -11,14 +11,18 @@ are left alone, as are literal inputs: the author typed those here.
 
 from typing import Any
 
+from raven.agent.subagent.dag_capabilities import AgentCapabilities
+from raven.agent.subagent.dag_graph import DagNodeSpec, graph_deps
+from raven.agent.subagent.dag_store import SessionNodes, memory_path_in, output_path_in
+from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_placeholders import Placeholder, iter_placeholders
+from raven.agent.subagent.prompt_render import (
+    check_inputs_referenced,
+    read_text,
+    require_exists,
+    resolve_file_placeholder,
+)
 from raven.security.trust import wrap_untrusted
-
-from ._capabilities import AgentCapabilities
-from ._errors import DagValidationError
-from ._graph import DagNodeSpec, graph_deps
-from ._paths import check_confined, split_reference
-from ._placeholders import Placeholder, iter_placeholders
-from ._store import SessionNodes, memory_path_in, output_path_in
 
 
 async def render_prompt(
@@ -56,7 +60,7 @@ async def render_prompt(
             than silently resolved against ``cwd``.
         roots (`tuple[str, ...] | None`):
             Absolute directories a file reference may resolve into. Re-checked
-            here as well as in ``_graph`` because this module is reachable
+            here as well as in ``dag_graph`` because this module is reachable
             without that validation pass.
         session_nodes (`SessionNodes | None`):
             What this session's earlier runs did with each node id. What lets
@@ -73,6 +77,7 @@ async def render_prompt(
             ``ref``/file-input path escapes its root, or a ``_path`` form
             names a file that does not exist.
     """
+    check_inputs_referenced(node.prompt_template, node.inputs, prefix=f"node '{node.id}' ")
     template = node.prompt_template
     parts: list[str] = []
     last = 0
@@ -182,6 +187,9 @@ async def _resolve(
 ) -> str:
     """Resolve one placeholder to its replacement string.
 
+    Everything that does not name a graph node is the shared layer's to
+    resolve; what is left here is exactly what needs the graph.
+
     Args:
         ph (`Placeholder`):
             The placeholder to resolve.
@@ -210,84 +218,32 @@ async def _resolve(
             path that escapes its root, or a ``_path`` form naming a file
             that does not exist.
     """
+    shared = await resolve_file_placeholder(
+        ph,
+        node.inputs,
+        backend=backend,
+        cwd=cwd,
+        runs_root=runs_root,
+        roots=roots,
+    )
+    if shared is not None:
+        return shared
     if ph.kind == "input":
-        return await _input_value(ph.name, node, backend, cwd, runs_root, roots, output_paths, session_nodes)
+        spec = node.inputs[ph.name]
+        resolved = _output_path(
+            str(spec["node"]), output_paths, backend, runs_root, session_nodes, f"input '{ph.name}'"
+        )
+        return wrap_untrusted(await read_text(backend, resolved, cwd, what=f"input '{ph.name}'"), source="subagent")
     if ph.kind == "input_path":
-        spec = node.inputs.get(ph.name)
-        if isinstance(spec, dict) and "node" in spec:
-            resolved = _output_path(
-                str(spec["node"]), output_paths, backend, runs_root, session_nodes, f"input '{ph.name}'"
-            )
-            return await _require_exists(backend, resolved, ph.raw)
-        if not isinstance(spec, dict) or "file" not in spec:
-            raise DagValidationError(
-                f"input '{ph.name}' has no file path to reference",
-            )
-        check_confined(str(spec["file"]), what="input path", roots=roots)
-        return await _require_exists(backend, _abspath(backend, str(spec["file"]), cwd, runs_root), ph.raw)
-    if ph.kind in ("output", "output_path"):
-        resolved = _output_path(ph.name, output_paths, backend, runs_root, session_nodes, ph.raw)
-        if ph.kind == "output":
-            return wrap_untrusted(await _read(backend, resolved, cwd, what=ph.raw), source="subagent")
-        return await _require_exists(backend, resolved, ph.raw)
-    if ph.kind == "ref":
-        check_confined(ph.name, what="ref", roots=roots)
-        return wrap_untrusted(await _read(backend, ph.name, cwd, runs_root, what=ph.raw), source="file")
-    # ph.kind == "ref_path"
-    check_confined(ph.name, what="ref_path", roots=roots)
-    return await _require_exists(backend, _abspath(backend, ph.name, cwd, runs_root), ph.raw)
-
-
-async def _input_value(
-    key: str,
-    node: DagNodeSpec,
-    backend: Any,
-    cwd: str,
-    runs_root: str | None,
-    roots: tuple[str, ...] | None,
-    output_paths: dict[str, str],
-    session_nodes: SessionNodes | None,
-) -> str:
-    """Return an input's value: literal, file contents, or a node's output.
-
-    Args:
-        key (`str`):
-            The input key.
-        node (`DagNodeSpec`):
-            The owning node.
-        backend (`BackendBase`):
-            Backend used to read a file input.
-        cwd (`str`):
-            Directory for relative path resolution.
-        runs_root (`str | None`):
-            Root that a ``@runs/`` file input resolves against.
-        roots (`tuple[str, ...] | None`):
-            Roots the file input may resolve into.
-        output_paths (`dict[str, str]`):
-            Dependency id to output file path, for a node input naming a
-            dependency of this same graph.
-        session_nodes (`SessionNodes | None`):
-            What this session's earlier runs did with each node id.
-
-    Returns:
-        `str`:
-            The literal string, the referenced file's contents, or the
-            referenced node's output.
-
-    Raises:
-        `DagValidationError`:
-            When a file input's path escapes its root, or a node input names
-            a node with no output to read.
-    """
-    spec = node.inputs.get(key)
-    if isinstance(spec, dict) and "file" in spec:
-        check_confined(str(spec["file"]), what="input file", roots=roots)
-        text = await _read(backend, str(spec["file"]), cwd, runs_root, what=f"input '{key}'")
-        return wrap_untrusted(text, source="file")
-    if isinstance(spec, dict) and "node" in spec:
-        resolved = _output_path(str(spec["node"]), output_paths, backend, runs_root, session_nodes, f"input '{key}'")
-        return wrap_untrusted(await _read(backend, resolved, cwd, what=f"input '{key}'"), source="subagent")
-    return str(spec)
+        spec = node.inputs[ph.name]
+        resolved = _output_path(
+            str(spec["node"]), output_paths, backend, runs_root, session_nodes, f"input '{ph.name}'"
+        )
+        return await require_exists(backend, resolved, ph.raw)
+    resolved = _output_path(ph.name, output_paths, backend, runs_root, session_nodes, ph.raw)
+    if ph.kind == "output":
+        return wrap_untrusted(await read_text(backend, resolved, cwd, what=ph.raw), source="subagent")
+    return await require_exists(backend, resolved, ph.raw)
 
 
 def _output_path(
@@ -339,99 +295,3 @@ def _output_path(
             f"{what} names node '{node_id}', which neither this graph nor an earlier run in this conversation produced",
         )
     return output_path_in(backend, runs_root, owner, node_id)
-
-
-def _abspath(backend: Any, path: str, cwd: str, runs_root: str | None) -> str:
-    """Resolve a checked reference path against the root its prefix names.
-
-    Args:
-        backend (`BackendBase`):
-            Backend supplying the environment's path semantics.
-        path (`str`):
-            A reference path that already passed :func:`check_confined`.
-        cwd (`str`):
-            Root for an unprefixed path.
-        runs_root (`str | None`):
-            Root for a ``@runs/``-prefixed path.
-
-    Returns:
-        `str`:
-            The absolute path in the backend environment.
-
-    Raises:
-        `DagValidationError`:
-            When a ``@runs/`` reference is used where no run history root was
-            supplied -- falling back to ``cwd`` would silently resolve it to a
-            path in the workdir that means something else entirely.
-    """
-    root, relative = split_reference(path)
-    if root != "runs":
-        return backend.abspath(relative, cwd=cwd)
-    if runs_root is None:
-        raise DagValidationError(
-            f"'{path}' refers to this session's DAG run history, which is not available here",
-        )
-    return backend.abspath(relative, cwd=runs_root)
-
-
-async def _require_exists(backend: Any, resolved: str, what: str) -> str:
-    """Return ``resolved``, refusing a reference to a file that is not there.
-
-    Both forms need this, for different reasons, and they used to report the
-    same mistake in two different shapes. A ``_path`` form hands over a path
-    instead of the bytes, so nothing in this process would otherwise open the
-    file at all -- a mistyped name reaches the sub-agent as a plausible path
-    and comes back as a confident answer about a file it could not read. A
-    contents form does open it, but a bare ``FileNotFoundError`` names neither
-    the placeholder that asked nor what the author should fix.
-
-    Args:
-        backend (`BackendBase`):
-            Backend used for the existence check.
-        resolved (`str`):
-            The absolute path the reference resolved to.
-        what (`str`):
-            How the reference was written, named in the error.
-
-    Returns:
-        `str`:
-            ``resolved``, unchanged.
-
-    Raises:
-        `DagValidationError`:
-            When no file exists at ``resolved``.
-    """
-    if not await backend.file_exists(resolved):
-        raise DagValidationError(f"{what} points at '{resolved}', which does not exist")
-    return resolved
-
-
-async def _read(backend: Any, path: str, cwd: str, runs_root: str | None = None, what: str | None = None) -> str:
-    """Read a backend file as UTF-8 text, resolving against its root.
-
-    Args:
-        backend (`BackendBase`):
-            Backend used for the read.
-        path (`str`):
-            A relative or absolute path in the backend environment.
-        cwd (`str`):
-            Directory a relative ``path`` resolves against.
-        runs_root (`str | None`):
-            Root for a ``@runs/``-prefixed ``path``.
-        what (`str | None`):
-            How the reference was written. Given, a missing file is reported
-            against it rather than as a bare ``FileNotFoundError``.
-
-    Returns:
-        `str`:
-            The decoded file contents.
-
-    Raises:
-        `DagValidationError`:
-            When ``what`` is given and no file exists at the resolved path.
-    """
-    resolved = _abspath(backend, path, cwd, runs_root)
-    if what is not None:
-        await _require_exists(backend, resolved, what)
-    data = await backend.read_file(resolved)
-    return data.decode("utf-8", errors="replace")

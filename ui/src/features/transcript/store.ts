@@ -173,7 +173,7 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
       const ps = Array.isArray(a.paths) ? (a.paths as unknown[]).map((p) => String(p).split('/').pop()) : []
       return ps.length > 2 ? `${ps[0]} ×${ps.length}` : ps.join(' ')
     }
-    case 'spawn': return String(a.task_summary || a.label || String(a.task || '').split('\n')[0])
+    case 'spawn': return String(a.task_summary || a.label || String(a.prompt_template || a.task || '').split('\n')[0])
     /* The graph's own line, which the model is required to write. Not left to
        the default branch below: it picks the first string in the arguments,
        which for a dag call is whichever key pydantic happened to serialise

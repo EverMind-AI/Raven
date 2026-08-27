@@ -130,7 +130,7 @@ async def test_direct_chat_round_trip_leaves_records_and_a_handoff(loop: AgentLo
     assert loop.sessions.get_or_create(_CONVERSATION).messages == []
     assert loop._direct_handoff.pending_count(_CONVERSATION) == 2
 
-    session_dir = loop.subagents._session_dir(_CONVERSATION)
+    session_dir = loop.subagents.session_dir_for(_CONVERSATION)
     root = direct_root(session_dir, "raven", "notes")
     calls = sorted(p for p in root.iterdir() if p.is_dir())
     assert len(calls) == 2
@@ -210,7 +210,7 @@ async def test_a_third_party_instance_answers_and_lands_in_the_handoff(loop: Age
     assert replies == ["Coder: who are you"]
     assert backend.asked == ["who are you"]
 
-    root = direct_root(loop.subagents._session_dir(_CONVERSATION), "Coder", "greet")
+    root = direct_root(loop.subagents.session_dir_for(_CONVERSATION), "Coder", "greet")
     call = next(p for p in root.iterdir() if p.is_dir())
     assert (call / "out.md").read_text(encoding="utf-8") == "Coder: who are you"
     assert loop._direct_handoff.pending_count(_CONVERSATION) == 1
@@ -248,7 +248,7 @@ async def test_a_streamed_direct_turn_arrives_as_deltas_and_is_not_delivered_twi
     assert not [e for e in events if isinstance(e, Text)]
 
     # What the client rendered and what the next switch-in replays are one text.
-    root = direct_root(loop.subagents._session_dir(_CONVERSATION), "raven", "notes")
+    root = direct_root(loop.subagents.session_dir_for(_CONVERSATION), "raven", "notes")
     call = next(p for p in root.iterdir() if p.is_dir())
     assert (call / "out.md").read_text(encoding="utf-8") == streamed
 
@@ -269,7 +269,7 @@ async def test_a_turn_on_an_instance_lane_still_records_against_the_session(loop
     req = _req("on a lane", target=("raven", "notes"))
     await _run(loop, replace(req, conversation=lane), [])
 
-    session_dir = loop.subagents._session_dir(_CONVERSATION)
+    session_dir = loop.subagents.session_dir_for(_CONVERSATION)
     calls = [p for p in direct_root(session_dir, "raven", "notes").iterdir() if p.is_dir()]
     assert len(calls) == 1
     assert (calls[0] / "out.md").is_file()

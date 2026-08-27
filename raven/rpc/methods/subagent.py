@@ -2,7 +2,7 @@
 
 Two reads over what the delegation path already writes. A ``spawn`` records
 itself in the session's own metadata directory (see
-:mod:`raven.agent.subagent_history`): ``subagents/spawn/<call_id>/`` holding
+:mod:`raven.agent.subagent.history`): ``subagents/spawn/<call_id>/`` holding
 ``prompt.md`` written before dispatch, then ``out.md`` or ``error.md``, beside a
 ``meta.json``. Nothing here writes anything. The record is the audit trail the
 run keeps for itself, and these two methods are the view of it the panel draws.
@@ -42,10 +42,10 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
+from raven.agent.subagent.dag_live import live_run_ids
+from raven.agent.subagent.history import dag_root, spawn_root
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
-from raven.agent.subagent_dag.live import live_run_ids
-from raven.agent.subagent_history import dag_root, spawn_root
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.session import _manager_for, _map_to_wire, _safe_invoke_factory

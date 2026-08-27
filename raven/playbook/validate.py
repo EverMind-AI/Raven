@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from raven.agent.subagent_dag._graph import _REQUIRED_NON_BLANK
+from raven.agent.subagent.dag_graph import _REQUIRED_NON_BLANK
 from raven.playbook.types import NodeSpec, PlaybookSpec
 
 _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")

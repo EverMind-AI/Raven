@@ -31,6 +31,7 @@ from raven.agent.loop.recovery import (
 from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
+from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.deep_research import (
@@ -49,7 +50,6 @@ from raven.agent.tools.media_gen import (
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
@@ -1215,7 +1215,7 @@ class AgentLoop:
         # its roster was empty and a node had nothing to name. A graph over
         # research-raven and code-raven is a graph, so that gate would now be
         # withholding the tool from every default install.
-        from raven.agent.subagent_dag.tool import SubAgentDagTool
+        from raven.agent.subagent.dag_tool import SubAgentDagTool
 
         self.tools.register(
             SubAgentDagTool(
@@ -1238,7 +1238,7 @@ class AgentLoop:
         # two get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
         # stay reachable through the registry (and tool_call where it exists).
-        from raven.agent.subagent_dag.control_tools import CancelDagTool, DagStatusTool
+        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool
 
         self.tools.register(CancelDagTool(loop=self))
         self.tools.register(DagStatusTool(loop=self))
@@ -1412,7 +1412,7 @@ class AgentLoop:
         manager hooks as the registered one: one dispatch gate, one quota,
         one announce path.
         """
-        from raven.agent.subagent_dag.tool import SubAgentDagTool
+        from raven.agent.subagent.dag_tool import SubAgentDagTool
         from raven.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
 
         # The user layer of the two-layer library; the builtin layer is the
@@ -1524,7 +1524,7 @@ class AgentLoop:
         skill is there by default, and losing the instruction is the worse
         failure of the two.
         """
-        from raven.agent.subagent_dag.tool import GUIDE_SKILL_ID
+        from raven.agent.subagent.dag_tool import GUIDE_SKILL_ID
 
         registry = getattr(getattr(self.context, "skills", None), "registry", None)
         if registry is None:

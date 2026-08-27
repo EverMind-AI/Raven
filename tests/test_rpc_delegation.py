@@ -160,7 +160,7 @@ async def test_pausing_also_stops_a_dag_run_not_just_a_single_spawn() -> None:
     # The DAG tool dispatches to its own backends and never calls spawn(), so a
     # pause that only guarded spawn() would stop single spawns while a graph
     # kept fanning out behind a HUD reading "paused".
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
 
     manager = _real_manager()
     tool = SubAgentDagTool(workspace=Path("."), is_paused=lambda: manager.paused)

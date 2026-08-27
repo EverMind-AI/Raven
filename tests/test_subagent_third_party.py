@@ -34,7 +34,7 @@ from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
-from raven.agent.tools.spawn import SpawnTool
+from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.config.schema import (
     ACP_UNSUPPORTED_FIELDS,
     SubagentEverosConfig,
@@ -761,7 +761,7 @@ def test_spawn_tool_listing_omits_a_disabled_agent(tmp_path: Path) -> None:
 
 
 def test_dag_tool_roster_omits_a_disabled_agent(tmp_path: Path) -> None:
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
 
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
@@ -774,7 +774,7 @@ def test_dag_tool_with_every_configured_agent_disabled_keeps_the_built_in_rows(t
     # Switching off every configured agent used to leave the roster empty. It
     # cannot now: the built-in rows are package seeds rather than config, so the
     # graph tool always has something to dispatch to.
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
 
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
     tool = SubAgentDagTool(workspace=tmp_path, agents=[off])
@@ -981,6 +981,8 @@ async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
+    # Kept on the old `task=` spelling deliberately: this is the compat path's
+    # only coverage against a real third-party backend, not the stub manager.
     await tool.execute(task="do it", task_summary="do it", subagent="claude_code")
     assert captured["agent"] == "claude_code"
     assert captured["task"] == "do it"
@@ -1041,7 +1043,7 @@ class TestSpawnInstanceGate:
         spawned: list[dict] = []
         tool._manager.spawn = lambda **kw: spawned.append(kw)  # type: ignore[method-assign]
 
-        out = await tool.execute(task="do it", task_summary="do it", subagent="codex", instance="author")
+        out = await tool.execute(prompt_template="do it", task_summary="do it", subagent="codex", instance="author")
 
         assert out.startswith("Error:")
         assert "stateless" in out
@@ -1060,7 +1062,7 @@ class TestSpawnInstanceGate:
             return "started"
 
         tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
-        out = await tool.execute(task="do it", task_summary="do it", instance="author")
+        out = await tool.execute(prompt_template="do it", task_summary="do it", instance="author")
 
         assert out == "started"
         assert captured["instance"] == "author"
@@ -1074,7 +1076,9 @@ class TestSpawnInstanceGate:
             return "started"
 
         tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
-        out = await tool.execute(task="do it", task_summary="do it", subagent="claude_code", instance="author")
+        out = await tool.execute(
+            prompt_template="do it", task_summary="do it", subagent="claude_code", instance="author"
+        )
 
         assert out == "started"
         assert captured["instance"] == "author"
@@ -1088,7 +1092,7 @@ class TestSpawnInstanceGate:
             return "started"
 
         tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
-        assert await tool.execute(task="do it", task_summary="do it", subagent="codex") == "started"
+        assert await tool.execute(prompt_template="do it", task_summary="do it", subagent="codex") == "started"
         assert captured["instance"] is None
 
 
@@ -1123,9 +1127,9 @@ async def test_spawn_marks_a_minted_instance_as_automatic(tmp_path: Path) -> Non
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", task_summary="do it", subagent="claude_code")
+    await tool.execute(prompt_template="do it", task_summary="do it", subagent="claude_code")
     assert captured["instance_auto"] is True
-    await tool.execute(task="do it", task_summary="do it", subagent="claude_code", instance="author")
+    await tool.execute(prompt_template="do it", task_summary="do it", subagent="claude_code", instance="author")
     assert captured["instance_auto"] is False
 
 
@@ -1140,7 +1144,7 @@ async def test_spawn_hands_the_minted_handle_to_the_turn_stream(tmp_path: Path) 
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", task_summary="Refactor Auth", subagent="claude_code")
+    await tool.execute(prompt_template="do it", task_summary="Refactor Auth", subagent="claude_code")
     meta = tool.take_metadata()
     assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", meta["instance"])
     assert meta["instance_auto"] is True
@@ -1156,7 +1160,7 @@ async def test_spawn_publishes_no_metadata_for_a_stateless_agent(tmp_path: Path)
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", task_summary="do it", subagent="oneshot")
+    await tool.execute(prompt_template="do it", task_summary="do it", subagent="oneshot")
     assert tool.take_metadata() is None
 
 
@@ -1176,8 +1180,8 @@ async def test_spawn_does_not_leak_an_uncollected_handle_to_a_later_stateless_ca
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", task_summary="do it", subagent="claude_code")
-    await tool.execute(task="do it", task_summary="do it", subagent="oneshot")
+    await tool.execute(prompt_template="do it", task_summary="do it", subagent="claude_code")
+    await tool.execute(prompt_template="do it", task_summary="do it", subagent="oneshot")
     assert tool.take_metadata() is None
 
 
@@ -1191,7 +1195,7 @@ async def test_spawn_publishes_no_handle_for_a_call_the_manager_refused(tmp_path
     mgr.set_paused(True)
     tool = SpawnTool(manager=mgr)
 
-    result = await tool.execute(task="summarize the log", task_summary="summarize the log")
+    result = await tool.execute(prompt_template="summarize the log", task_summary="summarize the log")
 
     assert result.startswith(SPAWN_REFUSED_PREFIX)
     assert tool.take_metadata() is None
@@ -1208,7 +1212,7 @@ async def test_spawn_publishes_the_handle_once_the_manager_takes_the_call(tmp_pa
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
 
-    await tool.execute(task="summarize the log", task_summary="summarize the log")
+    await tool.execute(prompt_template="summarize the log", task_summary="summarize the log")
 
     meta = tool.take_metadata()
     assert meta is not None
@@ -2532,7 +2536,7 @@ def test_presets_have_no_timeout() -> None:
 
 
 def test_dag_tool_is_not_timer_killed() -> None:
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
 
     # The registry skips asyncio.wait_for for blocking_interaction tools, which is
     # what lets a long DAG run to completion under manual stop control.
@@ -3351,7 +3355,7 @@ async def test_spawn_mints_an_instance_for_a_stateful_agent(tmp_path: Path) -> N
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", task_summary="Refactor Auth", subagent="claude_code")
+    await SpawnTool(manager=mgr).execute(prompt_template="do it", task_summary="Refactor Auth", subagent="claude_code")
     assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", captured["instance"])
 
 
@@ -3365,7 +3369,7 @@ async def test_spawn_leaves_a_stateless_agent_without_an_instance(tmp_path: Path
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", task_summary="do it", subagent="oneshot")
+    await SpawnTool(manager=mgr).execute(prompt_template="do it", task_summary="do it", subagent="oneshot")
     assert captured["instance"] is None
 
 
@@ -3381,7 +3385,9 @@ async def test_spawn_never_overwrites_an_instance_the_model_chose(tmp_path: Path
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", task_summary="do it", subagent="claude_code", instance="author")
+    await SpawnTool(manager=mgr).execute(
+        prompt_template="do it", task_summary="do it", subagent="claude_code", instance="author"
+    )
     assert captured["instance"] == "author"
 
 
@@ -3401,7 +3407,7 @@ async def test_spawn_mints_for_the_built_in_sub_agent_too(tmp_path: Path) -> Non
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="summarize the log", task_summary="summarize the log")
+    await tool.execute(prompt_template="summarize the log", task_summary="summarize the log")
     assert captured["instance"]
     assert captured["instance"].startswith("summarize-the-log-")
     assert "instance" in tool.parameters["properties"]
@@ -3494,14 +3500,22 @@ async def test_the_old_agent_keyword_still_names_the_agent(monkeypatch: pytest.M
     captured: dict[str, Any] = {}
 
     class _Mgr:
+        # Both read while the prompt is rendered, which every spawn now passes
+        # through -- a bare double stops at the first reference root it needs.
+        workspace = Path("/nonexistent")
+
         def list_agents(self):
             return [third_party_agent_meta(ThirdPartyCliSubagentConfig(name="claude_code", command="cat"))]
+
+        def session_dir_for(self, session_key: str) -> Path:
+            return self.workspace / "sessions" / session_key
 
         async def spawn(self, **kw):
             captured.update(kw)
             return "started"
 
     tool = SpawnTool(manager=_Mgr())
+    # `task=` kept too, deliberately: both pre-rename spellings land here at once.
     assert await tool.execute(task="do it", task_summary="do it", agent="claude_code") == "started"
     assert captured["agent"] == "claude_code"
 
