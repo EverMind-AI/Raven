@@ -97,6 +97,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         _announce_updates,
         _write_serve_state,
         adopt_stored_cookie,
+        port_strict,
         resolve_ui_dist,
     )
     from raven.rpc.bootstrap import build_rpc_stack
@@ -116,7 +117,12 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
 
     ws_gateway = WsGateway()
     adopt_stored_cookie(ws_gateway)
-    bound_port = await pick_port(preferred_port)
+    # Same port policy as standalone serve, strict flag included: a relaunch
+    # under an open tab (the web supervisor's retry, `system.upgrade`) has to
+    # come back on the port that tab is pointed at, and this mount is now what
+    # `raven web` supervises -- reading the flag in only one of the two places
+    # is how a restart would strand the page it was restarting for.
+    bound_port = await pick_port(preferred_port, strict=port_strict())
     ws_gateway.port = bound_port
 
     stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop)

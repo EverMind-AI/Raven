@@ -342,5 +342,85 @@ async def test_start_one_is_idempotent(monkeypatch):
         _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
     )
     first = mgr.channels["fake"]
+    await first.start()
     assert await mgr.start_one("fake") == "already"
     assert mgr.channels["fake"] is first
+
+
+@pytest.mark.asyncio
+async def test_start_one_rebuilds_an_adapter_whose_start_gave_up(monkeypatch):
+    """The state the reader gets stuck in: a scan login nobody completed.
+
+    weixin gives up after the code expires three times, leaving the adapter in
+    the table with `is_running` false -- and while "already" covered that, the
+    entrance could never be started again without restarting the gateway. The
+    row said "not started" and the one button offering to fix it did nothing.
+    """
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_FakeChannel)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    dead = mgr.channels["fake"]
+    retired: list[str] = []
+    mgr.on_stopped = _async_collect(retired)
+    assert dead.is_running is False
+
+    assert await mgr.start_one("fake") == "started"
+    assert mgr.channels["fake"] is not dead, "it handed back the adapter that had given up"
+    # The dead one is retired properly on the way out, outlet included: the hub
+    # worker holds the adapter it was registered with, so a rebuild that left
+    # the old outlet in place would receive on the new adapter and reply on the
+    # old one.
+    assert retired == ["fake"]
+    await mgr.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_start_one_leaves_an_adapter_that_is_still_coming_up_alone(monkeypatch):
+    """The launch path is a task per channel that returns only when the adapter
+    stops, and mid-launch `is_running` is false for a channel that is perfectly
+    fine -- weixin is not running while it waits for the first code. Rebuilding
+    then would be a page write killing the gateway's own start.
+
+    Driven through `start_all`, not by planting a task: what makes the two states
+    distinguishable at all is that the launch records its tasks where `start_one`
+    looks, and a test that plants one proves nothing about that.
+    """
+    import asyncio
+
+    entered = asyncio.Event()
+    forever: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    class _SlowChannel(_FakeChannel):
+        async def start(self) -> None:
+            entered.set()
+            await forever
+
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_SlowChannel)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    coming_up = mgr.channels["fake"]
+    launch = asyncio.create_task(mgr.start_all())
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    assert coming_up.is_running is False, "the fake must not look running, or nothing is being tested"
+    try:
+        assert await mgr.start_one("fake") == "already"
+        assert mgr.channels["fake"] is coming_up
+    finally:
+        forever.set_result(None)
+        await asyncio.wait_for(launch, timeout=2)
+    # And the record does not outlive the start it describes: a finished task
+    # left in the table is a channel that looks like it is still coming up.
+    assert "fake" not in mgr._tasks
+
+
+def _async_collect(sink: list[str]):
+    async def _on_stopped(name: str) -> None:
+        sink.append(name)
+
+    return _on_stopped

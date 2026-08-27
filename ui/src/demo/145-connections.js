@@ -23,6 +23,10 @@ function connCloseDialog() { RavenIslands.connections.closeDialog(); }
    Writes refuse politely, as the offline demo always did. */
 DS.conn ??= {
   rows: async () => CHANNELS,
+  /* The demo's world has a host in it -- one of its channels is receiving --
+     so it answers yes. Left unanswered, the page would tell the reader nothing
+     is running it over a row that is. */
+  hostRunning: () => true,
   toggle: async (c, on) => { c.on = on; },
   apply: async () => { nlSay(null); },
   qr: async () => null,

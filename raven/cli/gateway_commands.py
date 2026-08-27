@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import typer
 from loguru import logger
@@ -28,6 +29,9 @@ from raven.cli._helpers import (
 )
 from raven.cli._plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
 from raven.utils.helpers import sync_workspace_templates
+
+if TYPE_CHECKING:
+    from raven.config.schema import GatewayPageConfig
 
 console = Console()
 
@@ -178,12 +182,35 @@ async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWr
         writer.close()
 
 
+def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int | None:
+    """Which port to serve the browser page on, or None for a channel-only run.
+
+    Two callers, and the flag is the one that wins. ``gateway.page.enabled`` is
+    the operator's standing preference; ``--page-port`` is `raven web` saying it
+    started this process FOR the page and its open tab is on that port -- so the
+    flag both mounts the page where config had it off (a supervisor with no page
+    is a process nobody asked for) and pins the port, because a page that comes
+    back on a different one strands the tab it came back for.
+    """
+    if page_port is not None:
+        return page_port
+    return page_config.port if page_config.enabled else None
+
+
 def register(app: typer.Typer) -> None:
     """Attach the ``gateway`` command to ``app``."""
 
     @app.command()
     def gateway(
         port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
+        page_port: int | None = typer.Option(
+            None,
+            "--page-port",
+            help=(
+                "Serve the browser page on this port, whatever gateway.page.enabled says. "
+                "Used by `raven web`, which pins the page to the port its open tab is on."
+            ),
+        ),
         workspace: str | None = typer.Option(
             None,
             "--workspace",
@@ -760,11 +787,14 @@ def register(app: typer.Typer) -> None:
                 # both surfaces, not left last-write-wins. mount_page returns
                 # None when a live standalone `raven serve` already owns the
                 # page; the IM round-trip above is then the wiring, untouched.
-                if config.gateway.page.enabled:
+                #
+                # Which port, and whether at all, is `page_target` above.
+                page_on = page_target(config.gateway.page, page_port)
+                if page_on is not None:
                     from raven.cli._gateway_page import mount_page
 
                     try:
-                        page_mount = await mount_page(agent, config.gateway.page.port)
+                        page_mount = await mount_page(agent, page_on)
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:

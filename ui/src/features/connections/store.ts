@@ -19,6 +19,10 @@ export interface ConnState {
   /* Remounts the dialog subtree when it is reopened, so its uncontrolled
      inputs start from the row's current values. */
   epoch: number
+  /* Whether anything is running that could host an adapter (see
+     ConnSource.hostRunning). Undefined until a source that answers has been
+     asked. */
+  host?: boolean
 }
 
 let state: ConnState = { rows: [], loaded: false, dialogId: null, epoch: 0 }
@@ -41,7 +45,7 @@ export const source = (): ConnSource => ds<ConnSource>('conn')
 export async function refresh(initial = false): Promise<void> {
   try {
     const rows = await source().rows(initial)
-    set({ rows, loaded: true })
+    set({ rows, loaded: true, host: source().hostRunning?.() })
   } catch (e) {
     toast(`加载失败：${(e as Error).message || e}`)
     set({ loaded: true })

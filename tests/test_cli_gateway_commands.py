@@ -666,3 +666,36 @@ async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> N
         await _deliver_question_to_channel(
             {"method": "clarify.request", "params": {"conversation_id": "gone"}}, sources={}, hub=None
         )
+
+
+class TestWhereThePageIsServed:
+    """``page_target``: whether this gateway serves the browser page, and where.
+
+    `raven web` supervises a gateway now rather than a standalone `raven serve`,
+    because only the gateway runs the channel adapters the entrances page acts
+    on. Its ``--page-port`` therefore has to be able to overrule config: the
+    supervisor started this process for the page, and its tab is on that port.
+    """
+
+    def target(self, *, enabled: bool = True, port: int = 18792, flag: int | None = None) -> int | None:
+        from raven.cli.gateway_commands import page_target
+        from raven.config.schema import GatewayPageConfig
+
+        return page_target(GatewayPageConfig(enabled=enabled, port=port), flag)
+
+    def test_config_decides_when_nobody_passed_the_flag(self) -> None:
+        assert self.target(port=18800) == 18800
+
+    def test_no_page_when_config_turned_it_off_and_nobody_asked(self) -> None:
+        """The channel-only run `gateway.page.enabled = false` exists for."""
+        assert self.target(enabled=False) is None
+
+    def test_the_flag_mounts_the_page_config_had_switched_off(self) -> None:
+        """A supervisor started for the page's sake, running a process with no
+        page, would be listening to nothing the open tab can reach."""
+        assert self.target(enabled=False, flag=18999) == 18999
+
+    def test_the_flag_pins_the_port_over_the_configured_one(self) -> None:
+        """A page that comes back on a different port strands the tab it came
+        back for."""
+        assert self.target(port=18792, flag=18999) == 18999

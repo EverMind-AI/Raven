@@ -70,6 +70,27 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   return { source, calls, shellCalls }
 }
 
+/* Records an apply exactly as the default fake does, for the cases that need
+   their own body as well as the record. */
+function calls_push(
+  calls: Array<[string, unknown]>,
+  c: ConnChannel,
+  patch: Record<string, string>,
+  enable: boolean,
+): void {
+  calls.push(['apply', { id: c.id, patch, enable }])
+}
+
+/* Types into a box the way a reader does: the value, then the event. The card's
+   connect is unavailable until every required box has something in it, and a
+   value assigned straight onto the node fires nothing and tells the form
+   nothing -- so a test that only assigns is testing a card that never saw the
+   credential. */
+function typeInto(box: HTMLInputElement, value: string): void {
+  box.value = value
+  box.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.surow')]
 const rowNamed = (name: string): HTMLElement =>
   rowsOf().find((r) => r.querySelector('.nm b')!.textContent === name)!
@@ -107,6 +128,25 @@ async function pickMenu(label: string): Promise<void> {
   await act(async () => {
     item!.click()
   })
+}
+
+/* A press on the scrim, over `under`.
+ *
+ * Which is what a press behind a modal card actually is: the scrim is on top,
+ * so it -- not the row -- is the event's target, and the row is found by asking
+ * the document what is at those coordinates. happy-dom has no layout, so
+ * `elementFromPoint` there always answers null; stubbing it is what lets the
+ * wiring above the hit test be tested at all. The hit test itself is a browser
+ * fact, checked in a browser. */
+function pressOver(under: Element): void {
+  /* `under` is the element the reader was aiming at -- the row's own button,
+     not the row's blank space. A press over blank space cannot tell a scrim
+     that swallows the press from one that re-dispatches it to what it covered,
+     which is the failure this helper exists to make visible. */
+  const veil = document.getElementById('connVeil')!
+  const spy = vi.spyOn(document, 'elementFromPoint').mockReturnValue(under)
+  veil.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }))
+  spy.mockRestore()
 }
 
 async function mount() {
@@ -240,22 +280,43 @@ describe('connections island', () => {
      token used to look exactly like a working one, because the flag was the
      whole test. */
   describe('what counts as being in service', () => {
-    it('puts a freshly switched-on entrance under connecting, not in service', async () => {
+    /* Nothing is running -- no app, no gateway, nobody to ask -- so the write
+       starts no adapter and mints no code. The row therefore does not move at
+       all: "connecting" over a row whose state is unknown was the flag being
+       read out loud one heading further along. */
+    it('leaves a switched-on entrance where it was when nothing started', async () => {
       install([
         chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
       ])
       await mount()
       expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
-      /* The row's button opens the card; the card's own button is the write. */
       await act(async () => {
         rowBtn('gui.chan.weixin').click()
       })
-      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
+      /* The card's own button is the write, and it changes nothing out here:
+         nothing started, so nothing is in service. */
       await act(async () => {
         ;(cardFoot().querySelector('button') as HTMLElement).click()
       })
-      /* One group, not two: the code has not been scanned yet. */
-      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_pending')
+      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
+      expect(rowNamed('gui.chan.weixin').querySelector('.kd')!.textContent).toBe('gui.conn.tag_unknown')
+    })
+
+    /* And no group in between. An adapter up and waiting on a code is not in
+       service, and a heading of its own for that middle moment is a state
+       nobody can act on -- signing in happens in the card, which is open while
+       it happens. */
+    it('keeps an entrance whose code is up out of a group of its own', async () => {
+      install([
+        chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true, connected: false }),
+      ])
+      await mount()
+      expect([...document.querySelectorAll('#connPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
+        'gui.conn.g_off',
+      ])
+      /* Nothing on the row narrates it either: what is true of it is still that
+         the way in is a scan. */
+      expect(rowNamed('gui.chan.weixin').querySelector('.kd')!.textContent).toBe('gui.conn.cost_scan')
     })
 
     it('keeps an entrance with made-up credentials out of in service', async () => {
@@ -263,14 +324,14 @@ describe('connections island', () => {
          here. */
       install([chan({ on: true, running: false, fields: [{ key: 'bot_token', required: true, set: true }] })])
       await mount()
-      expect(groupOf('Slack')).toBe('gui.conn.g_pending')
+      expect(groupOf('Slack')).toBe('gui.conn.g_off')
       expect(rowNamed('Slack').querySelector('.kd')!.textContent).toBe('gui.conn.tag_down')
     })
 
     it('keeps a scan entrance out of in service until it is paired', async () => {
       install([chan({ id: 'weixin', key: 'gui.chan.weixin', on: true, running: true, connected: false, qrLogin: true })])
       await mount()
-      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_pending')
+      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
     })
 
     it('promotes it the moment the adapter reports receiving', async () => {
@@ -290,13 +351,15 @@ describe('connections island', () => {
         rowBtn('Slack').click()
       })
       const box = document.querySelector<HTMLInputElement>('#connDlgBody input')!
-      box.value = 'made-up'
       await act(async () => {
-        ;(cardFoot().querySelector('button') as HTMLElement).click()
+        typeInto(box, 'made-up')
+      })
+      await act(async () => {
+        ;(cardFoot().querySelector('button.key') as HTMLElement).click()
       })
       expect(document.getElementById('connVeil')!.dataset.open).toBe('true')
       expect(document.querySelector('#connDlgBody .sustate')).toBeTruthy()
-      expect(cardFoot().querySelector('button')!.textContent).toBe('gui.conn.retry')
+      expect(cardFoot().querySelector('button.key')!.textContent).toBe('gui.conn.retry')
     })
 
     it('closes the card once the entrance is receiving', async () => {
@@ -314,9 +377,11 @@ describe('connections island', () => {
         rowBtn('Slack').click()
       })
       const box = document.querySelector<HTMLInputElement>('#connDlgBody input')!
-      box.value = 'a-real-token'
       await act(async () => {
-        ;(cardFoot().querySelector('button') as HTMLElement).click()
+        typeInto(box, 'a-real-token')
+      })
+      await act(async () => {
+        ;(cardFoot().querySelector('button.key') as HTMLElement).click()
       })
       expect(document.getElementById('connVeil')!.dataset.open).toBe('false')
       expect(groupOf('Slack')).toBe('gui.conn.g_on')
@@ -348,13 +413,94 @@ describe('connections island', () => {
       install([chan({ id: 'weixin', key: 'gui.chan.weixin', on: true, qrLogin: true, fields: [] })])
       await mount()
       expect(document.querySelector('#connBody > .sustate')).toBeNull()
-      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_pending')
+      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
     })
 
     it('counts only the receiving half when some are and some are not', async () => {
       install([chan({ on: true, running: true }), chan({ id: 'tg', name: 'Telegram', on: true, running: false })])
       await mount()
       expect(bar().textContent).toBe('gui.conn.gw_live {"n":"1"}')
+    })
+  })
+
+  /* What the page knows before the reader presses anything: whether there is a
+     host at all. With none, connecting starts no adapter and mints no code, and
+     saying that up front is what keeps the press from being the way to find
+     out. */
+  describe('when nothing is running that could host an adapter', () => {
+    it('names the reason on the row instead of calling the state unknown', async () => {
+      install([chan({ on: true })], { hostRunning: () => false })
+      await mount()
+      expect(rowNamed('Slack').querySelector('.kd')!.textContent).toBe('gui.conn.tag_nohost')
+    })
+
+    /* And where it genuinely cannot say, it says the honest thing. */
+    it('still says state unknown when the source cannot tell', async () => {
+      install([chan({ on: true })])
+      await mount()
+      expect(rowNamed('Slack').querySelector('.kd')!.textContent).toBe('gui.conn.tag_unknown')
+    })
+
+    it('tells a scan card there is no code coming before the press, not after', async () => {
+      install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] })], {
+        hostRunning: () => false,
+      })
+      await mount()
+      /* Opened off the row, not off its button: the button connects, and what
+         this pins is what the card says with nothing yet attempted. */
+      await act(async () => {
+        rowNamed('gui.chan.weixin').click()
+      })
+      const steps = [...document.querySelectorAll('#connVeil .suwiz .step')]
+      expect(steps[1]!.querySelector('.sd')!.textContent).toBe('gui.conn.w2_blocked')
+      /* Unpressed: the write has not happened, and the card said so anyway. */
+      expect(steps[0]!.getAttribute('data-state')).toBe('idle')
+    })
+
+    /* One sentence for two states was wrong in the commoner one: "Raven is not
+       running" over a page the gateway itself was serving. */
+    it('separates an adapter that gave up from nothing running at all', async () => {
+      const { calls } = install(
+        [chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: false })],
+        { hostRunning: () => true },
+      )
+      await mount()
+      await act(async () => {
+        rowNamed('gui.chan.weixin').click()
+      })
+      const steps = [...document.querySelectorAll('#connVeil .suwiz .step')]
+      expect(steps[1]!.querySelector('.sd')!.textContent).toBe('gui.conn.w2_down')
+      /* And it is worth trying again, which the row's own button cannot do from
+         under the card covering it. */
+      const retry = [...cardFoot().querySelectorAll('button')].find((b) => b.textContent === 'gui.conn.w_retry')
+      expect(retry, 'the card offers a retry').toBeTruthy()
+      await act(async () => {
+        ;(retry as HTMLElement).click()
+      })
+      expect(calls).toContainEqual(['apply', { id: 'weixin', patch: {}, enable: true }])
+    })
+
+    /* A code being waited on is not a failure: nothing to retry, and the panel
+       is what the reader is looking at. */
+    it('offers no retry while a code is actually up', async () => {
+      install([
+        chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true, connected: false }),
+      ])
+      await mount()
+      await act(async () => {
+        rowNamed('gui.chan.weixin').click()
+      })
+      expect([...cardFoot().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['gui.conn.disconnect'])
+    })
+
+    it('says nothing of the kind while the source has not answered', async () => {
+      install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] })])
+      await mount()
+      await act(async () => {
+        rowNamed('gui.chan.weixin').click()
+      })
+      const steps = [...document.querySelectorAll('#connVeil .suwiz .step')]
+      expect(steps[1]!.querySelector('.sd')).toBeNull()
     })
   })
 
@@ -371,7 +517,9 @@ describe('connections island', () => {
     const tag = (n: string): string | null => rowNamed(n).querySelector('.kd')?.textContent ?? null
     expect(tag('A')).toBeNull()
     expect(tag('B')).toBe('gui.conn.tag_down')
-    expect(tag('C')).toBe('gui.conn.tag_unpaired')
+    /* C is up and waiting on a code: a step of signing in, not a state to
+       advertise. Its badge is what it costs to get in, as before it was on. */
+    expect(tag('C')).toBe('gui.conn.cost_scan')
     expect(tag('D')).toBe('gui.conn.tag_unknown')
   })
 
@@ -394,7 +542,9 @@ describe('connections island', () => {
   })
 
   it('takes the switch back when the source reverts and rejects handled', async () => {
-    install([chan({ on: true })], {
+    /* Up and unpaired, so the row has a disconnect to press at all: the verb
+       follows the adapter now, not the flag. */
+    install([chan({ on: true, running: true, connected: false })], {
       /* What the live source does: optimistic flip now, revert on the rpc
          failure, reject handled so the island only redraws. */
       toggle: (c, on) => {
@@ -409,9 +559,165 @@ describe('connections island', () => {
     await act(async () => {
       rowBtn('Slack').click()
     })
-    /* Reverted: the flag is back on, so the row offers disconnect again. */
-    expect(groupOf('Slack')).toBe('gui.conn.g_pending')
-    expect(rowActs('Slack')).toEqual(['gui.conn.disconnect'])
+    /* Reverted, and still not in service: the flag came back, the adapter is
+       unpaired, and neither of those is being received on. */
+    expect(groupOf('Slack')).toBe('gui.conn.g_off')
+    expect(rowActs('Slack')).toEqual(['gui.conn.connect'])
+  })
+
+  /* The row's press opens the card, and does nothing else. It briefly did the
+     write itself, so a press was an attempt rather than a form -- but joining is
+     scanning a code or handing over a credential, both of which live in the
+     card, so a press out here could only ever be half the errand. */
+  it('opens the card from the row and attempts nothing on the way', async () => {
+    const { calls } = install([
+      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
+      chan({ fields: [{ key: 'bot_token', required: true, set: true }], missing: [] }),
+    ])
+    await mount()
+    await act(async () => {
+      rowBtn('gui.chan.weixin').click()
+    })
+    expect(cardHead().querySelector('.meta b')!.textContent).toBe('gui.chan.weixin')
+    expect(calls.filter((x) => x[0] === 'apply' || x[0] === 'toggle')).toEqual([])
+    /* Including the entrance that has everything it needs: no write, no start,
+       nothing claimed. */
+    await act(async () => {
+      store.closeDialog()
+    })
+    await act(async () => {
+      rowBtn('Slack').click()
+    })
+    expect(cardHead().querySelector('.meta b')!.textContent).toBe('Slack')
+    expect(calls.filter((x) => x[0] === 'apply' || x[0] === 'toggle')).toEqual([])
+  })
+
+  /* "Connect" is unavailable until there is something to connect WITH. Pressing
+     it with an empty box wrote nothing, started nothing and left the card
+     exactly as it was -- the press was the only feedback and it meant nothing. */
+  describe('a credential that has to actually exist', () => {
+    const key = (): HTMLButtonElement => cardFoot().querySelector('button.key')!
+
+    it('is unavailable while a required box is empty, and available once it is not', async () => {
+      const { calls } = install([
+        chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] }),
+      ])
+      await mount()
+      await act(async () => {
+        rowBtn('Slack').click()
+      })
+      expect(key().hasAttribute('disabled')).toBe(true)
+      /* And pressing it does nothing, which is the point of the attribute. */
+      await act(async () => {
+        key().click()
+      })
+      expect(calls.filter((x) => x[0] === 'apply')).toEqual([])
+
+      await act(async () => {
+        typeInto(document.querySelector<HTMLInputElement>('#connDlgBody input')!, 'tok')
+      })
+      expect(key().hasAttribute('disabled')).toBe(false)
+      await act(async () => {
+        key().click()
+      })
+      expect(calls).toContainEqual(['apply', { id: 'slack', patch: { bot_token: 'tok' }, enable: true }])
+    })
+
+    /* Whitespace is not a credential. */
+    it('does not count a box with nothing but spaces in it', async () => {
+      install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
+      await mount()
+      await act(async () => {
+        rowBtn('Slack').click()
+      })
+      await act(async () => {
+        typeInto(document.querySelector<HTMLInputElement>('#connDlgBody input')!, '   ')
+      })
+      expect(key().hasAttribute('disabled')).toBe(true)
+    })
+
+    /* Emptied again is empty again: the check is recomputed, not latched. */
+    it('goes back to unavailable when the box is cleared', async () => {
+      install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
+      await mount()
+      await act(async () => {
+        rowBtn('Slack').click()
+      })
+      const box = document.querySelector<HTMLInputElement>('#connDlgBody input')!
+      await act(async () => {
+        typeInto(box, 'tok')
+      })
+      expect(key().hasAttribute('disabled')).toBe(false)
+      await act(async () => {
+        typeInto(box, '')
+      })
+      expect(key().hasAttribute('disabled')).toBe(true)
+    })
+
+    /* Credentials already on file are credentials: an entrance configured last
+       week is pressable the moment its card opens, with every box left blank
+       (blank means "keep", never "erase"). */
+    it('counts a credential the config already holds', async () => {
+      const { calls } = install([
+        chan({ fields: [{ key: 'bot_token', required: true, set: true }], missing: [] }),
+      ])
+      await mount()
+      await act(async () => {
+        rowBtn('Slack').click()
+      })
+      expect(key().hasAttribute('disabled')).toBe(false)
+      await act(async () => {
+        key().click()
+      })
+      expect(calls).toContainEqual(['apply', { id: 'slack', patch: {}, enable: true }])
+    })
+
+    /* A scan entrance has no credential and no form: its wizard's button is not
+       this one, and gating it on an empty field list would have made signing in
+       impossible. */
+    it('leaves a scan entrance pressable, having nothing to fill', async () => {
+      install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] })])
+      await mount()
+      await act(async () => {
+        rowBtn('gui.chan.weixin').click()
+      })
+      expect((cardFoot().querySelector('button') as HTMLButtonElement).hasAttribute('disabled')).toBe(false)
+    })
+  })
+
+  /* The verb on the row is what the row claims. An entrance switched on whose
+     adapter never came up has nothing to disconnect from, and offering it named
+     the config flag as a connection. */
+  it('offers connect, not disconnect, where no adapter came up', async () => {
+    install([
+      chan({ id: 'a', name: 'A', on: true, running: true, connected: true }),
+      chan({ id: 'b', name: 'B', on: true, running: true, connected: false }),
+      chan({ id: 'c', name: 'C', on: true, running: false }),
+      chan({ id: 'd', name: 'D', on: true }),
+    ])
+    await mount()
+    expect(rowActs('A')).toEqual(['gui.conn.disconnect'])
+    /* Up and unpaired is not in service, so it is not what disconnect is for. */
+    expect(rowActs('B')).toEqual(['gui.conn.connect'])
+    expect(rowActs('C')).toEqual(['gui.conn.connect'])
+    expect(rowActs('D')).toEqual(['gui.conn.connect'])
+  })
+
+  /* Which would leave a switch nobody can take back, so the card carries it:
+     the row's control is about what the row is, the card has room to say what
+     the button does. */
+  it('keeps a way back to off in the card of an entrance that never started', async () => {
+    const { calls } = install([chan({ on: true, running: false, fields: [{ key: 'bot_token', required: true, set: true }] })])
+    await mount()
+    await act(async () => {
+      rowBtn('Slack').click()
+    })
+    const off = [...cardFoot().querySelectorAll('button')].find((b) => b.textContent === 'gui.conn.disconnect')
+    expect(off, 'the card offers disconnect').toBeTruthy()
+    await act(async () => {
+      ;(off as HTMLElement).click()
+    })
+    expect(calls).toContainEqual(['apply', { id: 'slack', patch: {}, enable: false }])
   })
 
   it('opens the credential dialog from the row and closes it on a click outside', async () => {
@@ -446,11 +752,14 @@ describe('connections island', () => {
   })
 
   /* The card is modal: the scrim covers the page and takes the press, so a
-     click outside closes the card and does not also operate what it covered --
-     pressing the rail behind an open card must not navigate, and pressing
-     another row's disconnect must not disconnect it. The press closes; the next
-     one acts. */
-  it('is modal: the press that closes it does not also work the list behind', async () => {
+     click outside never operates what it covered -- pressing the rail behind an
+     open card must not navigate, and pressing another row's disconnect must not
+     disconnect it. That the press stops at the scrim is a layout fact the
+     browser enforces and happy-dom cannot model, so this pins the half that is
+     in our hands: the handler hands the card to the row under the press and
+     never re-dispatches the press itself, which is the one way this code could
+     work a control it was covering. */
+  it('hands over the card without working the control under the press', async () => {
     const { calls } = install([
       chan({ id: 'a', name: 'A', on: true, running: true }),
       chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] }),
@@ -462,16 +771,32 @@ describe('connections island', () => {
     expect(cardHead().querySelector('.meta b')!.textContent).toBe('Telegram')
     /* Aim at the in-service row's disconnect, which is behind the scrim. */
     await act(async () => {
-      const b = rowBtn('A')
-      b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      pressOver(rowBtn('A'))
+    })
+    expect(calls.filter((c) => c[0] === 'toggle')).toEqual([])
+  })
+
+  /* Whatever the press is over -- the rail, the composer, another row, that
+     row's own connect -- the card closes and nothing else happens. Handing the
+     card over to the row under the press was still the press acting on
+     something it could not see. */
+  it('closes, and only closes, whatever the press was over', async () => {
+    const { calls } = install([
+      chan({ id: 'a', name: 'A', on: true, running: true }),
+      chan({ fields: [{ key: 'token', required: true }], missing: ['token'] }),
+    ])
+    await mount()
+    await act(async () => {
+      rowBtn('Slack').click()
+    })
+    /* Aimed at the in-service row's disconnect, which is behind the scrim. */
+    await act(async () => {
+      pressOver(rowBtn('A'))
     })
     expect(document.getElementById('connVeil')!.dataset.open).toBe('false')
-    expect(calls.filter((c) => c[0] === 'toggle')).toEqual([])
-    /* And the next press does act. */
-    await act(async () => {
-      rowBtn('A').click()
-    })
-    expect(calls).toContainEqual(['toggle', false])
+    expect(calls.filter((x) => x[0] === 'toggle')).toEqual([])
+    /* And no card was handed over on the way out. */
+    expect(document.querySelector('#connVeil .sheet')).toBeNull()
   })
 
   it('saves only the fields the reader filled, folding the optional ones', async () => {
@@ -495,11 +820,13 @@ describe('connections island', () => {
     expect(document.querySelector('#connDlgBody .suadv .sufield')).toBeNull()
     const body = document.getElementById('connDlgBody')!
     const token = body.querySelector<HTMLInputElement>('input[type="password"]')!
-    token.value = '  tok-1  '
+    await act(async () => {
+      typeInto(token, '  tok-1  ')
+    })
     /* The dialog's own save, not the row's way-in button behind it: both read
        "connect", which is right -- they are the same intent at two depths. */
     await act(async () => {
-      ;(cardFoot().querySelector('button') as HTMLElement).click()
+      ;(cardFoot().querySelector('button.key') as HTMLElement).click()
     })
     expect(calls).toContainEqual(['apply', { id: 'slack', patch: { bot_token: 'tok-1' }, enable: true }])
   })
@@ -831,6 +1158,7 @@ describe('connections island', () => {
     await act(async () => {
       ;(await screen.findByText('gui.chan.weixin')).click()
     })
+    /* The wizard's own foot has one button; backing out is it. */
     expect(cardFoot().querySelector('button')!.textContent).toBe('gui.conn.disconnect')
     await act(async () => {
       ;(cardFoot().querySelector('button') as HTMLElement).click()
@@ -856,9 +1184,9 @@ describe('connections island', () => {
     expect(body.querySelector('.sufield')).toBeNull()
     /* The list's verb, not a third one: it read "turn the entry on", which is
        also what step 1 above it says. */
-    expect(cardFoot().querySelector('button')!.textContent).toBe('gui.conn.connect')
+    expect(cardFoot().querySelector('button.key')!.textContent).toBe('gui.conn.connect')
     await act(async () => {
-      ;(cardFoot().querySelector('button') as HTMLElement).click()
+      ;(cardFoot().querySelector('button.key') as HTMLElement).click()
     })
     expect(calls).toContainEqual(['apply', { id: 'weixin', patch: {}, enable: true }])
   })

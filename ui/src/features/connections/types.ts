@@ -43,6 +43,13 @@ export interface ConnQr {
    "nothing to show yet"; the island keeps polling while the dialog is up. */
 export interface ConnSource {
   rows(initial?: boolean): Promise<ConnChannel[]>
+  /* Whether anything is running that could host a channel adapter at all --
+     the gateway lock, read after the last `rows`. A page-level fact, not a
+     per-row one: with no host there is no adapter to start, no code to mint and
+     nothing to ask, which is the difference between "this entrance is not
+     receiving" and "nothing here could be". Absent, or undefined, means the
+     source cannot say, and the page then claims nothing. */
+  hostRunning?(): boolean | undefined
   toggle(c: ConnChannel, on: boolean): Promise<unknown>
   apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<unknown>
   qr(c: ConnChannel): Promise<ConnQr | null>
