@@ -19,6 +19,14 @@ import type { AgentRow, AgentsSource, InstanceRow, OpenItem, SubagentRow } from 
 
 export interface AgentsState {
   roster: SubagentRow[]
+  /* The agent whose fresh instance is being minted, so its own button can
+     say so and a second click cannot mint a second one. Null when idle --
+     the name rather than a flag, because the panel has one button per
+     agent and only the asked-for one should show it. */
+  starting: string | null
+  /* Why the last start was refused, addressed to the agent it was for. Cleared
+     when the next start begins, so a stale refusal cannot outlive its button. */
+  startFail: { agent: string; why: string } | null
   rows: AgentRow[]
   /* What the panel lists. The runs in `rows` are still read, because a run
      detail opened from the conversation's own graph card takes its header from
@@ -52,7 +60,8 @@ export interface DirectChatState {
 }
 
 const initial: AgentsState = {
-  roster: [], rows: [], instances: [], sendFail: null, direct: {}, open: null, who: null, epoch: 0, tick: 0,
+  roster: [], starting: null, startFail: null, rows: [], instances: [], sendFail: null, direct: {}, open: null, who: null,
+  epoch: 0, tick: 0,
 }
 
 let state: AgentsState = { ...initial }
@@ -294,6 +303,120 @@ export function openInstance(it: InstanceRow, recordId?: string | null): void {
      and the row does not carry one. Left off and the record pane stays open
      beside the instance pane. */
   workspace?.openAgent?.(it, recordId || null)
+}
+
+/* Rises once per start. Identifies the request `starting` is held for, so a
+   request that settles late cannot release a newer one's hold. Module-level
+   rather than in the state: it is bookkeeping about a call, not something drawn,
+   and the reset that clears the state on a session switch must NOT reset it --
+   a request in flight across that switch is exactly the one this distinguishes. */
+let startTicket = 0
+
+/* Whether this agent can be given a fresh instance.
+
+   Enabled and stateful, which is the pair `subagents.instance.create` accepts: a
+   stateless agent answers every turn from nothing, so a handle onto it would name
+   a conversation that does not exist. Offering one anyway is a button that fails
+   on click for a reason the row cannot show.
+
+   Named for the two places that already say the same thing, so one grep finds all
+   three: `_require_addressable` in raven/agent/subagent/manager.py, which is the
+   refusal this mirrors, and `addressableAgents` in
+   ui-tui/src/components/newInstancePicker.tsx, which filters the TUI's own picker
+   by the identical condition. Three copies of one rule is not ideal -- there is no
+   server-computed flag for it the way `InstanceRow.resumable` is computed for an
+   existing instance -- but a shared name makes a drift in any of them findable. */
+export function addressable(row: SubagentRow | undefined): boolean {
+  return !!row && !!row.enabled && !!row.stateful
+}
+
+/* Start an instance and go straight into it.
+
+   Both, not either: the reader asked for this one, so it is opened -- and it is
+   a real instance like any other, so it joins the list and closing it leaves it
+   there.
+
+   Who opens it is the caller's, because the same list is drawn in two places: on
+   the standalone panel an instance opens the panel's own detail, and in the desk
+   it opens a desk pane. A row already takes its opener that way; so does this.
+
+   The list is refreshed before the open rather than after, so the row the panel
+   is showing is one the list already holds; opening first left a detail whose
+   own row arrived a heartbeat later. */
+export function startInstance(
+  agent: string,
+  open: (row: InstanceRow) => void = openInstance,
+): Promise<boolean> {
+  const src = source()
+  const key = sessionKey()
+  if (!src.instanceCreate || !key || state.starting) return Promise.resolve(false)
+  set({ starting: agent, startFail: null, epoch: state.epoch + 1 })
+  /* Which request this is. `starting` names the one the panel is waiting on, and
+     only that one may release it: two creates overlap across a conversation
+     switch -- the first is still out when the reader leaves, the second is
+     started where they arrive -- and a finalizer that cleared unconditionally
+     re-enabled the button while the second's RPC was in flight, so the next press
+     sent a duplicate.
+
+     A ticket rather than the agent name, which both requests share, and rather
+     than the session, which answers a different question: `mine()` below asks "is
+     this answer still for the conversation on screen", this asks "is this still
+     the request the button is held for". Neither implies the other. */
+  const ticket = ++startTicket
+
+  /* Every write below is gated on the conversation that asked still being the
+     one on screen. A create is a round trip and the reader can switch inside it:
+     the row minted for the conversation they left was being opened under the one
+     they arrived at, and the panel then showed an instance that conversation
+     never made. `refreshInstances` guards its own answer exactly this way -- the
+     rule is the store's, and this call was the one place not following it.
+
+     `starting` is not gated on the session, because a conversation that has gone
+     must not leave the next one's button disabled -- but it is gated on the
+     request, which is not the same thing and is what `ticket` is for. */
+  const mine = (): boolean => sessionKey() === key
+
+  /* The refusal is caught around the CREATE alone, not around the whole chain.
+     Everything after it -- the refresh, the open -- happens to an instance the
+     server has already minted, so a failure there is not a failure to start and
+     must not be reported as one: the card would say the run could not be created
+     while the row for it sat in the list underneath. */
+  return src
+    .instanceCreate(agent, key)
+    .catch((e: unknown) => {
+      if (mine()) set({ startFail: { agent, why: (e as Error)?.message || String(e) } })
+      return null
+    })
+    .then(async (row) => {
+      if (!row) return false
+      await refreshInstances(true)
+      /* Once, and here rather than before the refresh: the refresh is itself a
+         round trip, so a gate ahead of it does not cover the window it opens --
+         and this one covers both. Two would be a pair no test could tell apart,
+         which is how a guard comes to be deleted as dead. The wasted refresh for
+         a conversation already left is harmless: that read guards its own answer
+         the same way. */
+      if (!mine()) return false
+      /* The row the server minted, not one found by searching the refreshed
+         list: a handle is unique and the answer already carries it, and a
+         lookup would depend on a refresh that may have raced. */
+      try {
+        open(row)
+      } catch (e) {
+        /* The instance exists and is on the list; only the pane did not open.
+           Not reported as a start failure -- that would be a lie with the row
+           visible underneath it -- and not rethrown either, because the caller
+           discards this promise and an unhandled rejection is all that would
+           reach anyone. Logged so it is findable. */
+        console.error('sub-agent instance created but the view did not open', e)
+      }
+      return true
+    })
+    .finally(() => {
+      /* Only this request's. A successor already holds it otherwise, and clearing
+         it there is what let the button be pressed twice for one conversation. */
+      if (ticket === startTicket) set({ starting: null, epoch: state.epoch + 1 })
+    })
 }
 
 /* What a row in the list opens. Ordinarily the instance it names; for a

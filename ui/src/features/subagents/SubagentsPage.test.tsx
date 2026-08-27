@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from '@testing-library/react'
+import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as mount_ from './mount'
 import {
+  AgentList,
   AgentRecordConversation,
   InstanceConversation,
-  AgentList,
   InstanceRowView,
   orderAgentGroups,
   SubagentsApp,
@@ -15,6 +16,7 @@ import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
+import type { JSX } from 'react'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -71,6 +73,23 @@ async function mount() {
   const view = render(<SubagentsApp />, { container: document.getElementById('wsBody')! })
   store.attached(true)
   /* The list effect asks the source on mount; let the answer land. */
+  await act(async () => {
+    await Promise.resolve()
+  })
+  return view
+}
+
+/* The grouped-by-agent list, which is the desk palette's variant of the same
+   component -- the standalone panel draws one flat list of instances and has no
+   agent headings for a button to sit beside. */
+function Grouped({ onOpen }: { onOpen?: (row: InstanceRow) => void }): JSX.Element {
+  const s = useSyncExternalStore(store.subscribe, store.getState)
+  return <AgentList s={s} onOpen={onOpen} compact />
+}
+
+async function mountGrouped(onOpen?: (row: InstanceRow) => void) {
+  const view = render(<Grouped onOpen={onOpen} />, { container: document.getElementById('wsBody')! })
+  store.attached(true)
   await act(async () => {
     await Promise.resolve()
   })
@@ -254,6 +273,228 @@ describe('subagents island, the list', () => {
        row underneath it. */
     expect(screen.queryByText('stale')).toBeNull()
     expect(document.querySelector('.satx')).toBeNull()
+  })
+
+  /* One roster of four, so a single mount can say which agents get the button
+     and which do not. `hermes` is the only one that can hold a direct chat. */
+  function startable(over: Partial<AgentsSource> = {}): AgentsSource {
+    const roster = [
+      { name: 'hermes', enabled: true, stateful: true },
+      { name: 'mute', enabled: true, stateful: false },
+      { name: 'off', enabled: false, stateful: true },
+      { name: 'old', enabled: true },
+    ] as SubagentRow[]
+    return instances([inst({ handle: 'one' })], { roster: async () => roster, ...over })
+  }
+
+  const plusFor = (agent: string): HTMLButtonElement | null =>
+    Array.from(document.querySelectorAll<HTMLElement>('.agent-group')).find(
+      (g) => g.querySelector('.agent-head b')?.textContent === agent,
+    )?.querySelector('.agent-new') ?? null
+
+  it('offers a new instance only for an agent that can hold a direct chat', async () => {
+    startable()
+    await mountGrouped()
+    await screen.findByText('hermes')
+    /* Stateless, disabled, and a server too old to say either: the create
+       refuses all three, so a button on them would be a refusal on click. */
+        expect(plusFor('hermes')).not.toBeNull()
+    expect(plusFor('mute')).toBeNull()
+    expect(plusFor('off')).toBeNull()
+    expect(plusFor('old')).toBeNull()
+  })
+
+  it('creates an instance, lists it, and opens it', async () => {
+    const asked: Array<[string, string]> = []
+    let listed: InstanceRow[] = [inst({ handle: 'one' })]
+    const fresh = inst({ handle: 'fresh', status: 'idle' })
+    startable({
+      instances: async () => listed,
+      instanceCreate: async (agent, sessionKey) => {
+        asked.push([agent, sessionKey])
+        listed = [...listed, fresh]
+        return fresh
+      },
+    })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(asked).toEqual([['hermes', 's1']])
+    /* Both, which is the whole ask: the panel is inside the new instance, and
+       the instance is on the list waiting when `back()` leaves it. */
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    act(() => {
+      store.back()
+    })
+    expect(store.getState().open).toBeNull()
+    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+  })
+
+  it('does not open one conversation\'s new instance in another', async () => {
+    /* The create is a round trip, and the reader can switch conversations inside
+       it. `refreshInstances` already guards its own answer this way
+       (`const asked = sessionKey()` ... `if (asked !== sessionKey()) return`); the
+       create's continuation did not, so the row minted for s1 was opened under
+       s2 -- and the panel then showed an instance the new conversation never
+       made. */
+    let release: ((row: InstanceRow) => void) | null = null
+    const fresh = inst({ sessionKey: 's1', handle: 'fresh' })
+    startable({
+      instanceCreate: () => new Promise<InstanceRow>((resolve) => { release = resolve }),
+    })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    /* The switch, as production does it: the store is cleared with the session
+       (`wsReset` calls `subagents.reset`) and the new session is set. */
+    act(() => {
+      store.reset()
+      setCurrent('s2')
+    })
+    await act(async () => {
+      release!(fresh)
+      await Promise.resolve()
+    })
+    /* Nothing opened, and nothing was written into the new conversation. */
+    expect(store.getState().open).toBeNull()
+    expect(store.getState().startFail).toBeNull()
+    expect(store.getState().instances.map((r) => r.handle)).not.toContain('fresh')
+    /* And the button in the new conversation is usable: a `starting` left set by
+       the conversation that has gone would disable it for good. */
+    expect(store.getState().starting).toBeNull()
+  })
+
+  it('does not let a settled request release a newer one\'s button', async () => {
+    /* Two creates overlap across a switch. `starting` names the request the panel
+       is waiting on, so only that request may release it -- a finalizer that
+       clears unconditionally re-enables the button while the newer RPC is still
+       out, and the next press sends a duplicate. */
+    const gates: Array<(row: InstanceRow) => void> = []
+    startable({
+      instanceCreate: () => new Promise<InstanceRow>((resolve) => { gates.push(resolve) }),
+    })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    expect(store.getState().starting).toBe('hermes')
+
+    act(() => {
+      store.reset()
+      setCurrent('s2')
+    })
+    /* The roster leaves with the session, and the panel asks again for the one it
+       arrived at -- so the heading, and the button on it, come back. */
+    await act(async () => {
+      store.refreshRoster(true)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    /* The successor, in the new conversation and still in flight. */
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    expect(store.getState().starting).toBe('hermes')
+
+    /* Now the one from the conversation the reader left comes back. */
+    await act(async () => {
+      gates[0]!(inst({ sessionKey: 's1', handle: 'stale' }))
+      await Promise.resolve()
+    })
+    /* Still held: the s2 request has not answered. */
+    expect(store.getState().starting).toBe('hermes')
+
+    /* And when the successor does answer, it releases its own. */
+    await act(async () => {
+      gates[1]!(inst({ sessionKey: 's2', handle: 'fresh' }))
+      await Promise.resolve()
+    })
+    expect(store.getState().starting).toBeNull()
+  })
+
+  it('does not carry a refusal into the conversation the reader moved to', async () => {
+    /* The other half of the switch: the create can also FAIL after it. A refusal
+       written then belongs to a conversation nobody is looking at, and shows up
+       under one that never asked for anything. */
+    let refuse: ((e: Error) => void) | null = null
+    startable({
+      instanceCreate: () => new Promise<InstanceRow>((_, reject) => { refuse = reject }),
+    })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    act(() => {
+      store.reset()
+      setCurrent('s2')
+    })
+    await act(async () => {
+      refuse!(new Error('hermes is disabled'))
+      await Promise.resolve()
+    })
+    expect(store.getState().startFail).toBeNull()
+    expect(store.getState().starting).toBeNull()
+  })
+
+  it('does not blame the creation for a failure after it', async () => {
+    /* Everything after the create happens to an instance the server has already
+       minted. Reporting a later failure as a start failure would say the run
+       could not be created with its row sitting in the list underneath. */
+    const fresh = inst({ handle: 'fresh', status: 'idle' })
+    startable({
+      instances: async () => [inst({ handle: 'one' }), fresh],
+      instanceCreate: async () => fresh,
+    })
+    await mountGrouped(() => { throw new Error('the desk pane blew up') })
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(store.getState().startFail).toBeNull()
+    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    /* And it is released either way, so the button can be pressed again. */
+    expect(store.getState().starting).toBeNull()
+
+    /* The call still RESOLVES, and resolves true: the start happened. Asserted on
+       the promise because the button discards it, and an opener that throws with
+       nothing catching it leaves an unhandled rejection nobody sees -- which is
+       what the guard around the open is for, and what asserting only on the store
+       state cannot tell apart. */
+    let settled: unknown = 'never'
+    await act(async () => {
+      settled = await store.startInstance('hermes', () => { throw new Error('again') })
+    })
+    expect(settled).toBe(true)
+  })
+
+  it('says why a creation was refused, on the agent that refused it', async () => {
+    startable({ instanceCreate: async () => { throw new Error('hermes is stateless') } })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(document.querySelector('.agent-newfail')?.textContent).toContain('hermes is stateless')
+    expect(store.getState().open).toBeNull()
+    /* Released, not stuck: the button has to take a second try. */
+    expect(store.getState().starting).toBeNull()
+    expect(plusFor('hermes')!.disabled).toBe(false)
   })
 })
 

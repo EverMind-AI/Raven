@@ -20,6 +20,14 @@ function IcoUp(): JSX.Element {
   )
 }
 
+function IcoPlus(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M12 6v12M6 12h12" />
+    </svg>
+  )
+}
+
 function BotIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -197,32 +205,50 @@ export function AgentList({ s, onOpen, compact = false }: {
         const foldable = children.length > 0
         return (
           <section className="agent-group" key={name}>
-            <button
-              className="agent-head"
-              aria-expanded={foldable ? !folded : undefined}
-              disabled={!foldable}
-              onClick={() => setClosed((value) => {
-                if (!foldable) return value
-                const next = new Set(value)
-                if (next.has(name)) next.delete(name)
-                else next.add(name)
-                return next
-              })}
-            >
-              {/* The slot is drawn on every head, foldable or not. `hidden` took it
-                  out of the flow, so a group with children started its icon and its
-                  name 12px right of every leaf row's -- one list on two vertical
-                  lines. What a leaf row has no business showing is the glyph, not
-                  the column. */}
-              <span className="agent-fold" data-open={foldable && !folded} data-empty={!foldable} aria-hidden="true">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="m5.5 6.5 2.5 3 2.5-3" />
-                </svg>
-              </span>
-              <span className="agent-bot" aria-hidden="true"><BotIcon /></span>
-              <b title={name}>{name}</b>
-              <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
-            </button>
+            <div className="agent-headrow">
+              <button
+                className="agent-head"
+                aria-expanded={foldable ? !folded : undefined}
+                disabled={!foldable}
+                onClick={() => setClosed((value) => {
+                  if (!foldable) return value
+                  const next = new Set(value)
+                  if (next.has(name)) next.delete(name)
+                  else next.add(name)
+                  return next
+                })}
+              >
+                {/* The slot is drawn on every head, foldable or not. `hidden` took it
+                    out of the flow, so a group with children started its icon and its
+                    name 12px right of every leaf row's -- one list on two vertical
+                    lines. What a leaf row has no business showing is the glyph, not
+                    the column. */}
+                <span className="agent-fold" data-open={foldable && !folded} data-empty={!foldable} aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="m5.5 6.5 2.5 3 2.5-3" />
+                  </svg>
+                </span>
+                <span className="agent-bot" aria-hidden="true"><BotIcon /></span>
+                <b title={name}>{name}</b>
+                <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
+              </button>
+              {/* Outside the head, not inside it: the head is a button, and a
+                  button cannot hold another one. */}
+              {store.addressable(registered) && (
+                <button
+                  className="agent-new"
+                  title={t('gui.ws.instance_new_hint', { name })}
+                  aria-label={t('gui.ws.instance_new_hint', { name })}
+                  disabled={!!s.starting}
+                  onClick={() => { void store.startInstance(name, onOpen) }}
+                >
+                  {s.starting === name ? <span className="wkg" aria-hidden="true"><i /><i /><i /></span> : <IcoPlus />}
+                </button>
+              )}
+            </div>
+            {s.startFail?.agent === name && (
+              <p className="agent-newfail">{t('gui.ws.instance_new_fail', { why: s.startFail.why })}</p>
+            )}
             <div className="agent-instances" hidden={folded}>
               {children.map((it) => (
                 <InstanceRowView key={`${it.agent}:${it.handle}`} it={it} onOpen={onOpen} compact />

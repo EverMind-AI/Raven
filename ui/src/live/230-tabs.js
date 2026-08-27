@@ -60,6 +60,9 @@ DS.agents = {
   instanceSend: (agent, handle, text) =>
     rpc.call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle } })
       .then(() => undefined),
+  instanceCreate: (agent, sessionKey) =>
+    rpc.call('subagents.instance.create', { agent, session_key: sessionKey })
+      .then((r) => r && r.instance),
   /* The heartbeat, forwarded rather than acted on: a run in flight has to
      move on screen without being reopened, and every judgement about what
      that takes belongs to the island that is drawing it. */
