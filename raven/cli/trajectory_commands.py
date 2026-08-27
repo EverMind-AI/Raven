@@ -38,12 +38,14 @@ import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Callable
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from raven.cli._tty_guard import die_if_not_tty
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import collect_bundle
@@ -53,10 +55,44 @@ from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_ver
 
 console = Console()
 
-trajectory_app = typer.Typer(
-    help="Package, label, and protect agent trajectories.",
-    no_args_is_help=True,
-)
+trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
+
+
+@trajectory_app.callback(invoke_without_command=True)
+def trajectory_main(
+    ctx: typer.Context,
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Workspace holding the session records (default: the configured workspace)",
+    ),
+) -> None:
+    """Package, label, and protect agent trajectories (bare invocation opens
+    the interactive browser)."""
+    # Subcommands must pass through before the TTY gate, or non-interactive
+    # scripts running `trajectory save/list/...` would die on the check.
+    if ctx.invoked_subcommand is not None:
+        return
+    die_if_not_tty("raven trajectory list")
+    # Local import: the browser (and its questionary dependency) loads only
+    # when actually entered, and the module cycle commands <-> browse breaks.
+    from raven.cli.trajectory_browse import browse_trajectories
+
+    browse_trajectories(workspace=workspace)
+
+
+def _default_cassette_dir(attempt_id: str) -> Path:
+    """Default cassette directory for ``attempt_id`` under the cassettes root.
+
+    The id is recorded data; one that would name a path outside the cassettes
+    directory raises ``ValueError`` (shared by the CLI and the browser so the
+    escape check cannot drift)."""
+    out_root = (tracing_config.state_dir() / "cassettes").resolve()
+    out_dir = (out_root / attempt_id).resolve()
+    if out_dir.parent != out_root:
+        raise ValueError(f"id {attempt_id!r} cannot be used as a cassette directory name")
+    return out_dir
 
 
 def _bundle_dir_or_exit(target: str) -> Path:
@@ -149,6 +185,35 @@ def trajectory_report(
     ),
 ) -> None:
     """Redact a trajectory and pack it into a shareable .tar.gz (the original bundle is untouched)."""
+    try:
+        _report_attempt(id_, out=out, yes=yes, workspace=workspace, config=config, confirm=typer.confirm)
+    except (LookupError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _cli_bundled_note(attempt_id: str) -> None:
+    console.print(f"Bundled [cyan]{escape(attempt_id)}[/cyan] (re-packed to pick up the latest data)")
+
+
+def _report_attempt(
+    id_: str,
+    *,
+    out: Path | None,
+    yes: bool,
+    workspace: Path | None,
+    config: Path | None,
+    confirm: Callable[[str], bool],
+    on_bundled: Callable[[str], None] = _cli_bundled_note,
+) -> None:
+    """The report workflow with injectable presentation seams.
+
+    ``confirm`` carries only yes/no (a cancelled prompt must be raised by the
+    injector, not folded into False); ``on_bundled`` renders the re-pack
+    progress note (the browser injects an id-free variant). Collection errors
+    (``LookupError`` / ``ValueError``) propagate to the caller — each frontend
+    presents them within its own output boundary.
+    """
     if workspace is None and config is not None:
         # The traced agent's session records live in that config's workspace;
         # without this the bundle silently omits session.jsonl. An unloadable
@@ -160,13 +225,9 @@ def trajectory_report(
             workspace = load_config(config).workspace_path
         except Exception:
             pass
-    try:
-        bundle_dir = collect_bundle(id_, workspace=workspace)
-    except (LookupError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/red]")
-        raise typer.Exit(code=1)
+    bundle_dir = collect_bundle(id_, workspace=workspace)
     attempt_id = bundle_dir.name
-    console.print(f"Bundled [cyan]{escape(attempt_id)}[/cyan] (re-packed to pick up the latest data)")
+    on_bundled(attempt_id)
 
     staging = Path(tempfile.mkdtemp(prefix=f"raven-report-{attempt_id}-"))
     try:
@@ -203,7 +264,7 @@ def trajectory_report(
         else:
             console.print("[green]Residual scan: clean[/green]")
 
-        if not yes and not typer.confirm("Produce the report tarball?"):
+        if not yes and not confirm("Produce the report tarball?"):
             console.print("Aborted — no tarball was produced.")
             raise typer.Exit(code=1)
 
@@ -301,12 +362,10 @@ def trajectory_minimize(
     attempt_id = manifest_id if isinstance(manifest_id, str) and manifest_id else bundle_dir.name
     out_dir = out
     if out_dir is None:
-        # The manifest's attempt id is recorded data; refuse one that would
-        # name a default path outside the cassettes directory.
-        out_root = (tracing_config.state_dir() / "cassettes").resolve()
-        out_dir = (out_root / attempt_id).resolve()
-        if out_dir.parent != out_root:
-            console.print(f"[red]id {escape(repr(attempt_id))} cannot be used as a cassette directory name[/red]")
+        try:
+            out_dir = _default_cassette_dir(attempt_id)
+        except ValueError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]")
             raise typer.Exit(code=1)
     try:
         report = minimize_bundle(bundle_dir, out_dir, config_path=config)

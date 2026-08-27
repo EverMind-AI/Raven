@@ -55,6 +55,21 @@ def test_group_registered_on_app() -> None:
     assert "trajectories" in r.stdout
 
 
+def test_bare_invocation_without_tty_exits_2(state) -> None:
+    """The browser needs a terminal; CliRunner provides none."""
+    r = runner.invoke(trajectory_app, [])
+    assert r.exit_code == 2
+    assert "Non-interactive" in r.stdout
+
+
+def test_subcommands_unaffected_by_tty_gate(state) -> None:
+    """The callback must pass subcommands through before the TTY check."""
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    r = runner.invoke(trajectory_app, ["list"])
+    assert r.exit_code == 0
+    assert "trace-1" in r.stdout
+
+
 def test_subcommand_help() -> None:
     for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "merge", "split", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
