@@ -1,7 +1,7 @@
 {
   "name": "Raven-Code",
   "kind": "acp",
-  "description": "A powerful coding agent that can write, run and debug code for one engineering task on this host, reporting its work live as it goes. Use this agent for a fix, a small feature, a script, or a failing test. It reads local files on this host too. IMPORTANT: it edits your files for real and has nobody to ask, so put the acceptance criteria in the task. It is stateful, so a follow-up to the SAME instance continues the same task: do not restate the whole task, that starts a new one.",
+  "description": "A powerful coding agent that can write, run and debug code for one engineering task on this host, then report what it did. Use this agent for a fix, a small feature, a script, or a failing test. IMPORTANT: it edits your files for real and has nobody to ask, so put the acceptance criteria in the task.",
   "owns": "owns coding: writing, running or debugging code. Do not write the code yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
