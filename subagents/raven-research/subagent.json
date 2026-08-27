@@ -7,7 +7,7 @@
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py",
   "cwd": "{SUBAGENT_DIR}",
   "readyTimeoutMs": 60000,
-  "timeout": 2400,
+  "timeout": null,
   "maxOutputChars": 30000,
   "everos": {
     "userId": "raven-research",

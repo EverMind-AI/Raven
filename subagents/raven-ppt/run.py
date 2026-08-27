@@ -486,10 +486,10 @@ def render_config(source: Path) -> Path:
     # to prevent: a config that cannot answer, reported as a generic error with
     # nothing naming the credential. `--acp` widens the window from the length
     # of a write to the length of a session: `serve_acp` renders one and `execv`s
-    # into the server, which then holds this path for as long as it serves -- up
-    # to the 10800s `subagent.json` declares. That exec is also why the sweep at
-    # the top of this function is the only cleanup either mode has: nothing runs
-    # after it to remove anything.
+    # into the server, which then holds this path for as long as it serves --
+    # `subagent.json` sets no ceiling, so that is until a manual stop. That exec
+    # is also why the sweep at the top of this function is the only cleanup
+    # either mode has: nothing runs after it to remove anything.
     rendered = STATE_ROOT / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     # The mode argument applies only on create, and a pid can be reused, so a

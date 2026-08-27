@@ -7,7 +7,7 @@
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
   "cwd": "{SUBAGENT_DIR}",
   "readyTimeoutMs": 180000,
-  "timeout": 10800,
+  "timeout": null,
   "maxOutputChars": 60000,
   "everos": {
     "userId": "raven-ppt",
