@@ -645,7 +645,7 @@ What the entry does carry:
 | `command` | `{PYTHON} {SUBAGENT_DIR}/run.py` | Starts a *server*, once per connection - no `{prompt_file}`, no `{agent_id}`; a task placeholder here would be passed through literally and fail the handshake |
 | `cwd` | `{SUBAGENT_DIR}` | Pinned because the host's connection pool keys the launch on `(command, cwd, env)`; unset, it falls back to the calling task's workspace and every new workspace relaunches the server, killing the sessions the old one was serving |
 | `readyTimeoutMs` | `60000` | The `initialize` budget. The real handshake measures ~3s (a full engine import plus config render); 60s is headroom, not hope |
-| `timeout` | `2400` | Per `session/prompt`, preserving the old launcher's internal per-turn watchdog rather than the manifest's old `null` |
+| `timeout` | `null` | No ceiling on a `session/prompt`: a long run is ended by a manual stop, not a timer. `run.py` defines no watchdog of its own, so this field was the only clock on the path |
 | `maxOutputChars` | `30000` | The host tail-truncates the reply here - see the research-trail note above for what that costs |
 
 `run.py` still mints nothing and names nothing: sessions are the server's own
