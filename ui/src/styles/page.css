@@ -325,9 +325,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .list .lab { padding: 10px 10px 3px; display: block; }
 /* Rail group eyebrow: caret + label + count + hairline. The rule and the
    caret are what separate a heading from the session rows under it. */
+/* padding-left carries what the caret used to: the glyph now sits after the
+   count (see features/rail/RailPage.tsx), and the label holds the same x it
+   held when the caret led -- which is what keeps it lined up with `.grp-empty`
+   and with the whole column. */
 .list .grp {
   display: flex; align-items: center; gap: 7px;
-  padding: 13px 4px 5px 6px; cursor: pointer; user-select: none;
+  padding: 13px 4px 5px 23px; cursor: pointer; user-select: none;
 }
 .list .grp:first-child { padding-top: 6px; }
 .list .grp .car { display: grid; place-items: center; flex: none; color: var(--faint); }
@@ -380,14 +384,25 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .sess[aria-current="true"] .w { color: var(--muted); }
 /* The two common actions replace the timestamp in place on hover, keeping the
-   row width stable while making pin and archive one-click operations. */
+   row width stable while making pin and archive one-click operations.
+
+   The stamp yields on exactly the condition that brings the actions up, and
+   nothing else. Reading `.sess:focus-within` instead was the same thought
+   written one selector too wide: a row is a div[role=button][tabindex=0], so
+   CLICKING a session leaves the row itself focused -- which took the stamp
+   away and left 48px of nothing in its place, because the actions answer to
+   focus inside `.quick` rather than to focus on the row. The session you had
+   just opened was the one row in the rail with no time on it, for as long as
+   the focus stayed there. Keyboard reach is unaffected: the buttons are
+   opacity-0, not hidden, so tabbing on from the row focuses one and both
+   halves of this pair fire together. */
 .sess .quick {
   display: flex; align-items: center; gap: 3px; position: absolute; right: 9px;
   opacity: 0; pointer-events: none;
 }
 .sess:hover .quick, .sess .quick:focus-within { opacity: 1; pointer-events: auto; }
-.sess:hover .w, .sess:focus-within .w { display: none; }
-.sess:hover .t, .sess:focus-within .t { padding-right: 48px; }
+.sess:hover .w, .sess:has(.quick:focus-within) .w { display: none; }
+.sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 48px; }
 .sess .quick button {
   display: grid; place-items: center; position: relative; width: 21px; height: 21px; border-radius: 5px;
   color: var(--muted);

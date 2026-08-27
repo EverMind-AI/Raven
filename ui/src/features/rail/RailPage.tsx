@@ -187,9 +187,12 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
   )
 }
 
-/* Every group gets the same collapsible eyebrow: caret + label + count +
-   hairline. The cron and recent groups are permanent fixtures of the rail
-   (rendered even when empty); pinned only exists while something is pinned. */
+/* Every group gets the same collapsible eyebrow: label + count + caret +
+   hairline. The caret follows what it opens rather than leading it, so the
+   eyebrow starts on the word the eye is looking for; the label's own x is held
+   by the row's left padding instead (see `.list .grp` in styles/page.css). The
+   cron and recent groups are permanent fixtures of the rail (rendered even
+   when empty); pinned only exists while something is pinned. */
 function Group({
   label,
   items,
@@ -226,13 +229,13 @@ function Group({
         onClick={flip}
         onKeyDown={enterOrSpace(flip)}
       >
+        <span className="lab">{label}</span>
+        <span className="n">{String(items.length)}</span>
         <span className="car">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M8.5 5.5 15 12l-6.5 6.5" />
           </svg>
         </span>
-        <span className="lab">{label}</span>
-        <span className="n">{String(items.length)}</span>
         <span className="rule" />
         {action ? (
           <button

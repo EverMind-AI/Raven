@@ -513,6 +513,18 @@ describe('rail island', () => {
     })
   })
 
+  it('puts the caret after the label it opens, not in front of it', () => {
+    /* The eyebrow starts on the word the eye is looking for. Order rather than
+       presence: a caret is in the row either way, and what was asked for is
+       where it sits. The hairline stays last -- it is the one child that takes
+       the remaining width, so anything after it would be pushed off the row. */
+    install({ rows: [row()] })
+    const host = mount()
+    const grp = [...host.querySelectorAll<HTMLElement>('.grp')]
+      .find(g => g.textContent!.includes('gui.rail.recent'))!
+    expect([...grp.children].map(c => c.className)).toEqual(['lab', 'n', 'car', 'rule'])
+  })
+
   it('folds a group on its eyebrow and unfolds it again', () => {
     install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     const host = mount()
