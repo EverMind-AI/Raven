@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
 from raven.playbook.types import Triggers
 
 if TYPE_CHECKING:
@@ -185,7 +186,7 @@ async def _expand_once(
     source_input: str,
     seeds: list[str],
     model: str | None,
-) -> list[str]:
+) -> list[str] | None:
     response = await provider.chat_with_retry(
         messages=[
             {
@@ -201,16 +202,11 @@ async def _expand_once(
         model=model,
         tool_choice={"type": "function", "function": {"name": _EXPAND_TOOL_NAME}},
     )
-    if not response.has_tool_calls:
-        return []
-    args = response.tool_calls[0].arguments
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            args = {}
-    if not isinstance(args, dict):
-        return []
+    try:
+        args = required_tool_arguments(response, _EXPAND_TOOL_NAME)
+    except (ProviderResponseError, RequiredToolError) as exc:
+        logger.warning("trigger expansion failed: {}", exc)
+        return None
     return [*(args.get("keywords") or []), *(args.get("phrases") or [])]
 
 
@@ -237,7 +233,10 @@ async def expand_triggers(
     seed_words = list(seeds.keywords) if seeds is not None else []
     raw: list[str] = []
     for _ in range(max(1, rounds)):
-        raw += await _expand_once(provider, description, source_input, seed_words, model)
+        expanded = await _expand_once(provider, description, source_input, seed_words, model)
+        if expanded is None:
+            break
+        raw += expanded
     return guard_triggers(
         seed_words + raw,
         negative_samples=negative_samples,

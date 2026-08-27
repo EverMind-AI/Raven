@@ -24,10 +24,35 @@ from raven.playbook.types import PlaybookSpec
 
 EMIT_TOOL_NAME = "emit_playbook"
 
-# LLM-produced fields only; code-filled ones are stripped from the schema so
-# the model cannot fight the generator over them. name is code-derived
-# (slug), version is the format version.
+# Code-filled fields are stripped so the model cannot fight the generator.
+# The model proposes a name, which the generator normalizes into a slug.
 _CODE_FILLED_TOP = {"version"}
+
+
+def _inline_local_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Inline local ``$defs`` references for tool-schema compatibility."""
+    definitions = schema.get("$defs") or {}
+
+    def visit(value: Any, resolving: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [visit(item, resolving) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if ref := value.get("$ref"):
+            prefix = "#/$defs/"
+            if not isinstance(ref, str) or not ref.startswith(prefix):
+                raise ValueError(f"unsupported JSON Schema reference: {ref!r}")
+            name = ref.removeprefix(prefix).replace("~1", "/").replace("~0", "~")
+            if name not in definitions:
+                raise ValueError(f"unknown JSON Schema reference: {ref!r}")
+            if name in resolving:
+                raise ValueError(f"recursive JSON Schema reference: {ref!r}")
+            target = visit(definitions[name], (*resolving, name))
+            siblings = visit({key: item for key, item in value.items() if key != "$ref"}, resolving)
+            return {**target, **siblings}
+        return {key: visit(item, resolving) for key, item in value.items() if key != "$defs"}
+
+    return visit(schema)
 
 
 def emit_tool() -> list[dict[str, Any]]:
@@ -36,7 +61,7 @@ def emit_tool() -> list[dict[str, Any]]:
     Two extra arrays ride the same call but never enter the machine block:
     the generator routes them into the body's review section (open
     questions and assumptions are for a human, not for the runtime)."""
-    schema = PlaybookSpec.model_json_schema(by_alias=True)
+    schema = _inline_local_refs(PlaybookSpec.model_json_schema(by_alias=True))
     for key in _CODE_FILLED_TOP:
         schema.get("properties", {}).pop(key, None)
     schema["required"] = [r for r in schema.get("required", []) if r not in _CODE_FILLED_TOP]
@@ -104,6 +129,12 @@ value is missing, so phrase it as a directly askable question. A param with
 a default is never asked for. Templates reference values as
 ${params.<key>}. Anything fixable at generation time must not be a param.
 
+# confirmation
+
+`confirm` is graph-level. Set it to true when any step can make an
+irreversible change (publish, file a ticket, send mail, write a database);
+otherwise set it to false. Never put `confirm` on an individual node.
+
 # nodes (dag mode)
 
 - `subagent` must come from the available-agents list below.
@@ -123,9 +154,7 @@ ${params.<key>}. Anything fixable at generation time must not be a param.
 - Consecutive steps by one agent that must keep memory (revising a draft
   has to remember the draft) -> the same `instance`, with a dependency
   between the nodes; a fresh perspective (review, critique) -> no shared
-  instance. Same-instance nodes must declare identical skills/mcps.
-- Mark nodes taking irreversible actions (publish, file a ticket, send
-  mail, write a database) with `confirm: true`.
+  instance.
 
 # prompts (prompt mode)
 

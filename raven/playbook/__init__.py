@@ -28,6 +28,8 @@ from raven.playbook.generator import (
     GeneratedPlaybook,
     PlaybookGenerationError,
     PlaybookGenerator,
+    PlaybookProtocolError,
+    PlaybookProviderError,
     StaticInventory,
     live_inventory,
 )
@@ -54,6 +56,8 @@ __all__ = [
     "PlaybookExistsError",
     "PlaybookGenerationError",
     "PlaybookGenerator",
+    "PlaybookProviderError",
+    "PlaybookProtocolError",
     "PlaybookOrigin",
     "MAX_GAP_ROUNDS",
     "PlaybookRuntime",

@@ -116,7 +116,10 @@ class CreatePlaybookTool(Tool):
         try:
             generated = await self._generator.generate(workflow, skills)
         except PlaybookGenerationError as exc:
-            return f"Error: playbook generation failed: {exc}"
+            return (
+                f"Error: playbook generation failed: {exc}. Do not write directly into the Playbook "
+                "library or report success; a Playbook is usable only after its official validation passes."
+            )
         spec = generated.spec.model_copy(update={"name": name})
         path = self._store.save(spec, notes=generated.notes)
         # Enabled on arrival. It used to be written onto the deny list for the

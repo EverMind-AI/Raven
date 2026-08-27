@@ -21,6 +21,7 @@ from raven.playbook import (
     RouterSizes,
     Triggers,
 )
+from raven.providers.base import ErrorClassification, LLMResponse
 
 
 class FakeDagTool:
@@ -291,8 +292,13 @@ class ComposeProvider:
     async def chat_with_retry(self, messages, tools=None, model=None, tool_choice=None, **_):
         self.calls.append(messages)
 
+        payload = self._payloads.pop(0)
+        if isinstance(payload, LLMResponse):
+            return payload
+
         class _TC:
             def __init__(self, args):
+                self.name = "emit_graph"
                 self.arguments = args
 
         class _R:
@@ -300,7 +306,7 @@ class ComposeProvider:
                 self.has_tool_calls = args is not None
                 self.tool_calls = [_TC(args)] if args is not None else []
 
-        return _R(self._payloads.pop(0))
+        return _R(payload)
 
 
 def _prompt_spec():
@@ -379,6 +385,36 @@ async def test_prompt_mode_bad_graph_gets_one_repair_then_degrades():
     assert plan.kind == "questions"
     assert "Graph assembly" in plan.reply
     assert len(provider.calls) == 2  # one repair round happened
+
+
+async def test_prompt_mode_provider_error_does_not_enter_content_repair():
+    classification = ErrorClassification(
+        "upstream_transport_failure",
+        retryable=True,
+        should_fallback=True,
+    )
+    response = LLMResponse(
+        content="upstream did not process the request",
+        finish_reason="error",
+        error_classification=classification,
+    )
+    provider = ComposeProvider([response, json.dumps(GOOD_GRAPH)])
+    ex = PlaybookExecutor(dag_tool=FakeDagTool(), provider=provider, compose_prompt_mode=True)
+    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
+
+    assert plan.kind == "questions"
+    assert "upstream_transport_failure" in plan.reply
+    assert len(provider.calls) == 1
+
+
+async def test_prompt_mode_missing_tool_does_not_enter_content_repair():
+    provider = ComposeProvider([None, json.dumps(GOOD_GRAPH)])
+    ex = PlaybookExecutor(dag_tool=FakeDagTool(), provider=provider, compose_prompt_mode=True)
+    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
+
+    assert plan.kind == "questions"
+    assert "required_tool_missing" in plan.reply
+    assert len(provider.calls) == 1
 
 
 # ---------------------------------------------------------------- runtime

@@ -7,8 +7,12 @@ import pytest
 from raven.playbook import (
     PlaybookGenerationError,
     PlaybookGenerator,
+    PlaybookProtocolError,
+    PlaybookProviderError,
     StaticInventory,
 )
+from raven.playbook.prompt import emit_tool
+from raven.providers.base import ErrorClassification
 
 ROSTER = {
     "research-raven": "deep retrieval and fact-checking",
@@ -19,14 +23,30 @@ ROSTER = {
 
 
 class ToolCall:
-    def __init__(self, arguments):
+    def __init__(self, arguments, name="emit_playbook"):
         self.arguments = arguments
+        self.name = name
 
 
 class Response:
-    def __init__(self, args):
+    def __init__(
+        self,
+        args,
+        name="emit_playbook",
+        *,
+        finish_reason="stop",
+        error_classification=None,
+        content=None,
+        truncated=False,
+        max_tokens=None,
+    ):
         self.has_tool_calls = args is not None
-        self.tool_calls = [ToolCall(args)] if args is not None else []
+        self.tool_calls = [ToolCall(args, name)] if args is not None else []
+        self.finish_reason = finish_reason
+        self.error_classification = error_classification
+        self.content = content
+        self.truncated = truncated
+        self.max_tokens = max_tokens
 
 
 class ScriptedProvider:
@@ -36,7 +56,8 @@ class ScriptedProvider:
 
     async def chat_with_retry(self, messages, tools=None, model=None, tool_choice=None, **_):
         self.calls.append(messages)
-        return Response(self._payloads.pop(0))
+        payload = self._payloads.pop(0)
+        return payload if isinstance(payload, Response) else Response(payload)
 
 
 GOOD_DAG = {
@@ -80,12 +101,140 @@ def _generator(payloads, skills=("sql-queries",)):
     )
 
 
+def test_emit_tool_schema_inlines_refs_without_losing_constraints():
+    schema = emit_tool()[0]["function"]["parameters"]
+    encoded = json.dumps(schema)
+
+    assert '"$defs"' not in encoded
+    assert '"$ref"' not in encoded
+    assert schema["properties"]["triggers"]["properties"]["keywords"]["minItems"] == 1
+    assert schema["properties"]["params"]["additionalProperties"]["required"] == ["description"]
+    node = schema["properties"]["nodes"]["anyOf"][0]["items"]
+    assert node["required"] == ["id"]
+    assert node["properties"]["dependsOn"]["items"] == {"type": "string"}
+    assert "confirm" in schema["properties"]
+    assert "confirm" not in node["properties"]
+    assert "version" not in schema["properties"]
+    assert "blockingQuestions" in schema["properties"]
+
+
 async def test_happy_path_fills_code_owned_fields():
     gen, _ = _generator([GOOD_DAG])
     result = await gen.generate("weekly feedback analysis, the flow is fixed...", skills=["sql-queries"])
     assert result.spec.name == "weekly-feedback"
     assert result.spec.nodes[1].depends_on == ["pull"]
     assert result.notes == ["Assumption: the data source is slack"]
+
+
+async def test_missing_required_tool_is_a_protocol_error_without_content_repair():
+    gen, _ = _generator([None, GOOD_DAG])
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        await gen.generate("weekly feedback analysis")
+
+    assert raised.value.code == "required_tool_missing"
+    assert len(gen._provider.calls) == 1
+
+
+async def test_truncated_response_without_tool_has_its_own_protocol_error():
+    response = Response(None, truncated=True, max_tokens=512)
+    gen, _ = _generator([response, GOOD_DAG])
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        await gen.generate("weekly feedback analysis")
+
+    assert raised.value.code == "required_tool_output_truncated"
+    assert len(gen._provider.calls) == 1
+
+
+async def test_provider_failure_preserves_classification_without_becoming_a_missing_tool():
+    classification = ErrorClassification(
+        "upstream_transport_failure",
+        retryable=True,
+        should_fallback=True,
+    )
+    response = Response(
+        None,
+        finish_reason="error",
+        error_classification=classification,
+        content="upstream did not process the request",
+    )
+    gen, _ = _generator([response, GOOD_DAG])
+
+    with pytest.raises(PlaybookProviderError) as raised:
+        await gen.generate("weekly feedback analysis")
+
+    assert raised.value.classification is classification
+    assert raised.value.category == "upstream_transport_failure"
+    assert raised.value.code == "provider_call_failed"
+    assert "provider_call_failed" in str(raised.value)
+    assert len(gen._provider.calls) == 1
+
+
+def test_missing_required_tool_name_is_not_assumed_to_be_correct():
+    from raven.playbook.generator import _required_tool_args
+
+    response = Response(GOOD_DAG)
+    del response.tool_calls[0].name
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        _required_tool_args(response)
+
+    assert raised.value.code == "required_tool_wrong_name"
+
+
+def test_wrong_required_tool_name_is_classified_separately():
+    from raven.playbook.generator import _required_tool_args
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        _required_tool_args(Response(GOOD_DAG, name="other_tool"))
+
+    assert raised.value.code == "required_tool_wrong_name"
+
+
+def test_multiple_required_tool_calls_are_rejected_as_ambiguous():
+    from raven.playbook.generator import _required_tool_args
+
+    response = Response(GOOD_DAG)
+    response.tool_calls.append(ToolCall(GOOD_DAG))
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        _required_tool_args(response)
+
+    assert raised.value.code == "required_tool_multiple_calls"
+
+
+def test_missing_required_tool_arguments_are_a_protocol_error():
+    from raven.playbook.generator import _required_tool_args
+
+    response = Response(GOOD_DAG)
+    del response.tool_calls[0].arguments
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        _required_tool_args(response)
+
+    assert raised.value.code == "required_tool_arguments_invalid"
+
+
+async def test_invalid_required_tool_arguments_are_not_content_repaired():
+    gen, _ = _generator(["{truncated", GOOD_DAG])
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        await gen.generate("weekly feedback analysis")
+
+    assert raised.value.code == "required_tool_arguments_invalid"
+    assert len(gen._provider.calls) == 1
+
+
+async def test_truncated_required_tool_json_has_its_own_protocol_error():
+    response = Response("{truncated", truncated=True, max_tokens=512)
+    gen, _ = _generator([response, GOOD_DAG])
+
+    with pytest.raises(PlaybookProtocolError) as raised:
+        await gen.generate("weekly feedback analysis")
+
+    assert raised.value.code == "required_tool_arguments_truncated"
+    assert len(gen._provider.calls) == 1
 
 
 async def test_repair_loop_feeds_errors_back():

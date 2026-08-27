@@ -17,11 +17,13 @@ from raven.playbook import (
     select_playbooks,
 )
 from raven.playbook.types import PlaybookSpec
+from raven.providers.base import ErrorClassification, LLMResponse
 
 
 class _ToolCall:
     def __init__(self, arguments):
         self.arguments = arguments
+        self.name = "emit_triggers"
 
 
 class _Response:
@@ -40,6 +42,8 @@ class ScriptedProvider:
     async def chat_with_retry(self, messages, tools=None, model=None, tool_choice=None, **_):
         self.calls.append(messages)
         payload = self._payloads.pop(0)
+        if isinstance(payload, LLMResponse):
+            return payload
         if isinstance(payload, Exception):
             raise payload
         return _Response(payload)
@@ -124,6 +128,38 @@ async def test_expansion_unions_multiple_rounds():
     trig = await expand_triggers(provider, description="d" * 30, rounds=2)
     assert set(trig.keywords) == {"post a tweet", "tweet text", "write one that ranks"}
     assert len(provider.calls) == 2
+
+
+async def test_expansion_provider_error_stops_additional_sampling_rounds():
+    classification = ErrorClassification(
+        "upstream_transport_failure",
+        retryable=True,
+        should_fallback=True,
+    )
+    response = LLMResponse(
+        content="upstream did not process the request",
+        finish_reason="error",
+        error_classification=classification,
+    )
+    provider = ScriptedProvider([response, {"keywords": ["should not run"]}])
+
+    trig = await expand_triggers(
+        provider, description="specific trigger expansion", seeds=Triggers(keywords=["proper-noun"]), rounds=2
+    )
+
+    assert trig.keywords == ["proper-noun"]
+    assert len(provider.calls) == 1
+
+
+async def test_expansion_missing_tool_stops_additional_sampling_rounds():
+    provider = ScriptedProvider([None, {"keywords": ["should not run"]}])
+
+    trig = await expand_triggers(
+        provider, description="specific trigger expansion", seeds=Triggers(keywords=["proper-noun"]), rounds=2
+    )
+
+    assert trig.keywords == ["proper-noun"]
+    assert len(provider.calls) == 1
 
 
 def test_find_collisions_reports_shared_entries():
