@@ -6,7 +6,7 @@ infrastructure failure (the evolver's SOP distinction: an infra failure must
 never be diagnosed as an agent failure). Tracing cannot know any of this, so
 verdicts are written by whoever can judge — a user command, an eval judge, a
 replay harness — into an append-only ``verdicts.jsonl`` next to the trace
-logs, keyed by ``attempt.id``.
+logs, keyed by attempt id (the ``attempt_id`` field).
 
 Append-only on purpose: verdicts from different sources coexist (a user's
 "fail" and a judge's "fail" are two records), and re-judging appends rather

@@ -19,7 +19,10 @@ def _write_log(path, spans):
 
 
 def _span(trace_id, *, attempt_id=None, session_key=None, name="session.turn", start=None, end=None, attrs=None):
-    attributes = {"attempt.id": attempt_id or trace_id, "session.key": session_key}
+    """Span in the current format; pass ``attempt_id`` for a legacy-format span."""
+    attributes = {"session.key": session_key}
+    if attempt_id is not None:
+        attributes["attempt.id"] = attempt_id
     if attrs:
         attributes.update(attrs)
     return {
@@ -298,11 +301,11 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(state))
     _spans._store = None
     try:
-        aid = trace.begin_attempt("cli:e2e")
-        with trace.span("session.turn", session_key="cli:e2e"):
+        # A single turn is addressed by its trace id (attempt id = trace id).
+        with trace.span("session.turn", session_key="cli:e2e") as root:
             with trace.span("tool.call") as s:
                 s.artifact("tool.output", {"result": "ok", "items": list(range(50))})
-        trace.end_attempt("cli:e2e")
+        aid = root.trace_id
 
         bundle_dir = tbundle.collect_bundle(aid, state_dir=state, workspace=workspace)
 

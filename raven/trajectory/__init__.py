@@ -7,7 +7,7 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``verdict``  — the label sidecar. Task success/failure is not tracing's
   business (``status.code`` answers "did the code crash", not "did the task
   succeed"), so verdicts live in a separate append-only file keyed by
-  ``attempt.id``, written by whoever can judge (user command, eval judge).
+  attempt id, written by whoever can judge (user command, eval judge).
 - ``store``    — pin registry, attempt definitions, and the rotation-
   transparent span reader. A pinned attempt is corpus, not diagnostics: any
   purge tooling must consult :func:`store.pins` before deleting spans or the
@@ -33,11 +33,11 @@ into trajectories — addressable, labeled, retained units of agent work:
   (where the replay must diverge, what the live side must do there) evaluated
   against a cassette replay, driving ``tests/trajectories/``.
 
-The address unit is the **attempt** (``attempt.id`` on every span): one task
-try, possibly spanning several turns. Without an explicitly opened attempt
-(:func:`raven.tracing.trace.begin_attempt`) each turn is its own single-turn
-attempt whose id equals the trace id — so every trace is addressable as an
-attempt with zero ceremony.
+The address unit is the **attempt**: one task try, possibly spanning several
+turns. At read time an attempt id equals the trace id unless a definition in
+``attempts.json`` groups several traces under one minted id — so every trace
+is addressable as an attempt with zero ceremony. Old logs may carry a legacy
+span-level ``attempt.id`` attribute, which read paths keep resolving.
 """
 
 from __future__ import annotations

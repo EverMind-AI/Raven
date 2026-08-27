@@ -21,7 +21,10 @@ def _write_log(path, spans):
 
 
 def _span(trace_id, *, attempt_id=None, session_key=None, name="session.turn", attrs=None):
-    attributes = {"attempt.id": attempt_id or trace_id, "session.key": session_key}
+    """Span in the current format; pass ``attempt_id`` for a legacy-format span."""
+    attributes = {"session.key": session_key}
+    if attempt_id is not None:
+        attributes["attempt.id"] = attempt_id
     if attrs:
         attributes.update(attrs)
     return {

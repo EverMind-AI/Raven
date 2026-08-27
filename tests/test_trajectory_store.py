@@ -43,12 +43,16 @@ def _write_log(path, spans):
 
 
 def _span(trace_id, attempt_id=None, session_key=None, name="session.turn"):
+    """Span in the current format; pass ``attempt_id`` for a legacy-format span."""
+    attributes = {"session.key": session_key}
+    if attempt_id is not None:
+        attributes["attempt.id"] = attempt_id
     return {
         "schemaVersion": "audit.span.v1",
         "traceId": trace_id,
         "spanId": f"span-{trace_id}",
         "name": name,
-        "attributes": {"attempt.id": attempt_id or trace_id, "session.key": session_key},
+        "attributes": attributes,
     }
 
 
@@ -815,7 +819,7 @@ class TestAttemptDefinitions:
 
 
 def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
-    """Spans written by the live tracer are addressable through iter_spans."""
+    """Two live-tracer turns merged into one definition are addressable as one attempt."""
     from raven.tracing import spans as _spans
     from raven.tracing import trace
 
@@ -823,14 +827,16 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
     _spans._store = None
     try:
-        aid = trace.begin_attempt("cli:e2e")
-        with trace.span("session.turn", session_key="cli:e2e"):
+        with trace.span("session.turn", session_key="cli:e2e") as t1:
             with trace.span("tool.call"):
                 pass
-        trace.end_attempt("cli:e2e")
+        with trace.span("session.turn", session_key="cli:e2e") as t2:
+            pass
+        aid = tstore.merge_attempts([t1.trace_id, t2.trace_id], state_dir=tmp_path)
 
         got = list(tstore.iter_spans(tmp_path, attempt_id=aid))
         assert {s["name"] for s in got} == {"session.turn", "tool.call"}
+        assert {s["traceId"] for s in got} == {t1.trace_id, t2.trace_id}
         tverdict.record_verdict(aid, "fail", source="user", state_dir=tmp_path)
         assert tverdict.latest_verdict(aid, tmp_path).status == "fail"
         tstore.pin(aid, reason="repro", state_dir=tmp_path)
