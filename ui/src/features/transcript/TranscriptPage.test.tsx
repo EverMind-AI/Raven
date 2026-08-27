@@ -79,6 +79,21 @@ const art = (name: string, head: string | null, _lines = 3): unknown => wrote(na
 const $ = <T extends Element = HTMLElement>(sel: string): T | null => document.querySelector<T>(sel)
 const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
 
+/* A shut body is not built, so reading inside one means opening it the way the
+   reader does -- through its own control, which is also the only way a reader
+   ever sees that content. Three nested lids, outermost first: the turn's fold,
+   the step's work list, then a row's detail. */
+const openFolds = (): void => {
+  act(() => { $$('.tfold:not(.open) .tfh').forEach((b) => (b as HTMLElement).click()) })
+}
+const openWork = (): void => {
+  act(() => { $$('.wrow.sum:not(.open)').forEach((b) => (b as HTMLElement).click()) })
+}
+const openRows = (): void => {
+  act(() => { $$('.wkin > .wrow.tog:not(.open)').forEach((b) => (b as HTMLElement).click()) })
+}
+const openTurns = (): void => { openFolds(); openWork() }
+
 beforeEach(() => {
   store._resetForTests()
   tail._resetForTests()
@@ -125,6 +140,7 @@ describe('transcript island, history', () => {
         { role: 'assistant', text: 'one of them is missing' },
       ])
     })
+    openTurns()
     const rows = [...document.querySelectorAll('.wkin .wrow')]
     expect(rows).toHaveLength(2)
     expect(rows[0]!.className).not.toContain('bad')
@@ -183,6 +199,8 @@ describe('transcript island, history', () => {
         { role: 'assistant' as const, text: 'done' },
       ])
     })
+    openFolds()
+    openRows()
     const name = document.querySelector('.dhd .nm')
     expect(name).toBeTruthy()
     expect(name!.textContent).toBe('src/app.ts')
@@ -234,6 +252,7 @@ describe('transcript island, history', () => {
     })
     /* Two turns, two folds -- and the five-minute one keeps its own clock
        rather than wearing the twenty seconds the delivered turn took. */
+    openFolds()
     const folds = Array.from(document.querySelectorAll('.tfold'))
     expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m00s', '20s'])
     expect(folds.map((f) => f.querySelectorAll('.tfb .step').length)).toEqual([1, 1])
@@ -258,6 +277,7 @@ describe('transcript island, history', () => {
     expect(ask?.querySelector('.ansfoot .turnmeta')?.textContent).toBeTruthy()
     /* Everything that led to the answer folded behind one line with the
        question-to-answer span on it. */
+    openFolds()
     const fold = $('.tfold')
     expect(fold).toBeTruthy()
     expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
@@ -290,6 +310,8 @@ describe('transcript island, history', () => {
         { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
       ])
     })
+    openFolds()
+    openRows()
     const rows = $$('.wkin .wrow')
     expect(rows).toHaveLength(1)
     expect(rows[0]?.querySelector('.vb')?.textContent).toBe('en:gui.act.v.terminal')
@@ -389,6 +411,7 @@ describe('transcript island, history', () => {
     act(() => { mount.finishTurn(third, [first, second, third], '4s') })
     expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
     /* And the earlier prose stays where it was said, inside the fold. */
+    openFolds()
     expect($('.tfold')?.textContent).toContain('let me check the log')
     /* And it lands AFTER the work it introduced, as a finished turn does. */
     const order = [...document.querySelectorAll('.ask, .tfold, .answer')].map((n) => n.className.split(' ')[0])
@@ -423,6 +446,7 @@ describe('transcript island, history', () => {
     })
     act(() => { mount.finishTurn(last, steps, '2m05s') })
     expect($('.answer .prose')?.textContent).toBe('here you go')
+    openFolds()
     expect(document.querySelectorAll('.think').length).toBe(1)
     /* One row, holding every thought: nothing the reader watched arrive is
        thrown away, it is just no longer one row per attempt. */
@@ -446,6 +470,7 @@ describe('transcript island, history', () => {
       second.setSay('the pool is the problem')
     })
     act(() => { mount.finishTurn(second, [first, second], '4s') })
+    openFolds()
     expect(document.querySelectorAll('.think').length).toBe(2)
   })
 
@@ -474,6 +499,7 @@ describe('transcript island, history', () => {
       .map((n) => n.className.split(' ')[0])
     expect(order).toEqual(['ask', 'tfold', 'answer', 'tnote'])
     /* The work is inside the fold, not lost with it. */
+    openFolds()
     expect($('.tfold .tfb .wkin .wrow .vb')?.textContent).toBe('en:gui.act.v.read_file')
   })
 
@@ -1220,17 +1246,18 @@ describe('transcript island, tool episodes', () => {
     act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
     const row = $$('.wkin .wrow')[0] as HTMLElement
     expect(row.classList.contains('tog')).toBe(true)
+    /* Shut is not built at all, so the row stands with no card behind it. */
+    expect(row.nextElementSibling?.classList.contains('dtl')).toBe(false)
+    act(() => { row.click() })
     const dtl = row.nextElementSibling as HTMLElement
     expect(dtl.classList.contains('dtl')).toBe(true)
-    expect(dtl.hidden).toBe(true)
-    act(() => { row.click() })
-    expect((row.nextElementSibling as HTMLElement).hidden).toBe(false)
+    expect(dtl.hidden).toBe(false)
     expect(row.classList.contains('open')).toBe(true)
     /* The card is titled with the target and carries the output. */
     expect(dtl.querySelector('.dhd .nm')?.textContent).toBe('/tmp/a.txt')
     expect(dtl.querySelector('.bd pre')?.textContent).toBe('aaa')
     act(() => { row.click() })
-    expect((row.nextElementSibling as HTMLElement).hidden).toBe(true)
+    expect(row.nextElementSibling?.classList.contains('dtl')).toBe(false)
   })
 
   /* The chip's click is the island's own, and has to be: React's
@@ -1303,6 +1330,7 @@ describe('transcript island, tool episodes', () => {
       mount.foldRuns(handles)
     })
     expect($$('.step')).toHaveLength(1)
+    openWork()
     expect($$('.wkin .wrow')).toHaveLength(2)
     expect($('.wk > .wrow.sum .ar')?.textContent).toBe('en:gui.act.n.exec {"n":2}')
   })
@@ -1311,6 +1339,7 @@ describe('transcript island, tool episodes', () => {
 describe('transcript island, language', () => {
   it('repaints every catalogue word in place on a flip', () => {
     twoTurns()
+    openTurns()
     expect($$('.wkin .wrow')[0]?.querySelector('.vb')?.textContent).toBe('en:gui.act.v.grep')
     expect($('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
     lang = 'zh'
@@ -1448,6 +1477,7 @@ describe('transcript island, delegated calls', () => {
       st.tool('spawn', { task: 'dig', agent: 'code-raven', instance: 'refactor' }).done(true, 'started', 5)
       st.seal()
     })
+    openWork()
     const rows = $$('.wk .wrow').map((el) => el.textContent || '')
     expect(rows.join(' | ')).toContain('research-raven')
     expect(rows.join(' | ')).toContain('code-raven @refactor')
@@ -1976,5 +2006,81 @@ describe('transcript island, delegated calls', () => {
     /* The placeholder is marked up rather than left as text: it is the part that
        says where this step's material comes from. */
     expect(panel.querySelector('.tpl .ph')!.textContent).toBe('{{ tb-scan.output }}')
+  })
+})
+
+/* What a conversation costs to open should be what it shows, not everything it
+   could show. Every turn of a resumed conversation arrives shut, and three
+   nested lids used to be rendered-then-hidden: the turn's fold, the step's work
+   list, and each call's detail card. `hidden` spares the layout and the paint
+   but not the nodes, so a long conversation paid for a whole transcript nobody
+   had opened -- once on arrival, and again on every redraw(), which is what a
+   theme flip and a click in the workspace panel both run. */
+describe('transcript island, a shut body is not built', () => {
+  /* One turn, one question, one answer, one shut fold -- and inside the fold
+     either one round of work or thirty. The visible part is identical either
+     way, because every step of a finished turn lives in the fold body, so any
+     difference in what got built is the shut part being charged to the cost of
+     opening the conversation. The size is varied where the weight actually was:
+     a resumed conversation is nothing BUT shut folds. */
+  const stored = (rounds: number): unknown[] => {
+    const out: unknown[] = [{ role: 'user', text: 'why did the suite fail' }]
+    for (let i = 0; i < rounds; i += 1) {
+      out.push({
+        role: 'assistant', text: '',
+        tool_calls: [{ id: `c${i}`, name: 'exec', arguments: JSON.stringify({ command: `check ${i}` }) }],
+      })
+      out.push({ role: 'tool', tool_call_id: `c${i}`, name: 'exec', text: 'line one\nline two' })
+    }
+    out.push({ role: 'assistant', text: 'a stale lock file' })
+    return out
+  }
+  const built = (messages: unknown[]): number => {
+    wire()
+    act(() => { mount.history(messages as never) })
+    return ($('#stage') as HTMLElement).querySelectorAll('*').length
+  }
+
+  it('costs the same to open however much work the shut fold covers', () => {
+    const short = built(stored(1))
+    const long = built(stored(30))
+    expect(short).toBeGreaterThan(0)
+    expect(long).toBe(short)
+  })
+
+  it('mounts a fold body on opening and takes it down again on closing', () => {
+    act(() => { mount.history(stored(3) as never) })
+    expect($$('.tfb .step')).toHaveLength(0)
+    openFolds()
+    expect($$('.tfb .step')).toHaveLength(1)
+    /* Down again, so a conversation read through does not accumulate every
+       turn the reader ever glanced at. */
+    act(() => { ($('.tfold .tfh') as HTMLElement).click() })
+    expect($$('.tfb .step')).toHaveLength(0)
+  })
+
+  it('mounts a work list only while its summary is open', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('read_file', { path: '/tmp/a.txt' }).done(true, 'aaa', 5)
+      st.tool('read_file', { path: '/tmp/b.txt' }).done(true, 'bbb', 5)
+      st.seal()
+    })
+    expect(($('.wkin') as HTMLElement).hidden).toBe(true)
+    expect($$('.wkin .wrow')).toHaveLength(0)
+    openWork()
+    expect($$('.wkin .wrow')).toHaveLength(2)
+  })
+
+  it('mounts a call detail only while the row is open', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('exec', { command: 'ls' }).done(true, 'a\nb\nc', 5)
+      st.seal()
+    })
+    openWork()
+    expect($$('.wkin .dtl')).toHaveLength(0)
+    openRows()
+    expect($$('.wkin .dtl')).toHaveLength(1)
   })
 })
