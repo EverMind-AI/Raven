@@ -3658,7 +3658,13 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
-    @trace.instrument("session.turn", seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn)
+    # root: a turn is the top of its own trace. Without it a turn opened while
+    # another span is still active -- a dispatch that reports back, a follow-up
+    # driven by a tool's own completion -- nests inside that span, and the two
+    # turns share one trace.
+    @trace.instrument(
+        "session.turn", root=True, seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn
+    )
     async def _process_message(
         self,
         req: TurnRequest,

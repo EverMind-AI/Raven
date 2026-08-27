@@ -54,6 +54,40 @@ def test_nesting_kinds_and_attributes(trace_dir):
     assert all(sp["schemaVersion"] == "audit.span.v1" for sp in spans)
 
 
+def test_a_root_span_starts_its_own_trace_and_links_back(trace_dir):
+    """The shape a turn needs, and the one the viewer's grouping assumes.
+
+    A turn opened while another span is still active -- a dispatch reporting
+    back, a follow-up driven by a tool's own completion -- must not become that
+    span's child. Observed before this existed: a whole second turn sat at depth
+    2 under the first turn's tool call, so one trace held two turns and the
+    reader could not tell where one ended.
+    """
+    with trace.span("session.turn") as first:
+        with trace.span("tool.call", {"tool.name": "load_playbook"}) as dispatch:
+            with trace.span("session.turn", root=True) as second:
+                pass
+
+    written = {sp["spanId"]: sp for sp in _spans_written(trace_dir)}
+    outer, inner = written[first.span_id], written[second.span_id]
+
+    assert inner["parentSpanId"] is None, "a root span must not inherit a parent"
+    assert inner["traceId"] != outer["traceId"], "a root span must begin its own trace"
+    # Where it came from is kept, as a link rather than as parentage.
+    attrs = inner["attributes"]
+    assert attrs["trace.dispatched_by_span_id"] == dispatch.span_id
+    assert attrs["trace.dispatched_in_trace_id"] == outer["traceId"]
+
+
+def test_a_root_span_at_the_top_carries_no_dispatch_link(trace_dir):
+    with trace.span("session.turn", root=True) as only:
+        pass
+
+    written = {sp["spanId"]: sp for sp in _spans_written(trace_dir)}[only.span_id]
+    assert written["parentSpanId"] is None
+    assert "trace.dispatched_by_span_id" not in written["attributes"]
+
+
 def test_invocation_source_derives_from_enclosing_purpose(trace_dir):
     from raven.tracing import semconv
 
@@ -722,6 +756,62 @@ def test_explicit_attempt_groups_turns_under_one_id(trace_dir):
     assert len(grouped) == 3  # two turns + one tool call
     assert len({sp["traceId"] for sp in grouped}) == 2  # across two traces
     assert aid.startswith("att-")
+
+
+def test_a_nested_root_does_not_inherit_the_dispatchers_attempt(trace_dir):
+    """A root begins its own attempt, not the attempt it was dispatched from.
+
+    The trace id is fresh but the attempt id was still read off the enclosing
+    context, so the second turn filed itself under the first turn's attempt --
+    exactly the grouping the trajectory tools use, so two unrelated turns read
+    as one trajectory.
+    """
+    with trace.span("session.turn", session_key="cli:a", root=True) as first:
+        with trace.span("tool.call"):
+            with trace.span("session.turn", session_key="cli:b", root=True) as second:
+                pass
+
+    assert first.attempt_id == first.trace_id
+    assert second.attempt_id == second.trace_id, "a root must not carry the dispatcher's attempt"
+    assert second.attempt_id != first.attempt_id
+
+
+def test_a_nested_root_takes_its_own_sessions_open_attempt(trace_dir):
+    """An explicit attempt on the root's own session still wins over the ambient one."""
+    outer = trace.begin_attempt("cli:a")
+    inner = trace.begin_attempt("cli:b")
+    try:
+        with trace.span("session.turn", session_key="cli:a", root=True):
+            with trace.span("tool.call"):
+                with trace.span("session.turn", session_key="cli:b", root=True) as second:
+                    assert second.attempt_id == inner
+    finally:
+        trace.end_attempt("cli:b")
+        trace.end_attempt("cli:a")
+    assert outer != inner
+
+
+def test_a_child_keeps_the_attempt_its_tree_began_with(trace_dir):
+    """Inheritance is what holds a tree together once the attempt itself moves on.
+
+    Ending the attempt (or opening the next one) while a turn is still running
+    must not re-file the spans still to come: they belong to the attempt the turn
+    started under. Resolving per span from the session would split one turn.
+    """
+    first = trace.begin_attempt("cli:a")
+    with trace.span("session.turn", session_key="cli:a", root=True) as turn:
+        assert turn.attempt_id == first
+        second = trace.begin_attempt("cli:a")
+        with trace.span("tool.call") as mid:
+            with trace.span("llm.call") as leaf:
+                pass
+    trace.end_attempt("cli:a")
+
+    assert second != first
+    assert mid.attempt_id == first, "a child must keep its tree's attempt"
+    assert leaf.attempt_id == first
+    written = {sp["spanId"]: sp["attributes"]["attempt.id"] for sp in _spans_written(trace_dir)}
+    assert set(written.values()) == {first}
 
 
 def test_attempt_id_survives_detached_and_checkpoint(trace_dir):

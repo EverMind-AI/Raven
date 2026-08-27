@@ -240,6 +240,7 @@ def span(
     chat_id: str | None = None,
     surface: str | None = None,
     detached: bool = False,
+    root: bool = False,
     **kw,
 ) -> Iterator[Any]:
     """Open a span for ``name`` (``<domain>.<verb>``). Yields a :class:`Span` handle.
@@ -255,17 +256,27 @@ def span(
 
     try:
         cur = _ctx.current()
-        trace_id = cur.trace_id if cur else _ctx.new_trace_id()
-        parent = cur.parent_span_id if cur else None
+        # A root span begins a trace instead of joining the ambient one. A turn is
+        # a root by definition, and the grouping a viewer does assumes it: a turn
+        # that inherits an enclosing span becomes a descendant, so two turns end
+        # up in one trace and the tree gains a level that means nothing. Where it
+        # came from is kept as a link rather than as parentage.
+        dispatched_by = (cur.parent_span_id if cur else None) if root else None
+        dispatched_in = (cur.trace_id if cur else None) if root else None
+        trace_id = _ctx.new_trace_id() if root else (cur.trace_id if cur else _ctx.new_trace_id())
+        parent = None if root else (cur.parent_span_id if cur else None)
         # Passed session identity seeds a root span (the turn); otherwise inherit
         # from the active context so children carry the turn's identity.
         session_key = session_key if session_key is not None else (cur.session_key if cur else None)
         channel = channel if channel is not None else (cur.channel if cur else None)
         chat_id = chat_id if chat_id is not None else (cur.chat_id if cur else None)
         surface = surface if surface is not None else (cur.surface if cur else None)
-        # Children inherit the tree's attempt id; a root span resolves it from
-        # the session's open attempt, else this trace is a single-turn attempt.
-        attempt_id = (cur.attempt_id if cur else None) or _ctx.current_attempt(session_key) or trace_id
+        # Children inherit the tree's attempt id; a root span must NOT -- it would
+        # file its fresh trace under the dispatching turn's attempt and group two
+        # unrelated turns as one trajectory. A root resolves from its own session's
+        # open attempt, else this trace is a single-turn attempt.
+        inherited = None if root else (cur.attempt_id if cur else None)
+        attempt_id = inherited or _ctx.current_attempt(session_key) or trace_id
         span_id = _ctx.new_span_id()
         handle = Span(
             name,
@@ -282,6 +293,8 @@ def span(
             attempt_id=attempt_id,
         )
         handle.set(attributes, **kw)
+        if dispatched_by:
+            handle.set({"trace.dispatched_by_span_id": dispatched_by, "trace.dispatched_in_trace_id": dispatched_in})
         # A detached span is a leaf marker: it does NOT become the active parent,
         # so work done inside it attaches to ITS parent, not to it. Required for
         # cancellable spans (e.g. skill.inject) — otherwise a child that opened
@@ -340,7 +353,16 @@ def span(
             _log.debug("tracing: span(%s) emit failed", name, exc_info=True)
 
 
-def instrument(name: str, *, kind: str | None = None, detached: bool = False, seed=None, on_open=None, extract=None):
+def instrument(
+    name: str,
+    *,
+    kind: str | None = None,
+    detached: bool = False,
+    root: bool = False,
+    seed=None,
+    on_open=None,
+    extract=None,
+):
     """Decorator: wrap an async method so each call emits a ``name`` span.
 
     The adopter's integration surface — annotate a method, leave its body
@@ -403,7 +425,7 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
             async def awrapper(*args, **kwargs):
                 if not config.enabled():
                     return await func(*args, **kwargs)
-                with span(name, kind=kind, detached=detached, **_seed(args, kwargs)) as s:
+                with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                     _open(s, args, kwargs)
                     result = exc = None
                     try:
@@ -421,7 +443,7 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
         def swrapper(*args, **kwargs):
             if not config.enabled():
                 return func(*args, **kwargs)
-            with span(name, kind=kind, detached=detached, **_seed(args, kwargs)) as s:
+            with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                 _open(s, args, kwargs)
                 result = exc = None
                 try:

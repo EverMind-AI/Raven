@@ -84,31 +84,6 @@ def current_attempt(session_key: str | None) -> str | None:
     return _ATTEMPTS.get(session_key)
 
 
-@contextlib.contextmanager
-def turn_scope(
-    *,
-    session_key: str | None,
-    channel: str | None,
-    chat_id: str | None,
-    root_span_id: str,
-) -> Iterator[TraceCtx]:
-    """Open a fresh trace for one turn; child spans parent onto ``root_span_id``."""
-    trace_id = new_trace_id()
-    ctx = TraceCtx(
-        trace_id=trace_id,
-        session_key=session_key,
-        channel=channel,
-        chat_id=chat_id,
-        parent_span_id=root_span_id,
-        attempt_id=current_attempt(session_key) or trace_id,
-    )
-    token = _CTX.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _CTX.reset(token)
-
-
 def push(
     *,
     trace_id: str,
