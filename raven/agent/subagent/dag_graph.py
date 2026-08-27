@@ -62,7 +62,8 @@ class DagNodeSpec(BaseModel):
             ``subagents.agents[]`` -- the container lists identities, this field
             says which one performs the step.
         node_summary (`str`):
-            One line, for the user, on what this node is asked to do. Blank
+            A short title, for the user, naming what this node does -- the
+            length of a chat title, under ten words, not a sentence. Blank
             survives the parse and is refused by ``validate_and_order`` for the
             same reason the two fields above are: a playbook may leave it for
             the model to fill.
@@ -102,9 +103,10 @@ class DagNodeSpec(BaseModel):
     node_summary: str = Field(
         default="",
         description=(
-            "One line telling the user what this node is asked to do, written before its "
-            "prompt. Around 200 characters at most. It is this node's row in the run, read "
-            "by someone watching the graph."
+            "A short title for this step, written before its prompt -- the length of a "
+            "chat title, under ten words, not a sentence and not a summary of the "
+            "prompt. It is this node's row in the run, read by someone watching the "
+            "graph, so name the step and leave the detail to the prompt."
         ),
     )
     prompt_template: str = ""
@@ -118,7 +120,7 @@ class DagNodeSpec(BaseModel):
 class SubAgentDagSpec(BaseModel):
     """A whole sub-agent DAG: a flat list of nodes with edges, plus its one gate.
 
-    ``task_summary`` is one line, for the user, on what the whole graph is for.
+    ``task_summary`` is a short title, for the user, naming what the whole graph is for.
     It has no gap-filling path the way a node's summary does -- it is always
     written by the model through the tool schema or by the playbook executor --
     so blank is refused at parse rather than deferred to a later check.

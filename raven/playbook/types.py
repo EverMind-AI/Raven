@@ -118,14 +118,15 @@ class PlaybookSpec(CamelBase):
     task_summary: str = Field(
         min_length=1,
         description=(
-            "One line telling the user what running this playbook dispatches. Around 200 "
-            "characters at most. Distinct from `description`, which is matched against to "
-            "decide whether to run the playbook at all."
+            "A short title for what running this playbook dispatches -- the length of a "
+            "chat title, under ten words, not a sentence and not a summary. Distinct from "
+            "`description`, which is matched against to decide whether to run the "
+            "playbook at all."
         ),
     )
-    """One line, for the user, on what running this playbook dispatches. Distinct
-    from ``description``, which is matched against to decide whether to run it at
-    all."""
+    """A short title, for the user, naming what running this playbook dispatches.
+    Distinct from ``description``, which is matched against to decide whether to
+    run it at all."""
 
     version: int = SPEC_VERSION
     mode: Literal["dag", "prompt"]

@@ -138,9 +138,10 @@ otherwise set it to false. Never put `confirm` on an individual node.
 # nodes (dag mode)
 
 - `subagent` must come from the available-agents list below.
-- `nodeSummary` is one line, for the user, telling them what this step is
-  asked to do -- write it before the prompt, around 200 characters at most.
-  It is the node's row while the run happens.
+- `nodeSummary` is this step's title, written before the prompt: the
+  length of a chat title, under ten words -- not a sentence and not a
+  summary of the prompt. It is the node's row while the run happens, so
+  name the step; what it must do belongs in `promptTemplate`.
 - Configuration hangs on the node, not the role: `skills`/`mcps` are what
   this step injects; the same agent on several steps may differ per step.
   Skills may only reference names from the candidate list.

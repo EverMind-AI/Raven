@@ -146,9 +146,10 @@ class SpawnTool(Tool):
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "One line telling the user what you are dispatching, written before the task. "
-                    "Around 200 characters at most. They read it in listings and announcements and "
-                    "the sub-agent never does, so write it for them -- no ids, no internal shorthand."
+                    "A short title for what you are dispatching, written before the task -- the "
+                    "length of a chat title, under ten words, not a sentence and not a summary "
+                    "of the task. They read it in listings and announcements and the sub-agent "
+                    "never does, so write it for them -- no ids, no internal shorthand."
                 ),
             },
             "prompt_template": {

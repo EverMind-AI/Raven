@@ -209,7 +209,8 @@ _Avoid_: treating the fallback as the default — a sub-agent working in Agent h
 raven's own memory instead of the user's checkout, and says nothing about having done so.
 
 **Task summary** (`task_summary`, on `spawn`, `run_subagent_dag` and `PlaybookSpec`):
-the one line stating what is being dispatched, written before the prompt it summarises.
+the short title naming what is being dispatched, written before the prompt it titles --
+chat-title length, under ten words rather than a sentence.
 Only `spawn`'s reaches the user, naming the dispatch in instance handles, sub-agent rows,
 spawn records and announcements, and never reaching the sub-agent's own input. The other
 two reach the user through the Instance Title and the Run Title below:
