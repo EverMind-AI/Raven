@@ -122,12 +122,12 @@ class ClientCapabilities:
     def elicitation_form(self) -> bool:
         """Whether ``elicitation/create`` in form mode could be used.
 
-        Recorded, not acted on. Nothing here asks the client a question: with no
-        ``QuestionBroker`` the ``ask_user`` tool returns a tool error the turn
-        survives, which is a working outcome, and routing it out over the wire is
-        a change to the tool rather than to this layer. Kept so the decision to
-        stay silent is visible as a choice and so the flag is already read when
-        that changes.
+        Load-bearing: ``raven.acp.questions`` reads it to pick between the route
+        that can carry a typed answer and the one that cannot. A client that
+        declares form support is asked through ``elicitation/create``; one that
+        does not gets ``session/request_permission`` when the question has choices
+        to offer, and otherwise sees the question as an agent message with the
+        tool taking its default.
 
         Presence, not truthiness: the schema says ``{}`` explicitly advertises
         form support, so a client declaring it with no options would read as no

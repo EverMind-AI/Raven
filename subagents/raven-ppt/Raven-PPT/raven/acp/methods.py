@@ -31,6 +31,8 @@ from loguru import logger
 
 from raven.acp import materials, protocol
 from raven.acp.capabilities import ClientCapabilities, initialize_result
+from raven.acp.outbound import OutboundRequests
+from raven.acp.questions import AcpQuestions
 from raven.acp.session import AcpSession, SessionTable, TurnAlreadyRunningError
 from raven.acp.spine import Frames
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -91,12 +93,19 @@ class AcpMethods:
         engine_factory: EngineFactory,
         jobs_root: Path,
         channel: str = "acp",
+        outbound: OutboundRequests | None = None,
+        questions: AcpQuestions | None = None,
     ) -> None:
         self._emit = emit
         self._sessions = sessions
         self._engine_factory = engine_factory
         self._jobs_root = jobs_root
         self._channel = channel
+        # Optional so a test can drive the method surface without the outbound
+        # half. Absent, a response frame belongs to nobody and a question has
+        # nowhere to go -- which is what this surface did before either existed.
+        self._outbound = outbound
+        self._questions = questions
         self.initialized = False
         self.client = ClientCapabilities()
 
@@ -112,9 +121,11 @@ class AcpMethods:
         with no diagnostic.
         """
         if "method" not in frame:
-            # A response to something this agent asked. Nothing here asks: no
-            # permission requests, no elicitation. So a response can only be a
-            # client answering something it invented.
+            # A response to something this agent asked. Matched against the
+            # outbound table first: an unmatched one can only be a client
+            # answering something it invented, or one this side already timed out.
+            if self._outbound is not None and self._outbound.resolve(frame):
+                return None
             logger.debug("acp: a response arrived for no outstanding request: id={}", frame.get("id"))
             return None
         method = frame.get("method")
@@ -202,6 +213,8 @@ class AcpMethods:
         attempt raced its own setup.
         """
         self.client = ClientCapabilities.from_params(params)
+        if self._questions is not None:
+            self._questions.set_client(self.client)
         self.initialized = True
         return initialize_result(params)
 
@@ -249,6 +262,14 @@ class AcpMethods:
         """
         session = self._session_for(params)
         engine = session.engine
+        if self._questions is not None:
+            # Outside the turn guard above, and before the release: the ask runs on
+            # a task of its own, so it outlives the turn that started it and the
+            # session it belongs to. Left alone, the client holds a form for the
+            # rest of the ask's deadline and answers into a broker that went with
+            # the engine. This is the same retraction ``session/cancel`` does, and
+            # closing without it was the half of the lifecycle it did not cover.
+            self._questions.cancel(session.session_id)
         if session.turn is not None and engine is not None:
             with contextlib.suppress(Exception):
                 engine.scheduler.cancel_conversation(session.session_id)
@@ -274,6 +295,12 @@ class AcpMethods:
             logger.debug("acp: session/cancel for unknown session {}", session_id)
             return None
         try:
+            if self._questions is not None:
+                # Before the turn, so a tool call blocked on a question is
+                # released by the same cancel that stops the work around it.
+                # Cancelling the ask is also what retracts the request, so the
+                # client takes its form back down instead of holding it.
+                self._questions.cancel(session.session_id)
             if session.engine is not None:
                 session.engine.scheduler.cancel_conversation(session.session_id)
         finally:
@@ -293,22 +320,22 @@ class AcpMethods:
             return {"stopReason": "end_turn"}
 
         try:
-            staged = self._stage_for(session, text)
+            # Called for the staging itself: what it returns is this turn's new
+            # pairs, and the prompt block is built from the session's whole
+            # accumulated list rather than from that slice.
+            self._stage_for(session, text)
         except materials.StagingError as exc:
             # Fatal to the turn, not skipped: a deck built from part of its
             # material is wrong in a way nothing downstream can see. Reported as
             # message content because a prompt is never answered with an error.
             outlet.say(session.session_id, f"The material could not be staged. {exc}")
             return {"stopReason": "end_turn"}
-        if not session.staged:
-            outlet.say(
-                session.session_id,
-                "No source material. This agent builds decks from documents you name, so open the task "
-                'with a fenced block declaring them:\n```raven-ppt\n{"materials": ["/abs/notes.md"]}\n```',
-            )
-            return {"stopReason": "end_turn"}
-        if staged:
-            text += materials.describe(session.staged, session.materials, session.out, session.template)
+        # No gate on an empty staging. The deck author runs with or without
+        # documents -- it gathers and discloses instead of refusing -- and the
+        # launcher stopped refusing in 3d50e127. A refusal that survived only on
+        # this transport made the same request succeed over one entry point and
+        # end_turn over the other.
+        text += materials.describe(session.staged, session.materials, session.out)
 
         # Taken before the turn starts, so what this turn publishes can be told
         # apart from what an earlier turn of the same session left in the job.
@@ -359,20 +386,12 @@ class AcpMethods:
         collision-suffixed name, which would have the prompt list one document
         twice and the deck ground twice in it.
         """
-        declared, declared_template = materials.inputs_from_prompt(text)
-        wanted = materials.unique_sources(
-            declared + ([declared_template] if declared_template else []) + materials.materials_from_prompt(text)
-        )
+        declared = materials.inputs_from_prompt(text)
+        wanted = materials.unique_sources(declared + materials.materials_from_prompt(text))
         held = {os.path.realpath(source) for source, _ in session.staged}
         fresh = [source for source in wanted if os.path.realpath(source) not in held]
         staged = materials.stage(session.materials, fresh, session.taken)
         session.staged.extend(staged)
-        if declared_template:
-            wanted_real = os.path.realpath(declared_template)
-            session.template = next(
-                (target for source, target in session.staged if os.path.realpath(source) == wanted_real),
-                session.template,
-            )
         return staged
 
     def _report_deck(self, session: AcpSession, outlet: Any, before: dict[Path, float]) -> None:

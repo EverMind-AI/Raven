@@ -23,14 +23,12 @@ the interpreter running this file, so it is reached through a subprocess instead
 of an import. This stays standard-library only, and installable under a bare
 `python3`.
 
-Two manifests, one name. `subagent.json` is the `cli` entry and stays the default:
-it is also the file the host's own folder scan reads, and that scan validates
-every `*/subagent.json` as a cli config -- so a folder whose only manifest
-declared `kind: "acp"` would be skipped with a warning and disappear from the
-roster. `--acp` writes `subagent.acp.json` instead, which registers the same name
-over the ACP transport (`acp.py`). Both cannot be installed at once, by
-construction: they share a name, and the write path replaces an entry that shares
-one.
+One manifest, as the other three folders have. `subagent.json` declares
+`kind: "acp"` and the host's folder scan reads that field to pick the schema it
+validates against, so the transport is a property of the manifest rather than of
+which file was installed. This folder briefly shipped a second `subagent.acp.json`
+on the belief that a lone `kind: "acp"` manifest would be skipped by that scan;
+`raven-code` and `raven-research` had already disproved it.
 """
 
 from __future__ import annotations
@@ -105,9 +103,9 @@ def env_value(name: str) -> str | None:
 
 
 def resolve(entry: dict, python: str) -> dict:
-    """Substitute the install-time placeholders in every command field."""
+    """Substitute the install-time placeholders in every field that carries them."""
     resolved = dict(entry)
-    for field in ("command", "resumeCommand"):
+    for field in ("command", "resumeCommand", "cwd"):
         if template := resolved.get(field):
             resolved[field] = template.replace("{SUBAGENT_DIR}", str(HERE)).replace("{PYTHON}", python)
     return resolved
@@ -165,15 +163,9 @@ def main() -> int:
     )
     ap.add_argument("--config", default=None, help="Config file to write (default: the host raven's own)")
     ap.add_argument("--dry-run", action="store_true", help="Print the resolved entry and stop")
-    ap.add_argument(
-        "--acp",
-        action="store_true",
-        help="Register the ACP entry (subagent.acp.json) instead of the cli one; the agent is then "
-        "driven as a protocol peer rather than forked per task",
-    )
     args = ap.parse_args()
 
-    manifest = HERE / ("subagent.acp.json" if args.acp else "subagent.json")
+    manifest = HERE / "subagent.json"
     if not manifest.is_file():
         raise SystemExit(f"error: {manifest} is missing; this folder cannot be registered")
     template = json.loads(manifest.read_text(encoding="utf-8"))

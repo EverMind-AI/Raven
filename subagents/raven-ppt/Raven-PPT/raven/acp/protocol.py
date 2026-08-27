@@ -48,6 +48,12 @@ AUTH_REQUIRED = -32000
 RESOURCE_NOT_FOUND = -32002
 REQUEST_CANCELLED = -32800
 
+# The notification a caller sends to retract a request it has stopped waiting
+# for. Outbound only: this agent sends it when an ask it made of the client
+# times out or is cancelled, so the client can take the form back off the
+# screen instead of holding it for the rest of its own budget.
+CANCEL_REQUEST_METHOD = "$/cancel_request"
+
 STOP_REASONS = frozenset(
     {
         "end_turn",

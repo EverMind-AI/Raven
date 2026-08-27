@@ -33,6 +33,8 @@ from loguru import logger
 
 from raven.acp.engine import build_engine_factory
 from raven.acp.methods import AcpMethods
+from raven.acp.outbound import OutboundRequests
+from raven.acp.questions import AcpQuestions
 from raven.acp.session import SessionTable
 from raven.acp.stdio import read_frames, write_frame
 
@@ -82,12 +84,16 @@ async def serve(
         write_frame(out, frame)
 
     sessions = SessionTable()
+    outbound = OutboundRequests(emit)
+    questions = AcpQuestions(outbound=outbound, sessions=sessions, emit=emit)
     methods = AcpMethods(
         emit=emit,
         sessions=sessions,
-        engine_factory=engine_factory or build_engine_factory(config, emit, sessions),
+        engine_factory=engine_factory or build_engine_factory(config, emit, sessions, questions),
         jobs_root=jobs_root,
         channel=channel,
+        outbound=outbound,
+        questions=questions,
     )
     logger.info("acp: ready on channel {}; jobs under {}", channel, jobs_root)
 
@@ -99,7 +105,7 @@ async def serve(
             task.add_done_callback(tasks.discard)
         logger.info("acp: client closed stdin")
     finally:
-        # Three steps, in this order, and the order is the whole of it.
+        # Four steps, in this order, and the order is the whole of it.
         #
         # 1. Settle every pending prompt. That is what lets a handler suspended on
         #    a turn's future reach its own cleanup instead of waiting out the grace
@@ -110,6 +116,12 @@ async def serve(
         #    awaiting its engine build when EOF arrives -- registered with nothing
         #    left to release it, so its MCP subprocesses would outlive the process.
         # 3. Release the sessions, which is where the engines are torn down.
+        # 0. Fail every request still waiting on the client, before anything
+        #    else. A handler suspended on a question would otherwise wait out the
+        #    ask's own deadline inside step 2, long past the grace period, and the
+        #    tool call it belongs to would never be told the client had gone.
+        outbound.close()
+        await questions.drain()
         sessions.settle_all()
         await _drain(tasks)
         try:
