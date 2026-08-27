@@ -22,7 +22,15 @@ import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
-import { cycleTarget, enterDirect, getDirectChat, leaveDirect, orderedTargets } from './directChatStore.js'
+import {
+  armEscape,
+  cycleTarget,
+  disarmEscape,
+  enterDirect,
+  getDirectChat,
+  leaveDirect,
+  orderedTargets
+} from './directChatStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
@@ -607,12 +615,16 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
       switch (action) {
         case 'force-reset':
-          patchUiState({ escapeArmed: false })
+          disarmEscape(getDirectChat().active)
           chat!.forceReset()
 
           return
         case 'cancel-turn':
-          patchUiState({ escapeArmed: true })
+          // Armed against the lane on screen, which is the lane `cancel` below
+          // addresses. A global arm let a switch carry it to another view, where
+          // the next Ctrl+C took this branch's `force-reset` sibling and stopped
+          // nothing server-side.
+          armEscape(getDirectChat().active)
           chat!.cancel().catch((err: Error) => actions.sys(`cancel failed: ${err.message}`))
 
           return

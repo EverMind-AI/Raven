@@ -284,7 +284,11 @@ one footer line under it carries everything the box owes the reader -- the
 earlier-message count, the fold toggle, and `/agents` as the way to the full trace. The
 box is open by default while the run works and folds once it settles; a click anywhere on
 the panel toggles it, and the reader's toggle wins over both defaults
-(`lib/spawnOpen.ts`). The Work Segment holding the call suppresses its transcript row,
+(`lib/spawnOpen.ts`). Folded, the panel keeps one row: a `▾` disclosure mark and the
+run's newest line -- its latest step, words or thought, read straight off the wire
+messages by `traceTailLine` (the prompt's head until it has said anything). A running
+run's line is clipped from its left so it follows the stream's edge rather than freezing
+on words the run has left behind, which is what makes a folded panel read as moving. The Work Segment holding the call suppresses its transcript row,
 exactly as for a dag call. Fed by `subagent.status` frames carrying `tool_call_id` during
 the turn (pinned onto `tool.spawn`) or, on resume, rebuilt from the row's `spawn_task_id`
 through one `subagent.list` read.

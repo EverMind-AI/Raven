@@ -631,6 +631,11 @@
           "name": "session_key",
           "required": true,
           "schema": { "type": "string" }
+        },
+        {
+          "name": "target",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/DirectTarget" }
         }
       ],
       "result": {

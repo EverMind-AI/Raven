@@ -1545,6 +1545,7 @@ export interface TurnUnsubscribeResult {
 }
 export interface TurnCancelParams {
   session_key: string;
+  target?: DirectTarget;
 }
 export interface TurnCancelResult {
   cancelled: boolean;

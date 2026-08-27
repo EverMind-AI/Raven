@@ -129,8 +129,9 @@ describe('submitting while a turn is in flight', () => {
       'Coder/h1 is still replying; you can continue once it lands'
     )
     expect(h.sys).not.toHaveBeenCalled()
-    // A sub-agent's turn is not cancellable (spec D3), so no busy-input mode
-    // has anything to act on -- including the default, which would interrupt.
+    // A direct view refuses the second prompt outright, so no busy-input mode
+    // runs -- including the default, which would interrupt. Stopping the reply
+    // is Ctrl+C's job (chatStream.cancel), not a send's side effect.
     expect(h.request).not.toHaveBeenCalled()
     expect(h.send).not.toHaveBeenCalled()
   })

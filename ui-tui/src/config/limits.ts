@@ -3,6 +3,16 @@ export const LARGE_PASTE = { chars: 8000, lines: 80 }
 export const LIVE_RENDER_MAX_CHARS = 16_000
 export const LIVE_RENDER_MAX_LINES = 240
 
+// Live reasoning is an append-only buffer that the renderer re-reads on every
+// streamed update, so it has to be bounded by what a reader can use rather than
+// by how long the model thinks. Both accumulators the renderer reads -- the
+// turn's whole reasoning and the running segment's -- are trimmed to the same
+// window; the episode's own copy gets the smaller one because a turn holds many.
+export const REASONING_MAX_CHARS = 80_000
+export const REASONING_KEEP_CHARS = 60_000
+export const EPISODE_REASONING_MAX_CHARS = 20_000
+export const EPISODE_REASONING_KEEP_CHARS = 16_000
+
 // History-render bounds for messages outside FULL_RENDER_TAIL. Each rendered
 // line ≈ 1 Yoga/Text node + inline spans, so this is the dominant lever on
 // cold-mount cost during PageUp catch-up. 16 lines × 25 mounted ≈ 400 nodes

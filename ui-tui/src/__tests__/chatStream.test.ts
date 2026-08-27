@@ -18,6 +18,7 @@ import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import {
+  armEscape,
   directKey,
   enterDirect,
   getDirectChat,
@@ -762,6 +763,146 @@ describe('createChatStream — direct-chat routing', () => {
     const [, main] = sent[1] as [string, Record<string, unknown>]
     expect(direct.target).toEqual({ agent: 'Raven-Code', handle: 'refactor-auth' })
     expect('target' in main).toBe(false)
+  })
+
+  describe('cancelling from a direct view', () => {
+    const withCapture = async () => {
+      const sent: [string, unknown][] = []
+      const fake = makeFakeRpc()
+      const origRpc = fake.rpc.bind(fake)
+      fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+        sent.push([method, params])
+        return origRpc<R, P>(method, params)
+      }
+      const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+      await stream.attach()
+      return { fake, sent, stream }
+    }
+
+    const cancelParams = (sent: [string, unknown][]) =>
+      sent.filter(([method]) => method === 'turn.cancel').map(([, params]) => params)
+
+    it('names the instance, so the server can find the lane the turn runs on', async () => {
+      const { sent, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      await stream.cancel()
+
+      expect(cancelParams(sent)).toEqual([{ session_key: 'tui:default', target }])
+    })
+
+    it('answers isTurnActive for the view on screen, not for the main agent', async () => {
+      const { stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      expect(stream.isTurnActive()).toBe(true)
+      leaveDirect()
+      expect(stream.isTurnActive()).toBe(false)
+    })
+
+    it('leaves a background direct turn alone when Ctrl+C lands on the main view', async () => {
+      const { sent, stream } = await withCapture()
+      await stream.sendTo({ agent: 'Raven-Code', handle: 'refactor-auth' }, 'fix it')
+
+      await stream.cancel()
+
+      expect(cancelParams(sent)).toEqual([])
+    })
+
+    it('does not carry the main agent\'s arm into a direct view', async () => {
+      // The gap the per-view arm closes. Ctrl+C on the main turn arms; the user
+      // switches to an instance before the cancel lands; the second Ctrl+C used
+      // to read the stale arm and take the LOCAL force-reset rung -- resetting
+      // that pane and never asking the server to stop the sub-agent.
+      // `armEscape` is what the key handler calls; chatStream only cancels.
+      const { sent, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      await stream.sendTo(target, 'take your time')
+      await stream.send('and you too')
+
+      armEscape(null)
+      expect(getUiState().escapeArmed).toBe(true)
+
+      enterDirect(target.agent, target.handle)
+
+      // Same key, a different lane: still the first rung, so it reaches the server.
+      expect(getUiState().escapeArmed).toBe(false)
+      expect(stream.isTurnActive()).toBe(true)
+      await stream.cancel()
+      expect(cancelParams(sent)).toEqual([{ session_key: 'tui:default', target }])
+
+      // And switching back finds the main lane's arm exactly where it was left.
+      leaveDirect()
+      expect(getUiState().escapeArmed).toBe(true)
+    })
+
+    it('keeps a direct arm when the main turn ends beside it', async () => {
+      // The reverse leak: a global disarm at the main turn's end dropped an arm
+      // the direct lane had just placed, turning the user's next Ctrl+C there
+      // into a second cancel instead of the local reset.
+      const { fake, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      await stream.sendTo(target, 'take your time')
+      await stream.send('and you too')
+
+      enterDirect(target.agent, target.handle)
+      armEscape(target)
+      expect(getUiState().escapeArmed).toBe(true)
+
+      fake.__pushEvent({
+        type: 'message.complete',
+        payload: { turn_id: 'turn-1', usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } }
+      })
+
+      expect(getUiState().escapeArmed).toBe(true)
+    })
+
+    it('drops the arm when that lane\'s own cancelled turn comes back', async () => {
+      const { fake, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+      armEscape(target)
+
+      fake.__pushEvent({
+        type: 'error',
+        payload: { code: -32099, message: 'turn_cancelled', reason: 'cancelled_by_client', target }
+      })
+
+      expect(getUiState().escapeArmed).toBe(false)
+    })
+
+    it('puts the forceReset marker in the instance transcript, not the main one', async () => {
+      const appended: Msg[] = []
+      const sent: [string, unknown][] = []
+      const fake = makeFakeRpc()
+      const origRpc = fake.rpc.bind(fake)
+      fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+        sent.push([method, params])
+        return origRpc<R, P>(method, params)
+      }
+      const stream = createChatStream({
+        appendMessage: m => appended.push(m),
+        rpcClient: fake,
+        sessionKey: 'tui:default'
+      })
+      await stream.attach()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      stream.forceReset()
+
+      expect(getDirectTranscript(directKey(target.agent, target.handle)).map(m => m.text)).toContain('interrupted')
+      expect(appended).toHaveLength(0)
+      expect(stream.isTurnActive()).toBe(false)
+      expect(getDirectChat().running).toEqual([])
+      expect(getUiState().busy).toBe(false)
+    })
   })
 
   describe('a direct turn ending', () => {
