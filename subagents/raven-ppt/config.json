@@ -3,16 +3,16 @@
   "agents": {
     "defaults": {
       "model": "anthropic/claude-sonnet-5",
-      "provider": "custom",
-      "contextWindowTokens": 1048576,
+      "provider": "ppt",
+      "contextWindowTokens": 1000000,
       "llmCallTimeout": 600,
       "maxToolIterations": 600,
       "maxConcurrentSubagents": 2,
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     }
   },
   "providers": {
-    "custom": {
+    "ppt": {
       "apiBase": "https://openrouter.ai/api/v1",
       "models": [
         "anthropic/claude-sonnet-5"

@@ -20,12 +20,10 @@ wrap onto, and spreads the rows into the box it was given. Where the page wants 
 table, call it and spend the time on the argument instead. Where the page wants a
 different table, the recipe below is the shorter path, not the harder one.
 
-What is *not* yours is `add_table`. A bare `add_table` arrives with Office's own look
-— a white hairline around every cell, banding on, and a header style that fights the
-palette. Measured on a live deck: 25 cells, every one outlined, two columns filled in
-colours the theme does not contain. That is what `native_table` reports. A screenshot
-of a source table is no better: another typeface, and it cannot be reweighted around
-the page's conclusion.
+What is *not* yours is `add_table`. A bare `add_table` arrives with Office's own look —
+a white hairline around every cell, banding on, and a header style that fights the
+palette. That is what `native_table` reports. A screenshot of a source table is no
+better: another typeface, and it cannot be reweighted around the page's conclusion.
 
 ## When the page has its own grid, draw the page's
 
@@ -41,8 +39,7 @@ Reasons the page's answer is a different table:
 
 - **this deck already has a table that looks like this one.** Repetition belongs ahead
   of every structural reason under it: two pages of the same helper's defaults read as
-  one template's output whatever the figures on them say, which is the note decks come
-  back with. A second table is a second design problem, not a second call — turn the
+  one template's output whatever the figures on them say. A second table is a second design problem, not a second call — turn the
   rows into cards, the label column into a row of headings, the figures into marks,
   one wide comparison into two stacked halves. Look at what the deck has already put
   on a page before settling this page's grid;
@@ -166,45 +163,39 @@ copy. Within the grounds, bands first and column tints over them, or a band cuts
 tinted column into pieces.
 
 *The measurement is an estimate.* `text_size` and `lines_needed` are a per-character
-class average with the theme's face scaled in, not a font metric — right on about 92%
-of the strings that wrap. Nothing here moves at render time, because every box is
-placed absolutely, so a row cannot push the row under it down; what a bad estimate
-costs you is a cell whose copy runs past the bottom of its own cell. `AIR` is the
-reserve against that. Check the render.
+class average with the theme's face scaled in, not a font metric. Nothing here moves at
+render time, because every box is placed absolutely, so a row cannot push the row under
+it down; what a bad estimate costs you is a cell whose copy runs past the bottom of its
+own cell. `AIR` is the reserve against that. Check the render.
 
 ## What `table()` does for the ordinary comparison
 
 **Its case is the row-and-column comparison the reader scans** — like values down a
 column, a row read across to a verdict, one measure reported for each of several
 periods. For that table, everything above is done for you, plus the part that is
-arithmetic rather than design: **it sizes each column from what that column holds**,
-so a 22-character benchmark name gets the room it needs and a 4-character metric does
-not. Doing that by hand is what one live run spent thirteen requests on — it shortened
-"DAVIS J&F" to "DAVIS", tried `weights=(1.9, 1.25, 1.25, 1.3, 1.3)`, rebuilt,
-shortened another header, rebuilt again. `weights` is still there for a column you
-want wider than its content.
+arithmetic rather than design: **it sizes each column from what that column holds**, so
+a 22-character benchmark name gets the room it needs and a 4-character metric does not.
+`weights` is still there for a column you want wider than its content.
 
-**Rows are measured, not assumed.** Each row is as tall as the lines its own cells
-wrap onto at the widths the columns actually get. A declared row height is only a
-floor: rows used to be sized from the type alone, the renderer grew every wrapped one,
-and the dividers — free rectangles at the boundaries the arithmetic had named — stayed
-where they were and came down through a row's copy. That was the `rule_strike`
-reading. The rules are the cells' own borders now, so they sit on the boundary
-wherever the boundary ends up.
+**Rows are measured, not assumed.** Each row is as tall as the lines its own cells wrap
+onto at the widths the columns actually get, and a declared row height is only a floor.
+The rules are the cells' own borders, so they sit on the boundary wherever the boundary
+ends up rather than where the arithmetic first named it -- which is what `rule_strike`
+reports when a divider comes down through a row's copy.
 
-**And the rows spread into the box.** A table whose content is narrower and shorter
-than its region used to leave the bottom third of the page white; the slack now goes
-onto the rows in equal parts, capped at one line's worth each so a three-row table
-stays a three-row table instead of becoming three bands. `fill=False` turns that off.
-It is still worth asking `table_size(rows, theme, box=band)` while the page is being
-written: a four-column table of short values comes back narrow whatever you do with
-the height, and the answer to that is more to say — a column of commentary, a `mark`
-column, the rows you were going to summarise — not a wider table.
+**And the rows spread into the box.** Whatever slack a region has over the table's own
+content goes onto the rows in equal parts, capped at one line's worth each so a
+three-row table stays a three-row table instead of becoming three bands. `fill=False`
+turns that off. It is still worth asking `table_size(rows, theme, box=band)` while the
+page is being written: a four-column table of short values comes back narrow whatever
+you do with the height, and the answer to that is more to say — a column of commentary,
+a `mark` column, the rows you were going to summarise — not a wider table.
 
 It also carries the five things a table has to be able to say: `emphasize_rows` and
 `emphasize_columns` tint the row or column carrying the claim, `group_rows` turns a
 row into a named band across the table, `indent_rows` steps a detail row in, and
-`total_rows` sets a row bold under a rule. `marks` puts a rating, a state, a direction
+`total_rows` sets a row bold under a rule in the muted tone, darker than the hairline
+every boundary already carries. `marks` puts a rating, a state, a direction
 or a share in a cell as a shape rather than a string (below).
 
 Compose freely around it: a two-product comparison may be two parallel regions with
@@ -216,10 +207,26 @@ Preserve units, scales, qualifiers, series meaning and source labels exactly.
 ## The dials, and when to turn them
 
 The defaults are an argument, not a rule: no vertical rules, no banding, nothing
-filled, one accent rule under the header, one hairline under the last row, header and
-body at one size. Every one of them is a keyword away from being something else, and
-a page that needs the other thing should have it. **The reason a default is what it
-is is written beside it, so that overruling it is a decision rather than a guess.**
+filled, a frame around the table and a hairline at every row boundary in the theme's
+`grid` tone, one accent rule under the
+header, and header and body at one size. Every one of them is a keyword away from
+being something else, and a page that needs the other thing should have it. **The
+reason a default is what it is is written beside it, so that overruling it is a
+decision rather than a guess.**
+
+The frame and the row hairlines are the two defaults that are not restraints. Without
+the frame the table drew a rule
+under the header, a hairline under the last row and no side of any kind — three lines
+each ending in mid-air, which reads as unfinished rather than as held back. Without the
+row hairlines a four-column comparison whose cells wrap onto two lines said nothing
+about where one row ended and the next began, and the reader was left counting
+baselines to find which cell went with which label. So the outer
+edge is closed and the rows are told apart for you, and a bare
+`table(slide, box, rows, T)` is something a deck can
+ship. It is not the Office look coming back: that is a hairline around every one of 25
+cells with banding under them, and this is one rectangle and one horizontal per row in
+the quietest tone the theme carries, all at the same weight. Nothing inside the table
+is outlined down its columns unless `column_rules` asks for it.
 
 | | | |
 | --- | --- | --- |
@@ -227,11 +234,11 @@ is is written beside it, so that overruling it is a decision rather than a guess
 | `header_size` | `size` | raise it a step or two when the header is doing work — column headings that are questions, or a header over three-line cells. Never set it under `size` |
 | `align` | measured per column | `("left", "right", "right", "center")`, one per column. Turn to it for a centred column, or where the measurement reads a column differently from the page |
 | `rule_pt` | 2.25 | the accent rule under the header. Heavier where the table is the page; lighter where it sits beside a chart |
-| `grid_pt` | 1.0 | the row hairline. It was 0.9pt and did not resolve at all in the render — do not go under 1 |
+| `grid_pt` | 1.0 | every line but the header's at once — the frame, a row hairline, a total's rule, a column rule. Under 1pt it does not resolve in the render at all, so do not go under 1 |
 | `padding` | 0.03in | the air above and below a row's copy. The single number that decides dense against open |
 | `row_height` / `header_height` | measured | a floor you set, in inches. A row still grows past it for copy that needs the room — a declared height cannot shrink a line |
 | `fill` | `True` | `False` to keep the table at the size its content asks for |
-| `column_rules` | `False` | off because alignment already separates columns and a full grid is the Office look. **On** where the columns are unrelated scales rather than one comparison, or where a matrix has so many that the eye loses which one it is in |
+| `column_rules` | `False` | off because alignment already separates columns and a full grid is the Office look — the frame closes the outside and the hairlines part the rows, this is the only line that parts the columns. **On** where the columns are unrelated scales rather than one comparison, or where a matrix has so many that the eye loses which one it is in |
 | `fills` | none | `{(row, column): colour}`, either coordinate `None` for all of them: `{(None, 3): "accent_soft"}` fills column 3, `{(2, None): "surface"}` fills row 2, `{(2, 3): "#FFEECC"}` one cell. Any role the theme carries, including one the deck named for itself, or a literal |
 | `banding` | `False` | off because row spacing and alignment already tell the rows apart, and a tint on every other row fights whatever the template's own palette is doing. **On** for a long lookup table nobody reads straight through — twenty rows of figures somebody scans down for one line |
 | `style` | `"minimal"` | the four below |
@@ -241,12 +248,15 @@ says *column 3 is the one that matters* and picks the accent for you; `fills` sa
 *column 3 is this colour*. Reach for the emphasis when the page has one claim, and
 for `fills` when the deck has a palette of its own to spend.
 
-`table_size` takes the ones that change the geometry — `size`, `header_size`,
-`padding`, `row_height`, `header_height`, `indent_rows`, `fill`, `style`, `weights`,
-`group_rows`, `marks` — so the height you ask for is the height of the table you then
-draw. The ink-only ones (`align`, `rule_pt`, `grid_pt`, `fills`, `banding`,
-`column_rules`, `emphasize_*`, `total_rows`) are not there, because they cannot
-change it.
+`table_size` takes the ones that change the geometry — `size`, `header_size`, `padding`,
+`row_height`, `header_height`, `indent_rows`, `fill`, `style`, `weights`, `group_rows`,
+`marks` — so the height you ask for is the height of the table you then draw. The
+ink-only ones (`align`, `rule_pt`, `grid_pt`, `fills`, `banding`, `column_rules`,
+`emphasize_*`, `total_rows`) are not there, because they cannot change it. The frame and
+the row hairlines are ink on that reading too: a border is drawn on the boundary and not
+beside it, so it moves no glyph and no other rule. Raising `grid_pt` does not make the
+answer stale, and neither did giving every style the row hairlines: the same rows come
+back at the same height they did when only `row_rules` drew them.
 
 ## Which row, which column
 
@@ -262,12 +272,8 @@ label column and `len(header)` is one past the end.
 **Alignment is read off the cells and you do not normally pass anything.** A column
 every one of whose entries is a figure is right-aligned, because a column of numbers
 that is not right-aligned cannot be compared down its length; a column of prose is
-left-aligned. `numeric_from=1` used to be the default -- everything but the first
-column right-aligned, on the assumption that a table is labels and figures -- and a
-four-column comparison of sentences came out with three columns ragged down their
-left edge, which was the single thing that made those tables look wrong.
-`numeric_from` still takes a column index for the table the measurement reads
-differently: the first column to right-align, `0` for the labels as well,
+left-aligned. `numeric_from` still takes a column index for the table the measurement
+reads differently: the first column to right-align, `0` for the labels as well,
 `len(header)` for none of them. `align` overrides both and names every column; a name
 that is not `left`, `center` or `right` raises rather than being ignored. The header
 takes its column's alignment rather than its own.
@@ -284,10 +290,15 @@ one of them raises *unknown table style 'banded'* before a cell is drawn.
 
 | | |
 | --- | --- |
-| `minimal` | the default: an accent rule under the header, one hairline under the last row, nothing else |
-| `header_tint` | the header row filled in `accent_soft` |
-| `row_rules` | a hairline at every row boundary rather than only the last |
-| `compact` | a lower floor under the rows -- 0.293in against 0.333in at 14pt |
+| `minimal` | the default: the frame, an accent rule under the header, a hairline at every row boundary |
+| `header_tint` | the same, with the header row filled in `accent_soft` |
+| `row_rules` | the same table as `minimal`. The hairlines it used to switch on are what every style draws; the name still builds |
+| `compact` | the same, with a lower floor under the rows -- 0.293in against 0.333in at 14pt |
+
+All four draw the frame and the row hairlines; what varies is the header's surface and
+the floor under a row. They are the table's own edges rather than a treatment, so no
+style turns them off — a page that wants a table with neither is a page drawing its own,
+which is what the recipe above is for.
 
 `compact` buys less than its name suggests, and the floor is why: a row is never
 shorter than the line box in it plus the cell's own margins, and it is never shorter
@@ -349,12 +360,11 @@ can read -- `harvey` over a cell holding "82.1" raises *a rating of 82.1 is outs
 5-step scale*, and over an empty cell, *a harvey mark needs a rating, not ''*.
 
 Two things this form does that a bare `mark` cannot. The marked column is widened to
-hold what is in it, so the collapse above is already solved here: a five-step rating
-took one table's 0.98in column to 1.34in and a ten-step scale took it to 2.49in. And
-the mark takes the part of the cell the string does not need, on whichever side the
-column's alignment leaves free -- a bar in a right-aligned column starts at the cell's
-left edge, and in a left-aligned one it starts past the string, which is never given
-more than three fifths of the width.
+hold what is in it, so the collapse above is already solved here. And the mark takes the
+part of the cell the string does not need, on whichever side the column's alignment
+leaves free -- a bar in a right-aligned column starts at the cell's left edge, and in a
+left-aligned one it starts past the string, which is never given more than three fifths
+of the width.
 
 A marked row's strings still want to fit one line. The marks are placed on the row
 heights the table measured, and a row measured at one line is where a mark and its

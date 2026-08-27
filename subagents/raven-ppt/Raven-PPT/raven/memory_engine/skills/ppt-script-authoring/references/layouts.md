@@ -1,10 +1,9 @@
 # Page structures, and the layers you stack on them
 
-Called from §3.5 and §8 of the skill. A registry of the shapes a page can take, whose job
-is to make the list you choose from wider than the one you would have thought of. The
-measured failure is not that a composed page comes out *wrong* -- it is that every
-composed page in a deck comes out the *same*: one delivered 20-page deck drew eleven pages
-and four of them were the same eight lines, a table, one rounded `plane`, three `points`.
+Called from §3.5 and §8 of the skill. A registry of the shapes a page can take, whose
+job is to make the list you choose from wider than the one you would have thought of.
+The failure it answers is not that a composed page comes out *wrong* -- it is that every
+composed page in a deck comes out the *same*.
 
 **This is a registry and not a tutorial.** One line per entry, no worked code, no decision
 tables: Part 1 is the **page structures**, the bones of a page, and Part 2 the **modifier
@@ -40,7 +39,7 @@ rather than nine hundred lines it does not. The family rows below name the file,
 | `P35` | a chapter banner: two images of unequal weight over an oversized section number | for a divider page. The number is a graphic element and still measured type; the passage says what each tint costs |
 | | ***more than one figure*** | passages: [deck/build/references/layouts-multiples.md](deck/build/references/layouts-multiples.md) |
 | `P8` | small multiples: one row, one framing, one caption block each | not a grid of unrelated pictures. The identical framing is the message -- the reader compares because nothing but the content differs |
-| `P9` | two columns on one baseline | before and after, ours and theirs. Cut both panels to the taller of the two, and give the side carrying the answer `accent_soft` (`M3`) |
+| `P9` | two columns on one baseline | before and after, ours and theirs. Both sides carry the same row labels, so the reader compares across at a fixed height instead of matching sentences by eye. Cut both panels to the taller of the two, and give the side carrying the answer `accent_soft` (`M3`) |
 | `P10` | one dominant figure, the supporting ones beside it | unequal on purpose. A page where every region carries the same weight has argued nothing |
 | `P28` | an asymmetric collage: one dominant figure, smaller ones over its corner | `M21` and `M18` are what make it a stack of prints rather than a mistake. Keep each overlap well under 60% of what is under it, or `covered_shape` refuses the deck |
 | `P29` | picture in picture: the detail inset over the wide shot | the inset's own label goes above it, where the wide shot is not behind the words |
@@ -56,7 +55,7 @@ rather than nine hundred lines it does not. The family rows below name the file,
 | | ***charts as the page's bones*** | passages: [deck/build/references/layouts-data.md](deck/build/references/layouts-data.md) |
 | `P14` | a chart with its reading in a lane beside it | a chart alone states numbers; the lane says what to conclude. Pair it with `M11` and accent the item the lane is about |
 | `P15` | two charts read against one scale | `axis_max` on both, or the reader compares two pictures that are not comparable |
-| | ***tables as the page's bones*** | one structure used to stand for all of them, and every deck's tables came out looking alike -- passages: [deck/build/references/layouts-data.md](deck/build/references/layouts-data.md) |
+| | ***tables as the page's bones*** | passages: [deck/build/references/layouts-data.md](deck/build/references/layouts-data.md) |
 | `P21` | a table with its reading beside it | `table_size` says where the table ends before a cell is drawn, so the lane starts in the right place. [deck/build/references/tables.md](deck/build/references/tables.md) has the rest |
 | `P36` | the table as the whole page, the conclusion set over it | for six rows or more, where the numbers *are* the argument. `table_size(rows, T, box=room)` before a cell is drawn, because the row count is what picks the type size; the conclusion on one line above it, and `emphasize_rows` on what that line names. Skip it for four rows that need explaining -- `P21`'s lane has the room to say why, and this page has none |
 | `P37` | a two-axis matrix, the cell being the answer | rows are the options, columns the criteria, and the cells are *empty*: `marks` fills them with a tick, a cross or a half-dot, and a row of those is read across far faster than a row of the words for them. Wants `weights`, or the matrix sizes itself off its labels and sits in half the page, and a stated legend. Skip it when both axes are continuous -- that is `matrix_2x2` in [deck/build/references/charts.md](deck/build/references/charts.md) -- or when the comparison is one number per row, which is `P21` |
@@ -76,8 +75,9 @@ rather than nine hundred lines it does not. The family rows below name the file,
 
 ## Part 2 -- modifier layers
 
-case, not the exception.** None is decoration: each says something the boxes alone do not.
-
+Stack these on any structure above. The requirement is the skill's §3.5 -- every band of
+the page declared, more than one layer on the region that carries the claim -- and none of
+these is decoration: each says something the boxes alone do not.
 
 | id | the layer | how |
 |---|---|---|
@@ -93,7 +93,7 @@ case, not the exception.** None is decoration: each says something the boxes alo
 | `M9` | a kicker over a region | one line at `KICKER_PT` in `MUTED`, naming what the region below it is. `page()` gives the page's own; a band inside the page can have its own too |
 | `M10` | an outlined frame around a region | `preset(slide, box, T, "roundRect", tint=None, outline="accent")` -- draws the eye to one part without painting over it |
 | `M11` | one item brought forward in a chart | `accent=` on any chart form, by label or index. Everything else goes quiet, which is what makes the accented one mean something. [deck/build/references/charts.md](deck/build/references/charts.md) |
-| | ***what happens to a picture*** | every one of these was checked against what python-pptx can actually do; where it needs raw XML the passage says so and shows the three lines -- passages: [deck/build/references/layouts-figures.md](deck/build/references/layouts-figures.md) |
+| | ***what happens to a picture*** | where one needs raw XML the passage says so and shows the three lines -- passages: [deck/build/references/layouts-figures.md](deck/build/references/layouts-figures.md) |
 | `M12` | a figure that fills its region instead of being centred in it | `cover`: place at the box's own width *and* height, then trim `crop_left`/`crop_right` (or `crop_top`/`crop_bottom`) to give the visible part its aspect back. For a photograph. A figure that is evidence loses part of itself under this and stays in `picture_fit` |
 | `M13` | a picture clipped to a shape rather than to its rectangle | `clip`: set `prst` on the picture's own `a:prstGeom` -- `ellipse`, `roundRect`, `hexagon`, any preset -- and add an `a:gd` named `adj` for the corner radius. Raw XML, three lines |
 | `M14` | a flat plate under type that has to sit on a picture | `rect` from `ppt_charts`, with an opacity **under 0.8**: at 0.8 and above the fill reads as opaque, and a picture more than 60% under it is refused as `covered_shape` |
@@ -122,8 +122,8 @@ leaves most of this registry unused.
 
 **The failure this file exists for is the opposite of overreach.** It is a deck whose
 composed pages all resolve to a bare `P1` or `P9` with no modifier at all -- one tinted
-rectangle and three points, page after page, because that was the only shape anyone had
-seen. If your pages' `layout` fields read like that, not one of the entries above was chosen.
+rectangle and three points, page after page. If your pages' `layout` fields read like
+that, not one of the entries above was chosen.
 
 **Type on a picture is measured, so treat it as a build step and not a finish.** The
 ground under a text box is read off the render's modal pixel: a flat plate (`M14`) or the
@@ -134,10 +134,11 @@ at 1.0:1 -- blocking, on a page that looks fine. Keep the whole text block insid
 plateau, never in the transition.
 
 **Declare what you used.** `ppt_outline` takes a `layout` per page -- the structure ids
-and the modifier ids, `"P14 + M4 + M11"` -- and that declaration is what makes the choice
-reviewable before anything is drawn. It is also measured: a deck whose composed pages
-concentrate on one or two structures comes back as `layout_variety`, counted off the
-built file's own shapes, so a declaration cannot answer for a page drawn some other way.
+and the modifier ids, `"P14 + M4 + M11"`, one id for every band the page divides into
+(§3.5) -- and that declaration is what makes the choice reviewable before anything is
+drawn. It is also measured: a deck whose composed pages concentrate on one or two
+structures comes back as `layout_variety`, counted off the built file's own shapes, so a
+declaration cannot answer for a page drawn some other way.
 
 **None of this outranks §3.5.** The structure follows what the page has to say. A page
 that ends up as prose because prose is the shape of the argument is a right answer, and

@@ -45,12 +45,32 @@ say — and both refuse the deck, so a brief nobody agreed to is worse than no b
 all: it fails the deck against a decision the user never made. The audience is not
 measured; it is the room you judge the deck for when you look at the renders (§10).
 
+There is a fourth thing to record, and it is the one that gets dropped: whatever the
+user ruled out. `ppt_brief(forbidden=["no icons", "never name a competitor"])` is
+quoted back to you in so many words on **every** build, which is what keeps a
+prohibition agreed at turn three alive at turn forty; the same thing filed under
+`notes` is kept with the brief and never restated. Only what the user actually ruled
+out belongs there — a preference you inferred, recorded as a rule, is a constraint
+nobody agreed to.
+
 ## 2. Write the outline before you write the program
 
-`ppt_outline` records it, and the build refuses until it exists. This is the stage
-that decides how much is on a page, and the reason it is a stage: without one, what
-a page said got decided while its geometry was being typed, and the decks that came
-out were thin — a title and three short lines, eight times over.
+**Go looking for the deck's pictures first, and look widely.** Not for a page — there
+are no pages yet — but for the pool the outline gets to choose from, and it is worth
+more than the sweep of what the material happens to link. `web_search(kind="images")`
+returns each candidate with its pixel size and the page it came from, and its titles are
+descriptive where a sweep's are a bare position label. Search the things the material
+*names* as well as the things it links — a paper, a benchmark, a product, a release —
+and search for the ordinary furniture too, the logo and the product shot, which every
+deck wants and no material bothers to link. Bring in more than one page will use:
+`ppt_fetch` each, and `ppt_figure_inspect` them, because the pool is what you are
+choosing from and a candidate you have not looked at is a candidate you cannot choose.
+Which picture a page needs is decided below, against the plan; what you are doing first
+is making sure there is something to decide between.
+
+`ppt_outline` records it, and the build refuses until it exists. This is the stage that
+decides how much is on a page: without one, what a page says gets decided while its
+geometry is being typed, and the page comes out thin.
 
 Per page: the **claim** as a statement (which is also its title), what **carries**
 it, the **figures** it places by id, what it **says** in the deck's language, as
@@ -60,16 +80,15 @@ on the page will remind you of. A page whose `carries` is table-led and whose pl
 only "pricing table" leaves the builder prose where it needs columns and cells, and it
 comes back as a reading against the plan rather than as anything you can see.
 
-`says` is where density is decided, and it is the field that gets under-written.
-Measured across four finished decks, a content page carries 200 to 467 characters of
-copy and the **median is 250** — a five-row comparison, two takeaways and a caveat is
-that page, and it is a good page. Plan for the median rather than the top of the
-range: the top of it is where the type reaches its floor and `overset_copy` starts
-reporting. Points that are each half a line add up to a page that is a title and some
-labels, and the build cannot rescue it: geometry can arrange copy, never supply it.
-So write each point as the sentence a reader gets, evidence included, and if a page
-has only one short line in it either the evidence for it belongs there too or the
-page belongs merged into its neighbour.
+`says` is where density is decided, and it is the field that gets under-written. A
+content page carries 200 to 467 characters of copy and the **median is 250** — a
+five-row comparison, two takeaways and a caveat is that page, and it is a good page.
+Plan for the median rather than the top of the range: the top of it is where the type
+reaches its floor and `overset_copy` starts reporting. Points that are each half a line
+add up to a page that is a title and some labels, and the build cannot rescue it:
+geometry can arrange copy, never supply it. So write each point as the sentence a reader
+gets, evidence included, and if a page has only one short line in it either the evidence
+for it belongs there too or the page belongs merged into its neighbour.
 
 What is checked there rather than after the build — the difference between a cheap
 edit and an expensive one — is the plan against everything already settled: the page
@@ -125,17 +144,31 @@ the user gave none. The build directory then holds one theme, named after that f
 so `THEMES` has exactly one entry and its face is the template's own. Take that entry
 by iteration; a theme id typed into `THEMES[...]` is a `KeyError`.
 
-Its colours, though, are derived from what the file declares, and that is the one
-reading a template is routinely wrong about: eleven of the twelve bundled templates
-declare their second background as `#F0F0F0` and the twelfth `#E8E8E8`, and not one
-paints that colour on any page it ships. So look at
-the renders `ppt_template` returns and say what you see —
+The reading it takes off that file is narrower than it looks. Three roles come out of
+the template — the ground, the ink and its first accent — and `surface`, `accent_soft`,
+`accent_ink`, `grid` and `muted` are mixed from those three rather than chosen by
+anybody. What a file declares is also not what its pages paint: all twelve bundled
+templates declare their second background as `#F0F0F0` and not one of them paints that
+colour on any page it ships, which is why that slot is not read at all. So look at the
+renders `ppt_template` returns and say what you see —
 `ppt_template(project=..., palette={"accent": "#155FFD", "surface": "#DDE8FF"})` keeps
-those for the deck's whole life, every page's `ppt_theme` carries them, and the roles
-you leave out are derived from the ones you named. State it once, before the first
-page. What the build refuses is a deck not built inside the template's own copy — the
-theme part, which you pass by opening `PPT_TEMPLATE` at all. It does not check what
-colour you filled a shape with, and never did.
+those for the deck's whole life and every page's `ppt_theme` carries them.
+
+**State the roles you are sure of; a partial palette is the ordinary one, not a
+degraded one.** What you leave out is re-derived from what you named rather than from
+the file — `palette={"accent": "#7A1FA2"}` inside an amber template brings `surface`,
+`accent_soft` and `accent_ink` back as tints of that purple. Reach for it when the deck
+has a brand of its own, when a page needs an accent the template does not carry, or
+when a series wants a colour the content decides: `chart_series` is the one role a
+stated accent does *not* move, so a comparison drawn in your own two colours states
+them. A later call merges over what the deck already said, so correcting one role keeps
+the rest — state it before the first page either way.
+
+What the build refuses is a deck not built inside the template's own copy — the theme
+part, which you pass by opening `PPT_TEMPLATE` at all. `house_style` compares that
+part's colour slots and a palette never touches them, so a deck whose every plane is
+painted in a colour the template's scheme has never heard of passes it with nothing
+said. It does not check what colour you filled a shape with, and never did.
 
 **The role names are open; a role's meaning is not.** `foreground` is body type,
 `muted` is secondary type and source lines, `accent` marks the focal point of a page,
@@ -207,11 +240,10 @@ hierarchy at all. Two numbers in it are measured rather than chosen, because a d
 read projected: body copy stays at or above **14pt**, and a caption, a source line or
 any other short label may go to **10.8pt** but no further.
 
-Which floor a box answers to is decided from the box, not from you. In the bottom
-0.9in of the page a box is furniture and answers to **8pt** — nobody reads a running
-credit from a seat, and holding a footer to 10.8 put the same finding on every page of
-one deck. Above that band, a box holding twenty characters or more is copy and gets the
-14pt floor, unless it opens with `来源`, `注：`, `图`, `表`, `source:`, `figure` or
+Which floor a box answers to is decided from the box, not from you. In the bottom 0.9in
+of the page a box is furniture and answers to **8pt** — nobody reads a running credit
+from a seat. Above that band, a box holding twenty characters or more is copy and gets
+the 14pt floor, unless it opens with `来源`, `注：`, `图`, `表`, `source:`, `figure` or
 `table`, which is a caption in either language and gets 10.8; anything shorter than
 twenty characters is a label and gets 10.8 too. One thing is outside the measurement
 altogether: a box of fewer than four characters, which is a page number or a chart tick
@@ -220,7 +252,7 @@ and is set small on purpose.
 The size measured is the one the *render* came out at, not the one you declared, so a
 box too small for its copy is caught where autofit shrank it. Every page that breaks a
 floor comes back with the number and the box on it. If the copy will not fit above the
-floor, the page has too much on it: merge the bullets that state one thing, split the
+floor, the page has too much on it: merge the blocks that state one thing, split the
 page, or move a section elsewhere. Shrinking the type is not the fix; it is how the
 page stopped being readable.
 
@@ -266,42 +298,31 @@ purpose; everything else varies because the content varies (§3.5).
 
 Decide what carries the point before placing anything.
 
-**Reference — not a constraint.** The table below is vocabulary, not a lookup. A page
-may take one row, several rows together, or a composition no row names; no row carries
-a coverage quota and nothing counts which ones a deck used.
-
-| Content logic | What carries it |
-|---|---|
-| Real product, interface, experiment or published plot | a source figure |
-| Source-backed numeric comparison or trend | a chart you draw |
-| Tabular data or comparable rows and columns | a drawn table or comparison matrix |
-| Familiar capabilities or categories | icon-led regions |
-| Sequential steps or milestones | an interlocking chevron row, or a timeline; §7.5 |
-| Two genuinely contrasted alternatives | paired regions on one baseline |
-| One memorable conclusion | a single dominant statement |
-| One dominant number | the number at display size, reasoning beside it |
-
 Then compose around it. Give the load-bearing element the space its role deserves
 and let the rest defer; a page where every region carries equal weight has argued
 nothing. Vary composition because the content varies, not to fill a quota, and keep
-a series of comparable cases on one shape so the reader can compare them.
-Below the title, establish a visible hierarchy: the main argument or visual, and then
-the evidence that supports it. Give a conclusion or decision its own baseline,
-weight or restrained accent instead of styling every component identically.
+a series of comparable cases on one shape so the reader can compare them. Give a
+conclusion or decision its own baseline, weight or restrained accent instead of styling
+every component identically.
 
-Prefer one coherent composition over a dashboard of unrelated panels. Cards are for
-genuinely parallel, same-level items. Asymmetry is for when one region is logically
-primary. Do not draw boxes merely to avoid a prose page.
+Prefer one coherent composition over a dashboard of unrelated panels. Do not draw boxes
+merely to avoid a prose page.
 
 **Which shape the page takes is a choice out of a catalogue, not an invention.**
 [deck/build/references/layouts.md](deck/build/references/layouts.md) is that catalogue:
 a registry of page structures, each with a skeleton that runs, and of modifier layers
 that stack on any of them — icons, tinted grounds, badges, rules, leader lines, marks,
 one accented item. Open it while deciding, and say in the outline's `layout` which ids
-the page uses. The measured failure it exists for is not overreach: it is a delivered
-deck whose eleven composed pages were the same table, the same rounded plane, the same
-three points, four of them identical line for line, because one worked example was the
-whole vocabulary anybody had. More than one modifier on a page is the ordinary case.
+the page uses. The failure it exists for is not overreach: it is a deck whose composed
+pages all come out the same shape.
+
+**Every band of the page is declared, and the hierarchy is legible.** A composed page
+divides into regions before it divides into shapes: count them and name each one in the
+`layout`, because the band nobody planned is the one that comes back as bare paragraphs.
+Then rank the regions so the reader sees it before reading a word: which one is the
+claim, which supports it, which is aside. The structure is the skeleton; the modifier
+layers of [deck/build/references/layouts.md](deck/build/references/layouts.md) are what
+carry the information.
 
 Cards, planes and helper presets are optional primitives, not a required page grammar.
 The model may write a typographic page, a dominant figure, a drawn table, a comparison matrix, a chart, a timeline,
@@ -319,16 +340,8 @@ in another form, or shrinking the type to spread it out disguises the problem ra
 than fixing it, and each of those makes the page worse than the gap did.
 
 When the source already carries a real table, comparable rows or a set of parallel items
-with several attributes, keep that information shape. Draw it as aligned text regions
-and rules; do not flatten it into two bullet columns because the text happens to fit.
-
-On a figure-and-text page, let the figure dominate and turn the supporting copy into
-scan points with clear labels -- as many as the region beside the figure actually
-holds, which `points_size` answers before the page is drawn rather than after (§4).
-Put those points on one or more restrained theme-coloured surfaces so the image and
-explanation read as distinct layers; do not leave a bare paragraph floating beside the
-figure. The cards defer to the figure -- they are supporting structure, not a row of
-equal dashboard tiles.
+with several attributes, that information shape is part of the evidence: do not flatten
+it because the text happens to fit.
 
 Every placed figure carries a concise caption, and a figure can carry two of them
 that are not the same kind of claim. Its **source caption** is what the source
@@ -354,13 +367,11 @@ back the renders, without holding a part-written deck to the length that was agr
 and without publishing. Drop `draft` when the deck is whole and you want the gates.
 
 Two reasons, and the second outlives the first. The gateway in front of this model
-closes a connection that streams one very long reply, so a twenty-page program
-written in one call gets cut before its tool call arrives -- and sending the same
-thing again gets cut in the same place, which is why four runs died there. That part
-is a transport limit and will go when the transport does. What stays is that a draft
-shows you a page while there are three of them rather than twenty: every fix is one
-page wide, and the pages after it are written already knowing what the last one
-looked like.
+closes a connection that streams one very long reply, so a twenty-page program written
+in one call gets cut before its tool call arrives -- and sending the same thing again
+gets cut in the same place. What stays is that a draft shows you a page while there are
+three of them rather than twenty: every fix is one page wide, and the pages after it are
+written already knowing what the last one looked like.
 
 It runs in the build directory with python-pptx and Pillow, and reads its paths from
 the environment: `PPT_OUTPUT` (save there and nowhere else), `PPT_FIGURES_DIR`
@@ -384,6 +395,49 @@ every per-page thing the build does — matching a render to the code that drew 
 reporting a defect against the block that caused it, improving one page without
 touching another — has nothing to hold on to.
 
+**The whole program, ending included.** Every other example on this page and in the
+references is a page fragment. This is the file they go inside, and its last line is the
+one that gets left out: a program that draws twenty pages and never saves them exits
+cleanly, reports nothing, and leaves no deck.
+
+```python
+import os
+
+from pptx import Presentation
+
+from ppt_layout import BODY_PT, heading, page, points, write
+from ppt_theme import THEMES, rgb
+
+prs = Presentation(os.environ["PPT_TEMPLATE"])       # the template, its example pages gone
+T = THEMES[next(iter(THEMES))]                       # one entry, and it is the template's
+FACE, HAN = T["font_family"], T["cjk_font_family"]
+INK = rgb(T["foreground"])
+HOUSE = "Title Only"                                 # house_style's layout_for_a_page_you_draw
+LAYOUT = next(one for one in prs.slide_layouts if one.name == HOUSE)
+
+
+def content_page():                                  # the one skeleton every page shares
+    return prs.slides.add_slide(LAYOUT), page()      # the template's background comes with it
+
+
+# SLIDE 1
+slide, frame = content_page()
+heading(slide, frame, T, "四类任务，一套权重", "01 结论", font=FACE, cjk_font=HAN)
+write(slide, frame.body, "切任务只换输入查询，不重训。", size=BODY_PT, colour=INK,
+      font=FACE, cjk_font=HAN)
+
+# SLIDE 2
+slide, frame = content_page()
+heading(slide, frame, T, "证据", "02 消融", font=FACE, cjk_font=HAN)
+points(slide, frame.body, T, ["去掉时序颈：44.7 对 46.3", "去掉语义查询：不收敛"],
+       font=FACE, cjk_font=HAN)
+
+prs.save(os.environ["PPT_OUTPUT"])                   # the last line of every program
+```
+
+**`prs.save(os.environ["PPT_OUTPUT"])` is the last line of every program**, draft builds
+included. Nothing saves for you and nothing else is the place to save to.
+
 Then write the helpers *your* pages need. The header is meant to repeat (§3); what
 must not repeat is everything under it. A deck where every page is the header, one
 bullet row and the same three-card strip is a template — you just wrote it yourself
@@ -392,18 +446,15 @@ types have no reason to share a skeleton. A cover, an
 agenda, a two-way comparison, a table page, a full-bleed figure and a closing page
 should each be recognisably a different kind of page.
 
-**Default — a `*` after the geometry in every helper you write.** `def card(slide, x,
-y, w, h, *, fill=SOFT, bold=False, align="left")` — the boxes stay positional because
-they are always the same four numbers in the same order, and everything after them
-is named at the call site. What is measured is the cost of the alternative rather than
-this particular shape: two runs wrote twenty-seven helpers between them and not one did
-this; several took seven or eight positional parameters, and miscounting them was the
-largest single cause of a build that would not run at all: an empty
-string arriving where a bold flag goes, an argument short, a keyword the function
-never had. It also costs pages later — reviewing a deck means rebuilding one block at
-a time (§10), and a helper you can miscount is a page whose fix gets dropped for a
-`TypeError`. The helpers in `ppt_layout` are shaped this way, which is why a call to
-them cannot fail this way.
+**Default — a `*` after the geometry in every helper you write.**
+`def card(slide, x, y, w, h, *, fill=SOFT, bold=False, align="left")` — the boxes stay
+positional because they are always the same four numbers in the same order, and
+everything after them is named at the call site. Seven or eight positional parameters is
+the largest single cause of a build that will not run at all: an empty string arriving
+where a bold flag goes, an argument short, a keyword the function never had. It also
+costs pages later — reviewing a deck means rebuilding one block at a time (§10), and a
+helper you can miscount is a page whose fix gets dropped for a `TypeError`. The helpers
+in `ppt_layout` are shaped this way, which is why a call to them cannot fail this way.
 
 **The agenda is the page that goes wrong most often.** It is a map of the argument:
 the movements the talk makes, each named with one line saying what it settles.
@@ -425,6 +476,15 @@ it on every box it makes, so the way to turn it off is on the frame it hands bac
 itself costs nothing — an unfilled text box is invisible, it has no fill and no
 outline, and a left-aligned line starts in the same place whether its box ends at 4in
 or 7in.
+
+**`print()` is how those answers reach you.** Whatever the program writes to stdout
+comes back in the build reply, on a build that failed as well as one that worked — so
+`text_size`, `fits`, `formula_type_size`, `len(units(slide))` and the theme your script
+actually resolved are one `print` from being visible, instead of being inferred from
+the shape they drew. Print the measurement, not the whole theme: the last 20,000
+characters are what comes back, and a loop printing per shape pushes out the line you
+wanted. This is also the fastest way to find a page that runs and draws the wrong
+thing, which no render can explain and no traceback mentions.
 
 The agenda's geometry breaks the same three ways every time, so compute it:
 
@@ -489,26 +549,23 @@ default, and the icon names worth knowing by heart are only in
 | `mark(slide, box, theme, kind, value=None, *, colour=None)` | [deck/build/references/tables.md](deck/build/references/tables.md) |
 | `overlaps(boxes, tolerance=0.01)` | → the `(i, j)` pairs that overlap |
 
-> **The page's shape is yours to choose; only the safe area is not.**
-> `page()` returns one skeleton and it is the right one for an ordinary page, which is
-> why every page of every deck delivered so far has used it -- and why every one of
-> those decks puts its title in the same band at the same height. A deck whose pages
-> all open identically is reading itself out. When a page argues something a rail or a
-> full-bleed opener says better, build the `Frame` for it: `heading` will paint the
+> **The page's shape is yours to choose; only the safe area is not.** `page()` returns
+> one skeleton and it is the right one for an ordinary page -- and a deck that reaches
+> for nothing else puts every title in the same band at the same height. A deck whose
+> pages all open identically is reading itself out. When a page argues something a rail
+> or a full-bleed opener says better, build the `Frame` for it: `heading` will paint the
 > band under whatever title box you hand it, and `overlaps` still answers whether the
 > result collides. What you may not do is give each page a different header -- the
 > header is what every page shares, so whatever shape it takes, it takes throughout.
 
-> **Say which rectangle you mean: `Box.corners(...)` or `Box.at(...)`.**
-> `add_textbox`, `add_shape`, `add_picture` and any helper you write yourself all
-> take `left, top, width, height`; a box takes two corners. Four numbers cannot say
-> which, so the two calls are named and the bare `Box(a, b, c, d)` is not yours to
-> write. `Box.corners(0.82, 1.5, 4.25, 2.6)` is a box ending at x=4.25; a 4.25×2.6
-> box is `Box.at(0.82, 1.5, w=4.25, h=2.6)`. Both misreadings are measured — one run
-> wrote a size into every page header and put its subtitle through its title on seven
-> pages. And the mistake compounds: having seen it in the render, the repair to reach
-> for is the other named call — not "corrections" to your own helpers, which take a
-> size and were right all along.
+> **Say which rectangle you mean: `Box.corners(...)` or `Box.at(...)`.** `add_textbox`,
+> `add_shape`, `add_picture` and any helper you write yourself all take
+> `left, top, width, height`; a box takes two corners. Four numbers cannot say which, so
+> the two calls are named and the bare `Box(a, b, c, d)` is not yours to write.
+> `Box.corners(0.82, 1.5, 4.25, 2.6)` is a box ending at x=4.25; a 4.25×2.6 box is
+> `Box.at(0.82, 1.5, w=4.25, h=2.6)`. And the mistake compounds: having seen it in the
+> render, the repair to reach for is the other named call — not "corrections" to your
+> own helpers, which take a size and were right all along.
 
 Constants: `CANVAS_W`, `CANVAS_H`, `MARGIN`, `GUTTER`, `PAD`; the ramp `TITLE_PT`,
 `LEAD_PT`, `BODY_PT`, `LABEL_PT`, `KICKER_PT`, `NUMBER_PT`, `BODY_FLOOR_PT`.
@@ -549,17 +606,13 @@ round into an `if`:
 | `stack(box).short_by(*heights)` | how many inches the whole plan runs over, or 0.0 — measure every band, ask this, **then** draw. `rest()` spends the region it answers with; `room` is the same box and does not |
 
 **A short label in a big box: ask, do not name a step.** Every call above except the
-last measures downwards — whether the size you already chose will do. Ten live pages
-show what that leaves out: the ramp above was used zero times and the pages picked
-thirteen sizes of their own from 10 to 32pt, and where the ramp *was* used it was the
-smallest step, so a chevron label sat at 14pt in a shape 1.25in tall. Two or three
-characters in a box over an inch tall want
-`the_largest_step_this_copy_takes(label, one.box, font=F)`, which answered 30pt for
-those same five labels. Everything playing one role on the page shares one size, so
+last measures downwards — whether the size you already chose will do. What that leaves
+out is the label its box is far too big for: naming the smallest step of the ramp puts a
+chevron label at 14pt in a shape 1.25in tall. Two or three characters in a box over an
+inch tall want `the_largest_step_this_copy_takes(label, one.box, font=F)`, which answers
+30pt for that chevron row. Everything playing one role on the page shares one size, so
 ask for each and take the `min` — the longest label is what the row can afford. It
-answers a step and never a size between two: measured on the render over forty cases,
-the ramp left twice the clearance to the box's edge that a free integer did, and the
-estimate it rests on is worth 5 to 22 percent per face.
+answers a step of the ramp and never a size between two.
 
 **Ask `lines_needed` before you fix a band's height.** `write` turns autofit off on
 purpose, so copy that runs long does not shrink -- it runs out of its box and over
@@ -587,12 +640,10 @@ the inch a reading lands on and a rule at 80% goes where the chart put 80%),
 still no way to hand a chart a size). `nothing_was_dropped` is those three in one
 boolean.
 
-A chart that will not take its box raises `TooSmall`, carrying `short`: the deficit
-in inches as `(across, down)`, which is the number the old prose refusal never gave.
-**It raises before it draws anything** — measured over every chart at
-thirty-six boxes each, every refusal left zero shapes on the slide — so a
-`try/except` around one has no wreckage to clear, and `whether_a_chart_fits` is that
-`try/except` already written.
+A chart that will not take its box raises `TooSmall`, carrying `short`: the deficit in
+inches as `(across, down)`. **It raises before it draws anything** — a refusal leaves
+zero shapes on the slide — so a `try/except` around one has no wreckage to clear, and
+`whether_a_chart_fits` is that `try/except` already written.
 
 `ppt_charts`, always present — twenty-three charts drawn as shapes. Each takes the slide, a
 `Box` out of the grid, the theme, and its data; each fills the box, and there is no
@@ -639,7 +690,7 @@ says what to pass and none of these is about what to pass:
   way it refuses a landscape figure in a portrait frame rather than squashing it.
 - `units(container)` returns runs of repeating sibling groups — a card row, an agenda list.
 - `arrangement(run)` returns `("row"|"column"|"grid"|"irregular", rows, cols)`. Nothing
-  **moves** the survivors for you: 29% of runs follow no grid at all, so closing the hole
+  **moves** the survivors for you, and a run need follow no grid at all: closing the hole
   four units leave on a 2x4 grid is a design decision, and `place` is how you make it.
   Deleting the spares is not that decision and is not yours to do — `fill` and
   `adapt(items=...)` already did it.
@@ -656,14 +707,13 @@ position without `boxes` is guessing at coordinates the page already holds.
 `ppt_theme` gives `THEMES` and `rgb`. `ppt_icons` gives `add_icon(slide, name, left,
 top, size, colour, width_pt=1.75)`, `find_icons(term)` and `ICON_NAMES`.
 
-**`adapt(items=...)` in detail**, because three consecutive requests of a live run
-went into working it out. One entry per repeating unit, and the units left over are
-deleted. Each entry is a list positional over that unit's text shapes, or a dict
-keyed by the text a shape holds now. In a list: `None` keeps the template's own
-words, a string replaces them, and `""` empties the shape — **except over a number,
-where `""` means "this unit's number" and the slot is renumbered for its position**,
-in the template's own padding. That is what an agenda wants: six sections in a page
-that ships eight numbered slots come out numbered 01 to 06.
+**`adapt(items=...)` in detail.** One entry per repeating unit, and the units left over
+are deleted. Each entry is a list positional over that unit's text shapes, or a dict
+keyed by the text a shape holds now. In a list: `None` keeps the template's own words, a
+string replaces them, and `""` empties the shape — **except over a number, where `""`
+means "this unit's number" and the slot is renumbered for its position**, in the
+template's own padding. That is what an agenda wants: six sections in a page that ships
+eight numbered slots come out numbered 01 to 06.
 
 **Count the unit's text shapes and give one value each.** A list shorter than the unit
 leaves the remainder exactly as the template wrote it — which is what you want over a
@@ -676,10 +726,10 @@ decompiled page did not already tell you.
 
 **`items` fills one run, and a page can have two.** It fills the longest —
 `max(units(slide), key=len)` — and every other run on the page is a run of shapes it was
-not told about, so their words get emptied like any other unnamed text. A measured
-example: one template's four-card page is not one run of four, it is two runs of two
-(cards 01–02 and 03–04, grouped in pairs). `adapt(..., items=[a, b])` there ships two
-filled cards beside two blank ones. `fill(run, items)` is the second half:
+not told about, so their words get emptied like any other unnamed text. One template's
+four-card page is not one run of four, it is two runs of two (cards 01–02 and 03–04,
+grouped in pairs). `adapt(..., items=[a, b])` there ships two filled cards beside two
+blank ones. `fill(run, items)` is the second half:
 
 ```python
 slide = adapt(prs, prototype(tpl, 4), title="四项发现",
@@ -751,8 +801,11 @@ a chart somebody else published — rather than only when the materials left a h
 The results carry pixel dimensions, so a mark that would land soft on the page can be
 rejected before it is placed. Generate with `ppt_generate_image` only after both paths
 find no suitable existing visual; a generated image illustrates a concept and never
-replaces evidence. Fetched *numbers* are another matter: those are a source the user
-did not choose, so anything the deck states as fact still comes from the materials.
+replaces evidence. Ask for it at the shape of the region it will sit in —
+`aspect_ratio` takes `16:9`, `4:3`, `3:2`, `1:1`, `3:4` or `9:16` and defaults to
+`16:9`, so a full-height rail or a portrait strip gets a landscape image to crop or
+letterbox unless you say otherwise. Fetched *numbers* are another matter: those
+are a source the user did not choose, so anything the deck states as fact still comes from the materials.
 
 A cover does not need a figure. Reaching for one is a habit: the cover's job is the
 title, who wrote it and where, and a paper's Figure 1 pressed into its corner is
@@ -825,12 +878,10 @@ matters, and where its value sits — `horizontal_bar` in a `body.rows(3)[2]` is
 page. Do not reach for `add_chart`: it arrives with Office's own six colours and its
 own gridlines, which is as recognisable a tell as any stock template.
 
-**Never draw a table with a bare `add_table`**, which arrives with Office's own look —
-a white hairline around every cell, banding on, and a header style that fights
-whatever palette the deck is in. Measured on a live deck: 25 cells, every one
-outlined, two columns filled in colours the theme does not contain. A screenshot of a
-source table is no better: it arrives in another typeface and cannot be reweighted
-around the page's conclusion.
+**Never draw a table with a bare `add_table`**, which arrives with Office's own look — a
+white hairline around every cell, banding on, and a header style that fights whatever
+palette the deck is in. A screenshot of a source table is no better: it arrives in
+another typeface and cannot be reweighted around the page's conclusion.
 
 Everything above that ban is yours. **`ppt_layout.table()` is the shortcut** for the
 ordinary comparison table — the Office look taken off, plus the part that is
@@ -852,17 +903,27 @@ baseline below.
 
 Preserve units, scales, qualifiers, series meaning and source labels exactly.
 
-## 6.5 The page's frame, and its points
+## 6.5 The page's frame, and the helpers that fill it
 
 ```python
-from ppt_layout import heading, page, points
+from ppt_layout import PAD, card, card_body_box, card_size, fits, heading, page, plane, stack
 
 frame = page()
 heading(slide, frame, T, "把任务定义抽象成查询，网络本身就与任务无关",
         "02 统一范式 · 任务切换 = 换一组输入查询")
-points(slide, frame.body.rows(3)[2], T,
-       ["分类不再走全连接头：类别被建模成网络的动态输入，语义表示只通过损失监督学到。",
-        "同一套权重在推理时按需拼装查询集合即可热切换任务。"])
+said = [("route", "分类头没了", "类别成了网络的动态输入，语义表示只通过损失监督学到。"),
+        ("layers", "权重只有一套", "推理时按需拼装查询集合就能热切换任务，不重训。"),
+        ("gauge", "代价", "四类任务合并统计 46.3 mAP，比四套权重各自训练高 0.2。")]
+lanes = frame.body.inset(PAD, 0.0).columns(3)
+tall = max(card_size(lanes[0].w, icon=i, title=h, body=b, font=FACE).h for i, h, b in said)
+cell = stack(lanes[0]).take(tall)
+if not all(fits(b, card_body_box(cell, icon=i, title=h)) for i, h, b in said):
+    tall = max(card_size(lanes[0].w, icon=i, title=h, body=b).h for i, h, b in said)
+ground = stack(frame.body).take(tall + 2 * PAD)
+plane(slide, ground, T, tint="surface")
+for box, (icon, head, body) in zip(ground.inset(PAD).columns(3), said):
+    card(slide, box, T, tint="background", icon=icon, title=head, body=body,
+         font=FACE, cjk_font=HAN)
 ```
 
 **`heading()` is one ready-made top edge** — a quiet ground behind the title row with
@@ -878,37 +939,83 @@ that unit and the body. Do not put a decorative rule in the middle and leave the
 subtitle stranded beneath it, and tighten these internal gaps when the actual title
 uses fewer lines than the template's example did. Where it is defined is §4.
 
-**Two or more parallel claims in one box take `points()`.** Bare paragraphs read as
-one paragraph that happens to have a line break in it: a delivered page stacked two
-47- and 58-character sentences with nothing in front of either, and a reader has to
-work out that they are two things. `points()` writes a real bullet with a hanging
-indent -- so the second line of a point lines up with its first -- and takes
-`numbered=True` when the order matters. The build reports a wide box holding
-unmarked claims (`unmarked_points`), so this is measured rather than suggested.
+**Two claims in one frame read as one paragraph that happens to have a line break in
+it**, and putting a mark in front of each does not change that reading: four claims in a
+6.5in column drawn as four dots with running text after each, no card, no ground, five
+inches of the column empty under them, reads as that same page. **A mark is not a
+structure.** A single paragraph of explanation is a paragraph and nothing here is about
+one; what the build reports, as `listed_claims`, is a box carrying two or more parallel
+claims (§12).
 
-A single paragraph of explanation is a paragraph; leave it alone. What this is for is
-a set.
+**What a card holds, and what it costs, before it is drawn.** `card` paints a rounded
+plane in the tint you name and sets the icon's square, the title bold beside it and the
+copy under it, all inside `PAD`, and it owns that geometry (§7).
+`card_size(width, icon=, title=, body=, font=FACE).h` is how tall it has to be for what
+goes in it, answered before anything is drawn; `max(...)` across a set is the height
+that levels a row without padding each card out to its cell; and
+`fits(body, card_body_box(box, icon=..., title=...))` says whether the copy went in,
+without spending a render on the question. `card_body_box` is the box the copy really
+gets inside a height already chosen, so that question lands on the card rather than on
+the cell. Both answers come off one estimate, which scales a Latin run by the face it is
+told about and by the widest face it knows when it is told none -- so where the unnamed
+question refuses the levelled height, the row above takes what that answer asks for
+instead.
 
-**Never guess a y coordinate.** `stack(box)` is a cursor down a region: `take(h)`
-hands back the next band and moves on, `rest()` hands back everything still unspoken
-for, and `skip(GUTTER)` puts the deck's one gutter between them. Bands are adjacent
-otherwise, so heights from `table_size` and `the_smallest_box_a_chart_needs` add up to
-what the region has and the page can be budgeted before it is drawn. A run without it
-wrote
-`Box.corners(x0, 5.34, x1, 6.72)`, looked at the render, tried 5.50, looked again, tried
-4.86, and did the same thing on two later pages — three builds spent on a number the
-cursor knows. A coordinate you were *given* is different and you should paste it:
+**Dividing a region, and what the `evidence` count sees.** `columns`, `rows` and
+`box.grid(cols, rows)` cut a box into cells, row-major; a `stack` given
+`gutter=(box.h - n * tall) / (n - 1)` spends the region's slack as the air between its
+bands instead of leaving it in a heap at the bottom.
+`plane(slide, box, T, tint="surface")` paints a region, and it is a filled shape like
+any other: `evidence` counts a page as showing something at four of them, so three cards
+come to three and the same three on a `plane` come to four.
+
+`points(slide, box, theme, items, numbered=False)` writes a marked list, a hanging mark
+per item and `numbered=True` for an ordered one; `points_size` measures one before it is
+drawn, which `text_size` cannot, knowing nothing of the mark or the paragraph spacing.
+
+**Never guess a y coordinate.** `stack(box)` is a cursor down a region: `take(h)` hands
+back the next band and moves on, `rest()` hands back everything still unspoken for, and
+`skip(GUTTER)` puts the deck's one gutter between them. Bands are adjacent otherwise, so
+heights from `table_size` and `the_smallest_box_a_chart_needs` add up to what the region
+has and the page can be budgeted before it is drawn. Guessing one instead is a
+coordinate tried, rendered, tried again — builds spent on a number the cursor already
+knows. A coordinate you were *given* is different and you should paste it:
 `house_style`'s `body_area_as_code` (§8) is measured off the template, not guessed.
 
 ```python
+rows = [["任务", "四套权重", "一套权重"],
+        ["实例分割 VIS", "46.1", "46.3"],
+        ["语义分割 VSS", "52.4", "52.6"],
+        ["全景分割 VPS", "50.8", "50.9"],
+        ["指代分割 RVOS", "61.2", "61.4"],
+        ["四类合并", "46.1", "46.3"]]
+answer = "四类任务一套权重，切任务只换输入查询。"
+fig, cap = f"{FIGURES}/fig2.png", "Figure 2：架构（论文原图）"
+grid = table_size(rows, T, size=BODY_PT)
+said = text_size(answer, frame.body.w - 2 * (PAD + 0.10), size=LEAD_PT, bold=True, font=FACE)
+share = 1 - grid.w / (frame.body.w - GUTTER)
+above, _ = frame.body.split_top(1 - (said.h + 2 * PAD) / (frame.body.h - GUTTER))
+figure, _ = above.split_left(share)
 down = stack(frame.body)
-left, right = down.take(3.30).split_left(0.52)
-picture_fit(slide, f"{FIGURES}/fig2.png", left, T, caption="Figure 2：架构（论文原图）")
-for box, item in zip(right.rows(3, gutter=0.16), items):
-    card(slide, box, T, icon=item.icon, title=item.head, body=item.body)
+tall = max(grid.h, picture_size(fig, figure, caption=cap).h)
+figure, lane = down.take(tall).split_left(share)
+picture_fit(slide, fig, figure, T, caption=cap)
+table(slide, lane, rows, T, size=BODY_PT)
 down.skip(GUTTER)
-points(slide, down.rest(), T, takeaways)
+band = down.rest()
+plane(slide, band, T, tint="accent_soft", radius=True)
+write(slide, band.inset(PAD + 0.10), answer, size=LEAD_PT, bold=True, colour=INK,
+      font=FACE, cjk_font=HAN, anchor="middle")
 ```
+
+**Cut the region to what goes in it, in both directions.** `table_size(rows, T)` with no
+box answers both, and the lane and the band above are cut to its two fields: `.w` is the
+width those columns want, `.h` what the rows come to at it -- the band taking the larger
+of that and what `picture_size` says the figure needs in the room the answer's own line
+leaves. `card_size` answers a height alone, for a width you hand it; `text_size` answers
+both for copy, capped at the width asked about, so at a width the line cannot exhaust its
+`.w` is what that line sets. A band or a lane chosen by eye instead is what sits in it
+printing past its own edge, which the file measures as fitting and only the render shows.
 
 `picture_fit` is the other half of that: it scales the image to fit the box whole
 without cropping, centres it, and sets the caption under it. Giving `add_picture` one
@@ -922,7 +1029,7 @@ band cut by eye that is a strip of white over the figure and another under it.
 it and its caption really need; hand that `.h` to `stack.take` and the centring has
 nothing left to centre in.
 
-## 7. Icons, on the cards and beside the points
+## 7. Icons, on the cards and on the blocks beside them
 
 ```python
 from ppt_layout import card
@@ -933,13 +1040,9 @@ card(slide, box, T, icon="target", title="语义查询是必要的",
 add_icon(slide, "clock", Inches(0.7), Inches(2.1), Inches(0.42), ACCENT)
 ```
 
-**Default — reach for the set.** A card's title takes an icon well, and so does a point
-that stands on its own line; not every card needs one and nothing counts them. What the
-default answers is the whole set going unused: three decks built before `card()` existed
-drew every card by hand and not one of them used an icon, while the cards' titles sat in
-a column of identical bold lines — which is what makes a page of parallel points read as
-a list rather than as a set. Pick the icon for what the card argues, not for a noun in
-its title.
+**`card(icon=)` takes one, and so does a block drawn without a card.** Not every block
+needs one and nothing counts them. Pick the icon for what the block argues, not for a
+noun in its title.
 
 `card()` draws the surface, the icon, the title beside it and the copy under it, and
 it owns that geometry — the icon's square, the gap after it, the title's line, the
@@ -953,17 +1056,16 @@ icon takes that line whether or not a title shares it.
 
 **A card fills the box you hand it, so work out the height before you hand one over.**
 Four cards off `frame.body.columns(4)` are each as tall as the body, and two lines of
-copy in a 5.4in card is nine tenths void -- the defect a live deck's own render review
-named first. `max(card_size(width, **spec).h for spec in cards)` is what the row
-actually needs: ask a `stack` for that and the cards come out level, none of them padded
-out to the page.
+copy in a 5.4in card is nine tenths void.
+`max(card_size(width, **spec).h for spec in cards)` is what the row actually needs: ask
+a `stack` for that and the cards come out level, none of them padded out to the page.
 
-`add_icon` is for the icons that are not on a card: beside a kicker, in the corner of
-a metric, at the head of each row of a comparison. Stroked vectors, so they scale and
-stay editable after export, in whatever colour you pass. The ink is inset in the
-square you give it, and by no fixed fraction: over the 1304 icons the strokes fill
-anywhere from nothing of the square's height (`minus`, a rule) to 11/12 of its width
-(`json`), so a row of icons centred on their squares is not a row centred on its ink.
+`add_icon` is for the icons that are not on a card: beside a kicker, in the corner of a
+metric, at the head of each band of a panel drawn by hand (§6.5). Stroked vectors, so
+they scale and stay editable after export, in whatever colour you pass. The ink is inset
+in the square you give it, and by no fixed fraction -- from nothing of the square's
+height (`minus`, a rule) to nearly the whole of its width (`json`) -- so a row of icons
+centred on their squares is not a row centred on its ink.
 `the_ink_an_icon_covers(name, size)` is the box the strokes will really cover, in
 inches, before anything is drawn — and `add_icon` hands back the same box, measured off
 what landed.
@@ -975,13 +1077,12 @@ search reads them, so the word you would use on the slide is a good enough query
 name that misses answers the same way — `add_icon(slide, "kpi", ...)` raises with the
 closest names in the message, so a wrong guess costs no round.
 
-**A few hundred names need no lookup at all.** A live run spent four requests cycling
-through `layout-grid`, `category`, `crosshair` and `stack_2` before it found one that
-existed, then printed `ICON_NAMES` into the build log — where it came back on every
-request after that. All four of those exist now. The ones worth knowing by heart are
-grouped by what they are for in
-[deck/build/references/icons.md](deck/build/references/icons.md); `find_icons` reaches the rest. Open the
-list when you want to scan for the right idea rather than guess a word for it.
+**A few hundred names need no lookup at all**, and guessing at one costs a request that
+`find_icons` or the list would have saved. The ones worth knowing by heart are grouped
+by what they are for in
+[deck/build/references/icons.md](deck/build/references/icons.md); `find_icons` reaches
+the rest. Open the list when you want to scan for the right idea rather than guess a
+word for it.
 
 Keep them small -- an icon is a mark beside type, so the square follows the line it
 labels rather than a size of its own -- and give each real space. On a card that
@@ -1013,14 +1114,28 @@ regions when the actual content needs it. Only when no example can carry the arg
 after those edits may the page compose inside the measured style. A prototype is a
 starting composition, not an immutable form.
 
+**`ppt_template(project=..., pages=[4, 5])` reads an example page back as the
+python-pptx that would draw it** — up to six pages a call, and the second way to look
+at a template after its renders. It is flat and literal on purpose: every position in
+inches, inherited sizes and colours resolved to what they resolve to, groups opened,
+and a `# [n]` above each shape, which is the numbering `shape_at` and an integer key in
+`adapt` both use. The page's own pictures are written into the build directory beside
+your script, so an `add_picture("template_00.png", ...)` line in it runs as pasted; the
+imports it needs head the block as comments, so uncomment the ones you keep.
+Read a page this way when you need its real numbers — the pitch of a card row, the
+title's exact box, what its accent actually is. What it cannot give you comes back
+saying so: a custom-drawn shape, a gradient, a pattern fill or a semi-transparent fill
+is emitted as a comment naming itself, and the reply lists which pages hold one. Those
+are the pages to clone rather than redraw.
+
 ### The pages you clone
 
-`ppt_template` names them — `house_pages: {"cover": 1, "agenda": 2, "section": 3,
-"closing": 11}` — and renders them. Those four are what a reader recognises the house
-by, and a deck that draws its own cover announces itself as not the user's before a
-word of it is read. They are also the pages code cannot reproduce: on a typical
-thirteen-page template, 9 of them hold custom geometry, a gradient or a fill at 15%
-opacity that python-pptx has no way to write.
+`ppt_template` names them —
+`house_pages: {"cover": 1, "agenda": 2, "section": 3, "closing": 11}` — and renders
+them. Those four are what a reader recognises the house by, and a deck that draws its
+own cover announces itself as not the user's before a word of it is read. They are also
+the pages code cannot reproduce: custom geometry, a gradient or a semi-transparent fill
+that python-pptx has no way to write.
 
 ```python
 from ppt_template import adapt, prototype, shape_at, units, fill
@@ -1041,23 +1156,20 @@ adapt(prs, prototype(tpl, 2),                    # the contents page: one unit r
 
 **Name the heading by its role, not by its shape.** `title=` and `subtitle=` write the
 page's own heading rows -- its title placeholder, or the topmost line in the top third.
-`texts={"单击此处添加页面标题": ...}` still works and needs you to know what the slot
-currently says. What happens without either: one run filled the contents page with
-`items` alone, the header came back empty (text this call does not name is emptied), and
-it wrote "目录" and "Agenda" back as two new boxes over the clone -- which is the one
-construction `template_underlay` refuses.
+`texts={"单击此处添加页面标题": ...}` still works and needs you to know what the slot currently
+says. Without either, `items` alone leaves the header empty -- text this call does not
+name is emptied -- and writing "目录" and "Agenda" back as two new boxes over the clone is
+the one construction `template_underlay` refuses.
 
-**Both land on a content page; `subtitle` runs out on a closing one, and the split is
-measured.** Across the twelve templates shipped here and the 197 example pages they carry,
-`title` finds a row on every one and `subtitle` on 180 -- so on the page you are adapting,
-use them. Read by position: `subtitle` resolves on all twelve first pages and on 167 of the
-173 pages between, and on one of the twelve last pages, where the line under the title is
-the presenter's name rather than a second heading and refusing is the right answer. A cover that centres its
-title mid-page has nothing there. When it does not resolve `adapt` raises rather than
+**Both land on a content page; `subtitle` runs out on a closing one.** `title` finds a
+row on nearly any page and `subtitle` on nearly any content page, so on the page you are
+adapting, use them. Where `subtitle` has nothing to resolve to is a closing page, whose
+line under the title is the presenter's name rather than a second heading, and a cover
+that centres its title mid-page. When it does not resolve `adapt` raises rather than
 guessing, listing every shape on the page, so name that line in `texts={...}` off the
-render and carry on. Two of those covers go the other way and resolve `title` onto the
-presenter credit sitting above the real title -- if the render after your call shows the
-wrong row rewritten, that is this, and `texts` keyed on the words is the fix.
+render and carry on. A cover can go the other way and resolve `title` onto the presenter
+credit sitting above the real title -- if the render after your call shows the wrong row
+rewritten, that is this, and `texts` keyed on the words is the fix.
 
 **Numbering: an integer key is the shape's place on the page**, and the reference prints
 it — every shape carries a `# [n]` line above it, groups opened, counting shapes that
@@ -1078,48 +1190,36 @@ page arrives designed.
 **An emptied shape is not a removed one.** `adapt` empties the text it does not name and
 leaves the box standing, because the box is often the design -- a tinted panel, a
 numbered circle -- and an empty box shows nothing while a deleted one takes its panel
-with it. So `""` is not a spelling of delete: a live deck wrote it into the agenda slots
-it had no sections for and shipped the numbered bubbles anyway. `drop=` removes a shape
-before the clone is filled, by the same two keys as `texts`;
-`drop_shape(shape_at(slide, 7))` removes one afterwards, on the slide `adapt` handed
-back -- the rule left over a picture you moved, the panel a re-flow made redundant, the
-shapes you only find on the render.
+with it. So `""` is not a spelling of delete: written into the agenda slots a deck has
+no sections for, it ships the numbered bubbles anyway. `drop=` removes a shape before
+the clone is filled, by the same two keys as `texts`; `drop_shape(shape_at(slide, 7))`
+removes one afterwards, on the slide `adapt` handed back -- the rule left over a picture
+you moved, the panel a re-flow made redundant, the shapes you only find on the render.
 
-**Never lay a new text box over a page you cloned.** One run did exactly that on ten of
-twelve pages — `clone_page` for the background, `add_textbox` for the copy,
-`replace_text` never called — and shipped the template's own "单击此处添加长一点的副标题"
-under its own text on every page. Two decks of the same paper in the same template:
-
-| | replaced what it cloned | cloned and overlaid |
-| --- | --- | --- |
-| findings in total | **7** | **116** |
-| blocking | **2** | **55** |
-| words painted over words | 0 | 25 |
-| copy overflowing its card | 0 | 21 |
-
-`placeholder_copy` and `template_underlay` both refuse it now. If you cloned a page,
-every word on it arrives by replacing a word that was there.
+**Never lay a new text box over a page you cloned.** The construction is `clone_page`
+for the background, `add_textbox` for the copy, `replace_text` never called — and it
+ships the template's own "单击此处添加长一点的副标题" under your own text on every page.
+`placeholder_copy` and `template_underlay` both refuse it. If you cloned a page, every
+word on it arrives by replacing a word that was there.
 
 **The template's photographs are placeholders.** A cover's stock photograph of a meeting
-table, on a deck about video segmentation, shipped twice. Replace it with a figure from
-the sources or take the frame out — `pictures={7: f"{FIGURES}/fig3.png"}`, or `drop=[9]`.
-Small graphics are different: an image under a tenth of the page is an icon, a corner
-flourish or a rule, and belongs to the design.
+table says nothing about the deck's subject. Replace it with a figure from the sources
+or take the frame out — `pictures={7: f"{FIGURES}/fig3.png"}`, or `drop=[9]`. Small
+graphics are different: an image under a tenth of the page is an icon, a corner flourish
+or a rule, and belongs to the design.
 
 **A landscape figure does not go in a portrait frame.** `replace_picture` refuses when
 the two are more than 2x apart and says both numbers, because contained it becomes a
 strip in an empty frame and cropped it loses its outer columns. Give the frame the box
-the figure needs: `pictures={4: (f"{FIGURES}/fig2.png", (0.8, 1.6, 7.4, 4.2))}`, where the
-four numbers are `(left, top, width, height)` in inches — a **size**, the same one `place`
-takes, and not the two corners a `ppt_layout.Box` holds. A `Box` may be handed over whole
-and is converted, so with `frame, notes = body.split_left(0.52)` both
-`pictures={4: (f"{FIGURES}/fig2.png", frame)}` and `place(shape_at(slide, 4), frame)` say what
-they mean; what you must not do is unpack one into four numbers, because
-`Box.corners(0.72, 1.24, 12.6, 6.7)` read as a size draws
-a 12.6x6.7in frame off the side of a 13.33in page where those corners name an
-11.88x5.46in one. Same four numbers, and only one of the two readings is your figure.
-Permuting the shape number is what one
-run did instead, three times, and it never produced a deck.
+the figure needs: `pictures={4: (f"{FIGURES}/fig2.png", (0.8, 1.6, 7.4, 4.2))}`, where
+the four numbers are `(left, top, width, height)` in inches — a **size**, the same one
+`place` takes, and not the two corners a `ppt_layout.Box` holds. A `Box` may be handed
+over whole and is converted, so with `frame, notes = body.split_left(0.52)` both
+`pictures={4: (f"{FIGURES}/fig2.png", frame)}` and `place(shape_at(slide, 4), frame)`
+say what they mean; what you must not do is unpack one into four numbers, because
+`Box.corners(0.72, 1.24, 12.6, 6.7)` read as a size draws a 12.6x6.7in frame off the
+side of a 13.33in page where those corners name an 11.88x5.46in one. Same four numbers,
+and only one of the two readings is your figure.
 
 ### The pages you compose
 
@@ -1132,13 +1232,12 @@ where none does, composing the page is the answer and needs no apology in `needs
 
 **Start the page from the layout the template's own content pages sit on.** That is
 `layout_for_a_page_you_draw` in the measured `house_style`, and `add_slide` on it brings
-the template's background with it — the corner device, the edge rules, the ground colour,
-all of which hang on the layout and none of which you have to draw. Two live runs did
-exactly this and it is what makes their decks read as one deck: thirteen composed pages
-of a 20-page deck all added on the template's `Title Only`, so every one carried the same
-corner decoration and border without a line of code about it. `add_slide` on a blank
-layout, or painting your own background, is how a deck ends up with the template
-surviving as a colour.
+the template's background with it — the corner device, the edge rules, the ground
+colour, all of which hang on the layout and none of which you have to draw. Every
+composed page added on that one layout carries the same corner decoration and border
+without a line of code about it, which is what makes a deck read as one deck.
+`add_slide` on a blank layout, or painting your own background, is how a deck ends up
+with the template surviving as a colour.
 
 The rest of `house_style` is the frame for what you then put on it:
 
@@ -1156,7 +1255,7 @@ body_area_as_code: from ppt_layout import Box; body = Box.corners(0.72, 1.24, 12
 ```
 
 ```python
-from ppt_layout import Box, picture_size, points, stack, write
+from ppt_layout import Box, write
 T = THEMES[next(iter(THEMES))]                           # the template's own palette
 layout = next(l for l in prs.slide_layouts if l.name == "Title Only")
 slide = prs.slides.add_slide(layout)                     # the background comes with it
@@ -1176,16 +1275,14 @@ anchor is where the ink lands in it, and the two readings of one 0.98in row are 
 an inch apart. A template's title placeholder usually declares nothing and inherits from
 its master, and one bundled template's master says `anchor="b"` — so its cloned pages
 sink a single-line title to the bottom of the row while `write`, which anchors to the
-top unless told otherwise, puts the same line near the top. Measured on the render at
-150 DPI, same 55px glyph on both: cloned title ink starting at y=99px, composed at
-y=36px, a 0.42in jump on every page boundary between the two kinds. `title_row_as_code`
-is that call with the anchor already in it; `title_row` states it in words. A composed
-page whose anchor disagrees with the template's comes back as `title_row` (§12).
+top unless told otherwise, puts the same line near the top. `title_row_as_code` is that
+call with the anchor already in it; `title_row` states it in words. A composed page
+whose anchor disagrees with the template's comes back as `title_row` (§12).
 
-The subtitle row is reported the same way and for the same reason — one measured
-template sets its own at 24pt **centred** under a left-aligned title, which is its
-designer's decision and not a mistake to correct. Take the alignment from
-`subtitle_row_as_code` rather than assuming it matches the title's.
+The subtitle row is reported the same way and for the same reason — a template may set
+its own **centred** under a left-aligned title, which is its designer's decision and not
+a mistake to correct. Take the alignment from `subtitle_row_as_code` rather than
+assuming it matches the title's.
 
 **One scale for the whole deck.** Every page title at `type_pt["title"]`, body copy at
 `type_pt["body"]`, captions at `type_pt["caption"]`, and the floors of §3 under all
@@ -1197,8 +1294,8 @@ against the one before it and a body size that moves page to page reads as unfin
 **Set every size yourself, and give the box the room it needs.** `write` turns autofit
 off on purpose: a box that cannot hold its copy comes back as a measurement rather than
 as type quietly dropping to 10.8pt. If `overset_copy` says a box needs 1.51in and has
-0.90in, the answer is a taller box, a wider column, fewer points or a second page —
-never a smaller size. `text_size` and `points_size` say the same 1.51in before the
+0.90in, the answer is a taller box, a wider column, less copy or a second page —
+never a smaller size. `text_size`, `card_size` and `points_size` say the same 1.51in before the
 build does (§4), which is the cheaper place to hear it.
 
 **Stay inside the safe area.** `safe_area_in` is where the template keeps its own
@@ -1208,19 +1305,20 @@ title in the box `title_row` names, at the size it names, and every page of the 
 lines up with the template's own.
 
 **Ink is `foreground`. `surface` and `background` are what the ground is painted with.**
-On a dark template those three are white, near-black and black, and a deck that reached
-for "the dark one" as its type colour shipped eleven of twelve pages with the title in
-#1A1A1A on #000000. Two lines are measured off the render, against the ground each
-box actually landed on: under **2:1** nothing is legible and `unreadable` refuses the
-deck; between 2:1 and **3:1** `thin_contrast` reports it and leaves the call to you.
-The gap between them is deliberate — a template's own agenda numerals, white on
-orange, measure 2.5:1 and are what its designer drew.
+On a dark template those three are white, near-black and black, so reaching for "the
+dark one" as a type colour puts near-black type on black. One line is measured off the
+render, against the ground each box actually landed on: under **2:1** nothing is legible
+and `unreadable` refuses the deck. Above that line nothing is said, because a template's
+own pages ship shapes barely above it and an authored shape there cannot be told from
+one. So everything between "legible" and "comfortable" is yours to judge off the render
+(§10): a title over a mid-tone plane is worth looking at twice even though nothing will
+mention it.
 
 **Take the face from the page, not out of the theme.** `ppt_theme`'s `font_family` is
-what the template's *theme* declares, and one measured template says 微软雅黑 while all
-203 runs on its example pages are Arial. `house_style`'s `face` is what the pages
-actually use — pass it as `font=` and its CJK companion as `cjk_font=`, or a line of
-mixed text comes out in two unrelated faces.
+what the template's *theme* declares, and a template can declare 微软雅黑 while every run on
+its example pages is Arial. `house_style`'s `face` is what the pages actually use — pass
+it as `font=` and its CJK companion as `cjk_font=`, or a line of mixed text comes out in
+two unrelated faces.
 
 Which pages are cloned is decided in the outline, not here: `ppt_outline` takes a
 `prototype` per page, and with a template bound it refuses an outline whose cover,
@@ -1281,11 +1379,9 @@ again. A tight loop on one page finds what a sweep over twelve does not — a sw
 tells you twelve pages have something wrong, and a loop tells you what. Run the full
 build when a batch is settled; that is what runs the gates and publishes.
 
-**This is the last look the deck gets.** There is no pass after you. A stage used to
-run from code once the gates cleared and rearrange the pages, and it is gone: it could
-see a page and not change what it said, which is half of what is ever wrong with one.
-Every reading above is yours, and a page you send on unlooked-at is a page that ships
-as it is.
+**This is the last look the deck gets.** There is no pass after you, and no stage that
+rearranges the pages once the gates clear. Every reading above is yours, and a page you
+send on unlooked-at is a page that ships as it is.
 
 ## 11. The order is enforced, not suggested
 
@@ -1304,18 +1400,18 @@ page at a time, and look.
 
 One more thing the order decides: **`deck/ingest/materials.md` does not exist until
 `ppt_ingest` has run.** Reaching for it first costs a request and gets a
-`No such file or directory`. When it is there, `ppt_ingest` returns
-`materials_index` — every part of it with the line it starts at — and `read_file`
-takes `offset` and `limit`. Read the parts the deck stands on rather than the file:
-whatever you read stays in the context and is re-sent on every request after it,
-which on one measured run made a single whole-file read the most expensive thing in
-the deck.
+`No such file or directory`. When it is there, `ppt_ingest` returns `materials_index` —
+every part of it with the line it starts at — and `read_file` takes `offset` and
+`limit`. Read the parts the deck stands on rather than the file: whatever you read stays
+in the context and is re-sent on every request after it, so a single whole-file read is
+the most expensive thing in the deck.
 
 ## 12. What the build refuses, and what it only reports
 
 **Refused**, with the page named. Four of them land at the outline, before a line of
 the program is written: a **figure id the catalogue does not hold**; a **layout id
-the catalogue does not carry** -- the ids are `P1` to `P22` and `M1` to `M11`, not
+the catalogue does not carry** -- the ids are `P1` to `P41` as page structures and `M1`
+to `M26` as modifier layers, not
 zero-padded, and one that is not in `deck/build/references/layouts.md` can only come
 from not having opened it; with a template
 bound, an outline whose **cover, index and closing** do not name the
@@ -1349,8 +1445,7 @@ The rest land on the built deck:
 
 **Reported**, most of them with a page number, and all of them yours to judge: a
 **filled colour bar** carrying nothing; **type under the floors**, and body copy set at a
-size that is **not a step of the ramp** and under `BODY_PT`, and separately type
-that is legible but **thin against its ground** (2:1 to 3:1); a deck with **too few
+size that is **not a step of the ramp** and under `BODY_PT`; a deck with **too few
 content pages showing anything** — a figure, a table, a chart or a diagram, counted
 across the deck rather than page by page; a **table too wide to read**, or one still
 **wearing Office's own look**, or one drawn with **fewer columns or rows than its plan
@@ -1359,7 +1454,7 @@ the plan and the drawn table together, so the plan-time warning is settled by th
 rather than argued with; a **rule struck through** a row; copy **escaping a
 card**, or **crowding its panel's rim**; a shape **over the page edge**, and copy
 **painted off the page** by a box with wrapping off; copy **on the layout's artwork**;
-an **expression set as prose**; **parallel claims with no mark** in front of them; an
+an **expression set as prose**; **two or more parallel claims in one box**; an
 **inspected figure caption naming something the materials never mention**; a
 **label the render broke** onto a second line, or one **wrapped** in a box too narrow
 for it; **copy that does not fit** the box it was put in, and copy the file states that
@@ -1384,8 +1479,7 @@ At the plan, three more: a page planned with **one line and nothing else**, a de
 spending **a quarter of itself on pages carrying no argument**, and **material too thin
 for the pages agreed** — plus, at ingest, a **source that could not be read** at all.
 
-Ten of them come with the move that answers them, five of those written after reading
-finished decks page by page:
+Some come with the move that answers them:
 
 | Reported | What it means | The move |
 | --- | --- | --- |
@@ -1396,9 +1490,9 @@ finished decks page by page:
 | `native_table` | a table still wearing Office's banding and gallery style | `ppt_layout.table()`, which takes both off and keeps every row -- or draw the grid yourself, which never had them |
 | `spilled_copy` | a `wrap=False` box painting its copy off the page | turn wrapping on and give the box a second line's height |
 | `type_drift` | one slot the deck repeats, set at several sizes | give the boxes the height one size needs |
-| `type_scale` | copy set over the 14pt floor but under `BODY_PT`, at a size the ramp does not have — 15pt is the commonest | `size=BODY_PT`, `size=LABEL_PT`, or `the_largest_step_this_copy_takes(text, box, font=F)` |
+| `type_scale` | copy set over the 14pt floor but under `BODY_PT`, at a size the ramp does not have | `size=BODY_PT`, `size=LABEL_PT`, or `the_largest_step_this_copy_takes(text, box, font=F)` |
 | `flat_formula` | an expression set with `write`, so its subscripts are flat and the box may break it inside a symbol | `formula()` (§9) |
-| `unmarked_points` | a wide box holding two or more claims with nothing in front of any of them | `points()` (§6.5) |
+| `listed_claims` | one box holding two or more parallel claims, so they read as a list to be read out | separate them so a reader can see where one ends; §6.5 has the calls that measure a region before it is drawn |
 | `inferred_caption` | a caption written by looking at a figure, naming a product or system the materials never mention -- or disagreeing with the name its source printed | caption what is visible, or ingest the source that establishes the name; never credit the figure to it |
 
 Warnings are mostly not refusals for a reason: nearly every one of them can be "fixed"

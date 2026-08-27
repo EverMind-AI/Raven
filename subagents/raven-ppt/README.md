@@ -110,12 +110,16 @@ same agent-agnostic installer the other three subagents use, byte for byte.
    no argv slot for source documents. `run.py` reads absolute paths out of the
    task text, keeps the ones that exist and look like documents, and copies them
    into the job's `materials/`. A task that names nothing resolvable is not
-   refused: the run proceeds without material, and the prompt tells the agent it
-   holds none, so what it cannot verify is presented as a guess. Paths and URLs
-   in the task are not inspected beyond that: whatever does not resolve is
-   passed through untouched, and the agent reads the task text itself. A file
-   declared in the fenced block still cannot be skipped: a copy that fails stops
-   the run.
+   refused: the run proceeds without material, and the prompt tells the agent
+   which tools gather it -- `web_search` (including `kind="images"`),
+   `web_fetch` (including `extractMode="images"`), `ppt_fetch` and
+   `ppt_generate_image` -- and that fetching into the project is what the
+   provenance checks can see. What it still cannot verify is presented as a
+   guess. "A 5-page guide to using GitLab" names no file and needs none, and
+   was refused before it started. Paths and URLs in the task are not inspected
+   beyond that: whatever does not resolve is passed through untouched, and the
+   agent reads the task text itself. A file declared in the fenced block still
+   cannot be skipped: a copy that fails stops the run.
 2. **The copies are what the prompt names.** The workspace is the job directory,
    with `materials/` and `out/` inside it, and the staged listing points at the
    copies rather than the originals. The workspace is not fenced:

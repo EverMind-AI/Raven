@@ -1692,6 +1692,10 @@ def test_a_detail_row_is_stepped_in_and_a_total_row_sits_under_a_rule(tmp_path) 
     muted tone is the other half of the step, and the rule above the total is what
     says the numbers over it were added up rather than merely listed -- bold alone
     reads as nothing more than emphasis.
+
+    That rule is in the muted tone and not the grid one, because the grid one is now on
+    every boundary: a hairline over a total in the tone the row above it already has
+    says nothing, and the arithmetic that drew it could not change a pixel.
     """
     _, module = _layout(tmp_path)
     try:
@@ -1718,10 +1722,15 @@ def test_a_detail_row_is_stepped_in_and_a_total_row_sits_under_a_rule(tmp_path) 
             runs = table.cell(4, column).text_frame.paragraphs[0].runs
             assert all(run.font.bold for run in runs), f"a total's cell {column} is not bold"
 
+        firm = (str(module._rgb(theme["muted"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
         quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
-        assert _border(module, table.cell(3, 0), "lnB") == quiet, "nothing rules off the row above the total"
-        assert _border(module, table.cell(4, 0), "lnT") == quiet, "the two sides of that boundary disagree"
+        assert _border(module, table.cell(3, 0), "lnB") == firm, "nothing rules off the row above the total"
+        assert _border(module, table.cell(4, 0), "lnT") == firm, "the two sides of that boundary disagree"
         assert _border(module, table.cell(3, 0), "lnR") is None, "a vertical rule nobody asked for"
+        # And it is darker than the boundary a row that is not a total gets, which is
+        # the whole of what makes it readable as a rule rather than as another row.
+        assert _border(module, table.cell(2, 0), "lnB") == quiet, "an ordinary boundary lost its hairline"
+        assert firm[0] != quiet[0], "a total's rule is the same tone as every other boundary"
     finally:
         _drop(tmp_path)
 
@@ -2058,7 +2067,7 @@ def test_a_total_on_the_first_body_row_does_not_draw_over_the_header_s_rule(tmp_
     """Two rules on one boundary, and the second one eats the first.
 
     A total's rule sits at the top of its row, and the top of row 1 is the boundary
-    the accent rule under the header already holds. The grid-toned line is the
+    the accent rule under the header already holds. The muted-toned line is the
     thinner and quieter of the two, so writing it there takes away the one line on
     the table a reader is meant to see.
     """
@@ -2079,9 +2088,9 @@ def test_a_total_on_the_first_body_row_does_not_draw_over_the_header_s_rule(tmp_
         # Any other total row still gets its own rule -- this is a duplicate dropped,
         # not the treatment dropped.
         lower = module.table(slide, box, _GRID, theme, numeric_from=3, total_rows=(3,))
-        quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
-        assert _border(module, lower.cell(2, 0), "lnB") == quiet
-        assert _border(module, lower.cell(3, 0), "lnT") == quiet
+        firm = (str(module._rgb(theme["muted"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+        assert _border(module, lower.cell(2, 0), "lnB") == firm
+        assert _border(module, lower.cell(3, 0), "lnT") == firm
     finally:
         _drop(tmp_path)
 
@@ -3420,6 +3429,122 @@ def test_a_row_is_as_tall_as_the_lines_its_cells_wrap_onto(helpers) -> None:
     assert _border(module, drawn.cell(0, 0), "lnB")[1] == pytest.approx(module.HEADER_RULE_PT, abs=0.01)
 
 
+def test_a_bare_table_is_closed_by_a_frame_in_every_style(helpers) -> None:
+    """The default is what ships, so the default has to be presentable.
+
+    A delivered deck called `table(...)` with every keyword left alone and got a header,
+    one accent rule, rows with nothing between them, a hairline under the last row and
+    no side of any kind -- three lines each ending in mid-air, which reads as a page
+    that was not finished rather than as one that was held back, and which came back
+    as that reading four times over. The frame is
+    the table's own edge and it is not the Office look: that is a hairline around
+    every one of 25 cells, and this is one rectangle in the theme's quietest tone.
+    """
+    module, theme = helpers.ppt_layout, helpers.theme
+    box = module.Box.corners(0.72, 1.93, 12.60, 5.63)
+    quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    last = len(_WRAPPING) - 1
+    columns = len(_WRAPPING[0])
+
+    for style in ("minimal", "header_tint", "row_rules", "compact"):
+        drawn = module.table(_slide(module), box, _WRAPPING, theme, style=style)
+        assert _border(module, drawn.cell(0, 0), "lnT") == quiet, f"{style} has no top edge"
+        assert _border(module, drawn.cell(last, 0), "lnB") == quiet, f"{style} has no bottom edge"
+        for row in range(len(_WRAPPING)):
+            assert _border(module, drawn.cell(row, 0), "lnL") == quiet, f"{style} row {row} has no left edge"
+            assert _border(module, drawn.cell(row, columns - 1), "lnR") == quiet, f"{style} row {row} has no right"
+        # And the frame is the only vertical the default draws: an interior edge is
+        # still bare, which is the difference from the grid `column_rules` asks for.
+        assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
+        # The header's rule still outweighs the frame, so it stays the line the reader
+        # is meant to see; the frame is what the eye reads last.
+        assert _border(module, drawn.cell(0, 0), "lnB") == (
+            str(module._rgb(theme["accent"])),
+            pytest.approx(module.HEADER_RULE_PT, abs=0.01),
+        )
+        assert module.HEADER_RULE_PT > module.GRID_RULE_PT
+
+    # The frame takes its weight from `grid_pt` and nothing else, so a page that wants
+    # a heavier edge has the same dial the row hairlines have.
+    heavier = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=2.0)
+    assert _border(module, heavier.cell(0, 0), "lnT") == (str(module._rgb(theme["grid"])), pytest.approx(2.0))
+
+    # A border is drawn on the boundary and takes no room from the row it edges, so
+    # the frame cannot make `table_size` answer for a table that is not the drawn one.
+    for style in ("minimal", "compact"):
+        drawn = module.table(_slide(module), box, _WRAPPING, theme, style=style)
+        asked = module.table_size(_WRAPPING, theme, style=style, box=box)
+        assert drawn.box.h == pytest.approx(asked.h, abs=1e-9)
+        assert drawn.box.w == pytest.approx(asked.w, abs=1e-9)
+
+
+def test_every_row_boundary_carries_a_hairline_in_every_style(helpers) -> None:
+    """The other half of what a default has to ship, from the same reading as the frame.
+
+    A delivered page: a four-column comparison whose CJK cells wrap onto two lines, an
+    outer frame, an accent rule under the header, and nothing at all between the body
+    rows. With wrapped cells there is then no way to see where one row ends and the
+    next begins -- the reader counts baselines and pairs the wrong cell with the wrong
+    label. `style="row_rules"` drew them, and asking the author to name a keyword for
+    the readable table is the same mistake the frame was: a default is what ships.
+
+    So every style draws them, at `grid_pt` in the `grid` tone -- the frame's own line,
+    not a second vocabulary -- which keeps the header's accent rule the heaviest thing
+    on the table and the line it is read from.
+    """
+    module, theme = helpers.ppt_layout, helpers.theme
+    box = module.Box.corners(0.72, 1.93, 12.60, 5.63)
+    quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    rows = [
+        ["维度", "Mem0 平台", "自建向量库方案", "竞争含义"],
+        ["定价", "免费到 $19/月 Starter、$249/月 Pro；Enterprise 定制", "按实例计费，还要摊运维", "评估更容易"],
+        ["部署", "托管平台，开箱即用，SDK 三行代码接入", "自建集群，扩容与备份自理", "更强，尤其是早期团队"],
+        ["召回", "语义与图谱双通道，跨会话记忆自动衰减", "仅向量近邻，跨会话自己拼", "差异化的核心"],
+    ]
+    last = len(rows) - 1
+
+    for style in ("minimal", "header_tint", "row_rules", "compact"):
+        drawn = module.table(_slide(module), box, rows, theme, style=style)
+        for above in range(1, last):
+            assert _border(module, drawn.cell(above, 0), "lnB") == quiet, f"{style} row {above} runs into the next"
+            assert _border(module, drawn.cell(above + 1, 0), "lnT") == quiet, f"{style} boundary {above} disagrees"
+        # The header's boundary is the accent rule and stays the heavier: a separator
+        # at `rule_pt` would make the table louder, which is what the quiet default
+        # was avoiding in the first place.
+        header = _border(module, drawn.cell(0, 0), "lnB")
+        assert header == (str(module._rgb(theme["accent"])), pytest.approx(module.HEADER_RULE_PT, abs=0.01))
+        assert module.GRID_RULE_PT < module.HEADER_RULE_PT, "the row hairline is at the header rule's weight"
+        assert quiet[0] != header[0], f"{style} draws its row hairline in the accent tone"
+        # The bottom boundary is the frame's own edge, already drawn, so it is one line
+        # and not a hairline laid over a hairline.
+        assert _border(module, drawn.cell(last, 0), "lnB") == quiet, f"{style} has no bottom edge"
+        assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
+
+    # A border is drawn on the boundary rather than beside it, so the hairlines take no
+    # room: the height is still the rows' own and still what `table_size` answered
+    # before a single line was drawn. A separator that grew the table would have moved
+    # every page that cut a lane to that answer.
+    unit = module.Inches(1)
+    for style in ("minimal", "header_tint", "row_rules", "compact"):
+        for fill in (True, False):
+            drawn = module.table(_slide(module), box, rows, theme, style=style, fill=fill)
+            asked = module.table_size(rows, theme, style=style, box=box, fill=fill)
+            heights = sum(row.height / unit for row in drawn.rows)
+            assert drawn.box.h == pytest.approx(asked.h, abs=1e-9), f"{style} fill={fill} is not the size it answered"
+            # A row's height reaches the file as whole EMU, so the sum of what was
+            # written back is the box's height to within one EMU a row -- 1.1e-6in --
+            # and never to within a line weight, which is 0.014in at `grid_pt`.
+            assert drawn.box.h == pytest.approx(heights, abs=1e-5), f"{style} fill={fill} spent height on its rules"
+    # And `row_rules` is the same table as `minimal` now, to the inch and to the line.
+    plain = module.table(_slide(module), box, rows, theme, style="minimal")
+    named = module.table(_slide(module), box, rows, theme, style="row_rules")
+    assert named.box == plain.box
+    assert [r.height for r in named.rows] == [r.height for r in plain.rows]
+    for row in range(len(rows)):
+        for edge in ("lnT", "lnB", "lnL", "lnR"):
+            assert _border(module, named.cell(row, 0), edge) == _border(module, plain.cell(row, 0), edge)
+
+
 def test_a_table_spreads_into_the_box_rather_than_sitting_in_the_top_of_it(helpers) -> None:
     """A content-sized table left its box's bottom third white -- measured on a
     delivered page, 2.56in of a 3.70in region with the remaining 1.14in empty, which
@@ -3473,7 +3598,13 @@ def test_a_table_takes_the_look_it_is_told_to_take(helpers) -> None:
     assert _border(module, drawn.cell(0, 0), "lnB") == (str(module._rgb(theme["accent"])), pytest.approx(3.0))
     assert _border(module, drawn.cell(2, 0), "lnB") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
     assert _border(module, drawn.cell(1, 0), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
-    assert _border(module, drawn.cell(1, 2), "lnR") is None, "the last column was given an outer rule"
+    # `column_rules` puts a rule between two columns; the rule on the outside of the
+    # last one is the frame, which every table draws and this one only meets. Both
+    # weights come off `grid_pt`, so the two lines cannot come out different widths.
+    assert _border(module, drawn.cell(1, 2), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
+    unruled = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=1.5)
+    assert _border(module, unruled.cell(1, 0), "lnR") is None, "a vertical rule nobody asked for"
+    assert _border(module, unruled.cell(1, 2), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
 
     sizes = {run.font.size.pt for run in drawn.cell(0, 0).text_frame.paragraphs[0].runs}
     assert sizes == {18.0}, f"the header was set at {sizes}, not at header_size"

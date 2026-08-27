@@ -141,9 +141,11 @@ def sample(tmp_path: Path, image) -> Sample:
     # rows fire on this page. Page 4 stays unrelated, which is what the adherence
     # row needs.
     builder.text(page, (PLACEHOLDER, 18.0), left=1.0, top=4.5, width=6.0, height=0.5)
-    # White on the template's orange, which is 2.5:1 -- legible, thin, and the template's
-    # own choice on the agenda page every deck clones. Refusing a deck for it is what the
-    # flat 3:1 floor did, so this is the row that warns.
+    # White on the template's orange, which is 2.5:1 -- legible, and the template's own
+    # choice on the agenda page every deck clones. It stays in this deck as the case
+    # nothing may report: the flat 3:1 floor refused a deck for it, the warning tier that
+    # replaced the floor reported four of a real template's own eleven pages, and both
+    # are gone.
     builder.text(page, ("白字压在模板的橙色上", 20.0), left=7.0, top=5.6, width=3.0, height=0.6, colour="FFFFFF")
     # Two groups stacked with no more air between them than inside them, which is what
     # `unseparated_blocks` reports.
@@ -156,15 +158,15 @@ def sample(tmp_path: Path, image) -> Sample:
     # run raised or lowered, which is what `flat_formula` reports. Its subscripts are
     # flat and the box may break it after a comma.
     builder.text(page, ("Qin = concat(Qsem, Qinst, Qbg)", 16.0), left=1.0, top=6.6, width=3.6, height=0.4)
-    # Two parallel claims in one box with nothing in front of either, which is what
-    # `unmarked_points` reports -- they read as one paragraph with a line break.
+    # Two parallel claims in one box across the page, which is what `listed_claims`
+    # reports -- one box for two things a reader has to tell apart.
     builder.text(
         page,
         ("分类不再走全连接头：类别被建模成网络的动态输入，语义表示只通过损失监督学到。", 16.0),
         ("同一套权重在推理时按需拼装查询集合即可热切换任务，无需任何任务特定微调。", 16.0),
         left=1.0,
         top=6.9,
-        width=8.0,
+        width=11.0,
         height=0.8,
     )
     # One slot repeated, and the renderer set the second copy smaller because the copy
@@ -231,6 +233,12 @@ def sample(tmp_path: Path, image) -> Sample:
         # builder put at (1.0, 4.5) 6.0in wide on the same page.
         WordBox(page=3, text="单击此处添加长一点的副标", x0=76, y0=328, x1=500, y1=346),
         WordBox(page=3, text="题", x0=76, y0=350, x1=94, y1=368),
+        # A box the render carried a line past the bottom of: the builder's box at
+        # (7.0, 5.6) is 0.6in tall and ends at 446pt, and the render sets its second
+        # line from 452 to 470 -- wholly below the box, still on the canvas, over
+        # nothing. That is `box_overflow`, and it is the state no other row can see.
+        WordBox(page=3, text="白字压在模板的", x0=508, y0=407, x1=640, y1=425),
+        WordBox(page=3, text="橙色上", x0=508, y0=452, x1=568, y1=470),
         WordBox(page=3, text="Source:", x0=400, y0=100, x1=460, y1=115),
         WordBox(page=3, text="OVIS", x0=405, y0=102, x1=450, y1=116),
         WordBox(page=3, text="identical", x0=100, y0=210, x1=180, y1=226),
@@ -515,14 +523,14 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "table_room",
         "band",
         "flat_formula",
-        "unmarked_points",
+        "listed_claims",
         "type_floor",
         "type_drift",
         "type_scale",
         "clipped_copy",
-        "thin_contrast",
         "rule_strike",
         "card_overflow",
+        "box_overflow",
         "crowded_panel",
         "orphan_line",
         "unseparated_blocks",
@@ -543,6 +551,29 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         # quiet because the sample has labels and a brief.
         "unrendered",
     }
+
+
+def test_the_contrast_row_refuses_the_unreadable_and_says_nothing_about_an_accent_panel(sample: Sample) -> None:
+    """One contrast row now, not two.
+
+    This deck sets white on the template's orange at 2.5:1 on page 3 and #1A1A1A on
+    near-black on page 4. The second is refused; the first is not reported at all. The
+    band between the two thresholds was measured to be where template design lives: a
+    bound template's own eleven example pages produced four warnings in it, all shapes
+    its designer drew, and a live author who had learned that the category is usually
+    the template's answered a real 2.2:1 finding with "the template's own accent1 color
+    relationship, acceptable per spec note" -- about six chevrons its own program drew.
+
+    Which is why the refusal that remains is wired with `prototypes`, asserted here:
+    the finding settles that excuse instead of leaving it open.
+    """
+    findings = check_deck(sample.deck, only=["unreadable"])
+
+    assert [(finding.page, finding.kind, finding.severity) for finding in findings] == [
+        (4, "unreadable", Severity.BLOCKING)
+    ]
+    assert findings[0].detail["drawn_by"] == "authored"
+    assert "sits nowhere any of the template's own pages puts one" in findings[0].message
 
 
 def test_a_caller_can_ask_for_one_check_alone(sample: Sample) -> None:

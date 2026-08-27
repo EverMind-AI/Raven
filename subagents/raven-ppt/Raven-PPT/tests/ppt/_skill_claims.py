@@ -110,6 +110,25 @@ ok(
     "the skill offers the six measured faces as a choice; inside a template the face is the template's",
 )
 
+# 4b. the reserve the entry document's card paragraph states. It says a measuring call
+# scales a Latin run by the face it is told about and by the widest face it knows when
+# it is told none -- which is the difference between the two `card_size` calls in the
+# first example of 6.5, and the reason the row there is levelled to the second. Read off
+# the projected module, because that is the copy an author's program imports.
+_layout_source = (
+    script_helpers.layout_module_source()
+    if hasattr(script_helpers, "layout_module_source")
+    else __import__("raven.ppt.services.assets.layout", fromlist=["x"]).layout_module_source()
+)
+ok(
+    "_WIDEST_FACE = max(_FACE_WIDTH.values(), default=1.0)" in _layout_source,
+    "the skill says an unnamed face reserves for the widest one and the module computes it some other way",
+)
+ok(
+    "_FACE_WIDTH.get(face, _WIDEST_FACE)" in _layout_source,
+    "the skill says a measuring call told no face reserves for the widest and _em_width does not fall back to it",
+)
+
 # 5. icon count, preset count, and helper names
 ok(f"{len(icons.icon_names())} Tabler" in skill, f"icon count wrong; code has {len(icons.icon_names())}")
 drawable = shapes.drawable_presets()
@@ -406,6 +425,22 @@ ok(
     "the trigger-sentence check above now covers almost nothing",
 )
 
+# 11f. the two measuring helpers the document used to teach in prose only.
+#
+# `fits` and `card_body_box` were named seven times across the entry document and called
+# in no example anywhere -- and the first example of 6.5 shipped a card whose copy the
+# render set one line past its own bottom edge, with the call that refuses that height
+# described three paragraphs above it and demonstrated nowhere. A helper an author has
+# only ever read about is one they do not reach for, which 11d makes the same argument
+# about from the other side: there it is a helper with no sentence, here it is a helper
+# with no line of code.
+_in_an_example = " ".join(text for _, kind, text, _ in _RUNS if kind == "fence")
+for _guard in ("fits(", "card_body_box("):
+    ok(
+        _guard in _in_an_example,
+        f"the document teaches {_guard} in prose and no example in it or in the references calls it",
+    )
+
 for module in ("ppt_layout", "ppt_charts", "ppt_icons", "ppt_shapes", "ppt_theme", "ppt_template"):
     for names in re.findall(rf"from {module} import ([^\n#]+)", skill):
         for name in (n.strip() for n in names.split(",")):
@@ -431,11 +466,19 @@ ok(len(drawn) >= 15, f"ppt_charts defines {len(drawn)} charts and there should b
 for name in drawn:
     ok(f"`{name}(" in skill, f"ppt_charts draws {name} and the skill's table never names it")
 
-# 6. the theme fields the code sample reads
-from raven.ppt.services.assets.script_helpers import _EXPORTED_THEME_FIELDS
+# 6. the theme fields the code sample reads.
+#
+# Off the entries `theme_catalog` actually builds rather than off
+# `_EXPORTED_THEME_FIELDS`, which is only the palette half of one: the emitter adds
+# `cjk_font_family` to every entry beside that tuple, and a document reading it -- as
+# `ppt_theme.py`'s own docstring does -- was failed here for reading a field the build
+# demonstrably writes. Reading the built entry keeps every field the tuple carried and
+# covers whatever is added beside it next.
+_THEME_FIELDS = set().union(*(set(entry) for entry in script_helpers.theme_catalog().values()))
+ok("cjk_font_family" in _THEME_FIELDS, "the theme the build writes carries no CJK face")
 
 for field in re.findall(r'T\["([a-z_]+)"\]', skill):
-    ok(field in _EXPORTED_THEME_FIELDS, f"code sample reads T[{field!r}] which is not exported")
+    ok(field in _THEME_FIELDS, f"code sample reads T[{field!r}] which is not exported")
 
 # 7. type floors
 # Off the measurement that enforces them, which is now the only place they are
@@ -496,7 +539,6 @@ _KIND_PHRASES = {
     # Reports.
     "band": "filled colour bar",
     "type_floor": "type under the floors",
-    "thin_contrast": "thin against its ground",
     "evidence": "too few content pages showing anything",
     "wide_table": "table too wide to read",
     "native_table": "wearing Office's own look",
@@ -509,7 +551,7 @@ _KIND_PHRASES = {
     "spilled_copy": "painted off the page",
     "over_layout_art": "on the layout's artwork",
     "flat_formula": "expression set as prose",
-    "unmarked_points": "parallel claims with no mark",
+    "listed_claims": "read as a list to be read out",
     "orphan_line": "label the render broke",
     "wrapped_label": "in a box too narrow for it",
     "overset_copy": "copy that does not fit",
@@ -549,18 +591,34 @@ def _refuses(kind: str) -> bool:
 
 
 # Kinds built outside the registry -- in the outline tool, the build stage -- that
-# carry BLOCKING severity. Read off the source rather than listed,
-# because a list is the thing nobody updates: three of the four the skill was missing
-# are here.
+# carry BLOCKING severity, and beside them every kind the code names at all. Read off
+# the source rather than listed, because a list is the thing nobody updates: three of
+# the four the skill was missing are here.
 _BLOCKS_OUTSIDE = set()
+_EMITTED = set()
 for _source in sorted((ROOT / "raven/ppt").rglob("*.py")):
     _text = _source.read_text(encoding="utf-8")
+    _EMITTED |= set(re.findall(r'kind="([a-z_]+)"', _text))
     for _kind in re.findall(r'kind="([a-z_]+)",\s*\n\s*severity=Severity\.BLOCKING', _text):
         _BLOCKS_OUTSIDE.add(_kind)
 
 ok(_BLOCKS_OUTSIDE, "nothing in raven/ppt emits a blocking finding, which cannot be right")
 for kind in sorted(_BLOCKS_OUTSIDE | set(blocking) | {k for k, sev in DISPATCH.items() if sev is Severity.BLOCKING}):
     ok(kind in _KIND_PHRASES, f"{kind} can refuse a deck and the skill's section 12 never describes it")
+
+# The direction this map had no check in, and it kept a deleted kind alive for as long
+# as the sentence describing it stayed put. `thin_contrast` was retired -- its row, its
+# `checks()` entry and its threshold all deleted -- and `_refuses` answered False for
+# the ordinary reason a warning does, so the loop below went on asserting that section
+# 12 describes it under Reported, which it did. A gate whose whole job is keeping the
+# document honest about gate kinds was holding the document to a kind the code no
+# longer has. So: a kind is describable only while something still names it.
+for kind in sorted(_KIND_PHRASES):
+    ok(
+        kind in DISPATCH or kind in _EMITTED,
+        f"section 12 describes {kind}, which nothing in raven/ppt emits any more -- "
+        "delete the sentence and this row together",
+    )
 
 for kind, phrase in sorted(_KIND_PHRASES.items()):
     if _refuses(kind):
@@ -657,6 +715,135 @@ _FIRST_BUILD = (ROOT / "raven/ppt/backends/script/runner.py").read_text(encoding
 for _module in sorted(name for name in script_helpers.script_helper_files() if name.endswith(".py")):
     ok(_module in _TOOLS_DOC, f"TOOLS.md does not tell an author that {_module} is beside the program")
     ok(_module in _FIRST_BUILD, f"the message a first build answers with does not mention {_module}")
+
+# 11e. the capabilities a word search cannot find, because the word is already there.
+#
+# Each of these is a thing the route can do that the document only alluded to: the
+# palette an author states, the example page read back as source, the program's own
+# stdout, and the two fields of the brief that are not the three questions. A lexical
+# sweep passed all of them -- `palette` appeared once as an aside, `decompiled page`
+# once in a subordinate clause -- so what is asserted here is the shape of the claim
+# and not the presence of the word.
+
+_template_tool = next(t for t in build_ppt_tools(Path("/tmp/skillcheck")) if t.name == "ppt_template")
+_brief_tool = next(t for t in build_ppt_tools(Path("/tmp/skillcheck")) if t.name == "ppt_brief")
+_image_tool = next(t for t in build_ppt_tools(Path("/tmp/skillcheck")) if t.name == "ppt_generate_image")
+
+# The palette. Three roles come off the file and the rest are mixed from them, which is
+# what the skill now tells an author to correct rather than the `bg2` reading it used to
+# name -- and `bg2` is no longer read at all, so the old sentence described a derivation
+# that had gone.
+from raven.ppt.services.template import palette as _palette_mod
+from raven.ppt.services.template import theme as _theme_mod
+
+ok("palette" in _template_tool.parameters["properties"], "the skill states a palette and the tool takes none")
+ok(
+    {name for name, _ in _theme_mod._ROLES} == {"background", "foreground", "accent"},
+    "the skill says three roles are read off the template and the derivation reads others",
+)
+ok(
+    'said.get("surface") or _plane(accent, ground)' in (ROOT / "raven/ppt/services/template/theme.py").read_text(),
+    "the skill says a stated accent re-derives the plane and the plane is derived some other way",
+)
+for _role in ("surface", "accent_soft", "accent_ink", "grid", "muted"):
+    ok(_role in _palette_mod.DERIVED, f"the skill says {_role} is a role the derivation finishes and it is not")
+ok(
+    "chart_series" in _flat and _palette_mod.SERIES == "chart_series",
+    "the skill names chart_series as the role a stated accent does not move",
+)
+
+# The twelve bundled templates and the colour every one of them declares and none of
+# them paints. Measured here rather than written down, because the count and the value
+# are both claims in the document.
+_bundled = sorted((ROOT / "raven/ppt/assets/templates").glob("*.pptx"))
+ok(len(_bundled) == 12, f"the skill says twelve bundled templates and {len(_bundled)} ship")
+ok(
+    "all twelve bundled templates declare their second background as `#F0F0F0`" in _flat,
+    "the skill no longer states what every bundled template declares and none of them paints",
+)
+try:
+    from raven.ppt.services.template.inventory import inspect_template
+
+    _seconds = set()
+    for _one in _bundled:
+        _held = dict(inspect_template(_one).theme_colours)
+        _seconds.add(_held.get("lt2") or _held.get("bg2"))
+    ok(_seconds == {"#F0F0F0"}, f"the skill says every bundled template declares #F0F0F0 and they declare {_seconds}")
+except ImportError:  # pragma: no cover - python-pptx ships with the extra
+    pass
+
+# The example page read back as python-pptx. The skill alluded to "the decompiled page"
+# and to a reference that "prints" the shape index, and never said which call produces
+# either -- so the one way to reach the template's real numbers was named only in the
+# tool schema.
+from raven.ppt.services.template.decompile import _UNWRITABLE
+
+ok("pages" in _template_tool.parameters["properties"], "the skill says a page can be read as source and it cannot")
+_max_pages = _template_tool.parameters["properties"]["pages"].get("maxItems")
+ok(_max_pages == 6, f"the skill says six pages a call and the schema allows {_max_pages}")
+for _what in ("a custom-drawn shape", "a gradient", "a pattern fill", "a semi-transparent fill"):
+    ok(_what in _flat, f"the skill no longer names {_what!r} as something the source cannot reproduce")
+    ok(
+        any(_what.lstrip("a ") in said for _, said in _UNWRITABLE),
+        f"the skill says {_what!r} comes back as a comment and decompile does not name it",
+    )
+ok(
+    'add_picture("template_' in _flat,
+    "the skill no longer shows the picture line a read page hands back",
+)
+_decompile_src = (ROOT / "raven/ppt/services/template/decompile.py").read_text()
+ok(
+    'name = f"template_{ordinal:02d}.{image.ext}"' in _decompile_src,
+    "the skill shows template_NN.png and the decompiler writes some other name",
+)
+ok(
+    'head += [f"# {line}" for line in _needed_imports(self.source)]' in _decompile_src,
+    "the skill says the imports head the block as comments and they are emitted some other way",
+)
+
+# The program's own stdout, which is the only channel the measuring helpers have.
+from raven.ppt.backends.script.runner import MAX_OUTPUT_CHARS
+
+ok('payload["stdout"] = outcome.stdout' in build_tool, "the skill says print() comes back and the reply drops it")
+ok(
+    f"{MAX_OUTPUT_CHARS:,}" in _flat,
+    f"the skill states a stdout budget the runner does not keep; the runner returns {MAX_OUTPUT_CHARS}",
+)
+
+# The brief's fourth field, and the one beside it that binds differently.
+for _field in ("forbidden", "notes"):
+    ok(_field in _brief_tool.parameters["properties"], f"the skill names ppt_brief's {_field} and it has none")
+ok('payload["forbidden"] = list(agreed.forbidden)' in build_tool, "the skill says every build quotes the rules back")
+ok(
+    ".notes" not in build_tool,
+    "the skill says a note is kept with the brief and not restated, and the build restates it",
+)
+
+# The generated image's shape.
+_ratios = _image_tool.parameters["properties"]["aspect_ratio"]["enum"]
+for _ratio in _ratios:
+    ok(f"`{_ratio}`" in skill, f"the skill omits the aspect ratio {_ratio}, which the tool accepts")
+ok(
+    _image_tool.parameters["properties"]["aspect_ratio"]["default"] == "16:9",
+    "the skill says a generated image defaults to 16:9 and the tool defaults to something else",
+)
+
+# The layout catalogue's real range. Read off the shipped reference the way the outline
+# gate reads it, so a passage added to layouts.md moves both the refusal and the
+# document that describes it.
+from raven.ppt.tools.outline import catalogue_ids
+
+_known = catalogue_ids()
+_structures = sorted((one for one in _known if one.startswith("P")), key=lambda one: int(one[1:]))
+_modifiers = sorted((one for one in _known if one.startswith("M")), key=lambda one: int(one[1:]))
+ok(
+    f"`{_structures[0]}` to `{_structures[-1]}`" in _flat,
+    f"the skill states a structure range the catalogue does not carry; it holds {_structures[0]}-{_structures[-1]}",
+)
+ok(
+    f"`{_modifiers[0]}`\nto `{_modifiers[-1]}`" in skill or f"`{_modifiers[0]}` to `{_modifiers[-1]}`" in _flat,
+    f"the skill states a modifier range the catalogue does not carry; it holds {_modifiers[0]}-{_modifiers[-1]}",
+)
 
 # 12. canvas
 ok("13.3 x 7.5in" in skill, "canvas size claim changed")

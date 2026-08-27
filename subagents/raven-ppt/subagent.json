@@ -16,7 +16,7 @@
     "agentId": "raven-ppt"
   },
   "recommendedLlm": {
-    "provider": "custom",
+    "provider": "ppt",
     "model": "anthropic/claude-sonnet-5",
     "apiBase": "https://openrouter.ai/api/v1"
   }

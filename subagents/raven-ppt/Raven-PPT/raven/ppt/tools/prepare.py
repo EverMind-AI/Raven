@@ -214,21 +214,46 @@ def _asks(plan: Any, state: Any, script: str) -> list[str]:
             "on every build"
         )
     if plan.errands:
-        # The sweep, and only the sweep. Searching belongs to `ppt_outline`, which is
-        # the first step that knows what a page has to show; asked here it is a
-        # question with no target, and one live run answered it with two logos and a
-        # marketing banner -- which made the errand look satisfied while the paper
-        # and the two benchmark posts its material cited went unswept.
+        # Reading first, then the sweep. *Picture* search still belongs to
+        # `ppt_outline`, which is the first step that knows what a page has to show
+        # -- asked here it is a question with no target, and one live run answered it
+        # with two logos and a marketing banner. What was missing is that reading was
+        # never asked for at all: this text said only `extractMode="images"`, so a
+        # live run swept a company's own three pages for pictures and never once read
+        # what any of them said, on a deck introducing that company. Its own site was
+        # the most direct material there was and the deck was built without a word of
+        # it. Reading a source is gathering, which is this step's business; deciding
+        # which picture a page needs is not.
+        #
+        # Breadth is asked for by counting rather than by naming what to look for:
+        # the categories differ per deck and a named one gets copied. With the
+        # furniture spelled out ("the logo, the product shot") and the rest left
+        # abstract, twelve live runs issued ten queries between them -- six the
+        # subject's logo, four its name, nothing the material named -- and 47% of
+        # the pool came back as one social card, in nine of the ten decks.
         asks.append(
-            f"get the {len(plan.errands)} item(s) under gather by sweeping what the material itself "
-            'cites: web_fetch(extractMode="images") on those URLs returns each picture with the caption '
-            "its author wrote, which no search result carries. Pass those words to ppt_fetch as its "
-            "caption -- nothing downstream can read them off the bytes, so a picture fetched without "
-            "them reaches the figure catalogue with nothing but its pixels to say what it is. A paper "
-            "cited as an abstract keeps its figures in the PDF, captions and all -- ppt_fetch that and "
-            "the ingest reads them off the page. This establishes what there is to choose from; which "
-            "picture a page needs is decided against the outline. ppt_fetch what you will use, then "
-            "call ppt_prepare again"
+            f"get the {len(plan.errands)} item(s) under gather from what the material cites, reading "
+            "before sweeping. web_fetch on a cited URL returns the page itself, and a page's own words "
+            "are material -- on a deck about whoever wrote it, the most direct material there is. "
+            "Where the material names a source without linking it -- a paper, a benchmark, a release -- "
+            "web_search finds it, and reading it is this step's business even though choosing pictures "
+            'is not. Then web_fetch(extractMode="images") on those same URLs for what they show: it '
+            "returns each picture with the caption its author wrote, which no search result carries, and "
+            "passing those words to ppt_fetch as its caption is the only way they reach the catalogue. "
+            "A listing that shows a bare position label and no caption is telling you the page gave its "
+            "pictures no words at all -- those arrive with nothing but their pixels, so look at them with "
+            "ppt_figure_inspect before you choose, because the ranking cannot tell a page's decoration "
+            "from its evidence and inspection can. A paper cited as an abstract keeps its figures in the "
+            "PDF, captions and all -- ppt_fetch that and the ingest reads them off the page. Then search "
+            "wider than the citations, because a pool is what the outline gets to choose from and what a "
+            "material links is not it. Search the things the material names, not only what the deck "
+            "is called -- its own name and its logo are one picture, and the pages have to show "
+            "everything else it talks about. Whether the deck ends up with enough to stand on is "
+            "yours to judge: you are the one who has read the material and knows how many of its "
+            'pages will have to show something. web_search(kind="images") returns each candidate '
+            "with its pixel size and the page it came from. This establishes what there is to choose "
+            "from; which picture a page needs is decided against the outline. ppt_fetch what you "
+            "will use, then call ppt_prepare again"
         )
     if state.template is None and state.unbound_templates:
         asks.append(

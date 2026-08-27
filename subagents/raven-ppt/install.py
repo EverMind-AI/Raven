@@ -22,6 +22,15 @@ That module lives wherever the host raven is installed, which is not necessarily
 the interpreter running this file, so it is reached through a subprocess instead
 of an import. This stays standard-library only, and installable under a bare
 `python3`.
+
+Two manifests, one name. `subagent.json` is the `cli` entry and stays the default:
+it is also the file the host's own folder scan reads, and that scan validates
+every `*/subagent.json` as a cli config -- so a folder whose only manifest
+declared `kind: "acp"` would be skipped with a warning and disappear from the
+roster. `--acp` writes `subagent.acp.json` instead, which registers the same name
+over the ACP transport (`acp.py`). Both cannot be installed at once, by
+construction: they share a name, and the write path replaces an entry that shares
+one.
 """
 
 from __future__ import annotations
@@ -156,15 +165,25 @@ def main() -> int:
     )
     ap.add_argument("--config", default=None, help="Config file to write (default: the host raven's own)")
     ap.add_argument("--dry-run", action="store_true", help="Print the resolved entry and stop")
+    ap.add_argument(
+        "--acp",
+        action="store_true",
+        help="Register the ACP entry (subagent.acp.json) instead of the cli one; the agent is then "
+        "driven as a protocol peer rather than forked per task",
+    )
     args = ap.parse_args()
 
-    template = json.loads((HERE / "subagent.json").read_text(encoding="utf-8"))
+    manifest = HERE / ("subagent.acp.json" if args.acp else "subagent.json")
+    if not manifest.is_file():
+        raise SystemExit(f"error: {manifest} is missing; this folder cannot be registered")
+    template = json.loads(manifest.read_text(encoding="utf-8"))
     python = args.python or env_value("SUBAGENT_PYTHON") or sys.executable
     entry = resolve(template, python)
 
     if unresolved := [f for f in ("command", "resumeCommand") if "{SUBAGENT_DIR}" in str(entry.get(f, ""))]:
         raise SystemExit(f"error: placeholders left unresolved in {', '.join(unresolved)}")
 
+    print(f"registering {manifest.name} ({entry.get('kind', 'cli')})")
     print(json.dumps(entry, indent=2, ensure_ascii=False))
     interpreter = host_interpreter(args.raven_python)
     if args.dry_run:

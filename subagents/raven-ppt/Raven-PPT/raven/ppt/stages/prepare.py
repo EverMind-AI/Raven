@@ -423,10 +423,15 @@ def _with_pictures(plan: IntakePlan, state: deck_state.DeckState) -> tuple[Erran
                 else "ingest extracted nothing visual from the files, so every page will be prose or a drawing"
             ),
             how=(
-                'web_fetch(extractMode="images") on the URLs the material cites, which returns each '
-                "picture with the caption its author wrote; a paper cited as an abstract keeps its "
-                "figures in the PDF, so ppt_fetch that and ingest extracts them. ppt_fetch what you "
-                "will use. ppt_outline records no outline while a cited URL is still unopened -- one "
+                "web_fetch on the URLs the material cites, for the pages themselves before their "
+                "pictures -- a page's own words are material, and on a deck about whoever wrote it they "
+                'are the most direct material there is. Then web_fetch(extractMode="images") on the '
+                "same URLs, which returns each picture with the caption its author wrote; a listing "
+                "that carries no caption is telling you the page gave its pictures no words, so those "
+                "want ppt_figure_inspect before they are chosen. A paper cited as an abstract keeps its "
+                "figures in the PDF, so ppt_fetch that and ingest extracts them, and a source the "
+                "material names without linking is what web_search is for. ppt_fetch what you will "
+                "use. ppt_outline records no outline while a cited URL is still unopened -- one "
                 "that comes back with nothing goes in its `swept` argument, with what came back"
             ),
         ),

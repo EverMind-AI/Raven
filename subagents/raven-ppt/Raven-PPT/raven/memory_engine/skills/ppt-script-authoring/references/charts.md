@@ -198,18 +198,16 @@ drawing no chart at all is an answer too.
 | Where an ordered run of stages loses what it started with | `funnel`: each stage as wide as its own value, what it kept written in the air between two of them | the stages carry no loss → numbered regions |
 | What the exact values are, read off side by side | a drawn table (below) | a single comparison per row → bars, which the eye reads without arithmetic |
 
-**How many categories a form takes is measured, not ranged.** These rows used to carry
-ranges -- "5-12 items", "3-8 categories", "3-7 KPIs" -- and every one of them was
-standing in for the same question: whether *this* data's own labels have room. The
-module answers that question directly now, off the data you are about to pass and the
-box you are about to pass it, so there is nothing left for a range to approximate:
-`the_smallest_box_a_chart_needs` gives the smallest box this chart takes **this** data
-in, `whether_a_chart_fits` answers the same thing against the box you have, and
-`what_a_chart_will_do` hands back the
-same `Drawn` a real draw does, so its `names_not_written` says which names would have
-nowhere to go if you drew it anyway. Signatures in §4. Twelve categories named "Manufacturing" want
-8.05x0.90in for `column` and a quadrant of the page has 5.90x2.50in -- so that page
-draws a ranking, decided before a shape is written rather than after a render.
+**How many categories a form takes is measured, not ranged.** A range would only ever
+stand in for the same question -- whether *this* data's own labels have room -- and the
+module answers that question directly, off the data you are about to pass and the box
+you are about to pass it: `the_smallest_box_a_chart_needs` gives the smallest box this
+chart takes **this** data in, `whether_a_chart_fits` answers the same thing against the
+box you have, and `what_a_chart_will_do` hands back the same `Drawn` a real draw does,
+so its `names_not_written` says which names would have nowhere to go if you drew it
+anyway. Signatures in §4. Twelve categories named "Manufacturing" want 8.05x0.90in for
+`column` and a quadrant of the page has 5.90x2.50in -- so that page draws a ranking,
+decided before a shape is written rather than after a render.
 
 ## When none of the twenty-three is the shape of the argument
 
@@ -322,12 +320,8 @@ the module. Raise `TooSmall(name, (box.w, box.h), (across, down))` where the box
 not read, hand back `Drawn(plot, at, size, readings=dropped)` where it will, and
 `whether_a_chart_fits`, `what_a_chart_will_do` and `the_smallest_box_a_chart_needs` all
 work on **your** function -- they run it against a slide that swallows shapes, which the
-seven ink calls above already return early on. Measured on the example below:
-`whether_a_chart_fits` answered `False` for a 2.28x0.67in cell and `True` for the body,
-the refusal came back `needs about 2.73x3.00in` with `short` of `(0.45, 2.33)`, and
-`what_a_chart_will_do` named the same four readings the real draw dropped -- without a
-shape on the slide. The `Drawn` also composes with everything in
-["Annotating a chart you did not draw"](#annotating-a-chart-you-did-not-draw).
+seven ink calls above already return early on. The `Drawn` also composes with everything
+in ["Annotating a chart you did not draw"](#annotating-a-chart-you-did-not-draw).
 
 ### A worked example: two directions off one centre
 
@@ -404,15 +398,15 @@ def diverging_bar(slide, box, theme, data, parts, *, unit="%"):
     return Drawn(plot, at, size, readings=dropped)
 ```
 
-Called with five questions and `["Strongly disagree", "Disagree", "Neutral", "Agree",
-"Strongly agree"]` in a `frame.body`, it drew a plot of 4.44 to 12.61in at 14pt and
-reported four readings it could not place -- the three-per-cent slivers at the far left
-of three rows. That is the shape of the answer: the neutral part is split down the
-middle, every row's midpoint is on one line, and which questions net positive is
-readable across the column without adding anything up. The same data through
+Called with five questions and
+`["Strongly disagree", "Disagree", "Neutral", "Agree", "Strongly agree"]` in a
+`frame.body`, it reported four readings it could not place -- the three-per-cent slivers
+at the far left of three rows. That is the shape of the answer: the neutral part is
+split down the middle, every row's midpoint is on one line, and which questions net
+positive is readable across the column without adding anything up. The same data through
 `stacked_bar(share=True, direction="bar")` is five rows of equal length whose agree
-block starts at a different place on every one of them -- a correct chart of a
-different claim.
+block starts at a different place on every one of them -- a correct chart of a different
+claim.
 
 ### What a chart you drew still owes the deck
 
@@ -455,10 +449,10 @@ care who drew the shape.
 
 ### Still out of reach, and what replaces it
 
-A **sector at a computed angle** is the one construction with no primitive: nothing
-here draws an arc. A filled polygon is no longer on this list -- `poly(fill=...)` closes
-and paints one -- so the rows below that used to say "a filled polygon" now say what
-the form is worth instead, which is a different question and usually still no.
+A **sector at a computed angle** is the one construction with no primitive: nothing here
+draws an arc. A filled polygon is not one of them -- `poly(fill=...)` closes and paints
+one -- so the rows below say what such a form is worth rather than whether it can be
+reached at all.
 
 | Wanted | Where it stands | Draw |
 |---|---|---|
@@ -523,11 +517,9 @@ def radar(slide, box, theme, axes, series):
 ```
 
 Called with `[("v3", [72, 65, 48, 81, 55, 60]), ("v4", [88, 79, 63, 86, 74, 71])]` over
-six axes, the file carries `<a:alpha val="45000"/>` on the second polygon, the renderer
-composites it, and what comes off the raster is both shapes: v3's deep fill reads
-through v4's pale one everywhere they overlap, and the crescent where v4 reaches past v3
-is the page's whole claim. Filling both at 1.0 gives one polygon -- whichever went down
-last -- which is the failure the old advice was avoiding by giving up the second fill.
+six axes, both shapes come off the raster: v3's deep fill reads through v4's pale one
+everywhere they overlap, and the crescent where v4 reaches past v3 is the page's whole
+claim. Filling both at 1.0 gives one polygon -- whichever went down last.
 
 The other everyday use is a band across a plot. Drawn **after** the columns it crosses,
 it marks a target range without erasing anything inside it:

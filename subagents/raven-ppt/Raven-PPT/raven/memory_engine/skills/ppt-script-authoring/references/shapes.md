@@ -47,14 +47,13 @@ it the labels or hand it their count, whichever you have.
 `T["background"]`; on `tint="accent_soft"` or `"surface"`, `T["foreground"]`. Nothing
 here takes a type size, so the label keeps the deck's own ramp.
 
-**Ask how big the label may be; do not name a step.** A step's box is over an inch
-tall and a label in it is two or three characters, so the smallest step on the ramp
-puts type at a fifth the height of the thing it names — measured on the render, and
-it is what naming `LABEL_PT` here produced. `the_largest_step_this_copy_takes` walks
+**Ask how big the label may be; do not name a step.** A step's box is over an inch tall
+and a label in it is two or three characters, so the smallest step on the ramp puts type
+at a fifth the height of the thing it names. `the_largest_step_this_copy_takes` walks
 the ramp the other way and answers the biggest step the copy still fits at: the five
-labels above came back at 30pt where the named step was 14. Ask once per step and
-take the `min`, because the row has to share one size or it reads as five unrelated
-words — and the longest label is what the row can afford.
+labels above came back at 30pt where the named step was 14. Ask once per step and take
+the `min`, because the row has to share one size or it reads as five unrelated words —
+and the longest label is what the row can afford.
 
 Names are the DrawingML ones — `chevron`, `rightArrow`, `flowChartDecision`,
 `roundRect` — and `find_presets(term)` answers a near miss before the build does.
@@ -68,8 +67,7 @@ with one pointed destination edge": the same arrow, one for a step in a run and 
 where the run ends, and neither name says which. `find_presets` gets you the candidates;
 this is how you choose between them.
 
-**`PRESET_NAMES` is 109 of Office's 177.** All of them were rendered at their default
-adjustments and looked at, and sixty-eight came back unusable: the action buttons bake a
+**`PRESET_NAMES` is 109 of Office's 177.** The rest are out: the action buttons bake a
 grey glyph into the shape and the pseudo-3D ones (`cube`, `can`, `ribbon`, the curved
 arrows) a grey second face, neither of which the theme can reach; the leader-line
 callouts and the single-sided braces (`borderCallout1`, `leftBrace`) render broken at

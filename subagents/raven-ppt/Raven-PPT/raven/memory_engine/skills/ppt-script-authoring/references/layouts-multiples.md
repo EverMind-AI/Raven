@@ -36,21 +36,27 @@ Before and after, A and B, ours and theirs. Cut both panels to the taller of the
 neither is padded out to the page, and give the side carrying the answer `accent_soft`
 while the other keeps `surface` (`M3`).
 
+**The two sides carry the same row labels.** Row two on the left and row two on the right
+are the same question, so the reader compares across at a fixed height instead of matching
+sentences by eye. The field name takes `LABEL_PT` in `MUTED` and its value `BODY_PT` in
+the ink -- the ramp's own two steps for a label over what it labels.
+
 ```python
-sides = [
-    ("surface", "改造前", ["每类任务一套权重，四套一起上线。", "新增一类要重训全网。", "显存 4 x 11GB。"]),
-    ("accent_soft", "改造后", ["一套权重，任务在输入侧切换。", "新增一类只加一组查询。", "显存 1 x 12GB。"]),
-]
+fields = ("权重", "新增一类", "显存")
+sides = [("surface", "改造前", ("每类任务一套，四套一起上线", "重训全网", "4 x 11GB")),
+         ("accent_soft", "改造后", ("一套，任务在输入侧切换", "只加一组查询", "1 x 12GB"))]
 boxes = frame.body.split_left(0.5, gutter=0.5)
-tall = max(0.44 + 0.08 + points_size(said, box.w - 2 * (PAD + 0.10), font=FACE).h + 2 * (PAD + 0.10)
-           for box, (_, _, said) in zip(boxes, sides))
-for box, (tint, head, said) in zip(boxes, sides):
+tall = 0.44 + 0.08 + 3 * 0.86 + 2 * (PAD + 0.10)
+for box, (tint, head, values) in zip(boxes, sides):
     panel = Box(box.x0, box.y0, box.x1, box.y0 + tall)
     plane(slide, panel, T, tint=tint, radius=True)
     down = stack(panel.inset(PAD + 0.10))
     write(slide, down.take(0.44), head, size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
     down.skip(0.08)
-    points(slide, down.rest(), T, said, size=BODY_PT, font=FACE, cjk_font=HAN)
+    for field, value in zip(fields, values):
+        row = stack(down.take(0.86))
+        write(slide, row.take(0.30), field, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
+        write(slide, row.rest(), value, size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
 preset(slide, Box.at((boxes[0].x1 + boxes[1].x0) / 2 - 0.16, frame.body.y0 + tall / 2 - 0.16,
                      w=0.32, h=0.32), T, "rightArrow", tint="accent")
 ```
@@ -211,20 +217,20 @@ own = Frame(Box(inner.x0, inner.y0, inner.x1, inner.y0 + 0.30),
             Box(inner.x0, inner.y1, inner.x1, inner.y1))
 write(slide, own.kicker, "03 / 06 · 结构", size=KICKER_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 write(slide, own.title, "一侧通栏侧栏", size=TITLE_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
-points(slide, own.body, T, ["侧栏承担页眉，正文区整块留给图。", "整本 deck 的页眉形式必须一致。"],
-       size=LABEL_PT, font=FACE, cjk_font=HAN)
+write(slide, own.body, "侧栏承担页眉，正文区整块留给图。", size=LABEL_PT, colour=MUTED,
+      font=FACE, cjk_font=HAN)
 body = Box.corners(rail.x1 + GUTTER, MARGIN, CANVAS_W - MARGIN, CANVAS_H - MARGIN)
 picture_fit(slide, f"{FIGURES}/fig10.png", body, T, caption="图 9：本节要讲的结构")
 ```
 
 ### P32 -- Image navigation cards: a contents page whose entries are pictures
 
-The agenda page as a preview of the deck rather than a list of its section names. The type
-sits on a flat plate at the foot of each card with a short gradient above it, which is the
-combination that survives both checks: the plate gives `contrast` one colour to read, and
-the gradient loses the plate's top edge without covering enough of the picture for
-`covered_shape` to see a hidden figure. A single gradient over the whole card fails both --
-measured, on this page, before the plate went in.
+The agenda page as a preview of the deck rather than a list of its section names. The
+type sits on a flat plate at the foot of each card with a short gradient above it, which
+is the combination that survives both checks: the plate gives `contrast` one colour to
+read, and the gradient loses the plate's top edge without covering enough of the picture
+for `covered_shape` to see a hidden figure. A single gradient over the whole card fails
+both.
 
 ```python
 entries = (("01", "竞争全景", "fig1"), ("02", "架构分野", "fig2"),
@@ -273,6 +279,12 @@ gives the page somewhere to be and the figure gives it a number. The banner is
 cover-cropped to a band that runs off the left edge; the figure is `picture_fit` with its
 caption, because it is the evidence.
 
+The panel is already the ground, so the bands sit straight on the tint, each with its own
+icon (`M1`): a card on `accent_soft` is a surface on a surface. Measure the bands off
+their own copy with `text_size` and hand the leftover height to the stack's gutter --
+bands cut to a third of the panel each leave an inch of air inside every one of them, and
+the set stops reading as a set.
+
 ```python
 left, panel = frame.body.split_left(0.62, gutter=0.34)
 down = stack(left, gutter=0.18)
@@ -283,11 +295,19 @@ inner = stack(panel.inset(PAD + 0.10))
 write(slide, inner.take(0.46), "这一页在说什么", size=LEAD_PT, bold=True, colour=INK,
       font=FACE, cjk_font=HAN)
 inner.skip(0.10)
-points(slide, inner.rest(), T, [
-    "上面那张是氛围，它只负责让这一页有现场。",
-    "下面那张是证据，它负责这一页的数字。",
-    "面板里的字是结论，颜色和图都不参与。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+notes = [("image", "上面那张是氛围", "它只负责让这一页有现场。"),
+         ("gauge", "下面那张是证据", "它负责这一页的数字。"),
+         ("quote", "面板里的字是结论", "颜色和图都不参与。")]
+lane = inner.rest()
+bands = [0.38 + text_size(body, lane.w, size=LABEL_PT, font=FACE).h for _, _, body in notes]
+rows = stack(lane, gutter=(lane.h - sum(bands)) / (len(notes) - 1))
+for (icon, head, body), tall in zip(notes, bands):
+    band = rows.take(tall)
+    add_icon(slide, icon, Inches(band.x0), Inches(band.y0 + 0.03), Inches(0.28), INK)
+    write(slide, Box.corners(band.x0 + 0.42, band.y0, band.x1, band.y0 + 0.34), head,
+          size=BODY_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN, anchor="middle")
+    write(slide, Box.corners(band.x0, band.y0 + 0.38, band.x1, band.y1), body,
+          size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
 ### M1-M11 -- five of them at once, on top of `P9`

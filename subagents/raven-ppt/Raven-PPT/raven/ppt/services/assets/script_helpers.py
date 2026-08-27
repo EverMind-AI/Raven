@@ -122,9 +122,9 @@ with a card's padding without a render to nudge it against.
 
 `add_icon`'s `left`, `top` and `size` are EMU -- `Inches(0.4)`, not `0.4`. It is
 the one call in this directory that is not in inches, and a bare `0.4` means four
-ten-millionths of an inch: it used to draw a shape that rounded to nothing, at the
-corner of the page, without a word of complaint. A size that small is refused now.
-Every box either function *answers* with is in inches, like every other box here.
+ten-millionths of an inch, which would draw a shape that rounds to nothing at the
+corner of the page; a size that small is refused. Every box either function
+*answers* with is in inches, like every other box here.
 
 `find_icons` searches the names and each icon's keywords, so a word that is in no
 filename still finds something.
@@ -335,6 +335,8 @@ class Icon(list):
         self.box = box
 
 
+# Why this has to be asked rather than assumed: 151 of the packaged icons are half
+# their box or less tall.
 def the_ink_an_icon_covers(name, size=1.0):
     """Where this icon's strokes will land in a square of side `size`, before drawing.
 
@@ -346,10 +348,9 @@ def the_ink_an_icon_covers(name, size=1.0):
 
     Same square, wildly different ink. As a share of that square: `target`, `clock`
     and `circle` cover 75% x 75%, `chart_bar` 75% x 67%, `check` 62% x 42%, and
-    `minus` 58% x 0% -- a rule through the middle with no height. 151 of the icons
-    are half their box or less tall. So "icon at the top of the card, title beside
-    it" puts the mark three different distances from the title depending on which
-    name was written, and the only way to see that was to export the deck and look.
+    `minus` 58% x 0% -- a rule through the middle with no height. So "icon at the top
+    of the card, title beside it" puts the mark three different distances from the
+    title depending on which name was written.
 
     The box is the strokes' centrelines, which is what a freeform's own extent is:
     the pen straddles the path, so `width_pt` paints half its width outside every
@@ -382,9 +383,10 @@ def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
     """Draw `name` in a square of side `size` with its top-left at (left, top).
 
     `left`, `top` and `size` are EMU: `Inches(0.4)`, not `0.4`. A bare `0.4` is four
-    ten-millionths of an inch and drew a shape that rounded to nothing, so it is refused.
+    ten-millionths of an inch and would draw a shape that rounds to nothing, so it is
+    refused.
 
-    Hands back the shapes it drew -- a list, as it always was -- carrying `.box` for
+    Hands back the shapes it drew -- a list -- carrying `.box` for
     the ink they cover, in inches. The ink is not the square: `target` fills
     75% x 75% of it, `check` 62% x 42%, `minus` 58% x 0%, so `.box` is the only
     honest answer to "where did the mark end up", and `the_ink_an_icon_covers` is
@@ -829,10 +831,10 @@ def connect(slide, start, end, theme, *, kind="straight", arrow=True, colour=Non
 def _as_box(where):
     """A box, whether it arrived as a box or as the point somebody wanted to connect.
 
-    `connect(slide, (x0 + w, cy), (ax0, cy - off), T)` is what a live run wrote, and it
-    is the obvious thing to write when the two ends are places rather than regions: the
-    refusal was `AttributeError: 'tuple' object has no attribute 'x0'`, which names
-    neither what was passed nor what was wanted. A point is a box with no size, and
+    `connect(slide, (x0 + w, cy), (ax0, cy - off), T)` is the obvious thing to write
+    when the two ends are places rather than regions, and unaccepted it refuses with
+    `AttributeError: 'tuple' object has no attribute 'x0'`, which names neither what
+    was passed nor what was wanted. A point is a box with no size, and
     `_edges` already leaves from a box's edge, which for a point is the point.
     """
     if hasattr(where, "x0"):

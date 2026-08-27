@@ -9,12 +9,15 @@ It goes at `deck/build/build.py` — that whole path, relative to the workspace.
 A bare `build/build.py` lands somewhere the build does not look.
 
 The program runs with python-pptx and Pillow, in the build directory, and reads its
-paths from the environment: `PPT_OUTPUT` (save there and nowhere else),
-`PPT_FIGURES_DIR`, and — when the deck has a template — `PPT_TEMPLATE` (the
-template with its example pages removed, open this one) and `PPT_TEMPLATE_SOURCE`
-(the original, to clone a page out of). Every figure is reached through
-`PPT_FIGURES_DIR`: the program runs in the build directory and there is no
-`figures/` under it, so a path written relative to one resolves to nothing.
+paths from the environment: `PPT_OUTPUT`, where the program's last statement saves
+it -- `prs.save(os.environ["PPT_OUTPUT"])`, there and nowhere else. A program that
+draws every page and ends without that line is reported back as having built no
+deck, and the pages are gone. Then `PPT_FIGURES_DIR`, and — when the deck has a
+template — `PPT_TEMPLATE` (the template with its example pages removed, open this
+one) and `PPT_TEMPLATE_SOURCE` (the original, to clone a page out of). Every figure
+is reached through `PPT_FIGURES_DIR`: the program runs in the build directory and
+there is no `figures/` under it, so a path written relative to one resolves to
+nothing.
 
 Beside it, rewritten on every build: `ppt_layout.py` (the page's regions, the copy
 and table helpers, and the measurements that answer before anything is drawn),

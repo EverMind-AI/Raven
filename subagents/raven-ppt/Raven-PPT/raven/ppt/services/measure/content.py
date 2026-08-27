@@ -11,6 +11,7 @@ measure, and it is still the reason none of them is answerable by moving a box.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -66,6 +67,13 @@ COLUMN_SQUEEZE = 1.6
 # with the backslash-n printed -- the author's string went through a JSON round trip on
 # its way into the tool and came out with its escape escaped.
 _LITERAL_ESCAPES = ("\\n", "\\t", "\\r", "&nbsp;", "&amp;", "&lt;", "&gt;", "<br")
+# And the form python-pptx writes when a control character reaches `.text`: XML cannot
+# carry one, so it comes out spelled. `\x0b` is the one that happens, because it is what
+# PowerPoint's own format uses for a soft break inside a paragraph -- read a template's
+# placeholder with `.text` and every `<a:br/>` in it arrives as `\x0b`, so a title
+# written back with the same character prints `_x000B_`. Measured on a delivered cover:
+# "EverMind AI_x000B_给 AI 智能体_x000B_一个持久记忆", at title size, on page 1.
+_ESCAPED_CONTROL = re.compile(r"_x[0-9A-Fa-f]{4}_")
 # Unless the line is showing code, where "a\\nb" is the point. A quote or a bracket in
 # the same paragraph is what tells the two apart.
 _CODE_MARKS = ('"', "'", "`", "(", "[", "{")
@@ -79,6 +87,7 @@ def literal_escapes(pptx_path: Path) -> list[Finding]:
             for para in frame.paragraphs:
                 text = "".join(run.text for run in para.runs)
                 found = [mark for mark in _LITERAL_ESCAPES if mark in text]
+                found += sorted(set(_ESCAPED_CONTROL.findall(text)))
                 if not found or any(mark in text for mark in _CODE_MARKS):
                     continue
                 findings.append(
@@ -236,61 +245,82 @@ def _has_raised_run(para) -> bool:
     return False
 
 
-# How wide a box has to be before the marks are worth putting in. A narrow box is a
-# card's body or one column of a split page -- something already grouped, where two
-# sentences of explanation read as explanation and bullets read as clutter. A box
-# across half the page or more is the page talking, and there a stack of unmarked
-# claims reads as one paragraph. Measured on a live deck: at half the canvas the 15
-# boxes this reported became the 12 that are page-level, and the three dropped were
-# all card bodies -- one of them with a formula as its first line.
-_POINTS_SHARE = 0.5
+# How much of the page a box has to hold before what is in it is the page talking
+# rather than the inside of something. Two clauses, because a region can be tall and
+# narrow or short and wide and the same stack of claims is the page's own either way.
+#
+# An eighth of the canvas is one of the page's own regions. `page()`'s body is 62% of
+# the canvas and a page divides it into a handful of bands or columns, so an eighth is
+# still a region and anything under it is inside a block -- a card's body, a panel's
+# copy, one cell of a grid. Measured against the module's own geometry: a card's body
+# box holds 3.0% of the canvas in a three-up row, 6.4% in a two-up and 8.6% inside a
+# half-page panel, while a reading lane beside a chart holds 19%, the column beside a
+# figure 23%, and the column of the delivered page this was rewritten for 34%.
+#
+# Width alone was the whole test and it missed that page by a fifth of an inch: at
+# half the canvas the bar is 6.67in and the column was 6.48in -- wider than every card
+# body in the deck, and under the bar. It stays as the second clause because a box
+# across three quarters of the page is the page talking whatever its height, and a
+# full-width band two lines deep does not hold an eighth of the canvas.
+_A_REGION_OF_THE_PAGE = 0.125
+_ACROSS_THE_PAGE = 0.75
 
-# A point long enough that it is a claim rather than a label. Below this a stack of
-# short lines is a list of names, a legend or an axis, and marks on those are noise.
+# A line long enough to be a claim rather than a label. Below this a stack of short
+# lines is a list of names, a legend or an axis, and none of those wants a block each.
 _POINT_CHARS = 25
-# Marks an author may have typed at the front instead of using a real bullet. Not
-# ideal (the wrap does not hang), but the reader can see the list, which is what this
-# measures.
-_TYPED_MARKS = ("·", "•", "-", "–", "—", "*", "▪", "◦", "①", "②", "③", "1.", "2.", "3.", "一、", "二、", "三、")
 
 
-def unmarked_points(pptx_path: Path) -> list[Finding]:
-    """Parallel claims stacked in one box with nothing in front of any of them.
+def listed_claims(pptx_path: Path) -> list[Finding]:
+    """Parallel claims stacked in one box, where the page wanted a block for each.
 
-    Two 47- and 58-character sentences under a rule, no mark on either: a reader has
-    to work out that they are two things rather than one paragraph with a line break
-    in it. Measured on a delivered page, and the fix is one call -- `points()` writes
-    a real bullet with a hanging indent, so the second line of a point lines up with
-    its first.
+    Two claims in one frame read as one thing whatever sits in front of them. As bare
+    paragraphs they read as one paragraph that happens to have a line break in it --
+    two 47- and 58-character sentences under a rule, measured on a delivered page. As
+    bullets they read as a list to be read out: a later page put four
+    `Label: sentence` claims in a 6.5in column as four dots with a paragraph after
+    each, no card, no ground and nothing the eye can use as a boundary, and the answer
+    it got was to delete that layout. Both readings are this finding, which is why a
+    mark no longer clears it -- the marks were on that page, written by the call this
+    check used to name.
 
-    Table cells are left out: a cell holding two sentences is a cell, and marks in a
-    table read as clutter. So is any box narrower than half the page -- see
-    `_POINTS_SHARE`.
+    One claim, one block, so one claim per frame. `card()` draws a block in a call,
+    `card_size()` levels a row of them without padding any out to the region, and
+    `plane()` is the ground under the set.
+
+    Table cells are left out: a cell holding two sentences is a cell. So is any box too
+    small to be one of the page's own regions -- see `_A_REGION_OF_THE_PAGE`.
     """
     findings: list[Finding] = []
     presentation = open_deck(pptx_path)
-    room = (presentation.slide_width or 0) * _POINTS_SHARE
+    canvas_w = (presentation.slide_width or 0) / EMU_PER_INCH
+    canvas_h = (presentation.slide_height or 0) / EMU_PER_INCH
+    canvas = canvas_w * canvas_h
+    if not canvas:
+        return findings
     for number, slide in enumerate(presentation.slides, start=1):
         for shape in iter_shapes(slide.shapes):
             if getattr(shape, "has_table", False) or not getattr(shape, "has_text_frame", False):
                 continue
-            if (shape.width or 0) < room:
+            box = page_box(shape)
+            if box is None:
+                continue
+            if box.area / canvas < _A_REGION_OF_THE_PAGE and box.width / canvas_w < _ACROSS_THE_PAGE:
                 continue
             claims = [para for para in shape.text_frame.paragraphs if _is_claim(para)]
-            if len(claims) < 2 or any(_is_marked(para) for para in shape.text_frame.paragraphs):
+            if len(claims) < 2:
                 continue
             findings.append(
                 Finding(
-                    kind="unmarked_points",
+                    kind="listed_claims",
                     severity=Severity.WARNING,
                     page=number,
                     message=(
-                        f"{len(claims)} parallel points share a box with nothing in front of any of them, so "
-                        f"they read as one paragraph: '{_head(claims[0].text, 40)}'. Set them with points() "
-                        "from ppt_layout -- it writes a real bullet with a hanging indent, and takes "
-                        "numbered=True when the order matters"
+                        f"{len(claims)} parallel claims share one box, so they read as a list to be read out "
+                        f"rather than as {len(claims)} things: '{_head(claims[0].text, 40)}'. Separate them -- a "
+                        "frame each, fewer claims on the page, or the page split -- or leave it: prose that is "
+                        "one argument in two paragraphs is a reading and not a defect"
                     ),
-                    detail={"page": number, "points": len(claims), "first": _head(claims[0].text, 60)},
+                    detail={"page": number, "claims": len(claims), "first": _head(claims[0].text, 60)},
                 )
             )
     return findings
@@ -298,16 +328,6 @@ def unmarked_points(pptx_path: Path) -> list[Finding]:
 
 def _is_claim(para) -> bool:
     return len("".join(para.text.split())) >= _POINT_CHARS
-
-
-def _is_marked(para) -> bool:
-    """Whether this paragraph carries a mark: a real bullet, or one typed in."""
-    properties = para._pPr  # noqa: SLF001 -- no API for a paragraph's bullet
-    if properties is not None:
-        for tag in ("buChar", "buAutoNum"):
-            if properties.find(f"{{http://schemas.openxmlformats.org/drawingml/2006/main}}{tag}") is not None:
-                return True
-    return para.text.strip().startswith(_TYPED_MARKS)
 
 
 def wide_tables(pptx_path: Path) -> list[Finding]:
