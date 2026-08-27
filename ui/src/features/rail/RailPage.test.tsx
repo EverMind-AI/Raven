@@ -552,11 +552,11 @@ describe('rail island', () => {
     install({ cur: 'a' })
     mount()
     const fly = document.getElementById('moreFly')!
-    fly.innerHTML = '<button class="mrow"></button><button class="mrow"></button><button class="mrow"></button>'
+    fly.innerHTML = '<button class="navi"></button><button class="navi"></button><button class="navi"></button>'
     navUp('cronPage')
     fly.dataset.open = 'true'
     act(() => store.markNew())
-    const rows = [...fly.querySelectorAll('.mrow')].map(b => b.getAttribute('aria-current'))
+    const rows = [...fly.querySelectorAll('.navi')].map(b => b.getAttribute('aria-current'))
     /* morePages is [xa, conn, cron]: the third row is the page that is up. */
     expect(rows).toEqual(['false', 'false', 'true'])
     expect(current('moreBtn')).toBe('false')

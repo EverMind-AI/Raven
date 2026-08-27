@@ -53,7 +53,8 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
   window.DS = { cron: source }
   document.body.innerHTML =
     '<section id="cronPage"><div id="cronBody"></div></section>' +
-    '<div class="veil" id="jobVeil" data-open="false"></div>'
+    '<div class="veil" id="jobVeil" data-open="false"></div>' +
+    '<div id="menu" data-open="false"></div>'
   return { source, calls, shellCalls }
 }
 
@@ -63,6 +64,32 @@ async function mount() {
     store.open()
   })
   return view
+}
+
+
+const rowNamed = (name: string): HTMLElement =>
+  [...document.querySelectorAll<HTMLElement>('.surow')].find((r) => r.querySelector('.nm b')!.textContent === name)!
+const chipCount = (label: string): string | null =>
+  [...document.querySelectorAll<HTMLElement>('.cronfilter button')].find((b) => b.textContent!.startsWith(label))!
+    .querySelector('.n')!.textContent
+
+/* The overflow menu of whichever host drew it, through the shared #menu the page
+   keeps -- the same host production uses. */
+async function pickMenu(open: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    open.click()
+  })
+  const item = [...document.querySelectorAll<HTMLElement>('#menu button')].find((b) => b.textContent === label)
+  expect(item, `menu item ${label}`).toBeTruthy()
+  await act(async () => {
+    item!.click()
+  })
+}
+
+async function tab(name: string): Promise<void> {
+  await act(async () => {
+    ;[...document.querySelectorAll<HTMLElement>('.tabbar button')].find((b) => b.textContent!.startsWith(name))!.click()
+  })
 }
 
 afterEach(() => {
@@ -89,10 +116,43 @@ describe('cron island', () => {
     expect(await screen.findByText('gui.cron.none')).toBeTruthy()
   })
 
-  it('raises the failing banner for an enabled job whose last run failed', async () => {
-    install([job({ runs: [{ at: 'today', ok: false, note: 'boom' }] })])
+  /* Three chips with counts, and they filter. The banner they replace could
+     only say "something failed" -- it had no way to show the paused jobs, and
+     no way to narrow the list to the failures it was pointing at. */
+  it('counts and filters by state', async () => {
+    install([
+      job({ runs: [{ at: 'today', ok: false, note: 'boom' }] }),
+      job({ id: 'b', name: 'weekly report', runs: [{ at: 'today', ok: true, note: 'fine' }] }),
+      job({ id: 'c', name: 'paused one', on: false }),
+    ])
     await mount()
-    expect(await screen.findByText('gui.cron.failing {"n":1}')).toBeTruthy()
+    expect(await screen.findByText('morning digest')).toBeTruthy()
+    expect(chipCount('gui.cron.f_all')).toBe('3')
+    expect(chipCount('gui.cron.f_fail')).toBe('1')
+    expect(chipCount('gui.cron.f_paused')).toBe('1')
+    await act(async () => {
+      ;[...document.querySelectorAll<HTMLElement>('.cronfilter button')][1]!.click()
+    })
+    expect([...document.querySelectorAll('.surow .nm b')].map((b) => b.textContent)).toEqual(['morning digest'])
+    await act(async () => {
+      ;[...document.querySelectorAll<HTMLElement>('.cronfilter button')][2]!.click()
+    })
+    expect([...document.querySelectorAll('.surow .nm b')].map((b) => b.textContent)).toEqual(['paused one'])
+  })
+
+  /* The last result is the row's third line, and the whole line opens the
+     session that run wrote -- without opening the job page underneath it. */
+  it('opens the run session from the row without opening the job', async () => {
+    const { calls } = install([job({ runs: [{ at: 'today 08:00', ok: false, note: 'boom' }] })])
+    await mount()
+    const line = rowNamed('morning digest').querySelector('.sufoot2 .rl') as HTMLElement
+    expect(line.textContent).toContain('gui.cron.failed')
+    expect(line.textContent).toContain('boom')
+    await act(async () => {
+      line.click()
+    })
+    expect(calls).toContain('openRun')
+    expect(screen.queryByText('← gui.cron.back')).toBeNull()
   })
 
   it('opens the job page from a row and comes back to the list', async () => {
@@ -158,6 +218,7 @@ describe('cron island', () => {
     await act(async () => {
       ;(await screen.findByText('morning digest')).click()
     })
+    await tab('gui.cron.tab_runs')
     expect(await screen.findByText('first')).toBeTruthy()
     history.push({ at: 'today 09:00', ok: false, note: 'landed later' })
     await act(async () => {
@@ -173,6 +234,7 @@ describe('cron island', () => {
     await act(async () => {
       ;(await screen.findByText('morning digest')).click()
     })
+    await tab('gui.cron.tab_runs')
     await screen.findByText('stamped')
     const before = runs.mock.calls.length
     /* What the legacy language flip calls through the shim. */
@@ -198,10 +260,62 @@ describe('cron island', () => {
     await act(async () => {
       ;(await screen.findByText('morning digest')).click()
     })
-    await act(async () => {
-      ;(await screen.findByText('gui.cron.delete')).click()
-    })
+    await pickMenu(document.querySelector('.sumenu') as HTMLElement, 'gui.cron.delete')
     expect(await screen.findByText('← gui.cron.back')).toBeTruthy()
+  })
+
+  /* Destructive verbs are not row verbs and not page-face verbs: the list row
+     and the job page both keep them behind it. */
+  it('keeps delete off both faces', async () => {
+    install([job()])
+    await mount()
+    expect([...rowNamed('morning digest').querySelectorAll('button')].map((b) => b.textContent))
+      .not.toContain('gui.cron.delete')
+    await act(async () => {
+      ;(await screen.findByText('morning digest')).click()
+    })
+    const face = [...document.querySelectorAll('#cronBody button')].map((b) => b.textContent)
+    expect(face.length).toBeGreaterThan(0)
+    expect(face).not.toContain('gui.cron.delete')
+  })
+
+  /* The hourly interval the backend has always accepted. The form sent the
+     default every time, so "hourly" could only ever mean once an hour. */
+  it('takes an interval for an hourly job', async () => {
+    const saved: unknown[] = []
+    install([job({ freq: 'hour', every_ms: 3600000 })], {
+      save: async (d) => {
+        saved.push({ every_ms: d.every_ms })
+        return { ...job(), ...d }
+      },
+    })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('morning digest')).click()
+    })
+    const n = document.querySelector<HTMLInputElement>('.everyn input')!
+    expect(n.value).toBe('1')
+    await act(async () => {
+      n.value = '6'
+      n.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      ;(await screen.findByText('gui.cron.save')).click()
+    })
+    expect(saved).toEqual([{ every_ms: 6 * 3600000 }])
+  })
+
+  /* Delivery is a global setting the save payload never carried, so the page
+     states it and points at the setting rather than offering a choice that
+     gets thrown away. */
+  it('states delivery as a fact, with no per-job control', async () => {
+    install([job()])
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('morning digest')).click()
+    })
+    expect(screen.getByText('gui.job.deliver_global')).toBeTruthy()
+    expect(document.querySelector('#cronBody select')).toBeNull()
   })
 
   it('asks the source to toggle and refreshes from it', async () => {

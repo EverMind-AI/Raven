@@ -45,15 +45,11 @@ export interface XaRow {
   upgrade_to?: string | null
 }
 
-export type XaOp =
-  | 'build'
-  | 'connect'
-  | 'remove'
-  | 'upgrade'
-  | 'toggle'
-  | 'update'
-  | 'test'
-  | 'test_cancel'
+/* The four writes the page can make, which are the four steps of "connect" plus
+   the switch. Test, remove and the transport migration are gone with the buttons
+   that named them: the page has two verbs now, and each of these is one of them
+   for one kind of row. */
+export type XaOp = 'build' | 'connect' | 'migrate' | 'toggle' | 'update'
 
 export interface XaActArgs {
   new_name?: string

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { text as reachText } from '../../shell/reach'
+import { CardSkeleton } from '../../shell/skeleton'
 import * as store from './store'
 
 import type { SkillsState } from './store'
@@ -381,7 +382,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
     )
   }
 
-  if (!d) return <div className="pnote">{t('gui.hub.reading')}</div>
+  if (!d) return <CardSkeleton />
 
   const tags = (d.tags && d.tags.length ? d.tags : it?.tags) || []
   const sub = d.subscores || {}
@@ -449,10 +450,14 @@ const drawerHost = document.createElement('div')
 export function SkillsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
   useEffect(() => {
-    if (!s.drawer) return
-    const dBody = document.getElementById('dBody')
     const detail = document.getElementById('detail')
-    if (!dBody || !detail) return
+    if (!detail) return
+    if (!s.drawer) {
+      delete detail.dataset.fill
+      return
+    }
+    const dBody = document.getElementById('dBody')
+    if (!dBody) return
     if (drawerHost.parentElement !== dBody) {
       dBody.innerHTML = ''
       dBody.appendChild(drawerHost)
@@ -460,6 +465,9 @@ export function SkillsApp(): JSX.Element {
     const dTitle = document.getElementById('dTitle')
     if (dTitle) dTitle.textContent = ''
     detail.dataset.open = 'true'
+    /* This card's body is fetched when it opens, so the panel holds a settled
+       box while it is on its way -- see `.detail[data-fill]`. */
+    detail.dataset.fill = 'true'
   }, [s.drawer])
   return (
     <>

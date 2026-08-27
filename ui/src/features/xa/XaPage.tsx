@@ -3,16 +3,30 @@ import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
+import { SetupGroup, SetupRow, Tile } from '../../shell/setuprow'
 import * as store from './store'
 
 import type { XaRow } from './types'
 import type { JSX } from 'react'
 
-/* Connect the agents already installed on this machine, so Raven can hand
-   work to them. One row per agent; the rows are whatever `DS.xa` answers --
-   the fixture source with no gateway behind the page, the `subagents.*`
-   source in the live layer. Classes and structure are the legacy page's,
-   verbatim: this island changed who owns the data, not a pixel. */
+/* Connect the agents this machine can hand work to. One row per agent; the rows
+   are whatever `DS.xa` answers -- the fixture source with no gateway behind the
+   page, the `subagents.*` source in the live layer.
+ *
+ * Two verbs, and only two: connect and disconnect. Connect does whatever this
+ * particular agent needs to become dispatchable -- build a shipped folder's venv
+ * and its dependencies, write a config entry from a preset, take a credential,
+ * or just flip the roster switch back on -- and disconnect only marks it
+ * unavailable in the registry, so it is one click away from working again. What
+ * used to be here instead was the mechanism, spread across five buttons
+ * (install, connect, enable, test, switch to) that each named a step of the same
+ * errand and left the reader to sequence them.
+ *
+ * The rows carry no descriptions. They are the preset's own prompt text, written
+ * for the model that reads it when choosing whom to delegate to -- printing it
+ * under every row put sentences like "IMPORTANT: it cannot call sub-agents" on
+ * screen as if they were help. It appears once, in the card the row opens.
+ */
 
 const kindText = (kind: string): string =>
   t(
@@ -25,422 +39,239 @@ const kindText = (kind: string): string =>
           : 'gui.agent.kind_cli',
   )
 
-/* The one-line health summary. Order matters: the reason it cannot run beats
-   the fact that it is switched off, because that is the one the user has to
-   act on. */
-function stateOf(row: XaRow): { cls: string; text: string } {
-  /* A built-in agent is this process. There is nothing to install and nothing
-     to reach, so the only fact worth a line is whether it is switched on --
-     reading it through the probe verdicts would report "not measured" about a
-     loop that is demonstrably running. */
-  if (row.builtin) {
-    return row.enabled ? { cls: 'ok', text: t('gui.agent.inprocess') } : { cls: 'off', text: t('gui.agent.disabled') }
+/* How Raven reaches this agent, which is the one technical fact about it worth
+   printing: a subprocess, a protocol, an HTTP endpoint, or this process itself.
+   Deliberately not where the agent came from: whether an install shipped it or
+   a reader connected it changes nothing about using it, and the row and the card
+   are both about using it. */
+function wayIn(row: XaRow): string {
+  return [
+    kindText(row.kind),
+    /* The preset moved to another transport since this entry was written.
+       Rewriting it silently would change its command line and invalidate every
+       session handle bound to it, so it is stated, and disconnect-then-connect
+       is what re-reads the preset. */
+    row.upgrade_to ? t('gui.agent.stale_to', { to: kindText(row.upgrade_to) }) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/* The dot beside the name, and nothing under it. Health is a colour here, not a
+   sentence: the group heading says whether the agent is connected, the button
+   says what to do about it, and a third line repeating either in grey was the
+   standing small print this page was cleared of.
+ *
+ * Four probe verdicts, and they are not two. `attention` means the binary is
+ * there but nothing has verified it can do a task -- an amber nudge, not a
+ * failure. `unknown` is "not measured", which earns no colour at all. */
+function dotOf(row: XaRow): string {
+  /* A built-in agent is this process: reading it through the probe verdicts
+     would report "not measured" about a loop that is demonstrably running. */
+  if (row.builtin) return row.enabled ? 'ok' : 'off'
+  if (row.building || row.test_running) return 'warn'
+  if (row.kind === 'openai' && !row.has_api_key) return 'bad'
+  if (row.configured && !row.enabled && row.probe_status !== 'missing') return 'off'
+  if (row.probe_status === 'ready') return 'ok'
+  if (row.probe_status === 'attention') return 'warn'
+  if (row.probe_status === 'unknown') return 'off'
+  return 'bad'
+}
+
+/* What connecting this row still has to do. One stage, one write -- the page's
+   whole decision, so the row and the card cannot offer different verbs for the
+   same state.
+ *
+ * `install` and `off` both describe a shipped folder that is not on the roster,
+ * and they are not the same job: a folder whose venv was never built needs the
+ * installer (minutes, hundreds of MB), while one that was switched off needs
+ * its manifest flag back. The probe verdict is what separates them. */
+export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
+
+export function stageOf(row: XaRow): Stage {
+  if (row.builtin) return 'builtin'
+  if (row.building) return 'building'
+  if (row.vendored) {
+    if (row.probe_status === 'missing') return 'install'
+    return row.enabled ? 'live' : 'off'
   }
-  if (row.kind === 'openai' && !row.has_api_key) return { cls: 'bad', text: t('gui.agent.needs_key') }
-  if (row.configured && !row.enabled && row.probe_status !== 'missing') {
-    return { cls: 'off', text: t('gui.agent.disabled') }
-  }
-  /* Four probe verdicts, and they are not two. `attention` means the binary
-     is there but nothing has verified it can do a task -- an amber nudge, not
-     a failure. `unknown` is "not measured", which earns no colour at all. */
-  if (row.probe_status === 'ready') return { cls: 'ok', text: t('gui.agent.ready') }
-  if (row.probe_status === 'attention') return { cls: 'warn', text: row.probe_detail || t('gui.agent.unverified') }
-  if (row.probe_status === 'unknown') return { cls: 'off', text: row.probe_detail || '' }
-  return { cls: 'bad', text: row.probe_detail || t('gui.agent.missing') }
+  /* An HTTP agent cannot answer without its key, so it is not connected by
+     writing an entry -- the key is the missing part, whether the entry exists
+     yet or not. */
+  if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  if (!row.configured) return 'add'
+  if (row.enabled) return 'live'
+  /* Out of service and its preset has moved to another transport. Connecting it
+     is a remove plus an add, not a flag, so it is its own stage rather than a
+     variant of `off` -- the flag left `upgrade_to` standing and the old command
+     line in place, which is an agent the card offered to migrate and never did.
+     After `live`, so an agent still in service keeps offering the one verb its
+     state calls for, which is disconnect. */
+  if (row.upgrade_to) return 'stale'
+  return 'off'
 }
 
-function testLine(row: XaRow): string {
-  if (row.test_running) return t('gui.agent.testing')
-  if (row.last_test_ok == null) return t('gui.agent.test_never')
-  /* fmtStamp is the live layer's, reachable only if it stands on window;
-     the standalone demo has no live layer, hence the guard. */
-  const f = (window as Window & { fmtStamp?: (ms: number) => string }).fmtStamp
-  const ago = !row.last_test_at_ms
-    ? ''
-    : typeof f === 'function'
-      ? f(row.last_test_at_ms)
-      : new Date(row.last_test_at_ms).toLocaleString()
-  return t(row.last_test_ok ? 'gui.agent.test_ok' : 'gui.agent.test_bad', { ago })
-}
-
-const hueOf = (name: string): number => {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return h % 8
-}
-
-function confirmUpgrade(row: XaRow): void {
-  shell().confirmAsk(
-    t('gui.agent.upgrade_do'),
-    t('gui.agent.upgrade_body', { name: row.name }),
-    t('gui.agent.upgrade_do'),
-    () => void store.run('upgrade', row),
-  )
-}
-
-/* The preset moved to another transport since this entry was written.
-   Rewriting it silently would change its command line and invalidate every
-   session handle bound to it, so the switch is offered, never applied. */
-function UpgradeRow({ row }: { row: XaRow }): JSX.Element {
-  return (
-    <div className="keyrow">
-      <span className="pnote">{t('gui.agent.upgrade', { to: kindText(row.upgrade_to || '') })}</span>
-      <button className="mini" onClick={() => confirmUpgrade(row)}>
-        {t('gui.agent.upgrade_do')}
+/* Connect, disconnect, or nothing -- the same component in the row and in the
+   card, so the two can never disagree about what this agent needs next.
+ *
+ * `key` is the one stage whose write cannot be done from here: only the reader
+ * has the credential. In the row it opens the card, where the field is; in the
+ * card it is the field's own button, which is why the card passes `onKey`. */
+function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Element | null {
+  const stage = stageOf(row)
+  if (stage === 'builtin') return null
+  if (stage === 'building') {
+    return (
+      <button className="mini" disabled title={t('gui.agent.install_note')}>
+        {t('gui.agent.installing')}
       </button>
-    </div>
-  )
-}
-
-/* One package-supplied row: a built-in agent, or one of the vendored builds.
-   Deliberately not the configured-agent card: two of that card's three verbs
-   mean nothing here (there is no command to test and no row to disconnect), and
-   drawing them disabled reads as something being wrong.
-
-   Neither kind gets a switch, for different reasons. A built-in row cannot leave
-   the roster at all: an unnamed `spawn` and a dag node with no `subagent` both
-   dispatch to it, so `subagents.toggle` refuses the name and the package's seed
-   outranks any stored `enabled`. A vendored row is not in config and its name is
-   not a built-in one, so the same call answers `subagent_not_found`; its
-   membership is the folder's, so the way to take one out is to remove or disable
-   the folder (`"enabled": false` in its `subagent.json`), which is what the
-   section hint says. Offering a switch that errors is worse than offering none. */
-function BuiltinCard({ row, install = false }: { row: XaRow; install?: boolean }): JSX.Element {
-  const st = stateOf(row)
-  const open = () => store.sheetOpen(row)
+    )
+  }
+  if (stage === 'live') {
+    /* No confirm: this only marks it unavailable in the registry -- the entry,
+       the folder and the sessions it already ran all stay, and connect puts it
+       back. A dialog would be asking permission for a switch. */
+    return (
+      <button className="mini ghost" onClick={() => void store.run('toggle', row, { enabled: false })}>
+        {t('gui.agent.disconnect')}
+      </button>
+    )
+  }
+  const connect = (): void => {
+    if (stage === 'install') void store.run('build', row, {})
+    else if (stage === 'add') void store.run('connect', row, {})
+    else if (stage === 'stale') {
+      /* The one connect that is not a flag. A preset that changed transport
+         cannot be applied by switching `enabled`: there is no write that
+         changes a transport, so the entry is removed and added back from the
+         preset -- which drops the handles of runs already in flight, and is
+         why this one asks first. */
+      shell().confirmAsk?.(
+        t('gui.agent.migrate_do'),
+        t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
+        t('gui.agent.migrate_do'),
+        () => void store.run('migrate', row, {}),
+      )
+    } else if (stage === 'off') void store.run('toggle', row, { enabled: true })
+    else if (onKey) onKey()
+    else store.sheetOpen(row)
+  }
   return (
-    <div
-      className="pcard"
-      role="button"
-      tabIndex={0}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') open()
-      }}
+    <button
+      className="mini"
+      /* The one connect that costs the reader something to know about before
+         they click it. */
+      title={stage === 'install' ? t('gui.agent.install_note') : undefined}
+      onClick={connect}
     >
-      <div className="nm">
-        <span className={'led' + (st.cls === 'ok' ? '' : ' ' + st.cls)} />
-        <span>{row.name}</span>
-        <span className="kd">{kindText(row.kind)}</span>
-      </div>
-      <div className={'mo' + (st.cls === 'ok' || st.cls === 'off' ? '' : ' ' + st.cls)}>{st.text}</div>
-      <div className="one">{row.description || ''}</div>
-      <div className="ctl">
-        {/* Only the state Install fixes, plus the one it is already fixing.
-            `!row.enabled` alone also covered a folder its own `subagent.json`
-            switched off and one with no credential to spend, and for those the
-            button runs for minutes and comes back with the row unchanged -- and
-            since a vendored row deliberately has no switch, it would be the only
-            affordance offered and a dead end. `row.building` has to be in the
-            condition because a row being built reports `attention`, not
-            `missing`: dropping it would hide the button mid-build, which is the
-            one moment it has something to say. */}
-        {install && (row.building || row.probe_status === 'missing') ? (
-          <button
-            className="mini"
-            disabled={!!row.building}
-            title={t('gui.agent.install_note')}
-            onClick={(e) => {
-              e.stopPropagation()
-              void store.run('build', row, {})
-            }}
-          >
-            {t(row.building ? 'gui.agent.installing' : 'gui.agent.install')}
-          </button>
-        ) : null}
-        <button
-          className="mini ghost"
-          onClick={(e) => {
-            e.stopPropagation()
-            open()
-          }}
-        >
-          {t('gui.agent.configure')}
-        </button>
-      </div>
-    </div>
+      {t('gui.agent.connect')}
+    </button>
   )
 }
 
-function ConfiguredRow({ row }: { row: XaRow }): JSX.Element {
-  const st = stateOf(row)
-  const open = () => store.sheetOpen(row)
+/* Which group a row belongs in: two verbs, two groups. A row that is dispatchable
+   sits under "on duty" and offers disconnect; everything else is addable and
+   offers connect. The page used to lead with provenance -- built-in, then
+   vendored, then connected, then available -- which put a broken agent three
+   groups down while a healthy built-in row sat at the top with nothing to do. */
+type Grp = 'on' | 'off'
+const groupOf = (row: XaRow): Grp => {
+  const stage = stageOf(row)
+  return stage === 'live' || stage === 'builtin' ? 'on' : 'off'
+}
+
+/* What connecting costs, which is what the addable group is ordered by -- the
+   same question the entrances page sorts on. A switch is instant, an entry is a
+   file write, a credential needs the reader to go and find one, and an install
+   is several hundred megabytes. */
+const costOf = (row: XaRow): number => {
+  const stage = stageOf(row)
+  return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
+}
+
+function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
+  /* Health is only a question about an agent that is supposed to be working.
+     In the addable group not-dispatchable is what every row is, so a red dot and
+     the clay stripe that comes with it were an alarm about the group's own
+     definition -- and with the status line gone there was nothing left to say
+     what the alarm meant. */
+  const cls = groupOf(row) === 'on' ? dotOf(row) : 'off'
   return (
-    <div
-      className="pcard"
-      role="button"
-      tabIndex={0}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') open()
-      }}
-    >
-      <div className="nm">
-        <span className={'led' + (st.cls === 'ok' ? '' : ' ' + st.cls)} />
-        <span>{row.name}</span>
-        <span className="kd">{kindText(row.kind)}</span>
-      </div>
-      <div className={'mo' + (st.cls === 'ok' || st.cls === 'off' ? '' : ' ' + st.cls)}>
-        {[st.text, testLine(row)].filter(Boolean).join(' · ')}
-      </div>
-      {/* What the verdict actually proved, skipped when the status line above
-          already says the same sentence: a failed handshake used to print
-          itself twice, once red and once grey. */}
-      {row.last_test_detail && !String(st.text || '').includes(row.last_test_detail) ? (
-        <div className="pnote clamp" onClick={(e) => e.currentTarget.classList.toggle('clamp')}>
-          {row.last_test_detail}
-        </div>
-      ) : null}
-      {row.upgrade_to ? <UpgradeRow row={row} /> : null}
-      {/* Two verbs on the row, everything else in the detail sheet: the list
-          answers "which agents, are they alive". The whole row is a door to
-          the same place. */}
-      <div className="ctl">
-        {row.test_running ? (
-          <button
-            className="mini ghost"
-            onClick={(e) => {
-              e.stopPropagation()
-              void store.run('test_cancel', row)
-            }}
-          >
-            {t('gui.agent.test_cancel')}
-          </button>
-        ) : (
-          <button
-            className="mini ghost"
-            data-tip={t('gui.agent.test_spend', { name: row.name })}
-            onClick={(e) => {
-              e.stopPropagation()
-              void store.run('test', row)
-            }}
-          >
-            {t('gui.agent.test')}
-          </button>
-        )}
-        <button
-          className="mini ghost"
-          onClick={(e) => {
-            e.stopPropagation()
-            open()
-          }}
-        >
-          {t('gui.agent.configure')}
-        </button>
-      </div>
-    </div>
+    <SetupRow
+      name={row.name}
+      /* Empty text on purpose: SetupRow draws the second line only when there
+         is something to say there, and here there is not. */
+      state={{ cls, text: '' }}
+      tags={<span className="kd">{kindText(row.kind)}</span>}
+      act={<AgentAct row={row} />}
+      sel={sel}
+      onOpen={() => store.sheetOpen(row)}
+    />
   )
 }
 
-function OffCard({ row }: { row: XaRow }): JSX.Element {
-  const st = stateOf(row)
-  return (
-    <div className="card" onClick={() => store.sheetOpen(row)}>
-      <span className={'pmtile th' + hueOf(row.name)}>{(row.name[0] || '?').toUpperCase()}</span>
-      <div className="nm">
-        <span>{row.name}</span>
-        <span className="kd">{kindText(row.kind)}</span>
-      </div>
-      <div className="one">{row.description || ''}</div>
-      {st.text ? <div className={'st' + (st.cls === 'ok' || st.cls === 'off' ? '' : ' ' + st.cls)}>{st.text}</div> : null}
-      <div className="ctl">
-        <button
-          className="mini"
-          onClick={(e) => {
-            e.stopPropagation()
-            /* An HTTP agent cannot answer without its key, so connecting it
-               opens the sheet at the form rather than a one-click add: the
-               alternative lands a disabled row and leaves the user hunting
-               for why. */
-            if (row.kind === 'openai') {
-              store.sheetOpen(row)
-              return
-            }
-            void store.run('connect', row, {})
-          }}
-        >
-          {t('gui.agent.connect')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/* The agent's detail sheet: everything about one row in one place, drawn
-   into the same #detail dialog the plugin and skill details use -- identity
-   block up top, one decisive action beside it, then sections. Editing
-   happens HERE, never squeezed into the list row.
-
-   Configure means name, description, and -- only where one is needed -- the
-   api key. Never the command line. That comes from the preset, which is
-   version verified; letting the page edit it is how a working agent turns
-   into a command nobody can account for. */
-function XaSheet({ row }: { row: XaRow }): JSX.Element {
+/* One agent's card, drawn into the same #detail dialog the skill and plugin
+   details use -- and with their anatomy, not one of its own: identity block,
+   then a described section. Three things about the agent (who it is, what it is
+   good at, how Raven reaches it) and the one verb its state calls for.
+ *
+ * What it is not any more: a form. It carried editable name and description
+ * fields, a status line with a second copy of the row's own sentence, a test
+ * verdict, a transport-migration offer and a save button -- five things to read
+ * before the one thing to do. */
+function AgentCard({ row }: { row: XaRow }): JSX.Element {
   const dHost = store.detailHost()
+  const keyRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     const title = document.getElementById('dTitle')
     if (title) title.textContent = ''
     const drawer = document.getElementById('detail')
     if (drawer) drawer.dataset.open = 'true'
   }, [row])
-  const st = stateOf(row)
-  /* Rows the package supplies: a built-in agent, or one of the vendored builds.
-     Neither `connect` nor `update` can act on one -- `subagents.add` wants a
-     preset name and answers `unknown preset: 'raven'` / `'Raven-PPT'`, and
-     `subagents.update` wants a config row to edit. Both buttons were offered
-     anyway, the built-in one since before this change. */
-  const packaged = !!row.builtin || !!row.vendored
-  const nameRef = useRef<HTMLInputElement>(null)
-  const descRef = useRef<HTMLTextAreaElement>(null)
-  const keyRef = useRef<HTMLInputElement>(null)
-  const save = () => {
-    const patch = {
-      new_name: nameRef.current ? nameRef.current.value.trim() : '',
-      description: descRef.current ? descRef.current.value : '',
-      api_key: keyRef.current ? keyRef.current.value : '',
-    }
-    void store.run(row.configured ? 'update' : 'connect', row, patch)
+  const stage = stageOf(row)
+  /* An entry that exists takes the key as an edit; one that does not is written
+     from its preset with the key in hand. Either way the reader typed one thing
+     and the agent is connected after it. */
+  const saveKey = (): void => {
+    const api_key = keyRef.current ? keyRef.current.value.trim() : ''
+    if (!api_key) return
+    void store.run(row.configured ? 'update' : 'connect', row, { api_key })
   }
   return createPortal(
     <>
       <div className="pmdhead">
-        <span className={'pmtile th' + hueOf(row.name)}>{(row.name[0] || '?').toUpperCase()}</span>
+        <Tile name={row.name} />
         <div className="pmdmeta">
           <div className="l1">
-            <span className={'led' + (st.cls === 'ok' ? '' : ' ' + st.cls)} />
             <b>{row.name}</b>
-            <span className="kd">{kindText(row.kind)}</span>
           </div>
-          <div className="l2">{row.description || ''}</div>
+          <div className="l2">{wayIn(row)}</div>
         </div>
-        <div className="dact">
-          {row.vendored ? (
-            /* Install is the one action a vendored row has, and only for the one
-               state it fixes: a folder whose dependencies are missing. A row
-               disabled because its manifest says so, or because nothing can pay
-               for its model, is not something Install can help -- it would run
-               for minutes and come back unchanged. */
-            row.building || row.probe_status === 'missing' ? (
-              <button
-                className="mini"
-                disabled={!!row.building}
-                title={t('gui.agent.install_note')}
-                onClick={() => void store.run('build', row, {})}
-              >
-                {t(row.building ? 'gui.agent.installing' : 'gui.agent.install')}
-              </button>
-            ) : null
-          ) : row.builtin ? (
-            /* No head action at all. No connect (already running), no test
-               (nothing to spend), no disconnect (not writing a row is what "use
-               the default" means) -- and no switch either: an unnamed `spawn` and
-               a dag node with no `subagent` both dispatch to this row, so
-               `subagents.toggle` refuses the name and the package's seed outranks
-               any stored `enabled`. The sheet is where its description is read. */
-            null
-          ) : !row.configured ? (
-            /* Connecting an HTTP agent needs its key first, so the head
-               action defers to the form's save; every other kind connects
-               in one click. */
-            row.kind !== 'openai' ? (
-              <button className="mini" onClick={() => void store.run('connect', row, {})}>
-                {t('gui.agent.connect')}
-              </button>
-            ) : null
-          ) : row.test_running ? (
-            <button className="mini ghost" onClick={() => void store.run('test_cancel', row)}>
-              {t('gui.agent.test_cancel')}
-            </button>
-          ) : (
-            <button
-              className="mini"
-              data-tip={t('gui.agent.test_spend', { name: row.name })}
-              onClick={() => void store.run('test', row)}
-            >
-              {t('gui.agent.test')}
-            </button>
-          )}
-        </div>
+        {/* The key stage's button belongs beside its field, not up here where
+            there is nothing to type into. */}
+        <div className="dact">{stage === 'key' ? null : <AgentAct row={row} />}</div>
       </div>
-      <div className="pmsec">
-        <span className="cap">{t('gui.agent.sec_status')}</span>
-        <div
-          className={'probe' + (st.cls === 'ok' ? ' ok' : st.cls === 'bad' ? ' bad' : '')}
-          style={{ marginTop: 0 }}
-        >
-          {row.test_running ? t('gui.agent.testing') : st.text || '—'}
-        </div>
-        <dl className="kv" style={{ marginTop: '10px' }}>
-          <dt>{t('gui.agent.sec_transport')}</dt>
-          <dd>{kindText(row.kind)}</dd>
-          <dt>{t('gui.agent.sec_last_test')}</dt>
-          <dd>{testLine(row)}</dd>
-        </dl>
-        {row.last_test_detail && !String(st.text || '').includes(row.last_test_detail) ? (
-          <div className="pnote">{row.last_test_detail}</div>
-        ) : null}
-        {row.upgrade_to ? <UpgradeRow row={row} /> : null}
-      </div>
-      <div className="pmsec">
-        <span className="cap">{t('gui.agent.sec_config')}</span>
-        <div className="pform">
-          <div className="agf">
-            <label>{t('gui.agent.name')}</label>
-            <input type="text" defaultValue={row.name} ref={nameRef} />
-            <div className="hint">{t('gui.agent.name_hint')}</div>
-          </div>
-          <div className="agf">
-            <label>{t('gui.agent.desc')}</label>
-            <textarea rows={2} defaultValue={row.description || ''} ref={descRef} />
-            <div className="hint">{t('gui.agent.desc_hint')}</div>
-          </div>
-          {row.kind === 'openai' ? (
-            <div className="agf">
-              <label>{t('gui.agent.key')}</label>
-              <input
-                type="password"
-                autoComplete="off"
-                placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
-                ref={keyRef}
-              />
-              <div className="hint">{t('gui.agent.key_hint')}</div>
-            </div>
-          ) : null}
-          <div className="ctl">
-            {packaged ? (
-              <div className="hint">{t('gui.agent.packaged_note')}</div>
-            ) : (
-              <button className="mini" onClick={save}>
-                {t(row.configured ? 'gui.agent.save' : 'gui.agent.connect')}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-      {row.configured ? (
+      {row.description ? (
         <div className="pmsec">
-          <div className="ctl" style={{ justifyContent: 'flex-start' }}>
-            <button
-              className="mini ghost"
-              onClick={() => void store.run('toggle', row, { enabled: !row.enabled })}
-            >
-              {t(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable')}
-            </button>
-            <button
-              className="mini ghost danger"
-              onClick={() =>
-                shell().confirmAsk(
-                  t('gui.agent.disconnect'),
-                  t('gui.agent.disc_body', { name: row.name }),
-                  t('gui.agent.disconnect'),
-                  () => {
-                    store.closeSheet()
-                    void store.run('remove', row)
-                  },
-                )
-              }
-            >
-              {t('gui.agent.disconnect')}
+          <div className="cap">{t('gui.plug.sec_about')}</div>
+          <div className="pmdesc">{row.description}</div>
+        </div>
+      ) : null}
+      {stage === 'key' ? (
+        <div className="pmsec">
+          <div className="cap">{t('gui.agent.key')}</div>
+          <div className="sukey">
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
+              ref={keyRef}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveKey()
+              }}
+            />
+            <button className="mini key" onClick={saveKey}>
+              {t('gui.agent.connect')}
             </button>
           </div>
         </div>
@@ -464,84 +295,36 @@ export function XaApp(): JSX.Element {
     ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
     return () => ob.disconnect()
   }, [])
-  const builtin = s.rows.filter((a) => a.builtin)
-  /* Vendored rows are their own group, and they have to come out of `off`:
-     that section's verb is "connect", and there is nothing to connect. They are
-     folders this install shipped, discovered on every start, so what a row there
-     actually offers is the same set a built-in row does -- a switch and a look
-     inside. A row a user has additionally written by hand arrives as configured
-     rather than vendored, and stays in `on` with its own delete button. */
-  const vendored = s.rows.filter((a) => a.vendored && !a.builtin)
-  const on = s.rows.filter((a) => a.configured && !a.builtin && !a.vendored)
-  const off = s.rows.filter((a) => !a.configured && !a.builtin && !a.vendored)
+  const on = s.rows.filter((a) => groupOf(a) === 'on')
+  const off = s.rows.filter((a) => groupOf(a) === 'off').sort((a, b) => costOf(a) - costOf(b))
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
+  const rows = (list: XaRow[]): JSX.Element => (
+    <div className="sulist">
+      {list.map((row) => (
+        <AgentRow key={row.name} row={row} sel={s.sheet === row.name} />
+      ))}
+    </div>
+  )
   return (
     <>
       <div className="pmhero">
-        <h3>{t('gui.agent.hero')}</h3>
-        <p>{t('gui.agent.hero_sub')}</p>
+        <h3>{t('gui.page.agents')}</h3>
       </div>
-      {/* Built-in first: they are the agents a fresh install already has, so a
-          page that led with "nothing connected yet" would be describing the
-          roster wrongly. */}
-      {builtin.length ? (
-        <div className="csec">
-          <div className="hd">
-            <b>{t('gui.agent.builtin')}</b>
-            <span className="n">{String(builtin.length)}</span>
-          </div>
-          <div className="sec-hint">{t('gui.agent.builtin_h')}</div>
-          <div className="fset">
-            {builtin.map((row) => (
-              <BuiltinCard key={row.name} row={row} />
-            ))}
-          </div>
-        </div>
+      {/* A heading with nothing under it is a heading about nothing: each group
+          appears only when it has rows. The ordering inside the addable one is
+          still by what connecting costs -- that is behaviour, and it does not
+          need a caption to be true. */}
+      {on.length ? (
+        <SetupGroup label={t('gui.agent.g_on')} count={on.length}>
+          {rows(on)}
+        </SetupGroup>
       ) : null}
-      {vendored.length ? (
-        <div className="csec">
-          <div className="hd">
-            <b>{t('gui.agent.vendored')}</b>
-            <span className="n">{String(vendored.length)}</span>
-          </div>
-          <div className="sec-hint">{t('gui.agent.vendored_h')}</div>
-          <div className="fset">
-            {vendored.map((row) => (
-              <BuiltinCard key={row.name} row={row} install />
-            ))}
-          </div>
-        </div>
+      {off.length ? (
+        <SetupGroup label={t('gui.agent.g_off')} count={off.length}>
+          {rows(off)}
+        </SetupGroup>
       ) : null}
-      <div className="csec">
-        <div className="hd">
-          <b>{t('gui.agent.on')}</b>
-          <span className="n">{String(on.length)}</span>
-          <button className="mini ghost" disabled={s.probing} onClick={() => void store.run('probe')}>
-            {t(s.probing ? 'gui.agent.probing' : 'gui.agent.probe')}
-          </button>
-        </div>
-        {!on.length ? (
-          <div className="empty-note">{t('gui.agent.none')}</div>
-        ) : (
-          <div className="fset">
-            {on.map((row) => (
-              <ConfiguredRow key={row.name} row={row} />
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="csec">
-        <div className="hd">
-          <b>{t('gui.agent.off')}</b>
-          <span className="n">{String(off.length)}</span>
-        </div>
-        <div className="grid">
-          {off.map((row) => (
-            <OffCard key={row.name} row={row} />
-          ))}
-        </div>
-      </div>
-      {sheetRow ? <XaSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} /> : null}
+      {sheetRow ? <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} /> : null}
     </>
   )
 }

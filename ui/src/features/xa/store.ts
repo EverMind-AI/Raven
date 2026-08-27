@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { dropAfterFade } from '../../shell/detailfade'
 import { show as toast } from '../../shell/toast'
 
 import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
@@ -11,18 +12,16 @@ import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
 
 export interface XaState {
   rows: XaRow[]
-  /* The two flags only the page can answer: which sheet is unfolded, and
-     whether a probe is in flight. Both are about what is drawn, so neither
-     belongs to whichever source is answering. */
+  /* The one flag only the page can answer: which card is open. It is about what
+     is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
-  probing: boolean
   /* Bumped when the rows are replaced: the sheet's form is uncontrolled and
      mutated in place, so a fresh answer remounts it -- the same wholesale
      redraw the legacy xaSheetDraw performed after every mutation. */
   epoch: number
 }
 
-let state: XaState = { rows: [], sheet: null, probing: false, epoch: 0 }
+let state: XaState = { rows: [], sheet: null, epoch: 0 }
 const listeners = new Set<() => void>()
 
 export const getState = (): XaState => state
@@ -49,6 +48,9 @@ const failure = (e: unknown): string => {
   return (err && ((err.data && err.data.detail) || err.detail || err.message)) || String(e)
 }
 
+/* `load(true)` re-measures availability, and opening the page is the only thing
+   that asks for it now: the group heading in the page is a fresh answer every
+   time the reader arrives, which is what the re-check button used to be for. */
 export function open(): void {
   shell().showPage('xaPage')
   void source()
@@ -64,11 +66,9 @@ export function close(): void {
   shell().showPage(null)
 }
 
-/* Every mutation goes through here, and the two long-running ones say so on
-   screen before they hand over: a probe re-measures every entry and a test
-   runs the agent for real, either of which can outlast a model turn, and a
-   button that neither moves nor disables reads as a dead button. */
-export async function run(op: XaOp | 'probe', row?: XaRow, args?: XaActArgs): Promise<void> {
+/* Every write goes through here: one place that toasts the failure and repaints
+   from whatever the source answered, so no caller has to remember either. */
+export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void> {
   let rows = state.rows
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
@@ -78,25 +78,8 @@ export async function run(op: XaOp | 'probe', row?: XaRow, args?: XaActArgs): Pr
      the sheet at a name no row will ever have and close the drawer. */
   let renamed = ''
   try {
-    if (op === 'probe') {
-      set({ probing: true })
-      try {
-        rows = await source().load(true)
-      } finally {
-        set({ probing: false })
-      }
-    } else {
-      if (op === 'test' && row) {
-        row.test_running = true
-        set({})
-      }
-      try {
-        rows = await source().act(op, row as XaRow, args || {})
-        if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
-      } finally {
-        if (op === 'test' && row) row.test_running = false
-      }
-    }
+    rows = await source().act(op, row as XaRow, args || {})
+    if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
     toast(t('gui.agent.failed', { detail: failure(e) }))
   }
@@ -152,6 +135,11 @@ function watchBuilds(rows: XaRow[]): void {
    every open re-adopts it, so the island never reconciles into nodes
    a legacy wipe orphaned. */
 let host: HTMLDivElement | null = null
+/* Counts opens of the shared card, so a close scheduled for the card on screen
+   can tell a reopen from its own card still being there. Outside the reactive
+   state on purpose: nothing renders it. */
+let sheetGen = 0
+
 export function detailHost(): HTMLDivElement {
   if (!host) {
     host = document.createElement('div')
@@ -168,18 +156,31 @@ export function sheetOpen(row: XaRow): void {
     body.innerHTML = ''
     body.appendChild(detailHost())
   }
+  sheetGen += 1
   set({ sheet: row.name, epoch: state.epoch + 1 })
 }
 
 export function closeSheet(): void {
   shell().closeDetail?.()
-  if (state.sheet) set({ sheet: null })
+  sheetDismissed()
 }
 
 /* Called when legacy chrome closed the drawer itself (Esc, the close
-   button, a click outside): only the island state has to follow. */
+   button, a click outside): only the island state has to follow -- but not
+   until the drawer has finished fading, or the card is gone from inside a
+   panel that is still on screen. */
 export function sheetDismissed(): void {
-  if (state.sheet) set({ sheet: null })
+  if (!state.sheet) return
+  /* Which open this close belongs to. The name cannot answer that: closing a
+     card and pressing the same row again inside the fade writes the same string
+     back, so the pending drop read it as "still mine" and cleared the card that
+     had just opened. `epoch` is no good either -- a background reload bumps it,
+     which would read as a reopen and leave the closed card up. */
+  const gen = sheetGen
+  dropAfterFade(
+    () => set({ sheet: null }),
+    () => sheetGen !== gen,
+  )
 }
 
 /* A language flip changes nothing in this state, but every visible string

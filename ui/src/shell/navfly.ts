@@ -1,8 +1,11 @@
-/* The nav flyout: the 更多 group of the rail.
+/* The More group of the rail.
  *
- * 连接 / 入口 / 定时 live one level in, because they are set-up-once surfaces
- * rather than daily destinations. Three rows built from a table, into a slim
- * column that grows out of the rail (#moreFly in the markup).
+ * Sub-agents, entrances and schedules live behind a fold, because they are
+ * set-up-once surfaces
+ * rather than daily destinations. Three rows built from a table, into the gap
+ * above the fold's own button (#moreFly in the markup). They are .navi rows,
+ * the same shape as the four modules above them: unfolding the group makes one
+ * list longer rather than opening a second, indented one under it.
  *
  * A writer, not an island. Two reasons: each row carries raw SVG path data
  * that the style freeze wants byte-identical, and the marks on these rows are
@@ -64,7 +67,7 @@ export function draw(): void {
   box.innerHTML = ''
   MORE_ROWS.forEach((row) => {
     const b = document.createElement('button')
-    b.className = 'mrow'
+    b.className = 'navi'
     b.setAttribute('aria-current', String(pageUp(row.page)))
     b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${row.path}</svg>`
     /* Names only. These three rows are places the reader already knows by
@@ -90,7 +93,7 @@ export function draw(): void {
 export function mark(): boolean {
   const box = fly()
   if (!box || box.dataset.open !== 'true') return false
-  const rows = box.querySelectorAll('.mrow')
+  const rows = box.querySelectorAll('.navi')
   rows.forEach((b, i) => {
     const row = MORE_ROWS[i]
     b.setAttribute('aria-current', String(!!row && pageUp(row.page)))

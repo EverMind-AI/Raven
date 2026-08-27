@@ -49,7 +49,7 @@ function install(over: Partial<Shell> = {}): Harness {
 }
 
 const fly = (): HTMLElement => document.getElementById('moreFly')!
-const rows = (): HTMLElement[] => [...fly().querySelectorAll<HTMLElement>('.mrow')]
+const rows = (): HTMLElement[] => [...fly().querySelectorAll<HTMLElement>('.navi')]
 const marked = (): Array<string | null> => rows().map((b) => b.getAttribute('aria-current'))
 const names = (): Array<string | null> => rows().map((b) => b.querySelector('.nm')?.textContent ?? null)
 const current = (id: string): string | null => document.getElementById(id)!.getAttribute('aria-current')
@@ -67,8 +67,10 @@ beforeEach(() => {
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button><button id="plugBtn"></button>' +
-    '<button id="memBtn"></button><button class="navi" id="moreBtn" aria-expanded="false"></button>' +
+    '<button id="memBtn"></button>' +
     '<div class="moresub" id="moreFly" data-open="false"></div>' +
+    '<button class="navi more" id="moreBtn" aria-expanded="false">' +
+    '<span class="l-more">更多</span><span class="l-less">收起</span></button>' +
     '<section id="capsPage" data-open="false"></section>' +
     '<section id="xaPage" data-open="false"></section>' +
     '<section id="connPage" data-open="false"></section>' +
@@ -89,11 +91,14 @@ describe('the nav flyout', () => {
     expect(names()).toEqual(MORE_ROWS.map((r) => r.nameKey))
   })
 
+  /* The rows are the same shape as the modules above them -- .navi, not a
+     class of their own -- which is what makes the group read as one list
+     getting longer rather than a second, indented one opening under it. */
   it('gives every row its glyph and nothing else', () => {
     install()
     draw()
     for (const b of rows()) {
-      expect(b.className).toBe('mrow')
+      expect(b.className).toBe('navi')
       expect(b.children).toHaveLength(2)
       expect(b.children[0]!.tagName.toLowerCase()).toBe('svg')
       expect(b.children[0]!.getAttribute('aria-hidden')).toBe('true')
