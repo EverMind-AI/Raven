@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import raven.playbook.generator as generator_mod
 from raven.playbook import (
     PlaybookGenerationError,
     PlaybookGenerator,
@@ -258,6 +259,48 @@ async def test_envelope_wrapped_spec_is_unwrapped():
     gen, _ = _generator([{"playbook": GOOD_DAG}])
     result = await gen.generate("weekly feedback analysis")
     assert result.spec.name == "weekly-feedback"
+
+
+async def test_a_stringified_object_field_is_decoded_not_refused():
+    """Some models serialise a nested object twice; the content is still right."""
+    payload = json.loads(json.dumps(GOOD_DAG))
+    payload["triggers"] = json.dumps(GOOD_DAG["triggers"])
+    payload["params"] = json.dumps(GOOD_DAG["params"])
+    payload["nodes"] = json.dumps(GOOD_DAG["nodes"])
+    # Scripted four deep so a regression ends in the loop's own error naming
+    # the field, rather than the provider running out of payloads.
+    gen, _ = _generator([payload] * 4)
+    result = await gen.generate("weekly feedback analysis", skills=["sql-queries"])
+    assert result.spec.triggers.keywords == ["user feedback", "feedback weekly"]
+    assert list(result.spec.params) == ["week_of"]
+    assert [n.id for n in result.spec.nodes] == ["pull", "report"]
+    assert len(gen._provider.calls) == 1, "it should not have needed a repair round"
+
+
+async def test_free_text_that_parses_as_json_is_left_alone():
+    """`prompts` is the author's prose, not a structure to decode."""
+    payload = {
+        "name": "due-diligence",
+        "description": "run due diligence on a target",
+        "taskSummary": "due diligence sweep",
+        "mode": "prompt",
+        "triggers": {"keywords": ["due diligence", "diligence sweep"]},
+        "prompts": '{"layer one": "a breadth scan", "layer two": "fan out by focus"}',
+    }
+    gen, _ = _generator([payload] * 4)
+    result = await gen.generate("build me a due-diligence playbook")
+    assert result.spec.prompts == payload["prompts"]
+
+
+def test_the_decoded_field_set_tracks_the_contract():
+    """A new object or array field on the spec must not need a second list."""
+    assert set(generator_mod._STRUCTURAL_FIELDS) == {
+        "triggers",
+        "params",
+        "nodes",
+        "blockingQuestions",
+        "assumptions",
+    }
 
 
 async def test_unknown_skills_degrade_into_notes():
