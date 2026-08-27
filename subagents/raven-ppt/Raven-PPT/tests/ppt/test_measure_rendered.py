@@ -19,6 +19,7 @@ from raven.ppt.services.measure.rendered import (
     CARD_SLOP_PT,
     COLLISION_SHARE,
     COLLISIONS_PER_PAGE,
+    OUTSIDE_LINE_SHARE,
     OVERFLOWS_PER_PAGE,
     RULE_BOTTOM_SPARE,
     RULE_MAX_HEIGHT_PT,
@@ -26,6 +27,7 @@ from raven.ppt.services.measure.rendered import (
     RULE_TOP_SPARE,
     RULES_PER_PAGE,
     WORD_IN_CARD_SHARE,
+    box_overflows,
     card_overflows,
     cards,
     hairline_rules,
@@ -36,6 +38,8 @@ from raven.ppt.services.measure.words import WordBox, by_page, parse_bbox_xml, r
 from tests.ppt.conftest import DeckBuilder
 
 pytest.importorskip("pptx")
+
+_DRAWINGML = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 
 def _word(text: str, x0: float, y0: float, x1: float, y1: float, page: int = 1) -> WordBox:
@@ -334,6 +338,108 @@ def test_a_panel_carrying_copy_is_not_a_card_the_copy_can_escape(deck: DeckBuild
     assert cards(deck.save())[1] == []
 
 
+# --- copy escaping its own text box ------------------------------------------
+
+
+def _one_box(tmp_path: Path, *, text: str = "the copy this box was given", width: float = 3.0) -> Path:
+    """One text box at (1.0, 1.0), `width` wide and 0.6in tall -- 72,72 to x,115.2 in points."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(width), Inches(0.6)).text_frame.text = text
+    path = tmp_path / f"box-{width}-{len(text)}.pptx"
+    presentation.save(str(path))
+    return path
+
+
+def test_copy_the_render_sets_below_its_box_is_reported(tmp_path: Path) -> None:
+    """A live deck shipped a page whose last line rendered 0.30in under the box that
+    holds it, over the template's corner ornament, and all sixteen findings on that deck
+    were about something else: `off_page` compares against the canvas edge and the line
+    was still on the canvas, `spilled_copy` is about a box with wrapping off, and
+    `overset_copy` predicts the height from font metrics and under-read it."""
+    deck = _one_box(tmp_path)
+    words = [
+        _word("the copy this box", 76, 76, 260, 94),
+        _word("was given", 76, 118, 200, 136),  # wholly below the box, which ends at 115.2
+    ]
+
+    findings = box_overflows(deck, words)
+
+    assert [f.kind for f in findings] == ["box_overflow"]
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].page == 1
+    assert findings[0].detail["words"] == ["was given"]
+    # The numbers to act on: 136 - 115.2 past a 0.6in box, so the copy took 0.89in.
+    assert findings[0].detail["below_in"] == pytest.approx((136 - 115.2) / 72, abs=0.01)
+    assert findings[0].detail["needs_in"] == pytest.approx(0.6 + (136 - 115.2) / 72, abs=0.01)
+    assert "do not shrink the type to fit" in findings[0].message
+
+
+def test_copy_inside_its_box_is_not(tmp_path: Path) -> None:
+    deck = _one_box(tmp_path)
+
+    assert box_overflows(deck, [_word("the copy this box was given", 76, 76, 260, 94)]) == []
+
+
+def test_the_slack_is_half_the_escaping_line(tmp_path: Path) -> None:
+    """A word's bbox is the font's box and not its ink, so the last line of a box sized
+    exactly to its copy always ends a little below it -- 0.12 of the line's own height at
+    worst on the deck this was measured against. Half a line is where that stops being
+    the explanation."""
+    assert OUTSIDE_LINE_SHARE == 0.5
+    deck = _one_box(tmp_path)
+    reported = []
+    for below in (0.45 * 18, 0.55 * 18):
+        tail = _word("was given", 76, 115.2 + below - 18, 200, 115.2 + below)
+        reported.append(len(box_overflows(deck, [_word("the copy this box", 76, 76, 260, 94), tail])))
+
+    assert reported == [0, 1]
+
+
+def test_a_line_below_a_neighbouring_column_is_not_this_box_s_overflow(tmp_path: Path) -> None:
+    """The tail of one column otherwise reads as the overflow of whatever box happens to
+    sit above it in the other."""
+    deck = _one_box(tmp_path)
+
+    assert (
+        box_overflows(
+            deck,
+            [
+                _word("the copy this box", 76, 76, 260, 94),
+                _word("another column", 500, 118, 620, 136),
+            ],
+        )
+        == []
+    )
+
+
+def test_a_line_a_full_line_below_the_box_belongs_to_whatever_wrote_it(tmp_path: Path) -> None:
+    """Copy flows, so the first line past a box starts within one line of where the box
+    ended. Further down is the next block on the page, not this box's overflow."""
+    deck = _one_box(tmp_path)
+
+    assert (
+        box_overflows(
+            deck,
+            [
+                _word("the copy this box", 76, 76, 260, 94),
+                _word("a separate block", 76, 140, 200, 158),
+            ],
+        )
+        == []
+    )
+
+
+def test_a_box_the_render_put_nothing_in_owns_no_overflow(tmp_path: Path) -> None:
+    deck = _one_box(tmp_path)
+
+    assert box_overflows(deck, [_word("was given", 76, 118, 200, 136)]) == []
+
+
 def test_copy_the_render_does_not_show_is_named() -> None:
     """A shape narrower than its own words clips instead of wrapping, and every other
     check passes: the words that did render sit exactly where they belong."""
@@ -531,6 +637,66 @@ def test_a_label_that_did_not_break_is_not(tmp_path: Path) -> None:
     presentation.save(str(deck))
 
     assert orphan_lines(deck, [_word("任务碎片化：为什么要统一", 72, 72, 380, 90)]) == []
+
+
+def test_a_break_the_author_wrote_is_not_an_orphan(tmp_path: Path) -> None:
+    """A two-line chevron label written as "提交并\n推送" used to report the same as a label
+    the box was too narrow to hold, and one live run spent three consecutive iterations
+    arguing back that its labels were meant to read that way instead of acting on
+    anything. It was right: the first is typography and the second is a defect.
+
+    The form pinned here is the one the file actually carries. `layout.write` assigns
+    the paragraph's text, and python-pptx turns a `\n` in it into an `a:br` -- which
+    reads back as `\v`, not as the `\n` that went in, so a check looking for the
+    written character would never have found one.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven.ppt.services.measure.rendered import orphan_lines
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(1.4), Inches(1.0))
+    box.text_frame.paragraphs[0].text = "提交并\n推送"
+    deck = tmp_path / "written-break.pptx"
+    presentation.save(str(deck))
+
+    assert "\v" in box.text_frame.text
+    assert box.text_frame.paragraphs[0]._p.findall(f"{{{_DRAWINGML}}}br")
+
+    words = [_word("提交并", 76, 76, 130, 94), _word("推送", 76, 100, 112, 118)]
+
+    assert orphan_lines(deck, words) == []
+
+
+def test_a_genuine_orphan_in_a_box_that_also_carries_a_written_break_still_fires(tmp_path: Path) -> None:
+    """The skip is per break and not per shape: a box that carries a written break
+    somewhere in it is still checked everywhere else."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven.ppt.services.measure.rendered import orphan_lines
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1.2))
+    box.text_frame.paragraphs[0].text = "提交并推送\n任务碎片化：为什么要统一"
+    deck = tmp_path / "break-and-orphan.pptx"
+    presentation.save(str(deck))
+
+    words = [
+        _word("提交并推送", 76, 76, 166, 94),
+        _word("任务碎片化：为什么要统", 76, 100, 280, 118),
+        _word("一", 76, 124, 94, 142),
+    ]
+
+    findings = orphan_lines(deck, words)
+
+    assert [f.kind for f in findings] == ["orphan_line"]
+    assert findings[0].detail["orphan"] == "一"
 
 
 def _stacked_deck(tmp_path: Path, second_top_in: float) -> Path:

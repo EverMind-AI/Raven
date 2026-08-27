@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven.ppt.services.render import LocalDeckRenderer, RenderError
+from raven.utils.helpers import _IMAGE_TOKEN_CAP, _image_pixel_size
 
 _log = logging.getLogger(__name__)
 
@@ -102,8 +103,55 @@ class DeckViews:
         return _encoded(png, budget or self.max_image_bytes)
 
 
+def _fitted(raw: bytes) -> bytes:
+    """``raw`` with its long edge brought under the cap, or ``raw`` unchanged.
+
+    A budget in bytes does not bound pixels, and the two come apart on exactly the
+    picture this is most likely to be handed: a 3018x1528 logo of flat colour
+    encodes small enough to pass the budget untouched, so it went to the endpoint
+    at full width. Anthropic allows 2000px per side once a request carries more
+    than twenty images, and a run that had fetched three figures and was reviewing
+    its own renders was well past that -- it died on the 28th content block of one
+    message, 47 iterations and 13 dollars in, having published nothing.
+
+    The cap is the token formula's, imported rather than restated so the two cannot
+    drift: past 1568 the patch count is clamped, so the extra pixels buy no detail
+    the model can see and cost bytes and this refusal. Downscaling is silent
+    because there is nothing for an author to decide -- the picture the model gets
+    is the same picture.
+    """
+    size = _image_pixel_size(raw)
+    if size is None:
+        # A format the header parser does not read. Passing it through is what
+        # happened before this function existed.
+        return raw
+    if max(size) <= _IMAGE_TOKEN_CAP:
+        return raw
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - Pillow ships with the ppt extra
+        return raw
+    scale = _IMAGE_TOKEN_CAP / max(size)
+    wanted = (max(1, round(size[0] * scale)), max(1, round(size[1] * scale)))
+    with Image.open(io.BytesIO(raw)) as image:
+        palette = image.mode in ("P", "PA")
+        # Resampled in RGB whatever the source is, because LANCZOS over palette
+        # *indices* averages numbers that mean nothing. A palette source is then
+        # returned to one: it held at most 256 colours to begin with, so the
+        # quantisation gives back what it already was, and skipping it is what
+        # turns a flat-colour logo into eight times its own bytes -- which the
+        # history budget is counted in, so it would trade this refusal for
+        # emergency shrinking.
+        shrunk = image.convert("RGB").resize(wanted, Image.LANCZOS)
+        if palette:
+            shrunk = shrunk.quantize(colors=256, method=Image.MEDIANCUT)
+        buffer = io.BytesIO()
+        shrunk.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
 def _encoded(png: Path, budget: int) -> str:
-    raw = png.read_bytes()
+    raw = _fitted(png.read_bytes())
     if len(base64.b64encode(raw)) <= budget:
         return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
     try:

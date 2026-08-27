@@ -120,7 +120,7 @@ def test_the_task_passes_through_without_path_checking(mod, tmp_path: Path, monk
     delivered = _task_arg(launches)
     assert delivered.startswith(task)  # the task arrives exactly as written
     assert "does not exist on this host" not in delivered
-    assert "No source material was staged" in delivered
+    assert "No material staged for this run" in delivered
 
 
 def test_an_unrelated_json_block_with_a_template_key_runs(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,7 +163,7 @@ def test_the_prompt_says_when_no_material_was_staged(mod, tmp_path: Path) -> Non
 
     section = mod.material_section([], mats)
 
-    assert "No source material was staged" in section
+    assert "No material staged for this run" in section
     assert str(mats) not in section
 
 

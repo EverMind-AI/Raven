@@ -23,9 +23,9 @@ from raven.ppt.services.measure.content import (
     banded_tables,
     evidence_coverage,
     flat_formulas,
+    listed_claims,
     native_tables,
     planned_tables,
-    unmarked_points,
     wide_tables,
 )
 from tests.ppt.conftest import DeckBuilder
@@ -394,7 +394,9 @@ def test_the_decks_own_table_helper_is_not_reported(deck: DeckBuilder, tmp_path:
 
 
 def test_every_style_the_table_helper_offers_stays_unreported(deck: DeckBuilder, tmp_path: Path) -> None:
-    """`header_tint` and `row_rules` add fills and rules of the deck's own, not Office's."""
+    """`header_tint` fills a row and every style rules between them -- the deck's own
+    lines, not Office's: this reads banding and the gallery style id, and a hairline at
+    a row boundary is neither."""
     layout = _projected(tmp_path, "ppt_layout.py")
     theme = _projected(tmp_path, "ppt_theme.py").THEMES["ink-graphite"]
     for style in ("minimal", "header_tint", "row_rules", "compact"):
@@ -545,65 +547,107 @@ def test_a_line_already_set_as_a_formula_is_left_alone(tmp_path) -> None:
             sys.modules.pop(name, None)
 
 
-def test_parallel_claims_with_no_mark_are_reported(deck: DeckBuilder) -> None:
-    """Verbatim from a delivered page: two sentences of 47 and 58 characters under a
-    rule, nothing in front of either, so a reader has to work out that they are two
-    things rather than one paragraph with a line break in it.
+def test_parallel_claims_in_one_region_are_reported(deck: DeckBuilder) -> None:
+    """The delivered page's own geometry: four claims in the 6.48 x 5.22in column that
+    was half of that page's body, which is the box the reviewer asked to be deleted.
     """
     page = deck.page()
     deck.text(
         page,
         ("分类不再走全连接头：类别被建模成网络的动态输入，语义表示只通过损失监督学到，架构因此与任务定义解耦。", 16.0),
         ("同一套权重在推理时按需拼装查询集合即可热切换任务；论文指出这条接口还能容纳文本 prompt。", 16.0),
-        left=1.0,
-        top=2.0,
-        width=8.0,
-        height=1.4,
+        left=6.12,
+        top=1.93,
+        width=6.48,
+        height=5.22,
     )
-    findings = unmarked_points(deck.save())
+    findings = listed_claims(deck.save())
 
-    assert [f.kind for f in findings] == ["unmarked_points"]
-    assert findings[0].detail["points"] == 2
-    assert "points()" in findings[0].message
+    assert [f.kind for f in findings] == ["listed_claims"]
+    assert findings[0].detail["claims"] == 2
+    assert "a frame each" in findings[0].message
 
 
-def test_a_mark_typed_at_the_front_counts(deck: DeckBuilder) -> None:
-    """Not ideal -- the wrap does not hang -- but the reader can see the list, and
-    that is what this measures.
+def test_a_box_across_the_page_is_reported_however_short_it_is(deck: DeckBuilder) -> None:
+    """A full-width band two lines deep does not hold an eighth of the canvas, and it
+    is still the page talking across itself."""
+    page = deck.page()
+    deck.text(
+        page,
+        ("分类不再走全连接头：类别被建模成网络的动态输入，语义只通过损失监督学到。", 16.0),
+        ("同一套权重在推理时按需拼装查询集合即可热切换任务，无需任务特定微调。", 16.0),
+        left=0.72,
+        top=2.0,
+        width=11.89,
+        height=0.9,
+    )
+
+    assert [f.kind for f in listed_claims(deck.save())] == ["listed_claims"]
+
+
+def test_a_mark_typed_at_the_front_no_longer_answers_this(deck: DeckBuilder) -> None:
+    """It used to clear the finding, and that is how the delivered page passed: the
+    claims carried a mark and the page was still a list to be read out.
     """
     page = deck.page()
     deck.text(
         page,
         ("· 分类不再走全连接头：类别被建模成网络的动态输入，语义只通过损失监督学到。", 16.0),
         ("· 同一套权重在推理时按需拼装查询集合即可热切换任务，无需任务特定微调。", 16.0),
-        left=1.0,
-        top=2.0,
-        width=8.0,
-        height=1.4,
+        left=6.12,
+        top=1.93,
+        width=6.48,
+        height=5.22,
     )
 
-    assert unmarked_points(deck.save()) == []
+    assert [f.kind for f in listed_claims(deck.save())] == ["listed_claims"]
 
 
 def test_a_stack_of_short_lines_is_left_alone(deck: DeckBuilder) -> None:
-    """A legend, an axis or a list of names. Marks on those are clutter."""
+    """A legend, an axis or a list of names. None of those wants a block each."""
     page = deck.page()
     deck.text(
         page,
         ("R-50 骨干", 16.0),
         ("Swin-T 骨干", 16.0),
         ("Swin-L 骨干", 16.0),
-        left=1.0,
-        top=2.0,
-        width=8.0,
-        height=1.4,
+        left=6.12,
+        top=1.93,
+        width=6.48,
+        height=5.22,
     )
 
-    assert unmarked_points(deck.save()) == []
+    assert listed_claims(deck.save()) == []
 
 
-def test_points_writes_a_real_bullet_and_passes(tmp_path) -> None:
-    """The call the finding names has to satisfy the finding."""
+def test_a_block_s_own_copy_is_left_alone(deck: DeckBuilder) -> None:
+    """A card's body inside a two-up row: already grouped, and two sentences of
+    explanation there read as explanation. Measured against the module's geometry --
+    3.0% of the canvas in a three-up row, 6.4% in a two-up, 8.6% inside a half-page
+    panel, all under the eighth this asks for.
+    """
+    page = deck.page()
+    deck.text(
+        page,
+        ("分类不再走全连接头：类别被建模成网络的动态输入，语义只通过损失监督学到。", 16.0),
+        ("同一套权重在推理时按需拼装查询集合即可热切换任务，无需任务特定微调。", 16.0),
+        left=0.94,
+        top=2.0,
+        width=5.37,
+        height=1.6,
+    )
+
+    assert listed_claims(deck.save()) == []
+
+
+def test_a_bulleted_list_across_a_region_is_reported_and_cards_are_not(tmp_path) -> None:
+    """The two calls, on the same claims, in the same region of the same page.
+
+    `points` still writes a real bullet with a hanging indent -- that mechanism is
+    unchanged and asserted here -- and a page's parallel claims set that way is now the
+    finding. The blocks that answer it have to clear it, or the fix the message names
+    would report itself.
+    """
     import sys
 
     from pptx import Presentation
@@ -619,28 +663,41 @@ def test_points_writes_a_real_bullet_and_passes(tmp_path) -> None:
         module = __import__("ppt_layout")
         from ppt_theme import THEMES
 
+        theme = THEMES["ink-graphite"]
+        claims = [
+            "分类不再走全连接头：类别被建模成网络的动态输入，语义只通过损失监督学到。",
+            "同一套权重在推理时按需拼装查询集合即可热切换任务，无需任务特定微调。",
+        ]
+        region = module.Box(6.12, 1.93, 12.60, 7.15)
+
         presentation = Presentation()
         presentation.slide_width, presentation.slide_height = module.Inches(13.333), module.Inches(7.5)
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-        frame = module.points(
-            slide,
-            module.Box(0.7, 2.0, 12.6, 3.4),
-            THEMES["ink-graphite"],
-            [
-                "分类不再走全连接头：类别被建模成网络的动态输入，语义只通过损失监督学到。",
-                "同一套权重在推理时按需拼装查询集合即可热切换任务，无需任务特定微调。",
-            ],
-        )
-        built = tmp_path / "deck.pptx"
-        presentation.save(str(built))
+        frame = module.points(slide, region, theme, claims)
+        listed = tmp_path / "listed.pptx"
+        presentation.save(str(listed))
 
-        assert unmarked_points(built) == []
+        assert [f.kind for f in listed_claims(listed)] == ["listed_claims"]
         # A real bullet with a hanging indent, not a character typed in front.
         namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
         first = frame.paragraphs[0]._pPr
         assert first.find(f"{namespace}buChar") is not None
         assert int(first.get("indent")) == -int(first.get("marL"))
         assert not frame.paragraphs[0].text.startswith(("•", "·"))
+
+        presentation = Presentation()
+        presentation.slide_width, presentation.slide_height = module.Inches(13.333), module.Inches(7.5)
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        module.plane(slide, region, theme, tint="surface")
+        inside = region.inset(module.PAD)
+        tall = max(module.card_size(inside.w, title="口径", body=one).h for one in claims)
+        rows = module.stack(inside, gutter=module.GUTTER)
+        for one in claims:
+            module.card(slide, rows.take(tall), theme, tint="background", title="口径", body=one)
+        blocks = tmp_path / "blocks.pptx"
+        presentation.save(str(blocks))
+
+        assert listed_claims(blocks) == []
     finally:
         sys.path.remove(str(tmp_path))
         for name in ("ppt_layout", "ppt_icons", "ppt_shapes", "ppt_theme"):

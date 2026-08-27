@@ -96,7 +96,9 @@ def env_value(name: str) -> str | None:
 # The host raven's config file, read for the fallback in `render_config`. Read
 # as JSON, never imported from raven: this launcher is standard-library only and
 # has to run under a bare python3 that may not have the runtime installed at all.
-HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
+RAVEN_HOME = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven")
+HOST_CONFIG = RAVEN_HOME / "config.json"
+MODEL_CATALOG = RAVEN_HOME / "cache" / "model-catalog.json"
 
 # Where each optional secret belongs in the config the agent loads. Named and
 # pathed as in the other three launchers so the four can be compared by grep.
@@ -119,6 +121,29 @@ def host_config() -> dict:
         return json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def model_context_window(model: str) -> int | None:
+    """This model's real ceiling from the host's catalog, or None to leave the pin.
+
+    None covers every way the catalog can decline to answer -- never fetched,
+    unreadable, or holding no row for this id -- and the caller then keeps
+    whatever `config.json` shipped. The number is taken verbatim rather than
+    shaded down for headroom: `agents.defaults.contextWindowTokens` is what the
+    runtime sizes its pre-send trimming against, so a value below the real one
+    makes the trimmer cut history the provider would have accepted, and a value
+    above it lets a request through that the provider refuses. Either way an
+    invented margin is a number nobody reading the rendered config could account
+    for.
+    """
+    try:
+        catalog = json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    models = catalog.get("models") if isinstance(catalog, dict) else None
+    entry = models.get(model) if isinstance(models, dict) else None
+    length = entry.get("context_length") if isinstance(entry, dict) else None
+    return length if isinstance(length, int) and not isinstance(length, bool) and length > 0 else None
 
 
 def dig(data: dict, path: tuple) -> str:
@@ -317,8 +342,15 @@ def material_section(staged: list[tuple[str, Path]], mats: Path) -> str:
             f"\nUse only files under {mats} as factual source material."
         )
     return (
-        "\n\nNo source material was staged for this run: every fact in the deck "
-        "is yours, and what you cannot verify is a guess. Present it as one."
+        "\n\n# No material staged for this run\n"
+        "Nothing was named, so this deck's material has to be gathered rather than "
+        "read: web_search for the sources and the pictures, "
+        'web_fetch(extractMode="images") on the URLs they cite -- which returns each '
+        "picture with the caption its author wrote -- and ppt_fetch what you will use, "
+        "so the ingest reads it in. Fetch into the project rather than placing anything "
+        "straight onto a page: what this deck never ingested is what its provenance "
+        "checks cannot see, and on a run with no staged material that is everything. "
+        "What you still cannot verify is a guess, and it is presented as one."
     )
 
 
@@ -393,6 +425,20 @@ def render_config(source: Path) -> Path:
             f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}"
             + (f"; ignored {', '.join(ignored)}, which need {llm_key}" if ignored else "")
         )
+    # After both branches, because the window is a fact about whichever model was
+    # chosen rather than about whose key is paying for it. The shipped number is
+    # right for the shipped model and wrong for every other, and `PPT_MODEL` and
+    # the inherited branch can both replace that model without touching it.
+    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    shipped_window = defaults.get("contextWindowTokens")
+    model = defaults.get("model") or ""
+    if window := model_context_window(model):
+        defaults["contextWindowTokens"] = window
+        note = "" if window == shipped_window else f", replacing the configured {shipped_window}"
+        log(f"[run] window: {window} for {model}, from {MODEL_CATALOG}{note}")
+    else:
+        log(f"[run] window: {shipped_window} from config; {MODEL_CATALOG} has no entry for {model or '(no model)'}")
+
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     rendered = STATE_ROOT / ".config.rendered.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

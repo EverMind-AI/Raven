@@ -110,7 +110,7 @@ def lift(picture, *, blur=0.20, drop=0.05, share=0.22):
     return picture
 ```
 
-Three things they cost, all measured on the built file rather than guessed at:
+Three things they cost:
 
 - **A gradient is opaque as far as `covered_shape` is concerned.** python-pptx reports no
   alpha for a gradient fill, so `scrim` and `vignette` count as solid panels: a picture

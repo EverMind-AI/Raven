@@ -23,8 +23,10 @@ prose uses is a name the code answers to.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,6 +40,12 @@ ROOT = Path(__file__).resolve().parents[2]
 # monorepo, absent from a standalone checkout of the package.
 WRAPPER = ROOT.parent
 WRAPPER_FILES = ("README.md", "subagent.json", "run.py", "install.py", ".env.example")
+
+# The shipped config and the template that overrides it. Deliberately not in
+# WRAPPER_FILES: those are read as prose for the name checks, and these two are read
+# as data by the launcher checks at the foot of this file.
+WRAPPER_CONFIG = WRAPPER / "config.json"
+WRAPPER_ENV_EXAMPLE = WRAPPER / ".env.example"
 
 # Names a path segment used to be. Nothing in the code can supply these -- they are gone
 # from it, which is the point -- so they are listed, and `test_the_retired_names_are_not
@@ -426,3 +434,239 @@ def test_every_reference_document_named_is_one_that_ships() -> None:
         for named in set(_REFERENCE_DOC.findall(text)) - shipped:
             problems.append(f"{where}: {named!r} is not one of {sorted(shipped)}")
     _fail(problems, "these reference documents do not ship")
+
+
+# ---------------------------------------------------------------------------
+# The launcher's rendered config, read back off the runtime that loads it
+# ---------------------------------------------------------------------------
+#
+# `config.json` makes claims to raven the same way the documents above make claims
+# to a model, and they went unread for the same reason: nothing compared the shipped
+# provider name against the registry that resolves it. Naming it `custom` cost a live
+# 5-page deck $15.61, all of it uncached input, because `find_gateway` returns on its
+# first step -- a `provider_name` that maps to a gateway spec -- and `custom` is one,
+# so the api_base detection that would have found OpenRouter never ran, and
+# `custom.supports_prompt_caching` is False. A name the registry has no spec for
+# resolves to nothing and lets that detection through.
+
+
+_needs_wrapper = pytest.mark.skipif(
+    not (WRAPPER / "subagent.json").is_file(),
+    reason="the launcher and its config are absent from a standalone checkout of the package",
+)
+
+
+def _shipped_env() -> dict[str, str]:
+    """`.env.example`'s assignments, so these tests move with the template."""
+    return {
+        key.strip(): value.strip()
+        for key, _, value in (
+            line.partition("=") for line in WRAPPER_ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+        )
+        if key.strip().startswith("PPT_") and value.strip()
+    }
+
+
+@pytest.fixture
+def launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The launcher module, repointed at tmp_path so no real `.env`, host config,
+    model catalog or state root can leak into a test."""
+    spec = importlib.util.spec_from_file_location("raven_ppt_launcher", WRAPPER / "run.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "HERE", tmp_path)
+    monkeypatch.setattr(module, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(module, "HOST_CONFIG", tmp_path / "no-host-config.json")
+    monkeypatch.setattr(module, "MODEL_CATALOG", tmp_path / "no-model-catalog.json")
+    for name in ("PPT_API_KEY", "PPT_MODEL", "PPT_API_BASE", "PPT_SERPER_API_KEY", "PPT_JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    return module
+
+
+def _render(launcher, tmp_path: Path, **overrides: str) -> dict:
+    """The shipped `config.json`, rendered the way `run.py` renders it, on a `.env`
+    holding what `.env.example` ships plus a key that is a placeholder, not a secret."""
+    values = {"PPT_API_KEY": "sk-placeholder-not-a-real-key", **_shipped_env(), **overrides}
+    (tmp_path / ".env").write_text("\n".join(f"{k}={v}" for k, v in values.items()), encoding="utf-8")
+    return json.loads(launcher.render_config(WRAPPER_CONFIG).read_text(encoding="utf-8"))
+
+
+@_needs_wrapper
+def test_the_shipped_provider_name_leaves_prompt_caching_on(launcher, tmp_path: Path) -> None:
+    """The regression test for the $15.61 deck. Everything else here explains it."""
+    from raven.providers.prompt_cache import accepts_cache_control
+
+    defaults = _render(launcher, tmp_path)["agents"]["defaults"]
+    assert accepts_cache_control(defaults["model"], addressed_to=defaults["provider"]), (
+        f"a request addressed to {defaults['provider']!r} may not carry cache_control, "
+        f"so every call bills {defaults['model']} at full input price"
+    )
+
+
+@_needs_wrapper
+def test_the_provider_block_is_keyed_by_the_name_that_selects_it(launcher, tmp_path: Path) -> None:
+    """`agents.defaults.provider` selects a block by name, so a rename that reaches one
+    and not the other leaves the runtime with no block at all."""
+    config = _render(launcher, tmp_path)
+    assert list(config["providers"]) == [config["agents"]["defaults"]["provider"]]
+
+
+@_needs_wrapper
+def test_the_shipped_provider_name_does_not_shadow_endpoint_detection(launcher, tmp_path: Path) -> None:
+    """Step 1 of `find_gateway` returns on a name that maps to a gateway spec, so a
+    shipped name has to be one the registry does not carry -- then the api_base and
+    api_key steps run and place the endpoint themselves."""
+    from raven.providers.registry import find_by_name, find_gateway
+
+    config = _render(launcher, tmp_path)
+    name = config["agents"]["defaults"]["provider"]
+    base = config["providers"][name]["apiBase"]
+    key = config["providers"][name]["apiKey"]
+
+    assert find_by_name(name) is None, f"{name!r} resolves to a spec, which is what suppresses detection"
+    detected = find_gateway(provider_name=name, api_key=key, api_base=base)
+    assert detected is not None and detected.supports_prompt_caching, (
+        f"{base} was not placed from the shipped name alone"
+    )
+    # The failure this replaced, stated as the mechanism rather than as a value: the
+    # old name answered step 1 and the endpoint was never looked at.
+    shadowed = find_gateway(provider_name="custom", api_key=key, api_base=base)
+    assert shadowed is not None and shadowed.name == "custom"
+
+
+@_needs_wrapper
+def test_an_endpoint_the_registry_cannot_place_is_left_to_the_model_id(launcher, tmp_path: Path) -> None:
+    """A base nobody claims resolves to no spec at all, which falls through to the
+    model's own name rather than to a spec that answers no."""
+    from raven.providers.prompt_cache import accepts_cache_control
+    from raven.providers.registry import find_gateway
+
+    defaults = _render(launcher, tmp_path, PPT_API_BASE="https://llm.internal.example.com/v1")["agents"]["defaults"]
+    assert find_gateway(api_base="https://llm.internal.example.com/v1") is None
+    assert accepts_cache_control(defaults["model"], addressed_to=defaults["provider"])
+
+
+@_needs_wrapper
+def test_the_context_window_is_the_catalogs_number_verbatim(launcher, tmp_path: Path, monkeypatch) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps({"version": 3, "fetched_at": 0.0, "models": {"vendor/tiny": {"context_length": 262144}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(launcher, "MODEL_CATALOG", catalog)
+    defaults = _render(launcher, tmp_path, PPT_MODEL="vendor/tiny")["agents"]["defaults"]
+    assert defaults["contextWindowTokens"] == 262144
+
+
+@_needs_wrapper
+def test_a_catalog_that_is_not_there_leaves_the_shipped_window_alone(launcher, tmp_path: Path) -> None:
+    shipped = json.loads(WRAPPER_CONFIG.read_text(encoding="utf-8"))["agents"]["defaults"]["contextWindowTokens"]
+    assert _render(launcher, tmp_path)["agents"]["defaults"]["contextWindowTokens"] == shipped
+
+
+@_needs_wrapper
+def test_a_model_the_catalog_does_not_list_leaves_the_shipped_window_alone(
+    launcher, tmp_path: Path, monkeypatch
+) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"version": 3, "fetched_at": 0.0, "models": {}}), encoding="utf-8")
+    monkeypatch.setattr(launcher, "MODEL_CATALOG", catalog)
+    shipped = json.loads(WRAPPER_CONFIG.read_text(encoding="utf-8"))["agents"]["defaults"]["contextWindowTokens"]
+    rendered = _render(launcher, tmp_path, PPT_MODEL="vendor/unlisted")
+    assert rendered["agents"]["defaults"]["contextWindowTokens"] == shipped
+
+
+@_needs_wrapper
+def test_the_shipped_reasoning_effort_is_medium(launcher, tmp_path: Path) -> None:
+    """A constant nothing in `.env` supplies, so it stays a config choice rather than
+    becoming a derivation with one possible answer."""
+    assert _render(launcher, tmp_path)["agents"]["defaults"]["reasoningEffort"] == "medium"
+
+
+@_needs_wrapper
+def test_the_launcher_imports_nothing_outside_the_standard_library() -> None:
+    """`run.py` runs under whatever python3 the host has, which may not be the one the
+    runtime is installed under -- so every derivation in it reads JSON off disk rather
+    than importing the module that owns the same answer."""
+    tree = ast.parse((WRAPPER / "run.py").read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+    assert imported, "no imports were found, so this check is empty"
+    assert not imported - sys.stdlib_module_names
+
+
+class _FinishedChild:
+    """A child that starts, says nothing and exits 0 -- enough for `main` to get
+    past the launch, which is the only thing the two tests below are asking."""
+
+    def __init__(self) -> None:
+        self.stdout: list[str] = []
+        self.returncode = 0
+
+    def wait(self) -> int:
+        return 0
+
+    def kill(self) -> None:  # pragma: no cover - only the watchdog calls this
+        pass
+
+
+def _launch(launcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str, *material: Path) -> str:
+    """Run `main` far enough to build the child's argv, and return the prompt in it.
+
+    Material is named in the task text because that is the only channel left: the
+    launcher has no argv slot for it, and `materials_from_prompt` is what reads the
+    absolute paths back out.
+    """
+    shipped = "\n".join(f"{k}={v}" for k, v in _shipped_env().items())
+    (tmp_path / ".env").write_text(f"PPT_API_KEY=sk-placeholder-not-a-real-key\n{shipped}", encoding="utf-8")
+    recorded: list[list[str]] = []
+
+    def _popen(argv, **_kwargs):
+        recorded.append(list(argv))
+        return _FinishedChild()
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", _popen)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run.py", "--job", "t", "--config", str(WRAPPER_CONFIG), "--no-deliver",
+         "--task", " ".join([task, *(str(path) for path in material)])],
+    )
+    launcher.main()
+    assert recorded, "the child was never started, so the run did not reach the launch"
+    argv = recorded[0]
+    return argv[argv.index("-m") + 1]
+
+
+@_needs_wrapper
+def test_a_run_with_no_material_reaches_the_launch_and_is_told_to_gather(
+    launcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deck whose material has to be found is a deck, not an error. The refusal
+    this replaced turned "a 5-page guide to using GitLab" into an exit code."""
+    prompt = _launch(launcher, tmp_path, monkeypatch, "make a 5-page guide to using GitLab")
+    assert "No material staged for this run" in prompt
+    for tool in ("web_search", "web_fetch", "ppt_fetch"):
+        assert tool in prompt, f"{tool} finds material and the prompt does not name it"
+    # The sentence that would forbid everything: it points at `materials/`, which on
+    # this branch is empty.
+    assert "Use only files under" not in prompt
+
+
+@_needs_wrapper
+def test_a_run_with_material_keeps_the_sentence_that_fences_it(
+    launcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: staged files still carry the sourcing rule that stops the deck
+    being grounded in the model's own log."""
+    source = tmp_path / "notes.md"
+    source.write_text("# notes\n", encoding="utf-8")
+    prompt = _launch(launcher, tmp_path, monkeypatch, "build a deck", source)
+    assert "Material staged for this run" in prompt
+    assert "Use only files under" in prompt
+    assert "notes.md" in prompt

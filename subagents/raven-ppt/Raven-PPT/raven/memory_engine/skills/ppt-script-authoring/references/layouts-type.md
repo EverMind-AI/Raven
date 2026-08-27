@@ -14,10 +14,15 @@ the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]
 over it, which is where the label and the date go. Fill the rest of the page -- a spine
 alone is a third of a page of content.
 
+Where the numbers came from is a source note, and the page has a strip for it:
+`page(footer=True)` gives up the foot of the body, and `frame.footer` is the box it hands
+back.
+
 ```python
 stops = ("立项", "试点", "灰度", "全量", "复盘")
 dates = ("01-08", "03-02", "05-19", "07-30", "09-15")
 said = ("四人两周", "两条产线", "10% 流量", "全部产线", "口径归档")
+frame = page(footer=True)
 down = stack(frame.body)
 track = timeline(slide, down.take(1.70), T, stops)
 for stop, name, when in zip(track.stops, stops, dates):
@@ -29,10 +34,10 @@ down.skip(GUTTER)
 for box, one in zip(down.take(0.40).columns(5), said):
     write(slide, box, one, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN, align="center")
 down.skip(GUTTER)
-points(slide, down.rest(), T, [
-    "灰度到全量之间隔了两个月，是等一条产线的检修窗口，不是技术原因。",
-    "复盘的口径与附录 A 一致，五个节点都按同一批日志统计。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+write(slide, down.rest(), "灰度到全量之间隔了两个月，是等一条产线的检修窗口，不是技术原因。",
+      size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
+write(slide, frame.footer, "来源：五个节点按同一批日志统计，口径与附录 A 一致。",
+      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
 ### P17 -- A chevron process row
@@ -62,21 +67,29 @@ for box, said in zip(down.rest().columns(5), (
 One number, big enough to read from the back, with the reasoning beside it rather than
 under it. `NUMBER_PT` is the ramp's step for this; a display number may go above it.
 
+Each card's own title is the label, so the generic "这个数字怎么来的" heading over the
+column has nothing left to say. `tint="background"` on the cards is what keeps them
+visible on the `surface` ground under them: a card the same colour as its ground is not a
+card. The ground is not only ink either: a display number is type, and `evidence` counts
+a page as showing something at four filled shapes, so the three cards come to three and
+the ground is the fourth.
+
 ```python
 number, said = frame.body.split_left(0.42)
 down = stack(number)
 write(slide, down.take(1.50), "42ms", size=NUMBER_PT + 26, bold=True, colour=ACCENT, font=FACE)
 write(slide, down.take(0.42), "端到端时延，四类任务合并统计", size=LABEL_PT, colour=MUTED,
       font=FACE, cjk_font=HAN)
-beside = stack(said)
-write(slide, beside.take(0.42), "这个数字怎么来的", size=LEAD_PT, bold=True, colour=INK,
-      font=FACE, cjk_font=HAN)
-beside.skip(0.08)
-points(slide, beside.rest(), T, [
-    "统计口径：P95，2 月 1 日至 3 月 31 日，剔除冷启动。",
-    "改造前是 121ms，四套权重串行。",
-    "其中 61% 落在第二阶段，是下一步的目标。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+notes = [("ruler", "口径", "P95，2 月 1 日至 3 月 31 日，剔除冷启动。"),
+         ("history", "改造前", "121ms，四套权重串行跑完。"),
+         ("target", "下一步", "其中 61% 落在第二阶段。")]
+plane(slide, said, T, tint="surface")
+lane = said.inset(PAD)
+tall = max(card_size(lane.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
+rows = stack(lane, gutter=(lane.h - 3 * tall) / 2)
+for icon, head, body in notes:
+    card(slide, rows.take(tall), T, tint="background", icon=icon, title=head, body=body,
+         font=FACE, cjk_font=HAN)
 ```
 
 ### P20 -- A metric row across one band
@@ -85,7 +98,11 @@ Three to five numbers on one line, each with its own label and icon, and the ban
 reading under it. The icons are the difference between this and four boxes with numbers
 in them.
 
+`page(footer=True)` again, the same split as `P16`: the strip at the foot takes the basis
+the four numbers share, and the band under the tiles is left to their reading.
+
 ```python
+frame = page(footer=True)
 down = stack(frame.body)
 band = down.take(1.90)
 for box, (value, name, icon) in zip(band.columns(4), [
@@ -100,10 +117,10 @@ for box, (value, name, icon) in zip(band.columns(4), [
     write(slide, inner.take(0.90), value, size=NUMBER_PT, bold=True, colour=INK, font=FACE)
     write(slide, inner.rest(), name, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 down.skip(GUTTER)
-points(slide, down.rest(), T, [
-    "四个数字取自同一批 2 月至 3 月的线上日志，口径写在附录 A。",
-    "显存下降来自权重合并，不是量化。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+write(slide, down.rest(), "显存下降来自权重合并，不是量化：精度同期还高了 0.2。",
+      size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
+write(slide, frame.footer, "来源：2 月至 3 月线上日志，四个数字同一批，口径见附录 A。",
+      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
 ### P18 -- Negative space dominant

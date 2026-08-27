@@ -230,16 +230,10 @@ _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 class TooSmall(ValueError):
     """A chart refusing a box, carrying how much more of each side it wants.
 
-    The refusal was always here and the number never was: `_room` said "a column
-    chart has 2.40x0.70in and needs about 1.0x0.9in", which is a sentence a person
-    reads and a program cannot act on, and the pair it quoted was a constant rather
-    than what *this* data needs. So a page that came out a fifth of an inch short
-    cost a whole render round -- the script died, the message came back as prose,
-    and the next attempt guessed again at a number the chart already knew.
-
     `short` is the deficit in inches as (across, down), which is exactly what
     `the_smallest_box_a_chart_needs` adds to the box before asking again. `needs`
-    and `had` are the two sizes it compared.
+    and `had` are the two sizes it compared -- both for *this* data, not the constant
+    pair a prose refusal quotes.
     """
 
     def __init__(self, what, had, needs):
@@ -332,9 +326,9 @@ def _plain(shape):
     supposed to mean "no effects". It does not, because `add_shape` also stamps
     `p:style` on the shape and its `a:effectRef idx="2"` is a reference to the
     theme's second effect -- a drop shadow -- which a renderer resolves separately.
-    Measured on this renderer: every bar, every baseline and every dot came out
-    with a grey shadow down its right side, which on a page of forty rectangles is
-    the single loudest tell that nobody looked at the render.
+    Left alone, every bar, every baseline and every dot comes out with a grey shadow
+    down its right side, which on a page of forty rectangles is the single loudest
+    tell that nobody looked at the render.
 
     The style also carries a line, a fill and a font from the theme's accent, all
     of which are set explicitly here, so nothing is lost with it.
@@ -352,14 +346,10 @@ def _solid(shape, colour, opacity):
     `a:srgbClr` the fill just wrote, in thousandths -- and python-pptx exposes no
     API for it, so it is written here the way `_plain` writes its own fix-up.
 
-    It matters because this module told itself for a long time that it could not be
-    done. "The export dialect treats every paint as opaque" was stated in three
-    places and acted on in more: a second filled polygon was documented as hiding
-    the first outright, which made a radar a one-series form and a band between two
-    series undrawable. Both were wrong. Measured end to end -- a translucent fill
-    over an opaque one, written to pptx, converted by the renderer and read back off
-    the raster -- the overlap comes out as the blend of the two and what is under it
-    stays legible. What is true is only that a *theme token* is a pre-mixed solid:
+    It works end to end: a translucent fill over an opaque one, written to pptx and
+    converted by the renderer, comes out as the blend of the two with what is under it
+    still legible -- so a radar is not a one-series form and a band between two series
+    is drawable. What is true is only that a *theme token* is a pre-mixed solid:
     `accent_soft` is mixed at rest so it is the same colour whatever it lands on,
     which is a different decision and still the right one for a ground.
     """
@@ -801,14 +791,13 @@ def number(value, label=None):
     a value that cannot be a length is refused -- with `label`, whatever the row
     it came in on was called, in the message when the caller had one.
 
-    A NaN or an infinity is that kind of value and used to get through: the type
-    check let it past and the failure surfaced further in, as `cannot convert
-    float NaN to integer` out of the label formatter or `cannot convert float
-    infinity to integer` out of the axis, with a traceback into a module the
-    author did not write and no clue which of forty numbers caused it. They
-    arrive by arithmetic rather than by typing -- `(new - old) / old` on a row
+    A NaN or an infinity is that kind of value. Let past, it surfaces further in as
+    `cannot convert float NaN to integer` out of the label formatter or `cannot
+    convert float infinity to integer` out of the axis, with a traceback into a
+    module the author did not write and no clue which of forty numbers caused it.
+    They arrive by arithmetic rather than by typing -- `(new - old) / old` on a row
     whose `old` is zero -- and the author reading the error is the one who wrote
-    that expression, so the message has to name the row and say the value is not
+    that expression, so the message names the row and says the value is not
     finite. Refused at the door, once, for all of them.
     """
     where = f" for {label!r}" if label is not None else ""
@@ -839,9 +828,9 @@ def fmt(value, unit="", sign=False):
     Trailing zeros go (128.0 -> "128") and nothing else does: a chart that rounded
     its own labels would carry numbers the source it came from does not.
 
-    Never in exponent form. `%g` -- which this used -- puts anything over a million
-    into scientific notation, so a revenue chart came back labelled "1.85e+06" over
-    a bar, which is a reading nobody in the room converts back.
+    Never in exponent form. `%g` puts anything over a million into scientific
+    notation, so a revenue chart comes back labelled "1.85e+06" over a bar, which is
+    a reading nobody in the room converts back.
     """
     reading = float(value)
     rounded = float(f"{reading:.10g}")
@@ -1017,9 +1006,9 @@ def _slot_needed(labels, face=None):
     `_rows_needed` wraps a name onto at most `LABEL_ROWS` lines and the foot is cut
     for that many, so a name that wants a third line is a name set past the bottom
     of the region -- silently, because `write` neither shrinks to fit nor clips.
-    Measured: eight categories called "Manufacturing" and the like want 0.62in of
-    slot each at 12pt, so 4.9in of box; the flat floor `_room` used to apply asked
-    for 1.0in and drew all eight anyway, at 0.125in a column.
+    Eight categories called "Manufacturing" and the like want 0.62in of slot each at
+    12pt, so 4.9in of box; a flat 1.0in floor draws all eight anyway, at 0.125in a
+    column.
     """
     return _widest(labels, KICKER_PT, face) / LABEL_ROWS + 0.05
 
@@ -1031,7 +1020,7 @@ def _rows_high(count):
     label is set over its neighbour's. Every row chart here already steps from
     LABEL_PT down to KICKER_PT when a row is shorter than a line; this is that same
     rule carried past the last step, where the answer stops being a smaller size and
-    becomes a taller box. Twelve rows want 3.02in, and `_room` used to pass 0.5in.
+    becomes a taller box. Twelve rows want 3.02in; a flat 0.5in floor passes them.
     """
     return line_height(KICKER_PT) * count
 
@@ -1260,11 +1249,11 @@ def _beside(slide, theme, reading, at_x, at_y, size, colour, region, taken, push
 def _room(box, what, across=0.8, down=0.5):
     """Refuse a box that is under what `what` needs, and say by how much.
 
-    The two numbers used to be constants -- 1.0x0.9in for a column chart whether it
-    carried three categories or twelve -- so the check passed for exactly the chart
-    that cannot be read: twelve columns in an inch is twelve labels a fortieth of an
-    inch apart. Every caller works its floor out of its own data first now, and the
-    constants are only the last word where the data asks for less.
+    Constants alone -- 1.0x0.9in for a column chart whether it carries three
+    categories or twelve -- pass the check for exactly the chart that cannot be read:
+    twelve columns in an inch is twelve labels a fortieth of an inch apart. Every
+    caller works its floor out of its own data first, and the constants are only the
+    last word where the data asks for less.
     """
     if box.w < across - 1e-9 or box.h < down - 1e-9:
         raise TooSmall(what, (box.w, box.h), (across, down))
@@ -2063,11 +2052,11 @@ def dumbbell(slide, box, theme, data, *, sides=(), accent=None, unit="", axis_ma
     than two bars, where the eye compares the lengths from the baseline instead.
     `sides` names the two states over the first row's own marks.
 
-    This was the first chart here whose axis does not start at zero, and the
-    reason is that nothing on it is a length: both ends are positions, and the
-    reading is the distance between them. Forced to zero, five rows running 38% to
-    78% sat in the right-hand third of the page with the gaps too short to compare
-    -- which loses exactly what the form is for. The axis is snapped out to round
+    The axis does not start at zero, and the reason is that nothing on it is a
+    length: both ends are positions, and the reading is the distance between them.
+    Forced to zero, five rows running 38% to 78% sit in the right-hand third of the
+    page with the gaps too short to compare -- which loses exactly what the form is
+    for. The axis is snapped out to round
     ends instead, and `axis_max` still raises the top. `line`, `dot_plot` and
     `box_plot` are the same case and are read the same way.
     """
@@ -3081,13 +3070,12 @@ def _ticks(low, high, dated, count=None):
 def _thinned_ticks(marks, box, at, face):
     """`marks` with the box each label goes in, minus the ones whose labels collide.
 
-    A tick label is centred on its own tick and slid back inside the region --
-    rather than given a fixed 1.1in and cropped where that left the box, which
-    halved the last one and wrapped it, so "09-01" came back as "09-" over "01" on
-    every serif theme. What the slide costs is the gap: the label on the last tick
-    moves left by up to half its width and eats the air the even spacing had left
-    it. Measured on a render of five marks in a 3.78in cell, "05-16" and "06-30"
-    were written 0.275in into each other and neither of them read.
+    A tick label is centred on its own tick and slid back inside the region -- a
+    fixed 1.1in cropped where that leaves the box halves the last one and wraps it,
+    so "09-01" comes out as "09-" over "01" on every serif theme. What the slide
+    costs is the gap: the label on the last tick moves left by up to half its width
+    and eats the air the even spacing had left it, and five marks in a 3.78in cell
+    put "05-16" and "06-30" 0.275in into each other with neither of them reading.
 
     The pitch cannot see that -- it is the same for every pair, and only the marks
     at the ends are clamped -- so the thinning is measured where the labels will
@@ -3807,22 +3795,22 @@ def _air(one, other):
     return max(max(other.x0 - one.x1, one.x0 - other.x1), max(other.y0 - one.y1, one.y0 - other.y1))
 
 
+# What the outer corner costs, off a render of four named quadrants: the top-right name
+# was written across the mark at (4.1, 4.6) with 0.073 x 0.150in of the disc under the
+# type, the disc being 0.150in across -- half the point covered.
 def _quadrant_corner(room, name, crossing, marks, face):
     """Which corner of `room` a quadrant's name goes in: the emptiest it can have.
 
-    The name used to be nailed to the corner furthest from the crossing, which is
-    the corner no reader can mistake for the next quadrant's -- and is also exactly
-    where the extreme point of that quadrant is. Measured off a render of four
-    named quadrants: the top-right name was written across the mark at (4.1, 4.6)
-    with 0.073 x 0.150in of the disc under the type, the disc being 0.150in across,
-    so the label covered half of the point whose quadrant it was naming.
+    The corner furthest from the crossing is the one no reader can mistake for the
+    next quadrant's -- and is also exactly where the extreme point of that quadrant
+    is, so a name nailed there is written across the mark whose quadrant it names.
 
     Between the two, the furniture is what moves: a quadrant name names a region,
     so it reads from any corner of that region, while a point is at its reading and
     nowhere else. Each of the four corners is measured against every mark and the
     ones that clear are preferred, furthest from the crossing first -- so a
-    quadrant with nothing in its outer corner is still written exactly where it
-    always was, and one with a point there steps along an edge instead of onto it.
+    quadrant with nothing in its outer corner is still written in that corner, and
+    one with a point there steps along an edge instead of onto it.
     Where all four are occupied the corner with the most air is used: there is no
     corner of a quadrant that is not inside it, so the name never wanders out of
     the region it belongs to, whatever the data does.
@@ -3920,9 +3908,9 @@ def _share(value, label=None, what="a progress track"):
 def _chart_of(chart):
     """`chart` as the function, whether it arrived as the function or as its name.
 
-    A live run asked `the_smallest_box_a_chart_needs("horizontal_bar", T, data)` and
-    got `TypeError: 'str' object is not callable` out of the rehearsal, three frames
-    down, with neither the name it passed nor the word "name" in the message. The
+    Unaccepted, `the_smallest_box_a_chart_needs("horizontal_bar", T, data)` raises
+    `TypeError: 'str' object is not callable` out of the rehearsal, three frames down,
+    with neither the name passed nor the word "name" in the message. The
     name is the natural thing to reach for -- it is what the chart is called in the
     catalogue and in the page's own plan -- so it is accepted, and a name that is not
     one is refused here saying so and listing the near misses.
@@ -4001,8 +3989,8 @@ def whether_a_chart_fits(chart, box, theme, *data, **knobs):
 def the_smallest_box_a_chart_needs(chart, theme, *data, **knobs):
     """The smallest box this chart takes *this* data in, as a `Box` at the origin.
 
-    The question a page asks before it divides itself up, and the one thing this
-    module could not answer: a chart's floor is not the pair of constants in its
+    The question a page asks before it divides itself up: a chart's floor is not the
+    pair of constants in its
     `_room` call -- it is those, and the width its category names want, and the
     height one line of type per row wants, and what a wrapped key or a column of
     axis readings takes out of both. All of that is arithmetic the chart does, so
@@ -4013,8 +4001,8 @@ def the_smallest_box_a_chart_needs(chart, theme, *data, **knobs):
         room = the_smallest_box_a_chart_needs(column, T, rows)
         chart = column if room.w <= cell.w and room.h <= cell.h else horizontal_bar
 
-    Measured on twelve categories with names like "Manufacturing": `column` wants
-    8.05x0.90in and a quadrant of a 13.3in page has 5.90x2.50in, so the page that
+    Twelve categories with names like "Manufacturing": `column` wants 8.05x0.90in
+    and a quadrant of a 13.3in page has 5.90x2.50in, so the page that
     would have drawn twelve columns 0.49in apart draws a ranking instead -- decided
     before a shape is written, from the data alone.
 

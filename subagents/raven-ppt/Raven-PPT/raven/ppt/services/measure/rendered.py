@@ -66,6 +66,24 @@ CARD_SLOP_PT = 3.0
 # sixteenth of an inch: below it the type is touching the edge, not sitting in it.
 CARD_PADDING_PT = 4.0
 
+# How much of a rendered line has to lie below the bottom of the text box holding it
+# before the copy has overrun the box rather than merely hung its tail over the edge.
+# The slack is what it is because a word's bbox is the font's box and not its ink --
+# the same fact `RULE_BOTTOM_SPARE` above is built on -- so the last line of a box
+# sized exactly to its copy always ends a little below it, and sizing a box exactly to
+# its copy is normal authoring. Measured over the 40 text boxes of the deck this was
+# found on: the deepest such tail is 0.12 of that line's own height (0.06in under a
+# 70pt title), while the line that had actually escaped sat 1.3 of its height past the
+# edge. Half the line separates them with 4x to spare, it is read off the render --
+# the height is the renderer's own -- so no font model enters it, and it is the same
+# half this module already uses to decide whether a box holds a word at all: what is
+# reported here is exactly a line its own box no longer holds.
+OUTSIDE_LINE_SHARE = 0.5
+# A line that continues a box's copy is set to that box's width, so it is claimed only
+# when it sits in the box's column: without this the tail of one column reads as the
+# overflow of whatever box sits above it in the other.
+TRAILING_IN_COLUMN = 0.5
+
 # One broken card produces a dozen pair-wise hits and the fix is the card, not
 # the dozen, so each check reports a few per page and stops.
 COLLISIONS_PER_PAGE = 4
@@ -263,6 +281,121 @@ def _card_overflow(page: int, home: Rect, items: Sequence[tuple[WordBox, Rect]])
         page=page,
         message=f"{len(items)} word(s) of this card's copy escape it in the render ({sample}): {advice}",
         detail=detail,
+    )
+
+
+def box_overflows(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVERFLOWS_PER_PAGE) -> list[Finding]:
+    """Copy the render sets below the bottom of the text box that holds it.
+
+    `card_overflow`'s twin, on the box the copy was actually put in rather than on the
+    panel it sits over -- and the gap 16 findings fell through. A live deck shipped a
+    page whose last line rendered 0.30in under its box, over the template's corner
+    ornament, and every other check had an answer for why it was not theirs: `off_page`
+    compares against the canvas edge and the line was still on the canvas, `spilled_copy`
+    is about a box with wrapping off painting outside itself, `card_overflow` needs a
+    filled panel to escape from, and `overset_copy` models the height from font metrics
+    and under-read it in the safe direction.
+
+    Which is why this one is subtraction on two rectangles that are already measured:
+    where the box is comes off the .pptx, where the copy landed comes off the render,
+    and nothing about the font is assumed. The bottom edge only. With wrapping on, the
+    widest line of that same deck sits 0.04in past its box's right edge, which is inside
+    the noise; with wrapping off a box paints wide by design, and `spilled_copy` owns it.
+    """
+    painted = by_page(words)
+    findings: list[Finding] = []
+    for number, slide in pages(pptx_path):
+        on_page = painted.get(number, [])
+        if not on_page:
+            continue
+        boxes, elsewhere = _text_boxes(slide)
+        claimed = {
+            index
+            for index, word in enumerate(on_page)
+            for _shape, box in boxes
+            if box.overlap(rect(word)) / max(rect(word).area, 1e-6) >= 0.5
+        }
+        reported = 0
+        for shape, box in boxes:
+            if reported >= per_page:
+                break
+            # Copy of its own first: a box the render put nothing in has nothing that
+            # could have left it, and the line below it is somebody else's.
+            if not any(index in claimed and _holds(box, word) for index, word in enumerate(on_page)):
+                continue
+            over = [
+                word for index, word in enumerate(on_page) if index not in claimed and _escaped(box, word, elsewhere)
+            ]
+            if not over:
+                continue
+            findings.append(_box_overflow(number, shape, box, over))
+            reported += 1
+    return findings
+
+
+def _holds(box: Rect, word: WordBox) -> bool:
+    return box.overlap(rect(word)) / max(rect(word).area, 1e-6) >= 0.5
+
+
+def _escaped(box: Rect, word: WordBox, elsewhere: Sequence[Rect]) -> bool:
+    """Whether this word is the box's own copy, set below the box's bottom edge.
+
+    A line that overran is a line no share of its box holds, which is why the
+    containment test every other check here uses cannot reach it -- and that is exactly
+    the line worth reporting. What still ties it to the box is the flow: it is set to
+    the box's width, it stands in the box's column, and the renderer starts it within
+    one line of where the box ended. Anything a table or a chart drew is nobody's
+    overflow.
+    """
+    span = rect(word)
+    if span.area <= 0 or span.y1 - box.y1 <= OUTSIDE_LINE_SHARE * span.height:
+        return False
+    shared = min(box.x1, span.x1) - max(box.x0, span.x0)
+    if shared <= 0 or shared / max(span.width, 1e-6) < TRAILING_IN_COLUMN:
+        return False
+    if span.y0 > box.y1 + span.height:
+        return False
+    return not any(frame.overlap(span) / span.area >= 0.5 for frame in elsewhere)
+
+
+def _text_boxes(slide) -> tuple[list[tuple[object, Rect]], list[Rect]]:
+    """(every text shape with its box, every table and chart frame), in points."""
+    boxes: list[tuple[object, Rect]] = []
+    elsewhere: list[Rect] = []
+    for shape in iter_shapes(slide.shapes):
+        box = shape_rect_pt(shape)
+        if getattr(shape, "has_table", False) or getattr(shape, "has_chart", False):
+            elsewhere.append(box)
+        if has_text(shape) and shape.width and box.area > 0:
+            boxes.append((shape, box))
+    return boxes, elsewhere
+
+
+def _box_overflow(page: int, shape, box: Rect, over: Sequence[WordBox]) -> Finding:
+    """One box's overrun, with the height the copy actually took."""
+    below = max(rect(word).y1 for word in over) - box.y1
+    top = min((word.y0 for word in over), default=box.y1)
+    sample = ", ".join(repr(word.text[:16]) for word in over[:3])
+    needed = (box.height + below) / 72
+    return Finding(
+        kind="box_overflow",
+        severity=Severity.WARNING,
+        page=page,
+        message=(
+            f"in the render this box's copy ends {below / 72:.2f}in below the box itself ({sample}) -- "
+            f"the box is {box.height / 72:.2f}in tall and the copy takes {needed:.2f}in. Nothing else sees "
+            f"this: the line is still on the canvas and it collides with nothing, it is simply outside the "
+            f"box it belongs to. Give the box that height, take the room from a neighbour, or say it in "
+            f"fewer words -- do not shrink the type to fit"
+        ),
+        detail={
+            "words": [word.text[:28] for word in over[:6]],
+            "below_in": round(below / 72, 2),
+            "box_in": round(box.height / 72, 2),
+            "needs_in": round(needed, 2),
+            "from_y_in": round(top / 72, 2),
+            "head": " ".join(shape.text_frame.text.split())[:40],
+        },
     )
 
 
@@ -532,6 +665,15 @@ def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVER
     called clean it claimed the title broke as "…基准上更好 / 更好", and the render shows
     that title on one line. A one-character orphan is too fine a thing to predict, and
     the render already knows.
+
+    A break the author wrote is not one of these. It used to be: a two-line chevron
+    label written as "提交并\n推送" reported the same as a label the box was too narrow
+    to hold, and one live run spent three consecutive iterations arguing back that its
+    labels were meant to read that way instead of acting on anything. It was right --
+    the first is a defect and the second is typography -- and which one this is is a
+    fact in the file rather than a judgement, so the block the author wrote is what the
+    render is compared against here, one block at a time. Per break and not per shape:
+    a shape that carries a written break somewhere else is still checked here.
     """
     painted = by_page(words)
     findings: list[Finding] = []
@@ -547,28 +689,65 @@ def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVER
             inside = [word for word in on_page if box.overlap(rect(word)) / max(rect(word).area, 1e-6) >= 0.5]
             if not inside:
                 continue
-            lines = _lines(inside)
-            if len(lines) != ORPHAN_LINES:
-                continue
-            last = "".join(word.text for word in lines[-1]).strip()
-            if not last or len(last) > ORPHAN_CHARS:
-                continue
-            head = " ".join(word.text for word in lines[0])
-            findings.append(
-                Finding(
-                    kind="orphan_line",
-                    severity=Severity.WARNING,
-                    page=number,
-                    message=(
-                        f"'{head[:30]}' breaks with {last!r} alone on the second line -- the box is "
-                        f"{box.width / 72:.2f}in and the label needs a hair more. Widen it, or say it in fewer "
-                        f"characters"
-                    ),
-                    detail={"label": head[:40], "orphan": last, "box_in": round(box.width / 72, 2)},
+            for block in _authored_blocks(shape, _lines(inside)):
+                if reported >= per_page or len(block) != ORPHAN_LINES:
+                    continue
+                last = "".join(word.text for word in block[-1]).strip()
+                if not last or len(last) > ORPHAN_CHARS:
+                    continue
+                head = " ".join(word.text for word in block[0])
+                findings.append(
+                    Finding(
+                        kind="orphan_line",
+                        severity=Severity.WARNING,
+                        page=number,
+                        message=(
+                            f"'{head[:30]}' breaks with {last!r} alone on the second line -- the box is "
+                            f"{box.width / 72:.2f}in and the label needs a hair more. Widen it, or say it in fewer "
+                            f"characters"
+                        ),
+                        detail={"label": head[:40], "orphan": last, "box_in": round(box.width / 72, 2)},
+                    )
                 )
-            )
-            reported += 1
+                reported += 1
     return findings
+
+
+def _authored_blocks(shape, lines: Sequence[Sequence[WordBox]]) -> list[list[list[WordBox]]]:
+    """The rendered lines regrouped into the blocks of copy the author wrote.
+
+    A block ends where the author put a break and nowhere else, so every boundary
+    *inside* one is the renderer's own wrapping -- which is the only kind this check is
+    about. Both forms the file can carry are one break here: a paragraph, and the
+    `a:br` that python-pptx writes for a `\n` handed to `layout.write` (it reads back
+    as `\v`, and the deck this was found on carries eleven of them).
+
+    Lines are assigned by consuming characters in order, the way `_paragraph_gap` does
+    it, which holds for CJK and Latin alike because the renderer breaks lines but never
+    reorders them. A block the renderer set in more lines than the file accounts for
+    keeps them, so a miscount can only merge blocks and never invent a break.
+    """
+    blocks: list[list[list[WordBox]]] = []
+    authored = [
+        squeezed
+        for piece in shape.text_frame.text.replace("\n", "\v").split("\v")
+        if (squeezed := "".join(piece.split()))
+    ]
+    current: list[list[WordBox]] = []
+    carried = ""
+    index = 0
+    for line in lines:
+        current.append(line)
+        if index >= len(authored):
+            continue
+        carried += "".join("".join(word.text for word in line).split())
+        if len(carried) >= len(authored[index]):
+            blocks.append(current)
+            current, carried = [], ""
+            index += 1
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def _panel_padding(cards_by_page: Mapping[int, Sequence[Rect]], painted: Mapping[int, Sequence[WordBox]]):

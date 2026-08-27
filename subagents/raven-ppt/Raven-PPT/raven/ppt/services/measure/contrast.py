@@ -21,6 +21,15 @@ An earlier version segmented the crop into ink and ground by quantile and report
 ratio between them. It flagged every page, and what it flagged were the commas: a `·` is
 a few pixels wide, its crop is nearly all ground, and both quantiles land on the same
 colour -- 1.0:1 meaning "no glyph here", not "unreadable".
+
+Each finding also says who drew the shape it measured. "It came from the template's own
+page, so it is the template's choice" is how a live author waved away a finding on six
+chevrons its own program drew, and a refusal is where that excuse costs the most: which of
+the two files the fix belongs in is a question only the files can answer. So they answer
+it: cloning copies a prototype's shape positions exactly, so a shape sitting where a
+prototype puts one, on a page that is that prototype's clone, is the template's, and a
+shape sitting nowhere any prototype puts one is the program's. With no template to compare
+against, the finding says nothing about it rather than guessing.
 """
 
 from __future__ import annotations
@@ -30,7 +39,21 @@ from pathlib import Path
 from typing import Any
 
 from raven.ppt.contracts.findings import Finding, Severity
-from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck, page_box
+
+# Who drew a shape is `adherence`'s question and `adherence`'s answer: a cloned page
+# keeps its prototype's shape positions exactly, and the tolerance that reads as "the
+# same box" took three live decks to calibrate. Private and imported anyway, the way
+# `type_size` already imports `_matches` -- a second way of deciding whether a shape is
+# the template's is how the two come to disagree.
+from raven.ppt.services.measure.adherence import MIN_SHAPES, _matches, _nearest, _pages
+from raven.ppt.services.measure.geometry import (
+    EMU_PER_INCH,
+    iter_shapes,
+    open_deck,
+    page_box,
+    shape_rect_pt,
+)
+from raven.ppt.services.measure.type_size import _inches, _template_boxes
 
 # WCAG AA asks 4.5:1 for body copy and 3:1 for large text, and 3:1 applied to everything
 # is where this started. It refused a deck for its own template's design: the agenda page
@@ -38,22 +61,35 @@ from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_
 # which measures 2.5:1 and is perfectly readable -- a live run rebuilt that page five
 # times and could not publish, because the only fix was to break the template.
 #
-# So the two answers are separated, and the numbers come from the two real cases:
+# That was answered by splitting the check in two -- 2:1 refusing, and a 3:1 warning
+# above it for type that is legible but thin -- and the warning is gone as well now.
+# Measured, the 2-to-3 band is where template design lives rather than where mistakes do.
+# The bound template's own theme puts these ratios between its own roles:
+#
+#   #FCFCFC on #50BBB6  ->  2.24:1   background on accent
+#   #FCFCFC on #EDF6F6  ->  1.07:1   background on surface, which is no text at all
+#
+# and its own eleven example pages, rendered and measured, came back with four warnings
+# around 2.3:1, every one of them a shape its designer drew. On one run an authored shape
+# measured 2.24:1 and a template-drawn one 2.30:1, so no threshold inside the band
+# separates the two and only provenance does. The cost was never the noise: a live author
+# met a real 2.2:1 finding with "the template's own accent1 color relationship, acceptable
+# per spec note" -- about six chevrons its own program drew. A category that is usually
+# wrong is what teaches that answer, so do not re-add it at a lower number.
+#
+# What is left is the case no design argues with:
 #
 #   #1A1A1A on #000000  ->  1.2:1   invisible; the case this check was built for
-#   #FFFFFF on #FF8400  ->  2.5:1   the template's own agenda numerals, shipped, legible
 #
-# Under 2:1 nothing is legible and the deck is refused. Between 2 and 3 it is thin, which
-# is worth saying on a page this deck drew and is not worth refusing a deck over.
-MIN_RATIO = 3.0
+# Under 2:1 nothing is legible and the deck is refused. Above it this file says nothing.
 UNREADABLE_RATIO = 2.0
 # Below this the crop cannot say what its ground is.
 _MIN_PIXELS = 24
 # A run that is one mark and nothing else. Measured over eight delivered decks, about
 # 160 pages: this check found three things, two of them right and the third a single
-# bullet at 1.8:1 -- which refused the whole deck. A dim bullet is worth saying and is
-# not worth refusing a deck over, and it is the same shape as the failure this file
-# was already rewritten once for, when quantile segmentation reported every comma.
+# bullet at 1.8:1 -- which refused the whole deck. A dim bullet is not worth refusing a
+# deck over, and it is the same shape as the failure this file was already rewritten once
+# for, when quantile segmentation reported every comma.
 _A_MARK = frozenset("\u2022\u00b7\u25cf\u25aa\u2013\u2014-\u2192\u2713\u2715\u00d7|/\\.,;:!?")
 
 
@@ -62,16 +98,87 @@ def _is_copy(text: str) -> bool:
     return bool(set(str(text).strip()) - _A_MARK)
 
 
+_TEMPLATE_DREW = "template"
+_AUTHOR_DREW = "authored"
+# The two halves of the fact, spelled so neither can be read as the other. Each states
+# what settles it, because "the template's" is the claim an author reaches for and a
+# claim with its evidence attached is one they can check.
+_DREW = {
+    _TEMPLATE_DREW: (
+        "this shape is the template's own -- the page is a clone of the template's page {prototype}, "
+        "and the shape sits where that page puts one"
+    ),
+    _AUTHOR_DREW: "this shape is your own program's -- it sits nowhere any of the template's own pages puts one",
+}
+
+
+# The deck's shapes by page, the template's by page, and every box the template puts
+# a shape at -- read once, because each of the three costs opening a deck.
+_Origins = tuple[dict[int, set], dict[int, set], set]
+
+
+def _origins(pptx_path: Path, prototypes: Path | None) -> _Origins | None:
+    """What is needed to say who drew a shape, or None when nothing can be said.
+
+    `prototypes` is the user's template as handed over, example pages included -- not
+    the prepared copy the build opens, which has those pages removed and so holds no
+    page a shape could have been cloned from. An adherence check wired on the prepared
+    copy found nothing to compare and reported that every deck was fine; here the same
+    mistake would report that every shape is the author's.
+    """
+    if prototypes is None or not Path(prototypes).is_file():
+        return None
+    everywhere = _template_boxes(prototypes)
+    by_page = _pages(Path(prototypes))
+    if not everywhere or not by_page:
+        return None
+    return _pages(pptx_path), by_page, everywhere
+
+
+def _drawn_by(shape: Any, number: int, origins: _Origins | None) -> tuple[str | None, int | None]:
+    """Who drew this shape: `_TEMPLATE_DREW`, `_AUTHOR_DREW`, or None when it cannot say.
+
+    Two gates rather than one, because a single one answers wrongly in both directions.
+    A shape matching a prototype's box is not enough on its own -- a full-bleed panel
+    sits where every template puts one -- so the page has to be that prototype's clone
+    as well. And a shape on a cloned page that matches nothing the template ships is one
+    the program added on top, which is the `template_underlay` shape exactly.
+    """
+    if origins is None:
+        return None, None
+    built, by_page, everywhere = origins
+    if not _matches(_inches(shape_rect_pt(shape)), everywhere):
+        return _AUTHOR_DREW, None
+    shapes = built.get(number) or set()
+    # Under this many shapes a page is a divider or a quote and a match is coincidence,
+    # which is the reason `adherence` refuses to read a page this sparse at all.
+    if len(shapes) < MIN_SHAPES:
+        return None, None
+    home = _nearest(shapes, by_page)
+    if home is None:
+        return None, None
+    return _TEMPLATE_DREW, home[0]
+
+
 _HEAD = 30
 
 
 def contrast_findings(
-    pptx_path: Path, pdf_path: Path | None, dpi: int = 72, pages: list[Path] | None = None
+    pptx_path: Path,
+    pdf_path: Path | None,
+    dpi: int = 72,
+    pages: list[Path] | None = None,
+    prototypes: Path | None = None,
 ) -> list[Finding]:
     """Text whose declared colour is too close to the ground it landed on.
 
     `pages` are rendered pages when the caller already has them, which is also how a
     test hands over a page without a renderer on the machine.
+
+    `prototypes` is the user's template as handed over, which is what lets the finding
+    name who drew the shape it measured. Without it the finding says nothing about that
+    -- an absent input is not a defect, and a guess here is what the excuse this answers
+    was claimed on in the first place.
     """
     if pages is None and (pdf_path is None or not Path(pdf_path).is_file()):
         return []
@@ -89,6 +196,7 @@ def contrast_findings(
     presentation = open_deck(pptx_path)
     canvas_w = (presentation.slide_width or 1) / EMU_PER_INCH
     canvas_h = (presentation.slide_height or 1) / EMU_PER_INCH
+    origins = _origins(pptx_path, prototypes)
 
     findings: list[Finding] = []
     for number, slide in enumerate(presentation.slides, start=1):
@@ -97,42 +205,51 @@ def contrast_findings(
             continue
         with Image.open(png) as opened:
             image = opened.convert("RGB")
-            worst: tuple[float, str, str, tuple[int, int, int]] | None = None
+            worst: tuple[float, str, str, tuple[int, int, int], Any] | None = None
             count = 0
             for shape in iter_shapes(slide.shapes):
                 measured = _measure(shape, image, canvas_w, canvas_h)
                 if measured is None:
                     continue
                 ratio, text, ink, ground = measured
-                if ratio >= MIN_RATIO:
+                if ratio >= UNREADABLE_RATIO:
+                    continue
+                # Asked here rather than of the page's worst block. A mark can measure
+                # worse than any copy on the page -- a bullet at 1.0:1 beside a title at
+                # 1.5:1 -- and filtering afterwards let that mark be chosen as `worst`
+                # and then take the whole page's refusal down with it. What is refused
+                # is unreadable copy, so a mark is not a candidate for it at all, and
+                # `count` is the copy this page carries and not every dim thing on it.
+                if not _is_copy(text):
                     continue
                 count += 1
                 if worst is None or ratio < worst[0]:
-                    worst = (ratio, text, ink, ground)
+                    worst = (ratio, text, ink, ground, shape)
         if worst is None:
             continue
-        ratio, text, ink, ground = worst
+        ratio, text, ink, ground, shape = worst
+        drew, prototype = _drawn_by(shape, number, origins)
+        clause = "" if drew is None else _DREW[drew].format(prototype=prototype)
         others = f" and {count - 1} more block(s) on the page" if count > 1 else ""
-        invisible = ratio < UNREADABLE_RATIO and _is_copy(text)
+        detail: dict[str, Any] = {"ratio": round(ratio, 2), "blocks": count, "ink": ink, "text": text[:60]}
+        if drew is not None:
+            detail["drawn_by"] = drew
+        if prototype is not None:
+            detail["prototype"] = prototype
         findings.append(
             Finding(
-                kind="unreadable" if invisible else "thin_contrast",
-                severity=Severity.BLOCKING if invisible else Severity.WARNING,
+                kind="unreadable",
+                severity=Severity.BLOCKING,
                 page=number,
                 message=(
                     f"'{text[:_HEAD]}' is set in #{ink} on a ground that renders "
                     f"#{'%02X%02X%02X' % ground}{others} -- {ratio:.1f}:1, "
-                    + (
-                        f"under the {UNREADABLE_RATIO:g}:1 at which the characters stop being there at all. On a "
-                        f"dark deck the type colour is the theme's `foreground`; `surface` and `background` are "
-                        f"what the ground is painted with, and reaching for one of those gives you black on black"
-                        if invisible
-                        else f"under the {MIN_RATIO:g}:1 WCAG asks for large type. Legible, thin: if this page is "
-                        f"yours to draw, take the ink up or the ground down. If it came from the template's own "
-                        f"page, it is the template's choice and this is a note rather than a fault"
-                    )
+                    f"under the {UNREADABLE_RATIO:g}:1 at which the characters stop being there at all. On a "
+                    f"dark deck the type colour is the theme's `foreground`; `surface` and `background` are "
+                    f"what the ground is painted with, and reaching for one of those gives you black on black"
+                    + (f". And {clause}" if clause else "")
                 ),
-                detail={"ratio": round(ratio, 2), "blocks": count, "ink": ink, "text": text[:60]},
+                detail=detail,
             )
         )
     return findings

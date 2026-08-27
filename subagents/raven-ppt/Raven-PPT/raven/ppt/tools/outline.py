@@ -184,7 +184,9 @@ class PptOutlineTool(Tool):
                                     "sentence, written as `Label: what the page does with it` -- the label "
                                     "is the phrase a reader scans, and the sentence starts with the action: "
                                     "Compare, Explain, Break down, Highlight, Show, Debunk, Recap. "
-                                    "Quantities go in verbatim, with their unit and their basis. One "
+                                    "Each point becomes one block on the page and not one bullet in a "
+                                    "list: the label is that block's own heading and the sentence is its "
+                                    "copy. Quantities go in verbatim, with their unit and their basis. One "
                                     "device, for when the content asks for it: a point that introduces "
                                     "a breakdown ends on a colon and carries its "
                                     "rows under it, one per line beginning `- `, naming which rows and "
@@ -219,12 +221,28 @@ class PptOutlineTool(Tool):
                                     "otherwise silent about"
                                 ),
                             },
+                            # This field is the only trigger for a page-aimed image search, and
+                            # the description has to say so or leaving it blank looks free. Across
+                            # ten live outlines -- 196 pages -- 148 planned no figure at all, 29
+                            # filled `needs`, and 125 were both figureless and silent, so for 63% of
+                            # pages the only search that ever ran was `ppt_prepare`'s, which runs
+                            # before an outline exists and cannot know what a page has to show. Seven
+                            # of the ten left it empty on every page. Not a requirement and not a
+                            # gate: a page carrying a chart, a table or prose wants no picture.
                             "needs": {
                                 "type": "string",
                                 "description": (
                                     "what this page lacks and the materials do not hold, if anything -- it "
                                     "comes back as something to go and get before the page is written "
-                                    "rather than after. When it is a picture, say which kind: something "
+                                    "rather than after. This field is the switch for the one image search "
+                                    "aimed at a page: fill it and the page gets "
+                                    'web_search(kind="images") for what it said it needs; leave it blank '
+                                    "and the page gets no search of its own -- the only one that ran was "
+                                    "the sweep before this outline existed, which could not know what any "
+                                    "page would have to show. Blank is the right answer for a page whose "
+                                    "claim is carried by a chart you draw, a table or prose, and the wrong "
+                                    "one for a page that wants a picture and does not say so. When it is a "
+                                    "picture, say which kind: something "
                                     "that exists somewhere (a company's own mark, a product shot, a "
                                     "screenshot, a published plot) is searched for and fetched, while a "
                                     "diagram nobody has drawn is drawn in the program or generated. A named "

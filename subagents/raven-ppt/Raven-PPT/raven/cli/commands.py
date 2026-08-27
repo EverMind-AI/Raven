@@ -4,6 +4,7 @@ This module wires together every top-level command and every subcommand
 group. The actual implementations live in per-feature modules:
 
 - Top-level commands (each exposes a ``register(app)`` function):
+    - ``acp``      → ``raven/cli/acp_commands.py``
     - ``agent``    → ``raven/cli/agent_commands.py``
     - ``doctor``   → ``raven/cli/doctor_commands.py``
     - ``gateway``  → ``raven/cli/gateway_commands.py``
@@ -93,6 +94,7 @@ def main(
 # ============================================================================
 
 from raven.cli import (
+    acp_commands,
     agent_commands,
     doctor_commands,
     gateway_commands,
@@ -105,6 +107,7 @@ from raven.cli import (
 
 onboard_commands.register(app)
 gateway_commands.register(app)
+acp_commands.register(app)
 agent_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)

@@ -45,10 +45,10 @@ from raven.ppt.services.measure.content import (
     banded_tables,
     evidence_coverage,
     flat_formulas,
+    listed_claims,
     literal_escapes,
     native_tables,
     planned_tables,
-    unmarked_points,
     wide_tables,
 )
 from raven.ppt.services.measure.contrast import contrast_findings
@@ -58,6 +58,7 @@ from raven.ppt.services.measure.inherited import over_layout_art
 from raven.ppt.services.measure.layout import off_page_shapes, spilled_copy, wrapped_labels
 from raven.ppt.services.measure.overlap import overlap_findings
 from raven.ppt.services.measure.rendered import (
+    box_overflows,
     card_overflows,
     cards,
     clipped_copy,
@@ -161,9 +162,10 @@ DISPATCH: Mapping[str, Severity] = {
     "literal_escape": Severity.BLOCKING,
     # An expression written as prose. The fix is one call in the program.
     "flat_formula": Severity.WARNING,
-    # Parallel claims with nothing in front of them. The marks come with the call
-    # that writes the points.
-    "unmarked_points": Severity.WARNING,
+    # Parallel claims stacked in one box, so they read as a list to be read out.
+    # Reported and not refused with the other rows about a page's shape: the answer is
+    # a block for each claim, which is a page rebuilt rather than a line changed.
+    "listed_claims": Severity.WARNING,
     "type_floor": Severity.WARNING,
     # One slot the deck repeats, set at five sizes because the renderer shrank each
     # box to fit what went into it. The sizes even out by giving the boxes room, and
@@ -194,6 +196,18 @@ DISPATCH: Mapping[str, Severity] = {
     "clipped_copy": Severity.WARNING,
     "rule_strike": Severity.WARNING,
     "card_overflow": Severity.WARNING,
+    # The same escape measured against the box the copy was actually put in rather than
+    # against a panel it sits over, which is the gap a live page fell through: its last
+    # line rendered 0.30in under its own text box, over the template's corner ornament,
+    # and all sixteen findings on that deck were about something else. A warning, with
+    # `card_overflow` and `overset_copy` and against the argument that would make it
+    # refuse. It is real and it is not taste -- but unlike `word_collision`, whose fix
+    # is a wider box and costs the page nothing, the fix here is height taken from a
+    # neighbour or a line cut, which is exactly the trade D2 says a refusal must not
+    # force. And `overset_copy` predicts this same defect from font metrics and only
+    # reports: one deck state, two rows, one refusing and one reporting, is the
+    # contradiction `band` was downgraded for.
+    "box_overflow": Severity.WARNING,
     # The other side of the same rim: copy inside its panel and touching the edge. Found
     # by reading a polished deck page by page -- two note cards ended on their last
     # line's descender while every other card on that deck carried 0.20in of padding.
@@ -276,12 +290,11 @@ DISPATCH: Mapping[str, Severity] = {
     # Type a reader cannot make out: measured off the render, because what is behind a
     # text box is a layout's artwork, a photograph or a panel three shapes down, and
     # only the renderer has resolved that. Refused -- a page whose title is #1A1A1A on
-    # #000000 has not been delivered, however well it is composed.
+    # #000000 has not been delivered, however well it is composed. The only contrast
+    # row: a warning above it for legible-but-thin type reported the template
+    # designer's own accent panels far more often than a fault, and `contrast.py`
+    # keeps the measurements that retired it.
     "unreadable": Severity.BLOCKING,
-    # And the band above it: legible, thin. Separated from the row above after 3:1 flat
-    # refused a deck for its own template's agenda page, whose white-on-orange numerals
-    # measure 2.5:1 and are what the template's designer drew.
-    "thin_contrast": Severity.WARNING,
 }
 
 
@@ -393,14 +406,14 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "native_table": lambda deck: native_tables(deck.pptx_path),
         "banded_table": lambda deck: banded_tables(deck.pptx_path),
         "inferred_caption": lambda deck: caption_findings(deck.figure_catalogue, deck.materials),
-        # One reading, filtered three ways, the way the contrast and adherence rows
-        # already are: the three findings come off one pass over the plan and the file,
-        # and each answers differently, so each needs its own row in the table above.
+        # One reading, filtered three ways, the way the adherence rows already are: the
+        # three findings come off one pass over the plan and the file, and each answers
+        # differently, so each needs its own row in the table above.
         "unplaced_table": lambda deck: _planned(deck, "unplaced_table"),
         "table_grid": lambda deck: _planned(deck, "table_grid"),
         "table_room": lambda deck: _planned(deck, "table_room"),
         "flat_formula": lambda deck: flat_formulas(deck.pptx_path),
-        "unmarked_points": lambda deck: unmarked_points(deck.pptx_path),
+        "listed_claims": lambda deck: listed_claims(deck.pptx_path),
         "literal_escape": lambda deck: literal_escapes(deck.pptx_path),
         "type_floor": lambda deck: type_findings(deck.pptx_path, deck.rendered_type),
         "type_drift": lambda deck: drift_findings(deck.pptx_path, deck.rendered_type),
@@ -417,16 +430,14 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "placeholder_copy": lambda deck: placeholder_copy(deck.pptx_path, deck.prototypes),
         "template_picture": lambda deck: template_pictures(deck.pptx_path, deck.prototypes),
         "prototype_kept": lambda deck: prototype_kept(deck.pptx_path, deck.prototypes, deck.outline),
-        "unreadable": lambda deck: [
-            f
-            for f in contrast_findings(deck.pptx_path, deck.pdf_path, pages=deck.rendered_pages)
-            if f.kind == "unreadable"
-        ],
-        "thin_contrast": lambda deck: [
-            f
-            for f in contrast_findings(deck.pptx_path, deck.pdf_path, pages=deck.rendered_pages)
-            if f.kind == "thin_contrast"
-        ],
+        # `prototypes` so the refusal can name who drew the shape: "the template drew
+        # it" is what a live author answered a contrast finding with, about six chevrons
+        # its own program drew, and which of the two files the fix belongs in is the
+        # whole of what to do next. `prototypes` and not `template` for the reason
+        # `type_scale` above gives.
+        "unreadable": lambda deck: contrast_findings(
+            deck.pptx_path, deck.pdf_path, pages=deck.rendered_pages, prototypes=deck.prototypes
+        ),
         "template_underlay": lambda deck: [
             f for f in template_adherence(deck.pptx_path, deck.prototypes) if f.kind == "template_underlay"
         ],
@@ -446,6 +457,7 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "clipped_copy": lambda deck: _rendered(deck, lambda words: clipped_copy(deck.pptx_path, words)),
         "rule_strike": lambda deck: _rendered(deck, lambda words: rule_strikes(hairline_rules(deck.pptx_path), words)),
         "card_overflow": lambda deck: _rendered(deck, lambda words: card_overflows(cards(deck.pptx_path), words)),
+        "box_overflow": lambda deck: _rendered(deck, lambda words: box_overflows(deck.pptx_path, words)),
         "crowded_panel": lambda deck: _rendered(deck, lambda words: crowded_panels(cards(deck.pptx_path), words)),
         "orphan_line": lambda deck: _rendered(deck, lambda words: orphan_lines(deck.pptx_path, words)),
         "unseparated_blocks": lambda deck: _rendered(deck, lambda words: unseparated_blocks(deck.pptx_path, words)),

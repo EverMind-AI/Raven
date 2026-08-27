@@ -279,7 +279,7 @@ def census(pptx_path: Path, spans: Sequence[Span] | None = None) -> list[TypeCen
 # So this reports and never refuses, and the room comes from the page.
 _FIX = (
     "Bring it up, and give the copy the room the larger size needs rather than letting it overflow: "
-    "fewer bullets, a wider column, or the page split. Do not shrink it back to fit"
+    "a taller band, a wider column, less copy, or the page split. Do not shrink it back to fit"
 )
 # What to do instead when nobody chose the size: the box did, and the box is the
 # thing to change.
@@ -331,17 +331,25 @@ def _slot_findings(pptx_path: Path, spans: Sequence[Span]) -> list[Finding]:
     presentation = open_deck(pptx_path)
     body_floor, hard_floor = type_floors(presentation.slide_height / EMU_PER_INCH)
     by_page: dict[int, list[tuple[Slot, float]]] = {}
+    # Grouped before any of them is classified, because one slot's floor depends on
+    # what else is on its page: a kicker is only a kicker over a title.
+    everything: dict[int, list[Slot]] = {}
     for slot in slots(pptx_path, spans):
-        if slot.rendered_pt is None or slot.chars < _SLOT_CHARS:
-            continue
-        if _is_footer(slot, presentation):
-            floor = FOOTER_FLOOR_PT
-        else:
-            copy = slot.chars >= _COPY_CHARS and not _is_caption(slot, presentation)
-            floor = body_floor if copy else hard_floor
-        if slot.rendered_pt >= floor:
-            continue
-        by_page.setdefault(slot.page, []).append((slot, floor))
+        everything.setdefault(slot.page, []).append(slot)
+    for here in everything.values():
+        for slot in here:
+            if slot.rendered_pt is None or slot.chars < _SLOT_CHARS:
+                continue
+            if _is_footer(slot, presentation):
+                floor = FOOTER_FLOOR_PT
+            elif _is_kicker(slot, here):
+                floor = hard_floor
+            else:
+                copy = slot.chars >= _COPY_CHARS and not _is_caption(slot, presentation)
+                floor = body_floor if copy else hard_floor
+            if slot.rendered_pt >= floor:
+                continue
+            by_page.setdefault(slot.page, []).append((slot, floor))
     findings: list[Finding] = []
     for page, here in sorted(by_page.items()):
         # Each box against the floor that applies to it: a body block, a caption and a
@@ -505,6 +513,36 @@ def _is_footer(slot: Slot, presentation: Any) -> bool:
     """In the band at the foot of the page, where a deck puts its furniture."""
     canvas = (presentation.slide_height or 0) / EMU_PER_POINT
     return bool(canvas and slot.box.y0 >= canvas - _FOOTER_BAND * 72)
+
+
+# The line over a page's title, naming the section the page belongs to. `heading`
+# sets it at `KICKER_PT`, which is 12 against a 14pt body floor, and exposes no
+# parameter for it -- so held to the body floor it reports every page any deck gives
+# a top edge to, and names a fix (bring the size up, give the copy more room) that
+# the author has no way to carry out. No length rule tells it from copy either: the
+# kickers measured run past `_COPY_CHARS`. What tells it is where it sits.
+_HEAD_BAND = 1.6
+# How much larger the title it labels is set. A type scale steps by about 1.2x and a
+# title is more than one step over its kicker, so this clears two boxes of body copy
+# that merely differ while still catching the pair.
+_TITLE_RATIO = 1.4
+
+
+def _is_kicker(slot: Slot, here: Sequence[Slot]) -> bool:
+    """The small line at the head of a page, over a title set materially larger."""
+    if slot.rendered_pt is None or slot.box.y0 > _HEAD_BAND * 72:
+        return False
+    return any(
+        other is not slot
+        and other.rendered_pt is not None
+        and other.rendered_pt >= slot.rendered_pt * _TITLE_RATIO
+        # Below this one, and sharing some of its width: the title it labels, not a
+        # display number somewhere else in the same band.
+        and other.box.y0 >= slot.box.y1 - 2
+        and other.box.x0 < slot.box.x1
+        and other.box.x1 > slot.box.x0
+        for other in here
+    )
 
 
 def _is_caption(slot: Slot, presentation: Any) -> bool:

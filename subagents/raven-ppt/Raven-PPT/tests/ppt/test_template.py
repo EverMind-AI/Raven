@@ -1192,14 +1192,21 @@ def test_a_number_kept_with_none_is_the_templates_own(tmp_path: Path):
     assert "01" in said and "02" in said
 
 
-def test_a_short_item_leaves_the_rest_of_the_unit_alone(tmp_path: Path):
-    """What took the numbers off a real template's agenda.
+def test_a_short_item_keeps_the_units_number_and_drops_its_placeholder(tmp_path: Path):
+    """What a short list keeps, and what it must not.
 
-    Its unit holds three text shapes -- the title box, the folder shape (empty) and
-    the number inside it -- and the author gave two values. The zip stopped at the
-    shorter list, the number was never claimed, and the pass that empties unnamed
-    text emptied all six of them. The page came out with blank folders where the
-    template had 01 to 08.
+    Two failures meet in this one call. Taking the numbers off a real template's
+    agenda: the unit holds the number beside the copy, the author gave fewer values
+    than shapes, and the pass that empties unnamed text emptied all six of them, so
+    the page shipped blank folders where the template had 01 to 08. And leaving a
+    placeholder standing: a delivered page's four cards each kept "单击添加小标题"
+    under the author's own heading, which `placeholder_copy` refuses at the gate --
+    ten builds went by with the author editing elsewhere.
+
+    So running off the end of the list cannot mean one thing for both. A number is
+    the template's own content and is restated; anything else the template wrote is
+    its example copy and goes. An explicit ``None`` still keeps whatever it names --
+    that is the escape for a fixed label worth keeping.
     """
     from pptx import Presentation
 
@@ -1211,4 +1218,43 @@ def test_a_short_item_leaves_the_rest_of_the_unit_alone(tmp_path: Path):
 
     said = _texts(slide)
     assert "01" in said and "甲" in said
-    assert "单击此处添加文本" in said, "the third shape was not named, so it keeps what it had"
+    assert "单击此处添加文本" not in said, "a placeholder past the end of the list is example copy, not furniture"
+    assert "单击添加小标题" not in said, "the heading was named, so nothing of the template's is left in it"
+
+
+def test_a_short_item_restates_a_number_it_never_reached(tmp_path: Path):
+    """The agenda case on its own: the number is the tail, and it survives.
+
+    `_card_page` puts the number first, so the test above gives it a value. Here the
+    unit is walked so the number is what the list runs out before -- the shape the
+    author had no opinion about -- and it has to come back renumbered for its new
+    position rather than emptied.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven.ppt.services.template import adapt
+
+    # Built here rather than from `_card_page`, which puts the number first: the unit
+    # this protects is the one the docstring above describes, a label with the number
+    # after it, so a one-value list runs out exactly before the number.
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    page = built.slides.add_slide(built.slide_layouts[6])
+    for index in range(4):
+        group = page.shapes.add_group_shape()
+        label = group.shapes.add_textbox(Inches(0.7 + index * 3.0), Inches(2.8), Inches(2.6), Inches(0.5))
+        label.text_frame.text = "单击添加小标题"
+        number = group.shapes.add_textbox(Inches(0.7 + index * 3.0), Inches(2.0), Inches(0.6), Inches(0.6))
+        number.text_frame.text = f"0{index + 1}"
+    built.save(str(tmp_path / "agenda.pptx"))
+
+    source = Presentation(str(tmp_path / "agenda.pptx"))
+    out = Presentation(str(tmp_path / "agenda.pptx"))
+    slide = adapt(out, source.slides[0], items=[["甲"], ["乙"], ["丙"]])
+
+    said = _texts(slide)
+    assert {"甲", "乙", "丙"} <= said
+    assert {"01", "02", "03"} <= said, "a number past the end of the list is the template's own"
+    assert "04" not in said, "the fourth unit was not filled, so it is gone rather than emptied"
+    assert "单击添加小标题" not in said

@@ -19,26 +19,39 @@ Cut the figure's column to the figure before writing beside it: `picture_fit` ce
 what is left of a band, so a column cut by eye is a strip of white over the figure and
 the caption stranded at the bottom.
 
+`card_size` levels the three cards beside it, so none is padded out to the lane, and the
+`stack`'s gutter spends the lane's leftover height as the air between them rather than
+leaving it in a heap at the bottom -- floored at `GUTTER`, so a lane with little slack
+keeps the deck's own gap instead of closing below it.
+
 ```python
 caption = "图 1：四阶段流水线（论文原图）"
 figure, said = frame.body.split_left(0.58)
 tall = picture_size(f"{FIGURES}/fig1.png", figure, caption=caption).h
 picture_fit(slide, f"{FIGURES}/fig1.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall),
             T, caption=caption)
-down = stack(said)
-write(slide, down.take(0.42), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
-down.skip(0.10)
-points(slide, down.rest(), T, [
-    "四个阶段共享一套权重，切任务只换输入查询。",
-    "第三阶段是唯一带监督的一步。",
-    "端到端 42ms，其中第二阶段占 61%，是下一步的目标。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+notes = [("layers", "共享权重", "四个阶段共用一套权重，只换输入。"),
+         ("target", "唯一监督", "第三阶段是唯一带监督的一步。"),
+         ("stopwatch", "下一步", "端到端 42ms，第二阶段占 61%。")]
+beside = stack(said)
+write(slide, beside.take(0.42), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
+beside.skip(0.10)
+lane = beside.rest()
+tall = max(card_size(lane.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
+down = stack(lane, gutter=max(GUTTER, (lane.h - 3 * tall) / 2))
+for icon, head, body in notes:
+    card(slide, down.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
 ```
 
 ### P2 -- Figure right, copy left
 
 The mirror, and not the same page: the eye lands left first, so this is the one to
 reach for when the argument leads and the figure corroborates.
+
+Which is why the blocks here are not level, where `P1`'s are: an `accent_soft` band
+(`M3`) at `LEAD_PT` outweighs the two cards under it, so the eye lands on it first and on
+them second. A level set of three would say all three weigh the same, which on this page
+they do not.
 
 ```python
 caption = "图 2：验证集曲线"
@@ -47,11 +60,18 @@ down = stack(said)
 write(slide, down.take(0.42), "为什么是这条曲线", size=LEAD_PT, bold=True, colour=INK,
       font=FACE, cjk_font=HAN)
 down.skip(0.10)
-points(slide, down.rest(), T, [
-    "第 4 个 epoch 之后收益转平，继续训练只买到 0.3 个点。",
-    "两次回落都对应学习率重启，不是数据问题。",
-    "第 9 个 epoch 起验证集与训练集分离，是过拟合的起点。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+lead = down.take(1.30)
+plane(slide, lead, T, tint="accent_soft", radius=True)
+write(slide, lead.inset(PAD + 0.08), "第 9 个 epoch 起验证集与训练集分离，早停点就在这里。",
+      size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN, anchor="middle")
+down.skip(GUTTER)
+notes = [("trending_down", "第 4 个 epoch 后转平", "继续训练只买到 0.3 个点。"),
+         ("history", "两次回落是学习率重启", "形状一致，不是数据问题。")]
+rest = down.rest()
+tall = max(card_size(rest.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
+beside = stack(rest, gutter=max(GUTTER, rest.h - 2 * tall))
+for icon, head, body in notes:
+    card(slide, beside.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
 tall = picture_size(f"{FIGURES}/fig2.png", figure, caption=caption).h
 picture_fit(slide, f"{FIGURES}/fig2.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall),
             T, caption=caption)
@@ -246,11 +266,13 @@ write(slide, down.take(0.40), "03 / 06 · 分野", size=KICKER_PT, colour=MUTED,
 down.skip(0.12)
 write(slide, down.take(2.40), "一条窄图带，\n一个大标题。", size=TITLE_PT + 14, bold=True,
       colour=INK, font=FACE, cjk_font=HAN, spacing=1.18)
-points(slide, down.rest(), T, [
-    "窄带占满整页高度，宽度不到四分之一，剩下的都留给字。",
-    "带子里的内容不承担信息，它只承担这一页的语气。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+write(slide, down.take(0.46), "窄带占满整页高度，宽度不到四分之一，剩下的都留给字。",
+      size=BODY_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
+
+One quiet line under the title and no more. A display-size page that then stacks two
+claims under its own headline is arguing with itself; if the second claim matters, it is
+the next page's.
 
 ### P26 -- A figure running to the canvas edge, the copy in the clear
 
@@ -258,26 +280,42 @@ The box ends *at* `CANVAS_W`. A shape whose box crosses the edge is reported by 
 on every build, and it buys nothing: `cover` already throws away what does not fit, so a
 box to the edge and a box past it look the same on the page.
 
+The panel is cut to what its bands really need with `text_size` rather than to a share of
+the column, and the hairline parting them is a thin `plane` in `grid`: `rule` is capped at
+1.05in, so it cannot draw a line this wide.
+
 ```python
 said, _ = frame.body.split_left(0.46)
-down = stack(said)
-write(slide, down.take(0.50), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
-down.skip(0.10)
-points(slide, down.rest(), T, [
-    "图跑到画布边缘，页面没有一条框住图的边。",
-    "跑到边上的一侧不能承载信息：那里只能是背景或延伸的纹理。",
-    "字全部留在左侧的干净区域，不与图重叠。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+rules = [("跑到边的一侧不承载信息", "那里只能是背景，或者一段延伸的纹理。"),
+         ("字全部留在干净区域", "不与图重叠，也不压在图的渐变上。"),
+         ("盒子止于画布边缘", "越过一寸和贴住边缘看起来一样，越过的那寸会被报告。")]
+pad, air = PAD + 0.10, 0.16
+bands = [0.34 + text_size(body, said.w - 2 * pad, size=LABEL_PT, font=FACE).h for _, body in rules]
+panel = Box(said.x0, said.y0, said.x1,
+            said.y0 + sum(bands) + 2 * pad + 2 * (2 * air + 0.015))
+plane(slide, panel, T, tint="surface")
+down = stack(panel.inset(pad))
+for index, ((head, body), tall) in enumerate(zip(rules, bands)):
+    band = stack(down.take(tall))
+    write(slide, band.take(0.34), head, size=BODY_PT, bold=True, colour=INK,
+          font=FACE, cjk_font=HAN, anchor="middle")
+    write(slide, band.rest(), body, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
+    if index < len(rules) - 1:
+        down.skip(air)
+        plane(slide, Box.at(down.x0, down.y, w=down.w, h=0.015), T, tint="grid")
+        down.skip(air)
 cover(slide, f"{FIGURES}/fig1.png", Box.corners(6.80, frame.body.y0, CANVAS_W, frame.body.y1))
 ```
 
 ### P35 -- A chapter banner: two images of unequal weight over an oversized section number
 
 A divider page, and the one place a deck can spend a whole page on almost nothing. The
-number is the ground the title sits against, and its colour is a measured trade rather
-than a taste: on this template `accent_soft` came back `unreadable` at 1.2:1 and refused
-the deck, `grid` came back `thin_contrast` at 2.1:1 and passed with a note, and `MUTED`
-is clean. A ghost number is not free.
+number is the ground the title sits against, and its colour is a trade rather than a
+taste: on this template `accent_soft` came back `unreadable` at 1.2:1 and refused the
+deck; `grid` measures 2.1:1, which clears that bar and passes in silence, and is still a
+number nobody wants a section title read at -- above 2:1 nothing is measured, so your
+eye on the render is the only thing that catches it; `MUTED` is clean. A ghost number is
+not free.
 
 ```python
 upper = Box.corners(0.0, 0.0, CANVAS_W, 3.90)

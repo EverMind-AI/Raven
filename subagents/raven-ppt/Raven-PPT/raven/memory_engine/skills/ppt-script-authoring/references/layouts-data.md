@@ -16,6 +16,10 @@ the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]
 A chart alone states numbers; the lane says what to conclude. Pair this with `M11` --
 accent the one item the lane is about.
 
+The lane's two blocks are not the same weight: an `accent_soft` card (`M3`) carrying an
+icon and a title outweighs a quiet `LABEL_PT` line under it, and two level cards would
+say they weigh the same.
+
 ```python
 plot, lane = frame.body.split_left(0.66)
 horizontal_bar(slide, plot, T, [("华东", 46.3), ("华北", 42.1), ("西南", 39.4), ("华南", 31.8)],
@@ -23,10 +27,13 @@ horizontal_bar(slide, plot, T, [("华东", 46.3), ("华北", 42.1), ("西南", 3
 down = stack(lane)
 write(slide, down.take(0.40), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
 down.skip(0.08)
-points(slide, down.rest(), T, [
-    "华东一地占了四成，其余三地合计才追平。",
-    "华南低于线的原因是三月才接入。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+answer = down.take(card_size(lane.w, icon="target", title="华东一地占四成",
+                             body="其余三地合计才追平它。", font=FACE).h)
+card(slide, answer, T, tint="accent_soft", icon="target", title="华东一地占四成",
+     body="其余三地合计才追平它。", font=FACE, cjk_font=HAN)
+down.skip(GUTTER)
+write(slide, down.rest(), "华南低于线的原因是三月才接入，不到一个季度。",
+      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
 ### P15 -- Two charts read against one scale
@@ -62,14 +69,22 @@ rows = [
 grid, lane = frame.body.split_left(0.62)
 laid = table_size(rows, T, box=grid)
 table(slide, Box(grid.x0, grid.y0, grid.x1, grid.y0 + laid.h), rows, T, emphasize_rows=(2,))
+verdicts = [("check_circle", "合并权重", "精度打平，时延和显存各降三分之二。"),
+            ("x_circle", "合并 + 量化", "再降一档，但 1.5 个点的精度不在预算内。")]
 down = stack(lane)
 write(slide, down.take(0.40), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
 down.skip(0.08)
-points(slide, down.rest(), T, [
-    "合并权重这一行是本页的结论：精度打平，时延和显存各降三分之二。",
-    "量化再降一档，但 1.5 个点的精度不在预算内。",
-], size=BODY_PT, font=FACE, cjk_font=HAN)
+rest = down.rest()
+tall = max(card_size(rest.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in verdicts)
+beside = stack(rest, gutter=GUTTER)
+for tint, (icon, head, body) in zip(("accent_soft", "surface"), verdicts):
+    card(slide, beside.take(tall), T, tint=tint, icon=icon, title=head, body=body,
+         font=FACE, cjk_font=HAN)
 ```
+
+The titles in the lane are the grid's own row labels, so the lane reads against the table
+without counting rows. The tints carry the verdict -- `accent_soft` on the option taken,
+`surface` on the one that was not -- and `card_size` across both levels them (`M3`).
 
 ### P36 -- A table as the page's whole ground, the conclusion floated over it
 
@@ -95,7 +110,7 @@ write(slide, down.take(0.72), "只有两个华东站点把 P95 压在 50ms 以�
 down.skip(0.14)
 room = down.rest()
 size = BODY_PT if table_size(rows, T, box=room, size=BODY_PT).h <= room.h else LABEL_PT
-table(slide, room, rows, T, size=size, style="row_rules", emphasize_rows=(1, 2))
+table(slide, room, rows, T, size=size, emphasize_rows=(1, 2))
 ```
 
 ### P37 -- A two-axis matrix, the cell being the answer
@@ -164,12 +179,12 @@ write(slide, cells[5], "五套方案，同一组字段，同一个顺序。", si
 
 ### P39 -- A grouped header spanning columns, sub-labels under it
 
-`table()` has no column spans, so this one is drawn: `columns(5, gutter=0.0, weights=...)`
-gives the five cells, a `stack` down the same box gives the bands, and a box across a span
-is its first and last cells' own edges. Two things measured rather than guessed: `rule` is
-capped at 1.05in and starts 0.06in *below* the box it underlines, so a rule the width of a
-table is a thin `plane`; and the span band has to be tinted, or the two levels of header
-read as one row of five labels.
+`table()` has no column spans, so this one is drawn:
+`columns(5, gutter=0.0, weights=...)` gives the five cells, a `stack` down the same box
+gives the bands, and a box across a span is its first and last cells' own edges. Two
+things to get right: `rule` is capped at 1.05in and starts 0.06in *below* the box it
+underlines, so a rule the width of a table is a thin `plane`; and the span band has to
+be tinted, or the two levels of header read as one row of five labels.
 
 ```python
 spans = [("", 1), ("旧网关（3 月）", 2), ("新网关（4 月）", 2)]
@@ -290,11 +305,11 @@ table(slide, frame.body.rows(2)[0], rows, T, size=BODY_PT, emphasize_rows=(2,),
 
 ### M26 -- Cells tinted by their own value
 
-A tint is a ranking and the figure is still the reading, so the cells keep their numbers.
-The constraint is measured: `table` sets every cell's type in the theme's foreground, so
+A tint is a ranking and the figure is still the reading, so the cells keep their
+numbers. The constraint: `table` sets every cell's type in the theme's foreground, so
 the deep end of the ramp is whatever `contrast` says still carries it. Four steps mixed
-from the page's own ground toward its accent, and a legend under the grid saying what the
-steps are -- without the legend a tint is decoration.
+from the page's own ground toward its accent, and a legend under the grid saying what
+the steps are -- without the legend a tint is decoration.
 
 ```python
 rows = [
