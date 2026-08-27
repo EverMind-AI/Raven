@@ -6,6 +6,7 @@ import * as mount_ from './mount'
 import {
   AgentRecordConversation,
   InstanceConversation,
+  AgentList,
   InstanceRowView,
   orderAgentGroups,
   SubagentsApp,
@@ -1416,5 +1417,48 @@ describe('the list reads', () => {
 
     expect(asked).toEqual(['s1', 's2'])
     expect(store.getState().rows.map((row) => row.id)).toEqual(['call-s2'])
+  })
+})
+
+describe('the compact roster', () => {
+  /* One group with a conversation under it and one without, which is the shape
+     the desk's agents tab draws: a handful of registered agents, most of which
+     have run nothing this session. */
+  const roster = (): { roster: SubagentRow[]; instances: InstanceRow[] } => ({
+    roster: [{ name: 'Raven-Research' }, { name: 'Raven-Code' }] as SubagentRow[],
+    instances: [inst({ agent: 'Raven-Research', handle: 'r-1' })],
+  })
+
+  const draw = (): void => {
+    const { roster: names, instances: live } = roster()
+    wire({ list: async () => [] })
+    render(
+      <AgentList s={{ ...store.getState(), roster: names, instances: live }} compact />,
+      { container: document.getElementById('wsBody')! },
+    )
+  }
+
+  const heads = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.agent-head')]
+
+  /* The names have to start at one x. `hidden` removed the fold from the flow,
+     so a group with children indented its own icon and name past every leaf
+     row's -- visible in the product as a list on two vertical lines, and
+     invisible to any assertion about text or classes. happy-dom lays nothing
+     out, so what is pinned here is the cause: the slot is on every head, in the
+     same position, and never taken out of the flow. Its glyph is what a leaf
+     row withholds (page.css does that with visibility), and check-css keeps
+     that rule from going back to display. */
+  it('gives every head the fold slot, foldable or not', () => {
+    draw()
+    const [group, leaf] = heads()
+    expect(group?.querySelector('b')?.textContent).toBe('Raven-Research')
+    expect(leaf?.querySelector('b')?.textContent).toBe('Raven-Code')
+    for (const head of [group, leaf]) {
+      const fold = head?.firstElementChild as HTMLElement | null
+      expect(fold?.className).toBe('agent-fold')
+      expect(fold?.hasAttribute('hidden')).toBe(false)
+    }
+    expect((group?.firstElementChild as HTMLElement).dataset.empty).toBe('false')
+    expect((leaf?.firstElementChild as HTMLElement).dataset.empty).toBe('true')
   })
 })
