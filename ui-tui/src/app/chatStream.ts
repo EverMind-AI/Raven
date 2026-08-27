@@ -26,6 +26,8 @@ import type {
   TokenDeltaEvent,
   ToolCompleteEvent,
   ToolStartEvent,
+  TurnCancelParams,
+  TurnCancelResult,
   TurnEvent,
   TurnSendParams,
   TurnSendResult,
@@ -44,6 +46,7 @@ import {
   clearRunning,
   clearRunningKey,
   directKey,
+  disarmEscape,
   getDirectChat,
   MAIN_VIEW_KEY,
   markRunning,
@@ -195,6 +198,11 @@ const dispatchDirect = (
       // be in flight, and the user may be watching a different one. `markRunning`
       // / `clearRunning` own that projection.
       clearRunning(target)
+      // This lane's arm only. Left standing past a direct turn, the next Ctrl+C
+      // in that view would skip to the local force-reset and never ask the
+      // server to stop the sub-agent; cleared globally, it would instead drop an
+      // arm the main agent's own cancel had just placed.
+      disarmEscape(target)
       patchUiState({ status: 'ready' })
       // A direct turn moves its own instance's status too.
       scheduleInstanceRefresh()
@@ -207,6 +215,7 @@ const dispatchDirect = (
         role: 'system',
         text: reason === 'cancelled_by_client' ? 'interrupted' : `error: ${message} (code=${code})`
       })
+      disarmEscape(target)
       patchUiState({ status: 'ready' })
       sys?.(`${target.agent}/${target.handle}: ${message}`)
       return
@@ -568,12 +577,25 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     // for any server event. Backs the watchdog and the Ctrl+C escape hatch so
     // a turn that produces no terminal event can never wedge the UI.
     //
-    // The main agent's turn alone: a sub-agent's is not cancellable (spec D3)
-    // and a local escape must not pretend one stopped.
-    clearWatchdog(MAIN_VIEW_KEY)
-    clearRunning(null)
-    sending.delete(MAIN_VIEW_KEY)
-    state.turns.delete(MAIN_VIEW_KEY)
+    // Acts on the view on screen, the same turn `cancel` addressed: this is the
+    // second Ctrl+C of the same escape, and resetting a different view than the
+    // first press aimed at would leave the wedged one wedged.
+    const active = getDirectChat().active
+    const view = viewKeyOf(active)
+    clearWatchdog(view)
+    clearRunning(active)
+    sending.delete(view)
+    state.turns.delete(view)
+    if (active !== null) {
+      // The instance's own transcript, where dispatchDirect writes a cancelled
+      // turn's marker. Not restoreInputPrompt: that commits turnController's
+      // buffer into the main transcript, and a direct turn never filled it.
+      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text: 'interrupted' })
+      disarmEscape(active)
+      patchUiState({ status: 'ready' })
+
+      return
+    }
     restoreInputPrompt(opts.appendMessage, opts.sys)
     appendArtifacts(state, opts.appendMessage)
     state.artifacts = { changes: [], deliveries: [] }
@@ -604,8 +626,9 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
           forceReset()
           return
         }
-        // A sub-agent's turn is not cancellable, so there is nothing to unwind
-        // beyond this client's own bookkeeping: release the view and say so.
+        // No ack ever arrived, so there may be no turn on the other side to
+        // unwind -- release this client's own bookkeeping and say so. The user
+        // can still cancel from the view if one did start.
         sending.delete(key)
         state.turns.delete(key)
         clearRunningKey(key)
@@ -708,14 +731,21 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
   }
 
   const cancel = async (): Promise<void> => {
-    // The main agent's turn. `turn.cancel` names a session and means exactly
-    // that; a sub-agent's turn is not cancellable (spec D3), so asking here
-    // would be a request the server is right to answer with "nothing to do".
-    if (!state.turns.has(MAIN_VIEW_KEY)) {
+    // The turn of the conversation on screen, main agent or sub-agent. Ctrl+C
+    // means "stop what I am watching", and a direct turn is watched from its own
+    // view: cancelling the main lane from there would stop a turn the user
+    // cannot see and leave the one they can see running.
+    const active = getDirectChat().active
+    const view = viewKeyOf(active)
+    if (!state.turns.has(view)) {
       return
     }
-    await opts.rpcClient.rpc<{ cancelled: boolean }, { session_key: string }>('turn.cancel', {
-      session_key: opts.sessionKey
+    // `target` omitted rather than sent as null on the main conversation, the
+    // same way `sendTo` omits it: the server resolves the lane from it, and an
+    // absent key keeps the wire shape identical to every existing client's.
+    await opts.rpcClient.rpc<TurnCancelResult, TurnCancelParams>('turn.cancel', {
+      session_key: opts.sessionKey,
+      ...(active === null ? {} : { target: active })
     })
     // We do NOT clear the turn here — the server is expected to emit an
     // `error(reason=cancelled_by_client)` event that drives the actual
@@ -723,9 +753,10 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     // event delivery and leave the turn-active guard inconsistent.
   }
 
-  // Consulted by the Ctrl+C router to decide between cancel and force-reset,
-  // so it answers for the turn Ctrl+C can act on -- the main agent's.
-  const isTurnActive = (): boolean => state.turns.has(MAIN_VIEW_KEY)
+  // Consulted by the Ctrl+C router to decide between cancel and force-reset, so
+  // it answers for the turn Ctrl+C can act on -- the one in the view on screen,
+  // which is the same turn `cancel` above addresses.
+  const isTurnActive = (): boolean => state.turns.has(viewKeyOf(getDirectChat().active))
 
   return { attach, detach, send, sendTo, cancel, isTurnActive, forceReset }
 }

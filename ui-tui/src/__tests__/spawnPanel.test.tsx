@@ -65,16 +65,41 @@ describe('SpawnPanel', () => {
     expect(f).toContain('research CO and report back')
   })
 
-  it('folds the trace once the run settles', () => {
+  it('folds the trace once the run settles, keeping its last line under a mark', () => {
     const settled = run({ endedAt: 5000, status: 'completed' })
 
-    setDagNodeTrace(spawnTraceKey(settled.callId!), [say('the answer')], true)
+    setDagNodeTrace(spawnTraceKey(settled.callId!), [say('reading the WHO guidance'), say('the answer')], true)
 
     const f = frame(<SpawnPanel run={settled} t={DEFAULT_THEME} width={72} />)
 
-    expect(f).not.toContain('the answer')
     expect(f).toContain('completed')
-    expect(f).toContain('click to open the trace')
+    // One row: the newest line, behind the mark that says the panel opens.
+    expect(f).toContain('\u25be the answer')
+    expect(f).not.toContain('reading the WHO guidance')
+    // The trace box's own furniture is gone with the box.
+    expect(f).not.toContain('/agents for the full trace')
+    expect(f).not.toContain('msgs')
+  })
+
+  it('follows the newest step of a folded run that is still working', () => {
+    setDagNodeTrace(spawnTraceKey(run().callId!), [
+      say('reading the WHO guidance'),
+      { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"who.pdf"}' }] }
+    ], false)
+    toggleSpawnTrace(run())
+
+    const f = frame(<SpawnPanel run={run()} t={DEFAULT_THEME} width={72} />)
+
+    expect(f).toContain('who.pdf')
+    expect(f).not.toContain('click to open the trace')
+  })
+
+  it('shows the prompt on the folded row until the run has said anything', () => {
+    const settled = run({ endedAt: 5000, status: 'completed' })
+
+    const f = frame(<SpawnPanel prompt="research CO and report back" run={settled} t={DEFAULT_THEME} width={72} />)
+
+    expect(f).toContain('research CO and report back')
   })
 
   it('lets the reader reopen a settled run, their toggle winning over the default', () => {

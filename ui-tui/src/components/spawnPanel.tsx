@@ -25,6 +25,12 @@
 // One footer line carries everything the box owes the reader -- what was cut,
 // the fold toggle, and /agents -- because a second rule and a second dim hint
 // row were more furniture than a single-run panel can justify.
+//
+// Folded, that same row shows the run's newest line instead of a hint. A hint
+// spends the panel's one remaining row saying what the disclosure mark already
+// says, while the tail says what the run is doing -- and, because it is re-read
+// with the trace, a folded panel still reads as moving rather than as a closed
+// drawer.
 
 import { Box, stringWidth, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
@@ -36,7 +42,7 @@ import type { Theme } from '../theme.js'
 import { $dagNodeTraces } from '../app/dagNodeStore.js'
 import { fmtDuration } from '../domain/messages.js'
 import { DAG_STATUS_GLYPH, dagTraceRows } from '../lib/dagStatus.js'
-import { fitTraceTail } from '../lib/dagStream.js'
+import { fitTraceTail, traceTailLine } from '../lib/dagStream.js'
 import { $spawnOpenOverrides, spawnTraceKey, spawnTraceOpen, toggleSpawnTrace } from '../lib/spawnOpen.js'
 import { clipToWidth, elideMiddle } from '../lib/text.js'
 import { MessageLine } from './messageLine.js'
@@ -45,6 +51,10 @@ import { Spinner } from './thinking.js'
 // What the call is, printed once, at the top of the box that is its result --
 // the same convention as the dag panel's `run subagent dag`.
 const TITLE = 'spawn'
+
+// The disclosure mark on the folded row: what the row costs the tail, and the
+// only thing on a folded panel that says it opens.
+const OPEN_MARK = '\u25be '
 
 // The record id, elided like the dag header's run id: enough of each end to
 // tell two runs apart, which is all anyone reads it for.
@@ -100,6 +110,12 @@ export const SpawnPanel = memo(function SpawnPanel({
   const rows = dagTraceRows(run.status)
   const messages = run.callId ? traces.get(spawnTraceKey(run.callId))?.messages : undefined
   const fit = useMemo(() => fitTraceTail(messages ?? [], rows, inner), [inner, messages, rows])
+  // The folded row's own budget: the panel's width less the disclosure mark.
+  const tailRoom = Math.max(8, inner - stringWidth(OPEN_MARK))
+  const tail = useMemo(
+    () => (open ? '' : traceTailLine(messages ?? [], tailRoom, running)),
+    [messages, open, running, tailRoom]
+  )
   const handle = run.agent ? `${run.agent}${run.instance ? `@${run.instance}` : ''}` : ''
   // What identifies the run, most useful first: the handle a reader scans for,
   // the tally, and last the record id -- which names nothing a reader is
@@ -199,9 +215,17 @@ export const SpawnPanel = memo(function SpawnPanel({
           </Text>
         </>
       ) : (
-        <Text color={t.color.muted} dim wrap="truncate-end">
-          {'click to open the trace · /agents for the full trace'}
-        </Text>
+        /* The newest line the run said, or the head of what it was asked
+           while it has said nothing yet -- and the hint only when it has
+           neither, so the row is never blank next to the mark. */
+        <Box>
+          <Text color={t.color.accent}>{OPEN_MARK}</Text>
+          <Text color={t.color.muted} dim wrap="truncate-end">
+            {tail ||
+              clipToWidth(prompt.slice(0, PROMPT_CHARS), tailRoom) ||
+              'click to open the trace · /agents for the full trace'}
+          </Text>
+        </Box>
       )}
     </Box>
   )

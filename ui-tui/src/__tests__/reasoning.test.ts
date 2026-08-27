@@ -63,6 +63,37 @@ describe('cleanThinkingText', () => {
       )
     ).toBe('**Resolving comments on GitHub**\nActual step\nnext step')
   })
+
+  it('keeps prose in front of a verb word when no face precedes it', () => {
+    // A ticker fragment is a face glyph followed by its verb. Treating any run
+    // of non-letters as the face deleted the sentence ahead of every verb-like
+    // word, which on non-Latin reasoning is most of the line.
+    expect(cleanThinkingText('先看调用顺序 pondering... 再看锁的粒度')).toBe(
+      '先看调用顺序 pondering... 再看锁的粒度'
+    )
+    expect(cleanThinkingText('the queue is processing the tail')).toBe('the queue is processing the tail')
+  })
+
+  it('still drops a bare verb line', () => {
+    expect(cleanThinkingText('musing...\nthe real thought')).toBe('the real thought')
+  })
+
+  it('stays linear on a long non-Latin buffer', () => {
+    // Guards the shape of the match, not the machine's speed: the pattern this
+    // replaced was quadratic in line length, so a full reasoning buffer of CJK
+    // cost hundreds of ms per call at ~60 calls/s and wedged the event loop.
+    // The bound is loose enough not to flake on a busy CI box.
+    const paragraph = '用户想让我分析一下这个接口的调用顺序和锁的粒度'.repeat(50)
+    const buffer = Array.from({ length: 60 }, () => paragraph).join('\n')
+
+    expect(buffer.length).toBeGreaterThan(60_000)
+
+    const started = performance.now()
+
+    cleanThinkingText(buffer)
+
+    expect(performance.now() - started).toBeLessThan(100)
+  })
 })
 
 describe('hasMeaningfulReasoning', () => {

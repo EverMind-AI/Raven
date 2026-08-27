@@ -72,6 +72,10 @@ class RpcServer:
         self._reader: asyncio.StreamReader | None = None
         self._write_transport: asyncio.WriteTransport | None = None
         self._write_protocol: asyncio.BaseProtocol | None = None
+        # Set on the socket paths only, purely for its ``drain()`` -- writes
+        # still go through the transport. The pipe fallback wires a bare
+        # ``BaseProtocol``, which carries no flow control to wait on.
+        self._writer: asyncio.StreamWriter | None = None
         self._write_lock = asyncio.Lock()
         self._pending: set[asyncio.Task] = set()
         self._stopped = asyncio.Event()
@@ -89,12 +93,34 @@ class RpcServer:
 
         All writes (responses + notifications) MUST go through this method so
         the lock serializes them.
+
+        Then wait for the transport's buffer to come back under its high-water
+        mark. A client whose event loop has stalled -- mid-render on a long
+        turn, say -- stops reading, and without this wait the emitter keeps
+        handing frames to a buffer nobody drains: the backlog grows here and
+        then lands on the client all at once, which is what turns a slow client
+        into a stuck one. Waiting outside the lock so a slow peer blocks the
+        producers rather than the ordering of what has already been written.
         """
         if self._write_transport is None:
             raise RuntimeError("RpcServer.send_frame called before serve_forever()")
         data = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
         async with self._write_lock:
             self._write_transport.write(data)
+        await self._drain()
+
+    async def _drain(self) -> None:
+        """Block while the peer is behind. No-op without flow control."""
+        writer = self._writer
+        if writer is None:
+            return
+        try:
+            await writer.drain()
+        except (ConnectionError, OSError):
+            # The peer is gone. ``send_frame`` has never reported that -- a
+            # write to a closed transport is a silent no-op -- and the read
+            # pump owns noticing it, so stay quiet here too.
+            pass
 
     # ----- main loop --------------------------------------------------------
 
@@ -140,6 +166,7 @@ class RpcServer:
             transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
             self._write_transport = transport
             self._write_protocol = reader_protocol
+            self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
         elif req_is_sock and notif_is_sock:
             # Both fds are dups of the same accepted socket. Close the read
             # dup and reclaim the write dup as a ``socket.socket`` — only one
@@ -153,6 +180,7 @@ class RpcServer:
             transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, sock)
             self._write_transport = transport
             self._write_protocol = reader_protocol
+            self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
         else:
             # Legacy / test path: bare pipes via ``os.pipe()``.
             # `os.fdopen` so the transport owns a Python file object; loop
@@ -278,6 +306,10 @@ class RpcServer:
             except Exception:
                 logger.exception("rpc: error closing write transport")
             self._write_transport = None
+
+        # Dropped with the transport it wraps: send_frame checks the transport
+        # first and raises, but a drain already awaiting must not outlive it.
+        self._writer = None
 
         self._stopped.set()
         logger.info("rpc: RpcServer stopped (pid={})", os.getpid())

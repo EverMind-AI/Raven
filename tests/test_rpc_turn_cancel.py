@@ -29,6 +29,7 @@ from raven.rpc.methods.turn import (
     turn_subscribe,
 )
 from raven.rpc.subscriptions import SubscriptionEmitter
+from raven.spine import direct_lane
 
 
 class FakeHandle:
@@ -259,11 +260,15 @@ async def test_session_interrupt_is_registered_without_an_emitter() -> None:
     assert "session.interrupt" in d.methods()
 
 
-async def test_a_direct_turn_is_not_cancellable(emitter: SubscriptionEmitter, send_frame_capture: AsyncMock) -> None:
-    """Spec D3. `turn.cancel` names a session and means the main agent's turn;
-    a sub-agent that is answering is left to finish. It runs on its instance's
-    own lane, so the session's slot does not hold it and the cancel finds
-    nothing -- rather than reaching across and tearing it down."""
+async def test_an_untargeted_cancel_leaves_a_direct_turn_running(
+    emitter: SubscriptionEmitter, send_frame_capture: AsyncMock
+) -> None:
+    """A cancel with no target means the main agent's turn and nothing else.
+
+    A direct turn runs on its instance's own lane, so the session's slot does not
+    hold it: the cancel finds nothing rather than reaching across and tearing
+    down a sub-agent the user was not looking at.
+    """
     targets: dict[str, dict[str, str]] = {}
     await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
     await turn_send(
@@ -283,6 +288,82 @@ async def test_a_direct_turn_is_not_cancellable(emitter: SubscriptionEmitter, se
 
     assert result == {"cancelled": False}
     assert [e for e in _collect_events(send_frame_capture) if e["type"] == "error"] == []
+
+
+async def test_a_direct_turn_is_cancelled_through_its_target(
+    emitter: SubscriptionEmitter, send_frame_capture: AsyncMock
+) -> None:
+    """Naming the instance cancels its turn: the lane is resolved the same way
+    ``turn.send`` resolved the one it bound, and the error is tagged so the
+    client clears the direct view rather than the main transcript."""
+    from raven.rpc.methods import turn as turn_mod
+
+    targets: dict[str, dict[str, str]] = {}
+    turn_ids: dict[str, str] = {}
+    target = {"agent": "Raven-Code", "handle": "refactor-auth"}
+    await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+    sent = await turn_send(
+        {"session_key": "tui:default", "content": "fix it", "target": target},
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids=turn_ids,
+        direct_targets=targets,
+    )
+    handle = turn_mod._active_turns[direct_lane("tui:default", "Raven-Code", "refactor-auth")]
+
+    result = await turn_cancel(
+        {"session_key": "tui:default", "target": target},
+        emitter=emitter,
+        turn_ids=turn_ids,
+        direct_targets=targets,
+    )
+    await asyncio.sleep(0.05)  # let the coalescer flush
+
+    assert result == {"cancelled": True}
+    assert handle.cancelled is True
+    errors = [e for e in _collect_events(send_frame_capture) if e["type"] == "error"]
+    assert errors[-1]["payload"]["reason"] == "cancelled_by_client"
+    assert errors[-1]["payload"]["target"] == target
+    # The lane's own turn id, not the session's: a client correlating this error
+    # to the turn it was streaming has nothing else to match on.
+    assert errors[-1]["payload"]["turn_id"] == sent["turn_id"]
+
+
+async def test_cancelling_one_instance_leaves_another_instance_running(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """Each instance is its own lane, so a targeted cancel reaches exactly one."""
+    from raven.rpc.methods import turn as turn_mod
+
+    for handle_name in ("refactor-auth", "write-docs"):
+        await turn_send(
+            {
+                "session_key": "tui:default",
+                "content": "go",
+                "target": {"agent": "Raven-Code", "handle": handle_name},
+            },
+            emitter=emitter,
+            scheduler=FakeScheduler(),
+            turn_ids={},
+        )
+    other = turn_mod._active_turns[direct_lane("tui:default", "Raven-Code", "write-docs")]
+
+    result = await turn_cancel(
+        {"session_key": "tui:default", "target": {"agent": "Raven-Code", "handle": "refactor-auth"}},
+        emitter=emitter,
+    )
+
+    assert result == {"cancelled": True}
+    assert other.cancelled is False
+
+
+async def test_turn_cancel_for_an_idle_instance_is_not_an_error(emitter: SubscriptionEmitter) -> None:
+    """The routine case: Ctrl+C in a direct view whose turn already landed."""
+    result = await turn_cancel(
+        {"session_key": "tui:default", "target": {"agent": "Raven-Code", "handle": "refactor-auth"}},
+        emitter=emitter,
+    )
+    assert result == {"cancelled": False}
 
 
 async def test_cancelling_a_main_turn_leaves_the_error_untagged(

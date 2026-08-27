@@ -475,26 +475,39 @@ async def turn_cancel(
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
     turn's events still reach the client.
+
+    ``target`` names which lane to cancel and must be resolved the same way
+    ``turn.send`` resolves the lane it binds, or the lookup misses every direct
+    turn: those are registered under ``direct_lane(...)``, never under the bare
+    session key. The emit still goes to the session, which is what the client
+    subscribes to; the addressee rides the payload.
     """
     parsed = TurnCancelParams.model_validate(params)
 
-    handle = _active_turns.get(parsed.session_key)
+    lane = (
+        direct_lane(parsed.session_key, parsed.target.agent, parsed.target.handle)
+        if parsed.target is not None
+        else parsed.session_key
+    )
+
+    handle = _active_turns.get(lane)
     if handle is None:
         return {"cancelled": False}
 
     await handle.cancel()
 
     if emitter is not None:
-        # Tagged from the live map rather than from params: the client cancels a
-        # session, not a target, and this error is the only signal that clears
-        # the view the cancelled turn was streaming into.
+        # Tagged from the live map rather than from ``parsed.target``: the map is
+        # what turn.send bound for this lane, so the tag on this error is byte
+        # for byte the one the cancelled turn's own events carried -- which is
+        # what lets the client clear the view it was streaming into.
         await emitter.emit(
             parsed.session_key,
             {
                 "type": "error",
                 "payload": _tag(
-                    _cancel_payload((turn_ids or {}).get(parsed.session_key, "")),
-                    (direct_targets or {}).get(parsed.session_key),
+                    _cancel_payload((turn_ids or {}).get(lane, "")),
+                    (direct_targets or {}).get(lane),
                 ),
             },
         )

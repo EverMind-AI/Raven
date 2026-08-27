@@ -13,7 +13,9 @@ import type { TranscriptMessage } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
 import { DAG_TRACE_FIT_MAX_ROWS } from '../config/limits.js'
+import { callSubject } from '../domain/episodeFold.js'
 import { toTranscriptMessages } from '../domain/messages.js'
+import { clipToWidth, clipToWidthFromEnd, formatToolCall, hasAnsi, stripAnsi } from './text.js'
 import { estimatedMsgHeight } from './virtualHeights.js'
 
 // What the box's own rendering does, so the fit is measured against the same
@@ -121,4 +123,78 @@ export const fitTraceTail = (
   }
 
   return { hidden: messages.length - taken, shown }
+}
+
+// The last line of a block that says something. A step's newest words are at
+// its end, and the blank line a model leaves before a heading would otherwise
+// win the row.
+const lastLine = (raw: string): string => {
+  const lines = (hasAnsi(raw) ? stripAnsi(raw) : raw).split('\n')
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!
+
+    if (line.trim()) {
+      return line
+    }
+  }
+
+  return ''
+}
+
+// A live line is clipped from its left: the stream grows at the right, so
+// keeping the head would freeze the row on words the run has already left
+// behind, and keeping the tail is what makes it read as moving. A settled run
+// has no edge to follow, and its head is the part that says what happened.
+const follow = (text: string, cols: number, live: boolean) =>
+  live ? clipToWidthFromEnd(text, cols) : clipToWidth(text, cols)
+
+/**
+ * The newest thing a run said, as one line no wider than `cols`.
+ *
+ * What a folded trace box shows in place of the box: the tail of the run is the
+ * only thing a single row can carry that a reader could not already get from
+ * the header, and a row that moves says "still working" without spending a
+ * spinner on it.
+ *
+ * Read off the wire messages rather than through `fitTraceTail`, which folds --
+ * a fold collapses a whole assistant/tool run into one episode whose text is
+ * empty, so the one row it yields for a working run is often blank.
+ *
+ * Newest first, inside one entry as well as across them: a step is dispatched
+ * after the words that introduce it, and those after the thought that reached
+ * them. Empty when the run has said nothing yet.
+ */
+export const traceTailLine = (messages: readonly TranscriptMessage[], cols: number, live = false): string => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!
+
+    // A turn the runtime opened: the model reads its text, a reader must not --
+    // it carries an untrusted fence, an instance handle and an instruction not
+    // to repeat either (see `TranscriptMessage.origin`).
+    if (msg.role === 'user' && msg.origin) {
+      continue
+    }
+
+    const calls = msg.tool_calls ?? []
+    const call = calls[calls.length - 1]
+
+    if (call) {
+      return clipToWidth(formatToolCall(call.name, callSubject(call.arguments)), cols)
+    }
+
+    const text = lastLine(msg.text ?? '')
+
+    if (text) {
+      return follow(text, cols, live)
+    }
+
+    const thought = lastLine(msg.reasoning_content ?? '')
+
+    if (thought) {
+      return follow(thought, cols, live)
+    }
+  }
+
+  return ''
 }

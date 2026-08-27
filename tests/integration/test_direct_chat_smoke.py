@@ -13,8 +13,10 @@ continuation, and a block that lands on the next main-agent turn.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -280,3 +282,136 @@ async def test_a_turn_on_an_instance_lane_still_records_against_the_session(loop
     assert loop._direct_handoff.pending_count(_CONVERSATION) == 1
     await _run(loop, _req("what happened?"), [])
     assert str(direct_root(session_dir, "raven", "notes")) in _last_user(loop.provider)
+
+
+async def test_cancelling_a_direct_turn_stops_the_sub_agent(loop: AgentLoop, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+C in a direct view, driven through the real spine.
+
+    The chain the fix restored: ``turn.cancel`` resolves the instance's lane from
+    ``target``, the lane cancels its running task, and the CancelledError reaches
+    the backend mid-reply. Before the fix the lookup missed -- the turn registers
+    itself under ``direct_lane`` and the handler read the bare session key -- so
+    this answered ``cancelled: False`` and the sub-agent ran on.
+    """
+    from raven.agent.subagent.instances import get_registry
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.methods.turn import turn_cancel, turn_send
+    from raven.rpc.spine import build_rpc_spine
+    from raven.rpc.subscriptions import SubscriptionEmitter
+
+    started = asyncio.Event()
+    reached_backend = asyncio.Event()
+
+    async def parked_run(task, **_kwargs) -> str:
+        """A reply slow enough to interrupt. The sleep is the single await the
+        cancellation lands on, which is the shape the ACP backend's one
+        ``session/prompt`` round trip has."""
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            reached_backend.set()
+            raise
+        return "never"
+
+    monkeypatch.setattr(loop.subagents.registry.backend("raven"), "run", parked_run)
+    target = {"agent": "raven", "handle": "greet"}
+
+    emitter = SubscriptionEmitter(send_frame=AsyncMock(return_value=None))
+    targets: dict[str, dict[str, str]] = {}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=turn_mod.clear_active, direct_targets=targets
+    )
+    try:
+        await turn_send(
+            {"session_key": _CONVERSATION, "content": "take your time", "target": target},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+            direct_targets=targets,
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        result = await asyncio.wait_for(
+            turn_cancel(
+                {"session_key": _CONVERSATION, "target": target},
+                emitter=emitter,
+                turn_ids=turn_ids,
+                direct_targets=targets,
+            ),
+            timeout=5,
+        )
+        # Read before teardown: stopping the scheduler cancels every lane, so a
+        # flag read afterwards would be set even by a cancel that did nothing.
+        stopped_by_the_cancel = reached_backend.is_set()
+    finally:
+        await teardown()
+        turn_mod._active_turns.clear()
+
+    assert result == {"cancelled": True}
+    assert stopped_by_the_cancel, "the interrupt stopped at the lane and never reached the sub-agent"
+
+    # And the instance is left readable as stopped rather than stuck running.
+    row = next(r for r in get_registry().list_instances(_CONVERSATION) if r["handle"] == "greet")
+    assert row["status"] == "cancelled"
+
+
+async def test_an_untargeted_cancel_does_not_touch_a_direct_turn(
+    loop: AgentLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the guarantee: Ctrl+C on the main conversation must not
+    reach across into an instance the user is not watching."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.methods.turn import turn_cancel, turn_send
+    from raven.rpc.spine import build_rpc_spine
+    from raven.rpc.subscriptions import SubscriptionEmitter
+
+    started = asyncio.Event()
+    reached_backend = asyncio.Event()
+
+    async def parked_run(task, **_kwargs) -> str:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            reached_backend.set()
+            raise
+        return "never"
+
+    monkeypatch.setattr(loop.subagents.registry.backend("raven"), "run", parked_run)
+
+    emitter = SubscriptionEmitter(send_frame=AsyncMock(return_value=None))
+    targets: dict[str, dict[str, str]] = {}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=turn_mod.clear_active, direct_targets=targets
+    )
+    try:
+        await turn_send(
+            {
+                "session_key": _CONVERSATION,
+                "content": "take your time",
+                "target": {"agent": "raven", "handle": "greet"},
+            },
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+            direct_targets=targets,
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        result = await turn_cancel(
+            {"session_key": _CONVERSATION},
+            emitter=emitter,
+            turn_ids=turn_ids,
+            direct_targets=targets,
+        )
+        # A beat for a cancel that should not have gone out to arrive anyway, and
+        # read before teardown, which cancels every lane on its own.
+        await asyncio.sleep(0.05)
+        touched_the_instance = reached_backend.is_set()
+    finally:
+        await teardown()
+        turn_mod._active_turns.clear()
+
+    assert result == {"cancelled": False}
+    assert not touched_the_instance, "an untargeted cancel tore down a sub-agent the user was not watching"

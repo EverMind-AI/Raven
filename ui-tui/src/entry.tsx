@@ -21,6 +21,7 @@ import type { GatewayClient } from './gatewayClientStub.js'
 
 import { GatewayClientCompat } from './gatewayClientCompat.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
+import { startLoopLagMonitor } from './lib/loopLag.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
 import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
@@ -133,7 +134,15 @@ if (process.env.RAVEN_HEAPDUMP_ON_START === '1') {
   void performHeapDump('manual')
 }
 
-process.on('beforeExit', () => stopMemoryMonitor())
+// Records main-thread stalls out of band. A stall long enough to matter is a
+// stall that eats Ctrl+C too -- the key reaches the app as a keystroke, not a
+// signal -- so the session it explains is usually one that got killed.
+const stopLoopLagMonitor = startLoopLagMonitor()
+
+process.on('beforeExit', () => {
+  stopMemoryMonitor()
+  stopLoopLagMonitor()
+})
 
 const [ink, { App }, { logFrameEvent }, { trackFrame }] = await Promise.all([
   import('@hermes/ink'),

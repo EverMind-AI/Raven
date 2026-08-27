@@ -127,6 +127,80 @@ def _capture_asyncio_warnings() -> Iterator[list[str]]:
 
 
 @pytest.mark.asyncio
+async def test_send_frame_waits_for_a_peer_that_stopped_reading() -> None:
+    """A client that stops reading must stall the emitter, not fill a buffer.
+
+    The TUI stops reading whenever its event loop is busy. Without flow control
+    ``send_frame`` returns as fast as the runtime can produce frames, the
+    backlog accumulates in this process, and the whole batch lands on the
+    client at once when it recovers -- which is how a slow client becomes a
+    stuck one. Here the peer never reads, so sends must stop; once it drains,
+    they must resume.
+    """
+    server_sock, client, conn, tmp = await _wire_paired_socket()
+    try:
+        req_fd = os.dup(conn.fileno())
+        notif_fd = os.dup(conn.fileno())
+
+        disp = Dispatcher()
+        register_aligned_methods(disp)
+        server = RpcServer(req_fd, notif_fd, disp)
+        serve_task = asyncio.create_task(server.serve_forever())
+        await server.started.wait()
+
+        sent = 0
+
+        async def pump() -> None:
+            nonlocal sent
+            payload = "x" * 4_000
+            # Bounded so a regression fails on the assertions below instead of
+            # buffering until the run is killed -- which is what losing the
+            # wait actually does.
+            while sent < 5_000:
+                await server.send_frame({"jsonrpc": "2.0", "method": "event", "params": {"t": payload}})
+                sent += 1
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            # Asserted as "stops moving", not as a frame count: how much the
+            # socket and the transport absorb before the high-water mark is
+            # platform-dependent, but with no peer reading it must settle.
+            await asyncio.sleep(0.3)
+            stalled_at = sent
+            assert stalled_at > 0, "nothing was written at all"
+
+            await asyncio.sleep(0.2)
+            assert sent == stalled_at, f"emitter kept writing to an unread peer ({stalled_at} -> {sent})"
+
+            # Drain the peer; the emitter must pick up again.
+            loop = asyncio.get_running_loop()
+            for _ in range(200):
+                if sent > stalled_at:
+                    break
+                try:
+                    await asyncio.wait_for(loop.sock_recv(client, 1 << 20), timeout=0.1)
+                except asyncio.TimeoutError:
+                    pass
+            assert sent > stalled_at, "emitter did not resume once the peer drained"
+        finally:
+            pump_task.cancel()
+            try:
+                await pump_task
+            except asyncio.CancelledError:
+                pass
+
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+    finally:
+        client.close()
+        conn.close()
+        server_sock.close()
+
+
+@pytest.mark.asyncio
 async def test_socket_roundtrip_after_inbound_byte() -> None:
     """Hello + slash-style requests round-trip with responses delivered.
 

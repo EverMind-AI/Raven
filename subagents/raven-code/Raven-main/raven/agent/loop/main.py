@@ -2078,7 +2078,38 @@ class AgentLoop:
         skill extraction when a turn completes. When ``None``, extraction
         is skipped (no pipeline wired).
         """
+        # Aliased, never rebound: the caller keeps this list to persist a turn
+        # that dies mid-flight (`_save_broken_turn`), and it can only do that if
+        # the list it holds is the one the loop is still appending to. Both
+        # compaction sites below therefore replace the CONTENTS rather than the
+        # binding -- rebinding here would silently cut the caller off from every
+        # message added after the first compaction.
         messages = initial_messages
+
+        def _swap_transcript(replacement: list[dict]) -> None:
+            """Put ``replacement`` in the working transcript, in place.
+
+            In place because the caller keeps this list to persist a turn that
+            dies mid-flight, and can only do that if the list it holds is the
+            one being appended to. Rebinding here would cut it off from every
+            message added after the first compaction.
+
+            Checkpointed on both sides because the caller also holds an INDEX
+            into this list, and the summary tier returns a shorter one: the
+            first call puts the turn so far on disk, the swap happens, and the
+            second moves that index onto the new list -- which the session now
+            covers whole, so it saves nothing and only re-anchors. Without it a
+            watermark taken at 44 messages survives a compaction to 5 and every
+            later message sits below it, unsaved.
+            """
+            if on_checkpoint is not None:
+                on_checkpoint(messages)
+
+            messages[:] = replacement
+
+            if on_checkpoint is not None:
+                on_checkpoint(messages)
+
         iteration = 0
         final_content = None
         tools_used: list[str] = []
@@ -2252,8 +2283,11 @@ class AgentLoop:
                 fullness = self._context_fullness(messages, last_context_used, last_usage_msg_count)
                 limit, reserved = self._compaction_limits(effective_model)
                 if compaction.should_compact(fullness, limit, reserved, self._compaction.trigger_ratio):
-                    messages, changed = await self._compact_context(messages, effective_model, observed_used=fullness)
+                    compacted, changed = await self._compact_context(
+                        messages, effective_model, observed_used=fullness
+                    )
                     if changed:
+                        _swap_transcript(compacted)
                         compacted_this_turn = True
                         last_context_used = 0
                         last_usage_msg_count = len(messages)
@@ -2370,7 +2404,7 @@ class AgentLoop:
             ):
                 shrunk, changed = await self._compact_context(messages, effective_model, force_summary=True)
                 if changed:
-                    messages = shrunk
+                    _swap_transcript(shrunk)
                     compacted_this_turn = True
                     compress_retries += 1
                     iteration -= 1  # the overflowed call did no work; don't bill it
@@ -3220,31 +3254,77 @@ class AgentLoop:
         initial_messages = self._repair_tool_pairing(initial_messages)
         turn_start_idx = len(initial_messages) - 1
 
-        # Incremental persistence for long turns. ``_persisted_upto`` tracks how
-        # far into the (append-only; emergency shrink preserves length) message
-        # list the session already covers, so the final save never duplicates.
+        # Incremental persistence for long turns: ``_persisted_upto`` tracks how
+        # far into the message list the session already covers, so the final
+        # save never duplicates. The list is append-only EXCEPT at an in-turn
+        # compaction, whose summary tier returns a shorter one -- the loop
+        # checkpoints on both sides of that swap so this index is re-anchored
+        # onto whatever replaced the list rather than left pointing past its end.
         _persisted_upto = {"idx": turn_start_idx}
 
         def _mid_turn_checkpoint(msgs: list[dict]) -> None:
-            self._save_turn(session, msgs, _persisted_upto["idx"])
+            # Clamped for the swap's second call, which re-anchors the index on
+            # a list the session already covers whole and must save nothing.
+            self._save_turn(session, msgs, min(_persisted_upto["idx"], len(msgs)))
             self.sessions.save(session)
             _persisted_upto["idx"] = len(msgs)
 
-        final_content, _, all_msgs, outcome = await self._run_agent_loop(
-            initial_messages,
-            on_progress=on_progress,
-            extraction_session_id=extraction_sid,
-            model=routed_model,
-            fallback_models=fallback_models,
-            injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
-            on_token_delta=on_token_delta,
-            on_reasoning_delta=on_reasoning_delta,
-            on_tool_event=on_tool_event,
-            on_episode_start=on_episode_start,
-            usage_sink=usage_sink,
-            drain=drain,
-            on_checkpoint=_mid_turn_checkpoint,
-        )
+        # The stream buffers exist so a turn that dies mid-answer still has the
+        # text that was already on the reader's screen: the loop only appends an
+        # assistant message once the provider call returns, so a cancel in the
+        # middle of one would otherwise lose exactly what streamed.
+        streamed: dict[str, str] = {"text": "", "thought": ""}
+
+        async def _tap_token(delta: str) -> None:
+            streamed["text"] += delta
+            if on_token_delta is not None:
+                await on_token_delta(delta)
+
+        async def _tap_reasoning(delta: str) -> None:
+            streamed["thought"] += delta
+            if on_reasoning_delta is not None:
+                await on_reasoning_delta(delta)
+
+        async def _tap_episode(index: int) -> None:
+            # A new episode is a new stream: without the reset, a buffer that
+            # spans two assistant messages matches neither and would be saved
+            # as a duplicate of text the loop already committed.
+            streamed["text"] = ""
+            streamed["thought"] = ""
+            if on_episode_start is not None:
+                await on_episode_start(index)
+
+        try:
+            final_content, _, all_msgs, outcome = await self._run_agent_loop(
+                initial_messages,
+                on_progress=on_progress,
+                extraction_session_id=extraction_sid,
+                model=routed_model,
+                fallback_models=fallback_models,
+                injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
+                on_token_delta=_tap_token if on_token_delta is not None else None,
+                on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
+                on_tool_event=on_tool_event,
+                on_episode_start=_tap_episode,
+                usage_sink=usage_sink,
+                drain=drain,
+                on_checkpoint=_mid_turn_checkpoint,
+            )
+        except asyncio.CancelledError:
+            # A stop is not a failure, but it is also not amnesia: what already
+            # streamed is work the reader saw, so it lands in the session with a
+            # note saying a person ended the turn. Then the cancel proceeds.
+            #
+            # ``_persisted_upto``, not ``turn_start_idx``: a long turn has
+            # already checkpointed part of itself, and re-saving from the top of
+            # the turn would store those messages twice.
+            self._save_broken_turn(session, initial_messages, _persisted_upto["idx"], streamed, status="cancelled")
+            raise
+        except Exception as exc:
+            self._save_broken_turn(
+                session, initial_messages, _persisted_upto["idx"], streamed, status="failed", reason=str(exc)
+            )
+            raise
         self._stash_recovery(key, outcome)
         if (not self.profile.attended or self.profile.name == "legacy_oneshot") and any(
             outcome.gate_triggers.values()
@@ -3343,6 +3423,78 @@ class AgentLoop:
         if cls._TEST_GREEN_RE.search(output):
             return "green", ""
         return None, ""
+
+    def _save_broken_turn(
+        self,
+        session: Session,
+        messages: list[dict],
+        skip: int,
+        streamed: dict[str, str],
+        *,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        """Persist what a cancelled or failed turn got as far as producing.
+
+        The tail of the turn plus two kinds of repair, then one closing marker:
+
+        - an assistant message whose tool calls never got results gains a
+          synthetic ``[interrupted]`` result per open call, because a stored
+          history with an unanswered tool call is one strict providers reject
+          on the next turn;
+        - the text that streamed after the last committed message is saved as
+          its own assistant message -- it was on the reader's screen, and the
+          loop only commits a message once the provider call returns;
+        - the marker entry carries ``turn_ended`` so a client can say WHY the
+          transcript stops there, and readable text so the model sees the same.
+
+        Never raises: this runs on the way out of a dying turn, and a rescue
+        that throws replaces one loss with another.
+        """
+        try:
+            tail: list[dict] = [dict(m) for m in messages[skip:]]
+            open_calls: dict[str, str] = {}
+            for m in tail:
+                if m.get("role") == "assistant":
+                    for tc in m.get("tool_calls") or []:
+                        cid = str(getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "") or "")
+                        if cid:
+                            name = getattr(getattr(tc, "function", None), "name", None) or (
+                                (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
+                            )
+                            open_calls[cid] = str(name or "tool")
+                elif m.get("role") == "tool":
+                    open_calls.pop(str(m.get("tool_call_id") or ""), None)
+            for cid, name in open_calls.items():
+                tail.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "name": name,
+                        "content": "[interrupted] this call never returned",
+                    }
+                )
+            text = (streamed.get("text") or "").strip()
+            if text and not any(
+                m.get("role") == "assistant" and str(m.get("content") or "").strip() == text for m in tail
+            ):
+                partial: dict[str, Any] = {"role": "assistant", "content": streamed["text"]}
+                if (thought := (streamed.get("thought") or "").strip()) and not any(
+                    str(m.get("reasoning_content") or "").strip() == thought for m in tail
+                ):
+                    partial["reasoning_content"] = streamed["thought"]
+                tail.append(partial)
+            word = "cancelled by the user" if status == "cancelled" else f"failed: {reason or 'unknown error'}"
+            marker: dict[str, Any] = {
+                "role": "assistant",
+                "content": f"(turn {word})",
+                "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
+            }
+            tail.append(marker)
+            self._save_turn(session, tail, 0)
+            self.sessions.save(session)
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""

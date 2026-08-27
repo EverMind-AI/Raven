@@ -707,6 +707,84 @@ async def test_a_handle_resumes_the_same_session(tmp_path: Path) -> None:
     await backend.run("two", task_id="t2", workspace=tmp_path, session_key="s", instance="work", executor=None)
 
 
+async def test_an_interrupted_first_turn_still_binds_its_session(tmp_path: Path) -> None:
+    """Ctrl+C on the first turn must not cost the instance its session.
+
+    The deferred commit runs only after a turn that produced a reply, and the
+    cancel path re-raises before reaching it -- so an interrupted first turn left
+    the handle unbound and the next dispatch opened a fresh session. On screen
+    that reads as the sub-agent having forgotten the exchange the user just
+    interrupted, which is the one moment they are certain it happened.
+    """
+    cfg = stub_config("a", mode="cancel_aware")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    first = asyncio.create_task(
+        backend.run("write it all", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    )
+    await asyncio.sleep(0.8)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    bound = await registry.lookup("s", "a", "work", kind="acp")
+    assert bound is not None, "the interrupted first turn left the handle unbound"
+
+    # And the next turn continues THAT session rather than minting another. The
+    # commit fires only for a session this backend opened, so an unchanged id is
+    # the proof it resumed; a fresh one would have been committed over it.
+    second = asyncio.create_task(
+        backend.run("carry on", task_id="t2", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    )
+    await asyncio.sleep(0.8)
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+
+    assert await registry.lookup("s", "a", "work", kind="acp") == bound
+
+
+async def test_an_unsettled_cancel_still_drops_the_binding(tmp_path: Path) -> None:
+    """The other half: a cancel the agent ignored leaves the turn running on it,
+    so the session must NOT be reused -- prompting it again would collide."""
+    from raven.agent.acp import client as client_mod
+
+    cfg = stub_config("a", mode="cancel_deaf")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "earlier-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True),
+        registry=registry,
+    )
+
+    monkeyed = client_mod._CANCEL_SETTLE_S
+    client_mod._CANCEL_SETTLE_S = 0.3
+    try:
+        task = asyncio.create_task(
+            backend.run("hang on", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+        )
+        await asyncio.sleep(0.8)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        client_mod._CANCEL_SETTLE_S = monkeyed
+
+    assert await registry.lookup("s", "a", "work", kind="acp") is None
+    # The instance itself stays on the strip; only the stale id went.
+    assert [(r["agent"], r["handle"]) for r in registry.list_instances("s")] == [("a", "work")]
+
+
 async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> None:
     cfg = stub_config("a")
     registry = InstanceRegistry(path=tmp_path / "instances.json")

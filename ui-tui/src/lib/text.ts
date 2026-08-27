@@ -14,6 +14,7 @@ import {
   LIVE_RENDER_MAX_LINES,
   THINKING_COT_MAX
 } from '../config/limits.js'
+import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 
 const ESC = String.fromCharCode(27)
@@ -237,8 +238,20 @@ export const pasteTokenLabel = (text: string, lineCount: number) => {
     : `[[ ${preview} [${fmtK(lineCount)} lines] ]]`
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const THINKING_STATUS_RE = new RegExp(`^(?:${VERBS.join('|')})\\.{0,3}$`, 'i')
-const THINKING_STATUS_CHUNK_RE = new RegExp(`[^A-Za-z\n]+\\s*(?:${VERBS.join('|')})\\.{0,3}\\s*`, 'giu')
+// The status ticker renders one FACES glyph immediately followed by one VERBS
+// word (appChrome's FaceTicker), so that pair -- not "any run of non-letters"
+// -- is the leak's signature. Matching the faces literally keeps every
+// quantifier bounded: the earlier `[^A-Za-z\n]+` stand-in for a face matches a
+// whole line of non-Latin text, which is quadratic to backtrack and swallowed
+// the prose in front of any verb-like word. A bare verb alone on a line is
+// THINKING_STATUS_RE's job, not this one's.
+const THINKING_STATUS_CHUNK_RE = new RegExp(
+  `(?:${FACES.map(escapeRe).join('|')})[ \\t]*(?:${VERBS.join('|')})\\.{0,3}[ \\t]*`,
+  'giu'
+)
 
 export const cleanThinkingText = (reasoning: string) =>
   reasoning
@@ -250,10 +263,18 @@ export const cleanThinkingText = (reasoning: string) =>
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
+// `max` bounds the one-line `truncated` preview only; `full` renders the cleaned
+// text whole and its caller bounds what reaches the screen.
 export const thinkingPreview = (reasoning: string, mode: ThinkingMode, max: number = THINKING_COT_MAX) => {
+  // Ahead of the clean, not after it: a collapsed section shows nothing, and
+  // this runs on every streamed reasoning update.
+  if (mode === 'collapsed') {
+    return ''
+  }
+
   const raw = cleanThinkingText(reasoning)
 
-  return !raw || mode === 'collapsed' ? '' : mode === 'full' ? raw : compactPreview(raw.replace(WS_RE, ' '), max)
+  return !raw ? '' : mode === 'full' ? raw : compactPreview(raw.replace(WS_RE, ' '), max)
 }
 
 export const boundedLiveRenderText = (

@@ -1213,6 +1213,12 @@ class TurnUnsubscribeResult(_Strict):
 
 class TurnCancelParams(_Strict):
     session_key: str
+    # Which lane of the session to cancel. Absent means the main agent, which is
+    # what every caller sent while a direct turn was uncancellable. A direct turn
+    # runs on its instance's own lane (``direct_lane``), so without this the
+    # handler looks up a key nothing was ever registered under and reports
+    # "nothing to cancel" for a turn that is plainly running.
+    target: DirectTarget | None = None
 
 
 class TurnCancelResult(_Strict):

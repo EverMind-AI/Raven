@@ -713,17 +713,28 @@ class AcpAgentBackend:
                         cancel_session=session_id,
                     )
                 except asyncio.CancelledError:
-                    # The turn outlived its cancel budget, so it is still running
-                    # on the agent while this lock is about to be released --
-                    # prompting the same session again would collide with it.
-                    # Dropping the binding is the same recovery `_open_session`
-                    # makes when a resume fails: the instance keeps its handle
-                    # and the next dispatch opens a fresh session under it.
+                    # An UNSETTLED cancel means the turn outlived its cancel
+                    # budget, so it is still running on the agent while this lock
+                    # is about to be released -- prompting the same session again
+                    # would collide with it. Dropping the binding is the same
+                    # recovery `_open_session` makes when a resume fails: the
+                    # instance keeps its handle and the next dispatch opens a
+                    # fresh session under it.
                     # Evaluated in this order so take_unsettled_cancel -- a
                     # consuming read -- always clears the flag; skipping it for a
                     # stateless agent would leak it.
                     if client.take_unsettled_cancel(session_id) and self.is_stateful:
                         await self._registry.unbind(skey, self.name, handle)
+                    elif not resumed and self.is_stateful:
+                        # A cancel that SETTLED leaves a live session holding the
+                        # partial exchange, and the deferred commit below is
+                        # unreachable from here -- so an instance whose *first*
+                        # turn was interrupted was never bound, and the next
+                        # dispatch opened a fresh session. That reads as the
+                        # sub-agent having forgotten the conversation the user
+                        # just interrupted, which is the one moment they are
+                        # certain it happened.
+                        await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
                     # The frames of a turn that was cut short are the ones worth
                     # having, and this path returns no result to hang them off:
                     # published here or the record of a timed-out call points at
@@ -776,7 +787,9 @@ class AcpAgentBackend:
             if not resumed and self.is_stateful:
                 # Deferred commit, as the cli transport does it: binding a handle
                 # before the first turn succeeded would resume a session that
-                # never produced anything.
+                # never produced anything. A settled cancel binds it above
+                # instead -- that session did produce something, and is the one
+                # the next turn has to continue.
                 await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
             return await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)

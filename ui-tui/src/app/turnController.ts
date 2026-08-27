@@ -9,6 +9,12 @@ import type { DagRunSnapshot, SubagentStatusEvent } from '../rpc/index.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import {
+  EPISODE_REASONING_KEEP_CHARS,
+  EPISODE_REASONING_MAX_CHARS,
+  REASONING_KEEP_CHARS,
+  REASONING_MAX_CHARS
+} from '../config/limits.js'
+import {
   REASONING_PULSE_MS,
   STREAM_BATCH_MS,
   STREAM_IDLE_BATCH_MS,
@@ -28,6 +34,7 @@ import {
   toolResultPreview,
   toolTrailLabel
 } from '../lib/text.js'
+import { disarmEscape } from './directChatStore.js'
 import { resetFlowOverlays } from './overlayStore.js'
 import { pushSnapshot } from './spawnHistoryStore.js'
 import { archiveDoneTodos, getTurnState, patchTurnState, resetTurnState } from './turnStore.js'
@@ -231,7 +238,12 @@ class TurnController {
       tools: [],
       turnTrail: []
     }))
-    patchUiState({ busy: false, escapeArmed: false })
+    patchUiState({ busy: false })
+    // The main lane's arm only. This runs at a main turn's end, and a direct
+    // turn's cancel may be out at the same moment: clearing the flag globally
+    // would drop that arm too, so the user's second Ctrl+C in the direct view
+    // would re-send a cancel instead of forcing the pane back.
+    disarmEscape(null)
     resetFlowOverlays()
   }
 
@@ -800,8 +812,15 @@ class TurnController {
     this.reasoningText += text
     this.activeReasoningText += text
 
-    if (this.reasoningText.length > 80_000) {
-      this.reasoningText = this.reasoningText.slice(-60_000)
+    if (this.reasoningText.length > REASONING_MAX_CHARS) {
+      this.reasoningText = this.reasoningText.slice(-REASONING_KEEP_CHARS)
+    }
+
+    // The segment's copy needs the same trim, not just the turn's: this is the
+    // string syncReasoningSegment publishes and the transcript renders, so left
+    // unbounded it is what a long thinking phase grows without limit.
+    if (this.activeReasoningText.length > REASONING_MAX_CHARS) {
+      this.activeReasoningText = this.activeReasoningText.slice(-REASONING_KEEP_CHARS)
     }
 
     const ep = this.currentEpisode()
@@ -809,14 +828,14 @@ class TurnController {
     if (ep) {
       ep.reasoning = (ep.reasoning ?? '') + text
 
-      if (ep.reasoning.length > 20_000) {
-        ep.reasoning = ep.reasoning.slice(-16_000)
+      if (ep.reasoning.length > EPISODE_REASONING_MAX_CHARS) {
+        ep.reasoning = ep.reasoning.slice(-EPISODE_REASONING_KEEP_CHARS)
       }
     }
 
+    // Batched, not published here: a delta arrives about once per frame and each
+    // of these rebuilds the segment list and rewrites the whole turn state.
     this.scheduleReasoning()
-    this.syncReasoningSegment()
-    this.pulseReasoningStreaming()
   }
 
   recordToolComplete(
@@ -1021,6 +1040,13 @@ class TurnController {
         reasoning: this.reasoningText,
         reasoningTokens: estimateTokensRough(this.reasoningText)
       })
+      // Only while a segment is still open: closeReasoningSegment drains this
+      // on the paths that end a turn, and a pulse landing after one of those
+      // would re-light the thinking indicator on a turn already committed.
+      if (this.activeReasoningText) {
+        this.syncReasoningSegment()
+        this.pulseReasoningStreaming()
+      }
       // Episodes mode: push the growing reasoning so the running step streams
       // its thought live instead of only revealing it once the step completes.
       if (getUiState().transcript === 'episodes') {

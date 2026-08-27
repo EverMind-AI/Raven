@@ -23,8 +23,15 @@ export interface DirectChatState {
   // The view keys (`viewKeyOf`) whose turn is in flight. A list, not one slot:
   // each instance runs on its own lane server-side, so the main agent and any
   // number of instances can be answering at once. `uiState.busy` is this read
-  // through the view on screen -- see `syncBusy`.
+  // through the view on screen -- see `syncViewState`.
   running: string[]
+  // The view keys whose turn has already been asked to stop. Per lane for the
+  // same reason `running` is: the arm means "a cancel is out for THIS lane", so
+  // one slot would let a cancel armed on the main agent send the next Ctrl+C in
+  // a direct view down the local force-reset path -- which resets that pane and
+  // never asks the server to stop the sub-agent. `uiState.escapeArmed` is this
+  // read through the view on screen, exactly like `busy`.
+  armed: string[]
   instances: InstanceRow[]
   pendingHandoffCount: number
   // Both keyed by directKey(agent, handle).
@@ -35,6 +42,7 @@ export interface DirectChatState {
 const buildState = (): DirectChatState => ({
   active: null,
   running: [],
+  armed: [],
   instances: [],
   pendingHandoffCount: 0,
   scrollPos: new Map(),
@@ -89,7 +97,7 @@ const switchTo = (active: DirectTargetRef | null) => {
 
   rememberScroll(viewKeyOf(from), readScrollTop?.() ?? 0)
   patchDirectChat({ active })
-  syncBusy()
+  syncViewState()
 }
 
 export const enterDirect = (agent: string, handle: string) => switchTo({ agent, handle })
@@ -193,17 +201,26 @@ export const appendDirectDelta = (key: string, role: Msg['role'], text: string) 
 export const recallScroll = (key: string) => $directChat.get().scrollPos.get(key) ?? 0
 
 /**
- * `uiState.busy` is "is the conversation I am looking at working?".
+ * `uiState.busy` is "is the conversation I am looking at working?", and
+ * `uiState.escapeArmed` is "has the turn I am looking at already been told to
+ * stop?".
  *
- * Kept as one boolean deliberately: every reader of it -- the spinner, the
- * status line, the queue dispatcher, the long-run tool charms -- means exactly
- * that, and would mean nothing useful if it became "is anything working". So
- * the set of running turns lives here and `busy` is its projection through the
- * view on screen, recomputed on every start, end and switch.
+ * Both are kept as one boolean deliberately: every reader of `busy` -- the
+ * spinner, the status line, the queue dispatcher, the long-run tool charms --
+ * means exactly that, and would mean nothing useful if it became "is anything
+ * working". So the sets live here and the booleans are their projection through
+ * the view on screen, recomputed on every start, end and switch.
+ *
+ * `escapeArmed` has to be projected the same way and at the same moments. It
+ * gates the second rung of the Ctrl+C ladder, and while it was one global slot a
+ * switch that recomputed `busy` left a stale arm behind: the next Ctrl+C went
+ * straight to the local force-reset and reset the pane of a sub-agent nobody had
+ * asked to stop.
  */
-const syncBusy = () => {
+const syncViewState = () => {
   const state = $directChat.get()
-  patchUiState({ busy: state.running.includes(viewKeyOf(state.active)) })
+  const key = viewKeyOf(state.active)
+  patchUiState({ busy: state.running.includes(key), escapeArmed: state.armed.includes(key) })
 }
 
 export const markRunning = (target: DirectTargetRef | null) => {
@@ -212,18 +229,34 @@ export const markRunning = (target: DirectTargetRef | null) => {
   if (!state.running.includes(key)) {
     patchDirectChat({ running: [...state.running, key] })
   }
-  syncBusy()
+  syncViewState()
 }
 
 export const clearRunningKey = (key: string) => {
   patchDirectChat({ running: $directChat.get().running.filter(k => k !== key) })
-  syncBusy()
+  syncViewState()
 }
 
 export const clearRunning = (target: DirectTargetRef | null) => clearRunningKey(viewKeyOf(target))
 
 export const isRunning = (state: DirectChatState, target: DirectTargetRef | null) =>
   state.running.includes(viewKeyOf(target))
+
+export const armEscape = (target: DirectTargetRef | null) => {
+  const key = viewKeyOf(target)
+  const state = $directChat.get()
+  if (!state.armed.includes(key)) {
+    patchDirectChat({ armed: [...state.armed, key] })
+  }
+  syncViewState()
+}
+
+export const disarmEscapeKey = (key: string) => {
+  patchDirectChat({ armed: $directChat.get().armed.filter(k => k !== key) })
+  syncViewState()
+}
+
+export const disarmEscape = (target: DirectTargetRef | null) => disarmEscapeKey(viewKeyOf(target))
 
 // The one line a direct view shows before its first read lands. Muted, because
 // it is a status and not something anybody said.
