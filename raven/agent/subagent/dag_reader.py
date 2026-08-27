@@ -3,7 +3,7 @@
 The live ``dag_*`` progress events are the only thing the web UI sees while a
 run executes, and they exist for exactly one page-session: nothing replays them,
 and a gateway-mode tool result carries no manifest metadata. The run dir written
-by :class:`~raven.agent.subagent_dag._store.DagRunStore` is the durable record,
+by :class:`~raven.agent.subagent.dag_store.DagRunStore` is the durable record,
 so reading it back is what lets a reloaded page show the graph again -- and what
 lets a node's rendered prompt and full output be shown on demand instead of only
 the leaf ``terminal_outputs`` the manifest inlines.
@@ -21,7 +21,7 @@ import json
 import re
 from typing import Any
 
-from ._store import memory_path_in
+from raven.agent.subagent.dag_store import memory_path_in
 
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
@@ -74,7 +74,7 @@ def run_dir_of(backend: Any, root: str, run_id: str) -> str:
     """The run-scoped directory for ``run_id`` under a DAG history ``root``.
 
     ``root`` is the full ``.../subagents/mas_dag`` path, matching what
-    :class:`~raven.agent.subagent_dag._store.DagRunStore` writes to. The id is
+    :class:`~raven.agent.subagent.dag_store.DagRunStore` writes to. The id is
     validated before it is joined in.
     """
     return backend.join_path(root, _check_run_id(run_id))

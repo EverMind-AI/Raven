@@ -223,7 +223,7 @@ def make_run_id() -> str:
             ``"<UTC timestamp>-<8 hex>"``, e.g.
             ``"20260717T031500123456Z-1a2b3c4d"``.
     """
-    from raven.agent.subagent_history import history_stamp
+    from raven.agent.subagent.history import history_stamp
 
     return f"{history_stamp()}-{uuid.uuid4().hex[:8]}"
 
@@ -256,7 +256,7 @@ class DagRunStore:
                 ``.../subagents/mas_dag`` path, not a directory this
                 class appends a marker to. Deliberately not the session working
                 directory: a run record outlives whatever the working directory
-                is pointed at (raven/agent/subagent_history.py).
+                is pointed at (raven/agent/subagent/history.py).
             run_id (`str`):
                 The unique id for this run.
         """

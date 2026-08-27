@@ -995,7 +995,7 @@ _Avoid_: "workspace" unqualified — this term used to cover both agent-wide and
 storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
 Agent home or Session workspace, whichever is meant.
 
-**Subagent history** (`raven/agent/subagent_history.py`):
+**Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
 metadata directory at
 `<agent home>/sessions/<group>/<chat_id>/subagents/`, holding `spawn/<call_id>/`
@@ -1055,13 +1055,75 @@ A DAG node is told where its upstream records are: every node whose sub-agent ca
 local paths gets an `## Upstream memory records` block appended to its rendered prompt,
 listing each transitive upstream's node id and the absolute path of its record. Paths only --
 nothing injects a record's text. Suppressed entirely for a sub-agent the roster tags
-[no-local-files], on the same capability that refuses path placeholders. The listed files
-usually do not exist yet when the node starts, because the record is written by a
+[no-local-files], gated the same as a `_path` placeholder (Prompt template, below). The
+listed files usually do not exist yet when the node starts, because the record is written by a
 fire-and-forget poller after the upstream finished while the runner starts the next wave
 immediately; the block therefore tells the node to proceed without a missing or `pending`
 record rather than wait for it.
 _Avoid_: "memory trace" -- an earlier name for the recorder, from a draft where it also
 captured the call's time window.
+
+**Prompt template** (`raven/agent/subagent/prompt_placeholders.py`):
+The `{{ ... }}` grammar a dispatched sub-agent's prompt may carry, shared by `spawn` and
+`run_subagent_dag`. Six shapes: `inputs.<k>` / `inputs.<k>.path` read a per-call input as
+text or as a path, `<node>.output` / `<node>.output_path` read another node's result the
+same two ways, and `ref:<path>` / `ref_path:<path>` do it for an arbitrary file -- the bare
+form always injects content, the `_path` form always injects a location. `output` and
+`output_path` name a graph node, so only `run_subagent_dag` resolves them; `spawn` has no
+graph and refuses a template carrying either, pointing at `ref:` instead. A `{{ ... }}` body
+matching none of the six is not a mistyped placeholder -- it is ordinary text, carried
+through untouched, so template syntax from another system (Jinja, Vue, Handlebars) can sit
+in a prompt with no escape form needed. A body that does match a shape still fails
+downstream on a bad key, path, or node id, so a typo inside a placeholder is still caught.
+A `_path` shape aimed at a sub-agent the roster tags [no-local-files] is refused before
+dispatch -- the content forms still work, since those hand over text rather than a location
+a remote backend cannot open -- by one gate shared across both surfaces
+(`check_path_placeholders`, `raven/agent/subagent/prompt_capabilities.py`), which takes
+already-parsed placeholders rather than a raw template, so a grammar error is the parse
+step's own to raise and never something this gate catches and re-labels as a capability
+refusal.
+
+**Reference roots** (`check_confined`, `raven/agent/subagent/prompt_paths.py`):
+The directories a content or path reference may resolve into: the session's working
+directory, and its Subagent history above (`<session_dir>/subagents/`), so a later call in
+the same conversation can name an earlier spawn's `Record:` directory, or a DAG run's own
+files, by path. A relative reference resolves against the working directory; either root
+may also be named absolute. `@runs/<run_id>/...` is a third, narrower address -- this
+session's own DAG run history alone, checked lexically against that one prefix rather than
+against these roots -- for a run recorded before node ids were indexed, or a file under it
+that is not a node's output.
+Stops at Subagent history rather than at Agent home on purpose. Agent home also holds user
+memory, installed skills, and every *other* conversation's transcript and sub-agent history,
+already off limits to a working directory (`workdir.py`'s `_PROTECTED_SUBTREES`) -- and a
+template is LLM-authored and auto-run, so a root spanning Agent home would let a `ref`
+(exempt from the capability gate above, since it hands over content rather than a path a
+remote backend would have to open) inline another conversation's history, or the user's own
+memory, into a sub-agent's prompt. Containment is decided on where the reference lands on
+disk rather than on how it is spelled: both the resolved path and each root go through
+`realpath`, so a symlink inside a root that points outside every one of them is refused
+rather than followed, and a root reached through a symlink still contains its own files. The
+error names the path the author wrote, never the physical one, which could describe a
+directory they were not entitled to learn about.
+
+**The fence rule** (`raven/agent/subagent/prompt_render.py`, `dag_render.py`):
+What a resolved reference's content gets on the way into a prompt, decided by the kind of
+reference rather than by where the file turned out to sit. A content-form file reference --
+`ref`, or a file-shaped `inputs.<k>` entry -- is wrapped with `wrap_untrusted`
+(`source="file"`, `raven/security/trust.py`). Another node's output -- `output`, or a
+node-shaped `inputs.<k>` entry, both `run_subagent_dag` only -- is wrapped with
+`source="subagent"`. Neither is the dispatching model's own words: a file may hold whatever
+a run fetched or a checkout brought in, and a node's output is sub-agent-authored by
+construction. A literal `inputs.<k>` string is not fenced, because the author typed it into
+the call, and neither is any `_path` form or the `## Upstream memory records` block -- those
+carry a raven-minted path rather than content.
+This rule replaces one that keyed on location: a read whose resolved path landed under
+Subagent history was fenced, and every other read was not. That left the contents of a file
+in the working directory reaching a prompt bare, which is the wrong way round -- a checkout
+someone put in the working directory is precisely where text that must not be read as
+instructions arrives. What stays location-keyed is confinement, not fencing: Reference roots
+decides which directories a reference may resolve into at all, and does so on the resolved
+physical path (Reference roots, above), so the two questions -- may this be read, and what
+does its content get -- are answered independently and neither leans on the other.
 
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
 The pointer block the runtime prepends to the user's next turn to the main agent after
@@ -1359,7 +1421,7 @@ the part that is cut. Kept rather than raised because a partial answer is worth 
 noticed rather than returned bare because neither the main agent nor a person in a Direct
 Chat can otherwise tell the text simply stops.
 
-**DAG node id** (`raven/agent/subagent_dag/_graph.py`, `_store.py`):
+**DAG node id** (`raven/agent/subagent/dag_graph.py`, `dag_store.py`):
 A node's name inside a `run_subagent_dag` graph, and the address a *later* graph in the
 same conversation uses to read what that node produced — `{{ <id>.output }}`, needing no
 `depends_on`, since the node has already finished (naming it there is allowed and orders

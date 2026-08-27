@@ -20,7 +20,7 @@ import subprocess
 
 import pytest
 
-from raven.agent.subagent_dag import _machines
+from raven.agent.subagent import dag_machines
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def installed(monkeypatch, tmp_path):
     binary = tmp_path / ".venv" / "bin" / "raven"
     binary.parent.mkdir(parents=True)
     binary.write_text("#!/bin/sh\n", encoding="utf-8")
-    monkeypatch.setattr(_machines, "_raven_in", lambda agent: str(binary))
+    monkeypatch.setattr(dag_machines, "_raven_in", lambda agent: str(binary))
     return binary
 
 
@@ -43,7 +43,7 @@ def answers(monkeypatch, stdout: str, *, code: int = 0):
 def test_a_graph_with_nowhere_to_run_is_refused(installed, monkeypatch):
     answers(monkeypatch, json.dumps({"state": "ok", "listed": 0, "usable": 0, "blocking": []}))
 
-    stranded = _machines.machineless(["Raven-Oncall"])
+    stranded = dag_machines.machineless(["Raven-Oncall"])
 
     assert stranded is not None and stranded.agent == "Raven-Oncall"
 
@@ -53,7 +53,7 @@ def test_the_refusal_names_what_the_owner_has_to_supply(installed, monkeypatch):
     what it can see, by design."""
     answers(monkeypatch, json.dumps({"state": "ok", "listed": 1, "usable": 0, "blocking": ["gpu: 'key' is missing"]}))
 
-    text = _machines.refusal(_machines.machineless(["Raven-Oncall"]))
+    text = dag_machines.refusal(dag_machines.machineless(["Raven-Oncall"]))
 
     assert "Nothing was dispatched" in text
     assert "'key' is missing" in text, "say which machine failed and why"
@@ -65,15 +65,15 @@ def test_the_refusal_names_what_the_owner_has_to_supply(installed, monkeypatch):
 def test_a_machine_that_is_there_lets_the_graph_through(installed, monkeypatch):
     answers(monkeypatch, json.dumps({"state": "ok", "listed": 2, "usable": 1, "blocking": []}))
 
-    assert _machines.machineless(["Raven-Oncall"]) is None
+    assert dag_machines.machineless(["Raven-Oncall"]) is None
 
 
 def test_an_agent_with_nothing_to_do_with_machines_is_not_asked_twice(monkeypatch):
     """`_raven_in` returns None for a non-vendored agent, and that is the end of it."""
-    monkeypatch.setattr(_machines, "_raven_in", lambda agent: None)
+    monkeypatch.setattr(dag_machines, "_raven_in", lambda agent: None)
 
-    assert _machines.ask("Raven-Code") is None
-    assert _machines.machineless(["Raven-Code", "Raven-Ppt"]) is None
+    assert dag_machines.ask("Raven-Code") is None
+    assert dag_machines.machineless(["Raven-Code", "Raven-Ppt"]) is None
 
 
 def test_a_checkout_whose_command_does_not_exist_refuses_nothing(installed, monkeypatch):
@@ -81,7 +81,7 @@ def test_a_checkout_whose_command_does_not_exist_refuses_nothing(installed, monk
     That is not evidence the owner has no machines."""
     answers(monkeypatch, "No such command 'connection'.", code=2)
 
-    assert _machines.machineless(["Raven-Code"]) is None
+    assert dag_machines.machineless(["Raven-Code"]) is None
 
 
 def test_a_timeout_refuses_nothing(installed, monkeypatch):
@@ -90,19 +90,19 @@ def test_a_timeout_refuses_nothing(installed, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", explode)
 
-    assert _machines.machineless(["Raven-Oncall"]) is None
+    assert dag_machines.machineless(["Raven-Oncall"]) is None
 
 
 def test_output_that_will_not_parse_refuses_nothing(installed, monkeypatch):
     answers(monkeypatch, "usable: none\n")
 
-    assert _machines.machineless(["Raven-Oncall"]) is None
+    assert dag_machines.machineless(["Raven-Oncall"]) is None
 
 
 def test_a_payload_missing_the_field_it_promises_refuses_nothing(installed, monkeypatch):
     answers(monkeypatch, json.dumps({"state": "ok"}))
 
-    assert _machines.machineless(["Raven-Oncall"]) is None
+    assert dag_machines.machineless(["Raven-Oncall"]) is None
 
 
 def test_the_registry_it_asks_about_is_the_owners(installed, monkeypatch):
@@ -119,7 +119,7 @@ def test_the_registry_it_asks_about_is_the_owners(installed, monkeypatch):
     monkeypatch.setenv("RAVEN_CONNECTIONS", "/somewhere/else/connections.json")
     monkeypatch.setattr(subprocess, "run", fake)
 
-    _machines.ask("Raven-Oncall")
+    dag_machines.ask("Raven-Oncall")
 
     assert "--config" not in seen["argv"]
     assert seen["argv"][1:] == ["ops", "connection", "doctor", "--json"]
@@ -130,7 +130,7 @@ def test_only_one_agent_is_reported_even_when_two_are_stranded(installed, monkey
     """The owner has to be asked either way; twice is the same question twice."""
     answers(monkeypatch, json.dumps({"listed": 0, "usable": 0}))
 
-    stranded = _machines.machineless(["Raven-Oncall", "Raven-Sim"])
+    stranded = dag_machines.machineless(["Raven-Oncall", "Raven-Sim"])
 
     assert stranded.agent == "Raven-Oncall"
 
@@ -164,7 +164,7 @@ CPU = {"id": "conn_cpu", "display_name": "CPU box", "kind": "cpu", "cores": 32}
 
 
 def verdict(*machines):
-    return _machines.Verdict("Raven-Oncall", usable=len(machines), listed=len(machines), machines=tuple(machines))
+    return dag_machines.Verdict("Raven-Oncall", usable=len(machines), listed=len(machines), machines=tuple(machines))
 
 
 def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
@@ -173,7 +173,7 @@ def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
     somebody made."""
     nodes = [_Node("code", "Raven-Code"), _Node("watch", "Raven-Oncall")]
 
-    problem = _machines.unnamed_machine(nodes, verdict(GPU))
+    problem = dag_machines.unnamed_machine(nodes, verdict(GPU))
 
     assert "does not say which" in problem
     assert "conn_gpu" in problem, "the candidates have to be in front of it"
@@ -183,7 +183,7 @@ def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
 def test_a_machine_that_is_not_on_the_list_is_refused(monkeypatch):
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_typo"})]
 
-    problem = _machines.unnamed_machine(nodes, verdict(GPU))
+    problem = dag_machines.unnamed_machine(nodes, verdict(GPU))
 
     assert "conn_typo" in problem and "not one this installation can use" in problem
 
@@ -191,7 +191,7 @@ def test_a_machine_that_is_not_on_the_list_is_refused(monkeypatch):
 def test_a_named_machine_passes(monkeypatch):
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_gpu"})]
 
-    assert _machines.unnamed_machine(nodes, verdict(GPU)) == ""
+    assert dag_machines.unnamed_machine(nodes, verdict(GPU)) == ""
 
 
 def test_every_node_is_told_not_just_the_ones_before_the_work(monkeypatch):
@@ -204,7 +204,7 @@ def test_every_node_is_told_not_just_the_ones_before_the_work(monkeypatch):
         _Node("report", "Raven-Research", depends_on=["watch"]),
     ]
 
-    told = _machines.with_facts(nodes, verdict(GPU))
+    told = dag_machines.with_facts(nodes, verdict(GPU))
 
     for node in told:
         assert "A800" in node.prompt_template, f"{node.id} was not told"
@@ -216,7 +216,7 @@ def test_what_travels_is_what_the_machine_is_never_the_way_onto_it(monkeypatch):
     into a prompt even if the payload carried one."""
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_gpu"})]
 
-    told = _machines.with_facts(nodes, verdict(GPU))
+    told = dag_machines.with_facts(nodes, verdict(GPU))
 
     assert "id" not in told[0].prompt_template.split("---")[1].split("\n")[1]
     assert "not reachable from here" in told[0].prompt_template
@@ -225,7 +225,7 @@ def test_what_travels_is_what_the_machine_is_never_the_way_onto_it(monkeypatch):
 def test_a_graph_that_names_no_machine_is_left_alone(monkeypatch):
     nodes = [_Node("a", "Raven-Code"), _Node("b", "Raven-Research")]
 
-    assert _machines.with_facts(nodes, verdict(GPU)) is nodes
+    assert dag_machines.with_facts(nodes, verdict(GPU)) is nodes
 
 
 def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
@@ -237,7 +237,7 @@ def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
         _Node("report", "Raven-Research"),
     ]
 
-    told = _machines.with_facts(nodes, verdict(GPU, CPU))
+    told = dag_machines.with_facts(nodes, verdict(GPU, CPU))
 
     for node in told:
         assert "GPU机器" in node.prompt_template and "CPU box" in node.prompt_template

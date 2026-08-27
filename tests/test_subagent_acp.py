@@ -2327,8 +2327,8 @@ async def test_the_instance_gets_a_transcript_in_the_session_log_format(tmp_path
     conversation can read a sub-agent instance's.
     """
     from raven.agent.subagent import activity
+    from raven.agent.subagent.history import SpawnRecord
     from raven.agent.subagent.instance_log import transcript_path
-    from raven.agent.subagent_history import SpawnRecord
 
     session_dir = tmp_path / "session"
     backend = build_third_party_backend(stub_config("a"))
@@ -2359,8 +2359,8 @@ async def test_two_calls_of_one_instance_land_in_one_file(tmp_path: Path) -> Non
     """The whole point of an instance log: a handle dispatched twice is one
     conversation, not two records to stitch together."""
     from raven.agent.subagent import activity
+    from raven.agent.subagent.history import SpawnRecord
     from raven.agent.subagent.instance_log import transcript_path
-    from raven.agent.subagent_history import SpawnRecord
 
     session_dir = tmp_path / "session"
     backend = build_third_party_backend(stub_config("a"))
@@ -2387,8 +2387,8 @@ async def test_a_lane_with_no_frames_still_joins_the_instance_conversation(tmp_p
     prompt and the answer -- and the instance's conversation is the union of
     every lane that addressed it, whatever each could see."""
     from raven.agent.subagent import activity
+    from raven.agent.subagent.history import SpawnRecord
     from raven.agent.subagent.instance_log import transcript_path
-    from raven.agent.subagent_history import SpawnRecord
 
     session_dir = tmp_path / "session"
     backend = build_third_party_backend(_cli_stub_config())
@@ -2472,8 +2472,8 @@ async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Pa
     run's full output.
     """
     from raven.agent.subagent import activity
+    from raven.agent.subagent.history import SpawnRecord
     from raven.agent.subagent.instance_log import transcript_path
-    from raven.agent.subagent_history import SpawnRecord
 
     session_dir = tmp_path / "session"
     backend = build_third_party_backend(stub_config("a", mode="two_messages"))

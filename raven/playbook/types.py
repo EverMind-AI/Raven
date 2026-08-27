@@ -27,7 +27,7 @@ from typing import Any, ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-from raven.agent.subagent_dag._graph import DagNodeSpec
+from raven.agent.subagent.dag_graph import DagNodeSpec
 
 SPEC_VERSION = 1
 

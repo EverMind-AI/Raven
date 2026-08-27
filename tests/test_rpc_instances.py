@@ -44,7 +44,7 @@ class _FakeManager:
     def declared_stateful(self, agent: str | None) -> bool:
         return agent in self._stateful
 
-    def _session_dir(self, session_key: str) -> Path:
+    def session_dir_for(self, session_key: str) -> Path:
         return self.session_dirs[session_key]
 
     steered: list[tuple[str, str, str, str]] = []
@@ -277,7 +277,7 @@ async def test_forget_keeps_the_record_directories(tmp_path: Path, _isolated_reg
 
 
 def _spawn(session_dir: Path, *, agent: str, handle: str, task: str, output: str, at_ms: int) -> None:
-    from raven.agent.subagent_history import SpawnRecord
+    from raven.agent.subagent.history import SpawnRecord
 
     rec = SpawnRecord.open(session_dir, task_id=f"t{at_ms}", task=task, meta={"agent": agent, "handle": handle})
     rec.finish(status="completed", output=output)
@@ -287,7 +287,7 @@ def _spawn(session_dir: Path, *, agent: str, handle: str, task: str, output: str
 
 
 def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
-    from raven.agent.subagent_history import dag_root
+    from raven.agent.subagent.history import dag_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
@@ -310,7 +310,7 @@ def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -
 def _dead_dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
     """A run killed mid-flight: graph.json only, no manifest, and an output
     file only for the nodes that finished before the gateway died."""
-    from raven.agent.subagent_history import dag_root
+    from raven.agent.subagent.history import dag_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
@@ -1272,7 +1272,7 @@ class TestWhatEachRowIsCalled:
     RUN = "20260825T051102805861Z-871b6ab4"
 
     def _graph(self, session_dir: Path, run_id: str, graph: dict[str, Any]) -> Path:
-        from raven.agent.subagent_history import dag_root
+        from raven.agent.subagent.history import dag_root
 
         path = dag_root(session_dir) / run_id / "graph.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1422,7 +1422,7 @@ class TestWhatEachRowIsCalled:
         `mas_dag` directory itself, so without the check this reads a graph.json
         planted beside the runs and reports its line as this row's source.
         """
-        from raven.agent.subagent_history import dag_root
+        from raven.agent.subagent.history import dag_root
 
         session_dir = tmp_path / "sessions" / "s1"
         planted = dag_root(session_dir) / "graph.json"

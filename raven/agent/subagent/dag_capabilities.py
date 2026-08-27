@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Roster-dependent validation of a DAG spec: what each sub-agent can do.
 
-Separate from :mod:`._graph`, which validates the graph against itself (ids,
+Separate from :mod:`.dag_graph`, which validates the graph against itself (ids,
 edges, cycles, declared refs) and needs no knowledge of the configured agents.
 The checks here compare the graph against the *roster*, so they can only run
 where the roster is known -- the tool -- and they run before any node is
@@ -19,17 +19,10 @@ a file it never opened.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from ._errors import DagValidationError
-from ._graph import DagNodeSpec, SubAgentDagSpec
-from ._placeholders import parse_placeholders
-
-# Placeholder kinds that hand the sub-agent a filesystem path. The content form
-# to use instead comes from the placeholder itself (``Placeholder.content_form``),
-# so a run-qualified reference keeps its qualifier in the advice.
-_PATH_KINDS = ("output_path", "input_path", "ref_path")
-
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
+from raven.agent.subagent.prompt_capabilities import AgentCapabilities, check_path_placeholders
+from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_placeholders import parse_placeholders
 
 # Whether attaching an MCP server to a sub-agent's session is implemented at all.
 # It is not: nothing under ``raven/agent/subagent/`` reads a per-node mcp list.
@@ -37,24 +30,6 @@ _PATH_KINDS = ("output_path", "input_path", "ref_path")
 # silently ignored, and this flag is what keeps the answer honest -- flip it when
 # the wiring lands and the notice stops firing on its own.
 MCPS_IMPLEMENTED = False
-
-
-@dataclass(frozen=True)
-class AgentCapabilities:
-    """What one configured sub-agent can do, as the roster advertises it.
-
-    Defaults are permissive so an agent missing from the map -- a test double, a
-    backend built outside the config path -- is never rejected by these checks.
-    An unknown ``subagent`` name is already the runner's error to raise.
-    """
-
-    stateful: bool = True
-    reads_local_files: bool = True
-    injectable_skills: bool = True
-    injectable_mcps: bool = True
-    """Whether per-node ``skills`` / ``mcps`` can be pushed into this agent's
-    session at all. Only an in-process raven loop has a skill menu raven controls;
-    a cli or acp agent's is its own business, so a list aimed at one does nothing."""
 
 
 def validate_capabilities(
@@ -246,25 +221,25 @@ def _check_path_placeholders(
     node: DagNodeSpec,
     capabilities: dict[str, AgentCapabilities],
 ) -> None:
-    """Reject path placeholders aimed at an agent that cannot read local files."""
+    """Apply the shared file-reference gate, naming the node and the graph fix.
+
+    Parses the template as its own step, ahead of the gate call, rather than
+    inside a ``try`` around it -- so a grammar error, raised by the parse, is
+    never caught here and dressed in advice for an unrelated capability fault.
+    """
     caps = capabilities.get(node.subagent)
-    if caps is None or caps.reads_local_files:
+    reads_local_files = True if caps is None else caps.reads_local_files
+    if reads_local_files:
         return
-
-    offenders: list[str] = []
-    for ph in parse_placeholders(node.prompt_template):
-        if ph.kind not in _PATH_KINDS:
-            continue
-        offenders.append(f"{ph.raw} -> use {ph.content_form()}")
-    if not offenders:
-        return
-
-    raise DagValidationError(
-        f"node '{node.id}' passes local file paths to sub-agent '{node.subagent}', which the "
-        f"roster tags [no-local-files]: it cannot open them, so the path would reach it as "
-        f"meaningless text. Replace each with the content form ({'; '.join(offenders)}), or "
-        f"move the node to a sub-agent tagged [local-files]. Then call run_subagent_dag again "
-        f"with the corrected graph."
+    check_path_placeholders(
+        parse_placeholders(node.prompt_template),
+        node.subagent,
+        reads_local_files=reads_local_files,
+        subject=f"node '{node.id}'",
+        escape_hatch=(
+            ", or move the node to a sub-agent tagged [local-files]. "
+            "Then call run_subagent_dag again with the corrected graph"
+        ),
     )
 
 

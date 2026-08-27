@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from ._errors import DagValidationError
+from raven.agent.subagent.prompt_errors import DagValidationError
 
 _PLACEHOLDER_RE = re.compile(r"\{\{(.*?)\}\}")
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -47,11 +47,13 @@ def parse_placeholders(template: str) -> list[Placeholder]:
 
     Returns:
         `list[Placeholder]`:
-            The placeholders in order of appearance.
+            The placeholders in order of appearance. A ``{{ ... }}`` whose
+            body matches no known shape is not included -- it is ordinary
+            text, not a placeholder.
 
     Raises:
         `DagValidationError`:
-            When a ``{{ ... }}`` body does not match the grammar.
+            When a ``ref:`` or ``ref_path:`` body names an empty path.
     """
     return [ph for _, _, ph in iter_placeholders(template)]
 
@@ -63,7 +65,9 @@ def iter_placeholders(
 
     The spans let a renderer rebuild the string in a single left-to-right
     pass so a resolved value that itself contains ``{{ ... }}`` text is
-    never re-scanned or re-substituted.
+    never re-scanned or re-substituted. A ``{{ ... }}`` whose body matches no
+    known placeholder shape is skipped entirely, so its raw text is carried
+    through untouched by the spans on either side of it.
 
     Args:
         template (`str`):
@@ -75,18 +79,24 @@ def iter_placeholders(
 
     Raises:
         `DagValidationError`:
-            When a ``{{ ... }}`` body does not match the grammar.
+            When a ``ref:`` or ``ref_path:`` body names an empty path.
     """
     for match in _PLACEHOLDER_RE.finditer(template):
-        yield (
-            match.start(),
-            match.end(),
-            _parse_body(match.group(1).strip(), match.group(0)),
-        )
+        placeholder = _parse_body(match.group(1).strip(), match.group(0))
+        if placeholder is None:
+            continue
+        yield match.start(), match.end(), placeholder
 
 
-def _parse_body(body: str, raw: str) -> Placeholder:
-    """Parse the inside of one ``{{ ... }}`` into a :class:`Placeholder`.
+def _parse_body(body: str, raw: str) -> Placeholder | None:
+    """Parse the inside of one ``{{ ... }}``, or ``None`` when it is not one.
+
+    A body that matches no known shape is not a mistyped placeholder, it is
+    ordinary text: template syntax from another system (Jinja, Vue, Handlebars)
+    reaches a sub-agent through these prompts, and no escape form exists to get
+    it past a hard rejection. A body that DOES match a known shape still parses
+    and still fails downstream on a bad key, path, or node id, so a typo inside
+    a placeholder is caught as before.
 
     Args:
         body (`str`):
@@ -95,12 +105,14 @@ def _parse_body(body: str, raw: str) -> Placeholder:
             The full ``{{ ... }}`` substring.
 
     Returns:
-        `Placeholder`:
-            The parsed placeholder.
+        `Placeholder | None`:
+            The parsed placeholder, or ``None`` when ``body`` matches no known
+            shape.
 
     Raises:
         `DagValidationError`:
-            When ``body`` does not match a known form.
+            When body starts with ``ref:`` or ``ref_path:`` but names an empty
+            path.
     """
     for prefix, kind in (("ref:", "ref"), ("ref_path:", "ref_path")):
         if body.startswith(prefix):
@@ -118,4 +130,4 @@ def _parse_body(body: str, raw: str) -> Placeholder:
         return Placeholder(kind="output", name=parts[0], raw=raw)
     if len(parts) == 2 and _NAME_RE.match(parts[0]) and parts[1] == "output_path":
         return Placeholder(kind="output_path", name=parts[0], raw=raw)
-    raise DagValidationError(f"unrecognized placeholder '{raw}'")
+    return None

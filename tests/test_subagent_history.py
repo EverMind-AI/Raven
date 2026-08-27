@@ -11,7 +11,7 @@ import pytest
 
 from raven.agent.subagent import activity
 from raven.agent.subagent.backends.base import clamp_output
-from raven.agent.subagent_history import (
+from raven.agent.subagent.history import (
     SpawnRecord,
     add_turn_to_instance_log,
     dag_root,
@@ -154,7 +154,7 @@ def test_ids_minted_in_the_same_instant_still_sort_in_mint_order() -> None:
     enough -- the older call sorts first, the panel reshuffles on every poll,
     and the listing test that asserts newest-first fails intermittently.
     """
-    from raven.agent.subagent_history import make_call_id
+    from raven.agent.subagent.history import make_call_id
 
     first = make_call_id("efd70c2c")
     second = make_call_id("a8f2a07a")
@@ -167,8 +167,8 @@ def test_a_run_id_orders_against_a_call_id() -> None:
     """The panel sorts spawns and graph runs into one list, so the two id
     shapes have to be comparable -- a second-accurate stamp on either side
     reshuffles ties across both."""
-    from raven.agent.subagent_dag._store import make_run_id
-    from raven.agent.subagent_history import make_call_id
+    from raven.agent.subagent.dag_store import make_run_id
+    from raven.agent.subagent.history import make_call_id
 
     call = make_call_id("aaaa1111")
     run = make_run_id()

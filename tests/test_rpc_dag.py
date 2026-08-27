@@ -183,14 +183,14 @@ class _UnreadableDagTool(_FakeDagTool):
     """The run dir is gone (cleaned up, or the id was never real)."""
 
     async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
-        from raven.agent.subagent_dag._reader import DagReadError
+        from raven.agent.subagent.dag_reader import DagReadError
 
         raise DagReadError(f"no readable DAG run at {run_id}")
 
     async def read_node(
         self, run_id: str, node_id: str, *, max_output_chars: int = 20000, session_key: str | None = None
     ) -> dict:
-        from raven.agent.subagent_dag._reader import DagReadError
+        from raven.agent.subagent.dag_reader import DagReadError
 
         raise DagReadError(f"invalid node id: {node_id!r}")
 
@@ -226,7 +226,7 @@ def one_run_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A real run dir, in a real session dir, reached the way the handler reaches it."""
     import json
 
-    from raven.agent.subagent_history import dag_root
+    from raven.agent.subagent.history import dag_root
     from raven.session.manager import SessionManager
 
     ws = tmp_path / "ws"
@@ -310,8 +310,8 @@ def test_a_freshly_minted_run_id_passes_the_reader() -> None:
     from that commit refused to open -- while old run dirs kept working, so it
     read as "the graph stopped working for new runs only".
     """
-    from raven.agent.subagent_dag._reader import _check_run_id
-    from raven.agent.subagent_dag._store import make_run_id
+    from raven.agent.subagent.dag_reader import _check_run_id
+    from raven.agent.subagent.dag_store import make_run_id
 
     assert _check_run_id(make_run_id())
     # And the literal above, so run dirs written before the widening stay readable.
@@ -325,7 +325,7 @@ def test_a_freshly_minted_run_id_passes_the_reader() -> None:
 def test_the_reader_still_refuses_an_id_that_could_walk_out(bad: str) -> None:
     """The pattern is a containment check, not a formatting nicety -- these ids
     arrive off a web request and are joined into a path."""
-    from raven.agent.subagent_dag._reader import DagReadError, _check_run_id
+    from raven.agent.subagent.dag_reader import DagReadError, _check_run_id
 
     with pytest.raises(DagReadError):
         _check_run_id(bad)
@@ -351,7 +351,7 @@ async def test_the_fallback_reads_the_directory_the_run_was_written_to(
     """
     import json
 
-    from raven.agent.subagent_history import dag_root
+    from raven.agent.subagent.history import dag_root
     from raven.session.manager import SessionManager
 
     ws = tmp_path / "ws"
@@ -457,7 +457,7 @@ async def test_a_node_in_flight_is_served_from_the_activity_being_collected() ->
     """Nothing of a node reaches disk until it ends, so a panel watching one had
     only its prompt to show -- for the whole run."""
     from raven.agent.subagent import activity
-    from raven.agent.subagent_dag._store import node_live_key
+    from raven.agent.subagent.dag_store import node_live_key
 
     tool = _TranscribedDagTool([])
     with activity.collecting(live_key=node_live_key(RUN_ID, "node-a")) as did:
@@ -472,7 +472,7 @@ async def test_a_node_in_flight_is_served_from_the_activity_being_collected() ->
 async def test_a_finished_nodes_own_file_wins_over_a_live_key_left_behind() -> None:
     """Two runs of one graph reuse the node id; only the run dir tells them apart."""
     from raven.agent.subagent import activity
-    from raven.agent.subagent_dag._store import node_live_key
+    from raven.agent.subagent.dag_store import node_live_key
 
     tool = _TranscribedDagTool([{"role": "tool", "name": "on_disk", "content": "x"}])
     with activity.collecting(live_key=node_live_key(RUN_ID, "node-a")):

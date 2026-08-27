@@ -294,8 +294,8 @@ def playbook_run(
     store = _store(config)
     _require_known(store, name)
 
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
     from raven.cli._helpers import make_provider
     from raven.playbook import PlaybookExecutor, PlaybookRuntime
 

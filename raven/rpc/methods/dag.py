@@ -6,7 +6,7 @@ not listening for every frame is not stuck with whatever it happened to catch:
 
 * ``dag.get`` rebuilds (or repairs) a whole graph. An unfinalized run has no
   manifest, so the instance registry is overlaid on top -- see
-  :func:`~raven.agent.subagent_dag._resume.read_run_reconciled`, shared with the
+  :func:`~raven.agent.subagent.dag_resume.read_run_reconciled`, shared with the
   web surface so a resumed graph means the same thing on both.
 * ``dag.node`` pulls one node's *rendered* prompt and its output, neither of
   which the graph carries: the manifest inlines only the leaf nodes' text, and
@@ -19,13 +19,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
+from raven.agent.subagent.dag_live import live_run_ids
+from raven.agent.subagent.dag_reader import DagReadError
+from raven.agent.subagent.dag_resume import read_run_reconciled
+from raven.agent.subagent.dag_store import node_live_key
+from raven.agent.subagent.history import dag_root
+from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.tool_vocabulary import normalize_row
-from raven.agent.subagent_dag._errors import DagValidationError
-from raven.agent.subagent_dag._reader import DagReadError
-from raven.agent.subagent_dag._resume import read_run_reconciled
-from raven.agent.subagent_dag._store import node_live_key
-from raven.agent.subagent_dag.live import live_run_ids
-from raven.agent.subagent_history import dag_root
 from raven.rpc.errors import InternalError
 from raven.rpc.methods.session import _map_to_wire
 from raven.rpc.methods.subagent import _session_dir
@@ -164,7 +164,7 @@ async def _node_off_disk(
     offers -- and the lister *does* pass the factory -- would open empty, which
     is the exact state this fallback exists to prevent.
     """
-    from raven.agent.subagent_dag._reader import read_node as read_node_off
+    from raven.agent.subagent.dag_reader import read_node as read_node_off
 
     if not session_key:
         raise InternalError("dag.node needs session_key when no run_subagent_dag tool is live")
@@ -176,7 +176,7 @@ async def _node_off_disk(
 
 
 class _LocalFiles:
-    """The three calls ``_reader`` makes of a workspace backend, done locally."""
+    """The three calls ``dag_reader`` makes of a workspace backend, done locally."""
 
     async def file_exists(self, path: str) -> bool:
         return Path(path).is_file()

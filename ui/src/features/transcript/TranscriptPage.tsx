@@ -400,7 +400,7 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   const cost = head
     ? store.spawnCost(c, Date.now()) || (elapsedRun >= 1000 ? store.durText(elapsedRun) : '')
     : c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
-  const a = c.args as { agent?: string; instance?: string; task?: string }
+  const a = c.args as { agent?: string; instance?: string; task?: string; prompt_template?: string }
   const who = store.spawnAgentOf(a) ? store.spawnAgentOf(a) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
   const openTask = (): void => {
     if (c.kind === 'spawn') store.openSpawn(store.spawnAgentOf(a), c.label || '')
@@ -418,7 +418,7 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
       <div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>
     ))
   }
-  kv('task', t('gui.deleg.d_task'), c.label || String(a.task || '').slice(0, 160), true)
+  kv('task', t('gui.deleg.d_task'), c.label || String(a.prompt_template || a.task || '').slice(0, 160), true)
   kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
   /* `c.res` is the DISPATCH's result, so it is never the run's error. On a spawn
      whose run failed it reads `Subagent [...] started`, and beside the failure

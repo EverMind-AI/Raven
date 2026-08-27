@@ -18,6 +18,7 @@ const PREVIEW_KEYS = [
   'file',
   'url',
   'prompt',
+  'prompt_template',
   'text',
   'goal',
   'task',

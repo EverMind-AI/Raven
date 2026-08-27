@@ -13,7 +13,7 @@ inspectable the same way and the handoff can name a turn's input and output
 file without inventing a second convention.
 
 A file name is never derived from a sub-agent's output, only from ids raven
-mints itself -- the same invariant ``raven/agent/subagent_history.py`` states.
+mints itself -- the same invariant ``raven/agent/subagent/history.py`` states.
 The handoff block relies on it: the block is prepended to user text, and it is
 safe to leave unwrapped only because every byte in it is raven's own.
 """
@@ -29,7 +29,7 @@ from typing import Any, NamedTuple
 from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
-from raven.agent.subagent_history import add_turn_to_instance_log, make_call_id
+from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id
 from raven.utils.helpers import safe_path_segment
 
 _DIRECT_DIRNAME = "direct"

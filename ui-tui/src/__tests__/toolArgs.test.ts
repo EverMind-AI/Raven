@@ -28,6 +28,16 @@ describe('argPreview', () => {
     expect(argPreview({ prompt: 'a red fox in snow' })).toBe('a red fox in snow')
   })
 
+  it('previews a delegation call by its prompt template', () => {
+    expect(
+      argPreview({
+        task_summary: 'checking the plan',
+        prompt_template: 'follow this: {{ ref:plan.md }}',
+        subagent: 'raven'
+      })
+    ).toBe('follow this: {{ ref:plan.md }}')
+  })
+
   it('never returns a bare number or a JSON blob', () => {
     expect(argPreview({ count: 10, verbose: true })).toBe('')
     expect(argPreview({})).toBe('')

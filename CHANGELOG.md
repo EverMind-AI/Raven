@@ -123,7 +123,55 @@ All notable changes to Raven are documented here.
   and both produce the same rows; a streamed run republishes on every step, so a panel
   watching it sees the run progress rather than only its result.
 
+- `spawn` now takes a `prompt_template` and the same placeholder grammar `run_subagent_dag`
+  already had: `{{ ref:<path> }}` / `{{ ref_path:<path> }}` inline a file's contents or its
+  path, and an `inputs` mapping fills `{{ inputs.<key> }}` / `{{ inputs.<key>.path }}`. Paths
+  resolve inside the same two roots as a DAG node's -- the working directory and this
+  conversation's sub-agent history (`<session_dir>/subagents/`) -- so an earlier spawn's own
+  `Record:` directory is reachable without restating its output, and the `_path` forms are
+  refused for a sub-agent the roster tags `[no-local-files]`. The parameter was `task`, a
+  literal string with no such grammar; renamed to `prompt_template` (see Breaking Changes).
+  The completion announcement always shows the template as written, never the rendered prompt;
+  the `Record:` line beside it only names where the rendered version, with any `{{ ref: }}`
+  file inlined, is written on disk.
+- A prompt template's `{{ ... }}` text that matches none of the six placeholder shapes
+  (`ref`, `ref_path`, `input`/`inputs.<key>`, `input_path`, `output`, `output_path`) is
+  ordinary text now, on both `spawn` and `run_subagent_dag`. A stray `{{ }}` in an example, or
+  a note that happens to use double braces, used to be refused outright as `unrecognized
+  placeholder '...'`; the grammar now only claims a body actually shaped like one of the six,
+  and leaves everything else untouched.
+
+### Fixed
+
+- An `inputs.<key>` placeholder naming a key the template's `inputs` never defined rendered
+  the literal text `None` into the sub-agent's prompt -- indistinguishable from a real answer
+  -- instead of being refused as the typo it almost always is. Fixed on both
+  `run_subagent_dag` and `spawn`; an explicitly null input (`{"key": null}`) is refused the
+  same way, since it carries no more of a usable value than an absent one.
+- A file's contents reached a sub-agent's prompt unfenced whenever the file sat outside the
+  sub-agent history root -- which is most files, and includes a repository someone checked
+  out into the working directory. The fence now follows the kind of reference instead of the
+  directory the file was found in: a `{{ ref: }}` or file-shaped `inputs.<key>` read is
+  wrapped as `file` wherever it was read from, and another node's output as `subagent`. A
+  literal `inputs.<key>` string stays verbatim, because the author typed it into the call,
+  and so does every `_path` form, which carries a path rather than any text to fence.
+- A `spawn` call refused before dispatch -- a stateless sub-agent given an `instance` handle,
+  an empty `prompt_template`, or a rejected file reference -- could leave a previous call's
+  completion metadata sitting uncollected if that call's `instance` handle was never picked up
+  (no tool-event sink listening on the channel), and have a later, unrelated call report the
+  stale handle as its own. The handle is now cleared at the top of every call, ahead of every
+  refusal.
+
 ### Breaking Changes
+
+- An `inputs` key that no placeholder in the `prompt_template` references now refuses the
+  call, on both `spawn` and `run_subagent_dag`, before any file is read or any node is
+  dispatched. Material reaches a sub-agent only where a placeholder puts it -- nothing is
+  prepended and nothing is added around a substituted value -- so a declared key with no
+  placeholder was material that silently did not arrive, and the run still read as
+  finished. A call that passed an unused key has to drop it or reference it. An `inputs`
+  entry that is an object naming neither a file nor a node is refused for the same reason:
+  it used to render as its own Python repr.
 
 - `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the
   sub-agent step. Typer rejects an unknown option, so a script or CI job passing the old
@@ -196,6 +244,16 @@ All notable changes to Raven are documented here.
   write the agent makes; working above it (`~/.raven`, `~`) additionally puts
   `config.json` and `oauth/` inside the per-turn shadow-git snapshot. Use a
   subdirectory.
+- `spawn`'s `task` parameter is renamed `prompt_template`, matching the field name
+  `run_subagent_dag` already used for a node's own prompt -- a literal string still works
+  exactly as before, and the field additionally accepts the placeholder grammar described
+  above. `task` still works from a call that bypasses the tool registry (a direct or
+  programmatic call, including this repo's own tests): the registry rejects a model call
+  missing a schema's `required` parameter before `spawn` runs, so the old spelling only ever
+  rescues a caller that skips that validation, and a call sending both spellings has
+  `prompt_template` win. The TUI's and the web UI's transcript views read `prompt_template`
+  first and fall back to `task`, so a transcript recorded before this rename keeps labeling
+  its delegation rows correctly.
 
 ## v0.1.0 - Public Preview - 2026-06-30
 

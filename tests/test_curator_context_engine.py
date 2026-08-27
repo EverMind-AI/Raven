@@ -489,7 +489,7 @@ def test_pinned_items_carry_a_relevance_floor(tmp_path: Path) -> None:
 def test_the_default_pinned_skill_is_the_id_the_dag_tool_advertises() -> None:
     """The config default and the tool's pointer are the same string in two
     layers; this is the seam that catches them drifting apart."""
-    from raven.agent.subagent_dag.tool import GUIDE_SKILL_ID
+    from raven.agent.subagent.dag_tool import GUIDE_SKILL_ID
 
     assert ContextConfig().pinned_skill_ids == [GUIDE_SKILL_ID]
 

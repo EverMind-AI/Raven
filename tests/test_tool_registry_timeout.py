@@ -99,9 +99,9 @@ def test_every_subagent_invoking_tool_is_blocking():
     silent for far longer than that clock, so a tool missing the flag ends the
     turn in the web UI while the run is still going.
     """
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.spawn_tool import SpawnTool
     from raven.agent.tools.deep_research import DeepResearchOfferTool, DeepResearchTool
-    from raven.agent.tools.spawn import SpawnTool
 
     for cls in (SpawnTool, SubAgentDagTool, DeepResearchTool, DeepResearchOfferTool):
         assert cls.blocking_interaction is True, cls.__name__
@@ -121,9 +121,9 @@ async def test_cancelled_error_propagates_not_swallowed():
 @pytest.mark.asyncio
 async def test_long_running_tools_keep_generous_ceilings():
     # Guard against regressing the overrides on the genuinely-slow tools.
+    from raven.agent.subagent.spawn_tool import SpawnTool
     from raven.agent.tools.media_gen import VideoGenerateTool
     from raven.agent.tools.shell import ExecTool
-    from raven.agent.tools.spawn import SpawnTool
 
     assert ExecTool.timeout_seconds >= 600
     assert VideoGenerateTool.timeout_seconds >= 600
