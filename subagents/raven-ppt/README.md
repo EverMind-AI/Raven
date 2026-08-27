@@ -93,11 +93,21 @@ rm -rf ~/.raven/workspace/subagent_sessions/raven-ppt/jobs/<job>
 
 ## How it is wired
 
-`subagent.json` registers a stateful CLI subagent:
+`subagent.json` registers an ACP subagent, the same way `raven-code` and
+`raven-research` do -- one manifest whose own `kind` tells the host's folder scan
+which schema to validate it against:
 
 ```
-{PYTHON} .../raven-ppt/run.py --job {agent_id} --session cli:{agent_id} --prompt-file {prompt_file}
+{PYTHON} .../raven-ppt/run.py --acp
 ```
+
+The agent is a protocol peer rather than a process forked per task: one session
+holds one deck, material arrives at `session/prompt` rather than at launch, and
+the reply is the response plus the `session/update` stream. `run.py` without
+`--acp` is still the one-shot CLI path, and both build the same prompt from the
+same material -- `tests/ppt/test_prompt_claims.py` asserts they agree, because the
+launcher is standard-library-only and outside the checkout, so the text cannot be
+shared between them.
 
 `install.py` resolves `{PYTHON}` and `{SUBAGENT_DIR}` at install time. It is the
 same agent-agnostic installer the other three subagents use, byte for byte.

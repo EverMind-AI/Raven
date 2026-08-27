@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from raven.acp import protocol
-from raven.acp.capabilities import agent_capabilities
+from raven.acp.capabilities import ClientCapabilities, agent_capabilities
 from raven.acp.methods import UNIMPLEMENTED_METHODS, AcpMethods
 from raven.acp.session import SessionTable
 from raven.acp.spine import AcpOutlet
@@ -306,16 +306,21 @@ async def test_a_malformed_prompt_field_is_refused(harness):
     assert result["error"]["code"] == protocol.INVALID_PARAMS
 
 
-async def test_a_prompt_with_no_material_says_how_to_send_some(harness):
-    """The launcher made this fatal to the process. Here it is fatal to the turn
-    and explained, because a prompt is never answered with an error."""
+async def test_a_prompt_with_no_material_runs_and_is_told_to_gather(harness):
+    """Both entry points let this run. The refusal that used to stand here made a
+    request the launcher answers with a deck end its turn over ACP instead."""
     session_id = await harness.new_session()
     result = await harness.call(
-        "session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "build me a deck"}]}
+        "session/prompt",
+        {"sessionId": session_id, "prompt": [{"type": "text", "text": "make a 5-page guide to using GitLab"}]},
     )
     assert result["result"] == {"stopReason": "end_turn"}
-    assert "No source material" in harness.said()
-    assert harness.engines[0].scheduler.requests == []
+    assert harness.engines[0].scheduler.requests, "the turn never reached the agent"
+    sent = harness.engines[0].scheduler.requests[0].text
+    assert "No material staged for this run" in sent
+    for tool in ("web_search", "web_fetch", "ppt_fetch"):
+        assert tool in sent
+    assert "Use only files under" not in sent
 
 
 async def test_a_declared_material_is_staged_and_named_in_the_prompt(harness, tmp_path):
@@ -333,18 +338,30 @@ async def test_a_declared_material_is_staged_and_named_in_the_prompt(harness, tm
     assert f"Compile the deck under {session.out}/" in sent
 
 
-async def test_a_declared_template_is_told_apart_from_evidence(harness, tmp_path):
+async def test_a_declared_template_is_refused_rather_than_quietly_ignored(harness, tmp_path):
+    """The launcher refuses this declaration, so this must too: a deck delivered
+    without the house file the caller named would read as if it had been used."""
     notes = tmp_path / "notes.md"
     notes.write_text("facts", encoding="utf-8")
     house = _pptx(tmp_path / "house.pptx", slides=1)
     session_id = await harness.new_session()
     task = '```raven-ppt\n{"materials": ["%s"], "template": "%s"}\n```' % (notes, house)
+    result = await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
+    assert result["result"] == {"stopReason": "end_turn"}
+    assert "ppt_template" in harness.said()
+    assert harness.engines[0].scheduler.requests == []
+
+
+async def test_a_pptx_named_as_material_is_staged_for_ppt_template_to_bind(harness, tmp_path):
+    """The channel that replaced it, and the reason the refusal above costs
+    nothing: a deck file arrives as material and the tool binds it."""
+    house = _pptx(tmp_path / "house.pptx", slides=1)
+    session_id = await harness.new_session()
+    task = '```raven-ppt\n{"materials": ["%s"]}\n```' % house
     await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
     session = harness.sessions.get(session_id)
-    assert session.template == session.materials / "house.pptx"
-    sent = harness.engines[0].scheduler.requests[0].text
-    assert "[template]" in sent
-    assert "do not quote it as evidence" in sent
+    assert (session.materials / "house.pptx").is_file()
+    assert "house.pptx" in harness.engines[0].scheduler.requests[0].text
 
 
 async def test_a_path_named_only_in_prose_is_still_picked_up(harness, tmp_path):
@@ -696,3 +713,111 @@ def test_only_the_stop_reasons_the_schema_names_are_used():
     """A translator that latched a reason outside the enum is caught here rather
     than by a client."""
     assert {"end_turn", "cancelled"} <= protocol.STOP_REASONS
+
+
+# -- the outbound half -------------------------------------------------------
+
+
+def _wired(tmp_path):
+    """A method surface with the outbound half attached, as `serve` builds it."""
+    from raven.acp.outbound import OutboundRequests
+    from raven.acp.questions import AcpQuestions
+
+    harness = Harness(tmp_path)
+    frames: list[dict] = []
+    outbound = OutboundRequests(frames.append)
+    questions = AcpQuestions(outbound=outbound, sessions=harness.sessions, emit=frames.append)
+    harness.methods = AcpMethods(
+        emit=harness.frames.append,
+        sessions=harness.sessions,
+        engine_factory=harness._factory,
+        jobs_root=harness.jobs_root,
+        outbound=outbound,
+        questions=questions,
+    )
+    return harness, outbound, questions, frames
+
+
+async def test_a_response_frame_is_matched_against_what_this_agent_asked(tmp_path):
+    """The routing the surface did not have. Without it every answer a client
+    sends is logged and dropped, and every question this agent asks times out."""
+    harness, outbound, _questions, frames = _wired(tmp_path)
+    await harness.handshake()
+
+    call = asyncio.create_task(outbound.call("elicitation/create", {"message": "which theme"}))
+    await asyncio.sleep(0)
+    request_id = frames[0]["id"]
+
+    answered = await harness.methods.handle(
+        {"jsonrpc": "2.0", "id": request_id, "result": {"action": "accept", "content": {"answer": "teal"}}}
+    )
+
+    assert answered is None, "a response is not a request and gets no reply"
+    assert await asyncio.wait_for(call, timeout=1) == {"action": "accept", "content": {"answer": "teal"}}
+
+
+async def test_a_response_to_nothing_is_still_answered_with_silence(tmp_path):
+    harness, _outbound, _questions, _frames = _wired(tmp_path)
+    await harness.handshake()
+
+    assert await harness.methods.handle({"jsonrpc": "2.0", "id": 99, "result": {}}) is None
+
+
+async def test_the_handshake_hands_the_client_s_capabilities_to_the_questions(tmp_path):
+    """Which route a question takes is decided by this, so a surface that never
+    learned what the client declared would ask through the wrong one."""
+    harness, _outbound, questions, _frames = _wired(tmp_path)
+    assert questions.client.elicitation_form is False
+
+    await harness.call("initialize", {"protocolVersion": 1, "clientCapabilities": {"elicitation": {"form": {}}}})
+
+    assert questions.client.elicitation_form is True
+
+
+async def test_cancelling_a_session_takes_back_the_question_it_was_holding(tmp_path):
+    harness, _outbound, questions, _frames = _wired(tmp_path)
+    session_id = await harness.new_session()
+    cancelled: list[str] = []
+    questions.cancel = lambda sid: cancelled.append(sid) or 0  # type: ignore[method-assign]
+
+    await harness.notify("session/cancel", {"sessionId": session_id})
+
+    assert cancelled == [session_id]
+
+
+async def test_closing_a_session_takes_back_the_question_it_was_holding(tmp_path):
+    """The other half of the lifecycle. An ask runs on its own task, so closing
+    without this leaves the client a form for the rest of the ask's deadline and
+    an answer aimed at a broker that went away with the engine."""
+    harness, outbound, questions, frames = _wired(tmp_path)
+    session_id = await harness.new_session()
+    questions.set_client(ClientCapabilities.from_params({"clientCapabilities": {"elicitation": {"form": {}}}}))
+    broker = _Broker()
+    questions.handle(
+        broker,
+        "clarify.request",
+        {"request_id": "q-1", "conversation_id": session_id, "question": "which theme", "choices": ["teal"]},
+    )
+    await asyncio.sleep(0)
+    assert outbound.in_flight == 1
+
+    await harness.call("session/close", {"sessionId": session_id})
+    # No drain here, and that is the point: `drain` cancels what is left and would
+    # perform the retraction itself, so a test that drained would pass with the
+    # close doing nothing. A real client never calls it. The yields are only for
+    # the cancelled task to reach its own except branch.
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+    assert outbound.in_flight == 0, "the request was left in flight after the session went"
+    assert [f for f in frames if f.get("method") == protocol.CANCEL_REQUEST_METHOD], "no retraction reached the client"
+    assert broker.answers == [("q-1", "")], "the tool call was left blocked"
+
+
+class _Broker:
+    def __init__(self) -> None:
+        self.answers: list[tuple[str, str]] = []
+
+    def reply(self, request_id: str, answer: str) -> bool:
+        self.answers.append((request_id, answer))
+        return True

@@ -546,11 +546,62 @@ def deliver(deck: Path, dest_dir: str | None) -> Path | None:
         return None
 
 
+def serve_acp(config: str) -> int:
+    """Render the config, then become `raven acp` on this process's stdio.
+
+    The same entry point as the other two ACP sub-agents, reached the same way
+    (`run.py --acp`), so a reader who knows one folder knows this one. Only the
+    key still needs a launcher here: material arrives through the protocol and is
+    read at `session/prompt` rather than at launch, and the result is the response
+    plus the `session/update` stream, so there is no stdout to scrape and no
+    watchdog to kill a child whose output went quiet.
+
+    `execv`, not a subprocess. This process must not sit between the client and
+    the server: stdin and stdout are the protocol, and a middleman is one more
+    buffer to flush and one more place a stray byte can enter the frame stream.
+    Replacing the image hands the descriptors over untouched, which also means
+    nothing after this line runs.
+    """
+    global _VERBOSE
+    raven = CHECKOUT / ".venv" / "bin" / "raven"
+    if not (raven.is_file() and os.access(raven, os.X_OK)):
+        sys.stderr.write(
+            f"error: {raven} is not an executable. Build the checkout's venv first:\n"
+            f"  cd {CHECKOUT} && uv sync --extra ppt\n"
+        )
+        return 1
+
+    # Diagnostics to stderr, which is the channel an ACP client surfaces. There is
+    # no launcher log file in this mode: everything after the exec logs through the
+    # runtime's own sink.
+    _VERBOSE = True
+    try:
+        rendered = render_config(Path(config).resolve())
+    except SystemExit as exc:
+        # `render_config` raises SystemExit with the operator's next step in it --
+        # a missing key, a host config with nothing to inherit. Written to stderr
+        # rather than allowed to propagate, so the client shows the sentence
+        # instead of a traceback.
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
+    sys.stderr.write(f"[acp] serving from {CHECKOUT} with {rendered}\n")
+    sys.stderr.flush()
+    # cwd is the checkout, as the CLI mode sets it: the runtime resolves its
+    # bundled templates and skills relative to the installed package, and a launch
+    # from an arbitrary directory has been the cause of a missing-skill report
+    # before. It is NOT the session's working directory -- that arrives per session
+    # in `session/new`.
+    os.chdir(CHECKOUT)
+    os.execv(str(raven), [str(raven), "acp", "--config", str(rendered)])
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the raven-ppt agent on staged material.")
     ap.add_argument("--task", help="Deck-building prompt")
     ap.add_argument("--prompt-file", help="File holding the prompt (alternative to --task)")
-    ap.add_argument("--job", required=True, help="Job name; also the job directory name")
+    ap.add_argument("--job", help="Job name; also the job directory name (required unless --acp)")
     ap.add_argument("--session", help="Enable multi-turn: reuse this key across runs")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     # An hour killed a run that had written all twenty pages and was on its last
@@ -561,7 +612,18 @@ def main() -> int:
     ap.add_argument("--deliver-to", default=None, help="Copy the finished deck here")
     ap.add_argument("--no-deliver", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="Mirror diagnostics to stderr")
+    ap.add_argument(
+        "--acp",
+        action="store_true",
+        help="Serve the Agent Client Protocol on stdio instead of running one job",
+    )
     args = ap.parse_args()
+
+    if args.acp:
+        return serve_acp(args.config)
+
+    if not args.job:
+        raise SystemExit("error: --job is required unless --acp")
 
     if args.prompt_file:
         task = Path(args.prompt_file).read_text(encoding="utf-8")

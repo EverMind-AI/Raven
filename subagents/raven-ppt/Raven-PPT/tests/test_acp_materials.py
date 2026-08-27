@@ -8,6 +8,8 @@ move cannot quietly lose one.
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from raven.acp import materials
 
 
@@ -22,25 +24,41 @@ def _pptx(path: Path, slides: int = 2) -> Path:
 # -- reading the task text ---------------------------------------------------
 
 
-def test_a_fenced_block_names_materials_and_a_template():
-    text = 'build it\n```raven-ppt\n{"materials": ["/a.md", "/b.md"], "template": "/house.pptx"}\n```'
-    assert materials.inputs_from_prompt(text) == (["/a.md", "/b.md"], "/house.pptx")
+def test_a_fenced_block_names_the_materials():
+    text = 'build it\n```raven-ppt\n{"materials": ["/a.md", "/b.md"]}\n```'
+    assert materials.inputs_from_prompt(text) == ["/a.md", "/b.md"]
+
+
+def test_a_declared_template_is_refused_the_way_the_launcher_refuses_it():
+    """One channel, both entry points. The launcher raises on this declaration, so
+    accepting it here would make the same task text succeed over one transport and
+    fail over the other."""
+    text = '```raven-ppt\n{"materials": ["/a.md"], "template": "/house.pptx"}\n```'
+    with pytest.raises(materials.StagingError) as caught:
+        materials.inputs_from_prompt(text)
+    assert "ppt_template" in str(caught.value)
+
+
+def test_a_template_key_that_is_not_a_path_is_left_alone():
+    """A style name in an unrelated JSON block is not a path declaration."""
+    text = '```json\n{"materials": ["/a.md"], "template": "minimal"}\n```'
+    assert materials.inputs_from_prompt(text) == ["/a.md"]
 
 
 def test_a_plain_json_fence_is_read_too():
     text = '```json\n{"materials": ["/a.md"]}\n```'
-    assert materials.inputs_from_prompt(text) == (["/a.md"], None)
+    assert materials.inputs_from_prompt(text) == ["/a.md"]
 
 
 def test_a_fence_that_declares_neither_key_is_not_an_inputs_block():
     """A task may well quote unrelated JSON; only a block carrying one of the two
     keys is a declaration."""
-    assert materials.inputs_from_prompt('```json\n{"unrelated": 1}\n```') == ([], None)
+    assert materials.inputs_from_prompt('```json\n{"unrelated": 1}\n```') == []
 
 
 def test_malformed_json_in_a_fence_is_skipped_not_fatal():
     text = '```raven-ppt\n{not json}\n```\n```raven-ppt\n{"materials": ["/a.md"]}\n```'
-    assert materials.inputs_from_prompt(text) == (["/a.md"], None)
+    assert materials.inputs_from_prompt(text) == ["/a.md"]
 
 
 def test_a_declared_block_does_not_filter_by_file_type(tmp_path):
@@ -48,7 +66,7 @@ def test_a_declared_block_does_not_filter_by_file_type(tmp_path):
     material, while a declaration is explicit."""
     odd = tmp_path / "notes.xyz"
     odd.write_text("facts", encoding="utf-8")
-    declared, _ = materials.inputs_from_prompt('```raven-ppt\n{"materials": ["%s"]}\n```' % odd)
+    declared = materials.inputs_from_prompt('```raven-ppt\n{"materials": ["%s"]}\n```' % odd)
     assert declared == [str(odd)]
     assert materials.materials_from_prompt(f"see {odd}") == []
 
@@ -112,18 +130,22 @@ def test_the_prompt_block_names_the_copy_and_not_the_source(tmp_path):
         [("/elsewhere/notes.md", tmp_path / "materials" / "notes-2.md")],
         tmp_path / "materials",
         tmp_path / "out",
-        None,
     )
     assert "notes.md (from /elsewhere/notes.md) -> " in text
     assert str(tmp_path / "materials" / "notes-2.md") in text
     assert f"Compile the deck under {tmp_path / 'out'}/" in text
 
 
-def test_a_template_is_marked_and_excluded_from_the_evidence(tmp_path):
-    house = tmp_path / "materials" / "house.pptx"
-    text = materials.describe([("/x/house.pptx", house)], tmp_path / "materials", tmp_path / "out", house)
-    assert "[template]" in text
-    assert "do not quote it as evidence" in text
+def test_a_run_with_nothing_staged_is_told_to_gather_rather_than_refused(tmp_path):
+    """The branch this block did not have. A deck author runs with or without
+    documents; the launcher stopped refusing and this had to follow."""
+    text = materials.describe([], tmp_path / "materials", tmp_path / "out")
+    assert "No material staged for this run" in text
+    for tool in ("web_search", "web_fetch", "ppt_fetch"):
+        assert tool in text
+    # The sentence that would forbid everything: it points at an empty directory.
+    assert "Use only files under" not in text
+    assert f"Compile the deck under {tmp_path / 'out'}/" in text
 
 
 # -- verifying the deck ------------------------------------------------------

@@ -87,7 +87,6 @@ class AcpSession:
     # session rather than per turn: a second turn adds material without losing
     # what the first one grounded the deck in, and the prompt lists all of it.
     staged: list[tuple[str, Path]] = field(default_factory=list)
-    template: Path | None = None
     # Basenames already used under ``materials/``, so a second turn's source
     # cannot overwrite a first turn's copy of the same name.
     taken: set[str] = field(default_factory=set)

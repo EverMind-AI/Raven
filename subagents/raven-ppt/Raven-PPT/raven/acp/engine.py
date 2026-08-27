@@ -33,6 +33,24 @@ from raven.spine import Scheduler
 from raven.spine.delivery import DeliveryHub
 
 
+def bind_ask_user(agent_loop: Any, questions: Any) -> bool:
+    """Give this session's ``ask_user`` a broker, reporting whether one was bound.
+
+    A named function rather than four lines inside ``_build`` because it is the
+    single point where this surface becomes able to ask a question at all: delete
+    it and every test in the package still passes while ``ask_user`` answers
+    "not configured" and the turn proceeds on a guess. Something has to be able to
+    assert it happened.
+    """
+    if questions is None:
+        return False
+    ask_tool = agent_loop.tools.get("ask_user")
+    if ask_tool is None or not hasattr(ask_tool, "set_broker"):
+        return False
+    ask_tool.set_broker(questions.new_broker())
+    return True
+
+
 @dataclass
 class SessionEngine:
     """What one session needs to run turns, and how to give it back."""
@@ -68,7 +86,7 @@ class SessionEngine:
                 logger.exception("acp: stopping the memory backend failed")
 
 
-def build_engine_factory(config: Any, emit: Frames, sessions: Any) -> Any:
+def build_engine_factory(config: Any, emit: Frames, sessions: Any, questions: Any = None) -> Any:
     """A factory that builds one :class:`SessionEngine` per session.
 
     ``config`` is the already-loaded runtime config, passed in rather than read
@@ -79,12 +97,12 @@ def build_engine_factory(config: Any, emit: Frames, sessions: Any) -> Any:
     """
 
     async def factory(session: AcpSession) -> SessionEngine:
-        return await _build(config, session, emit, sessions)
+        return await _build(config, session, emit, sessions, questions)
 
     return factory
 
 
-async def _build(config: Any, session: AcpSession, emit: Frames, sessions: Any) -> SessionEngine:
+async def _build(config: Any, session: AcpSession, emit: Frames, sessions: Any, questions: Any = None) -> SessionEngine:
     from raven.agent.loop import AgentLoop
     from raven.agent.loop.recovery import limits_from_defaults
     from raven.cli._helpers import make_provider
@@ -150,6 +168,8 @@ async def _build(config: Any, session: AcpSession, emit: Frames, sessions: Any) 
         except Exception:
             logger.exception("acp: memory backend start failed; continuing with the legacy memory path")
 
+    bind_ask_user(agent_loop, questions)
+
     scheduler, hub, outlet, spine_teardown = build_acp(agent_loop, emit, sessions)
     # Wired for parity with the other surfaces: a sub-agent this loop spawns
     # submits its result-reinjection turn through the same scheduler.
@@ -164,4 +184,4 @@ async def _build(config: Any, session: AcpSession, emit: Frames, sessions: Any) 
     )
 
 
-__all__ = ["SessionEngine", "build_engine_factory"]
+__all__ = ["SessionEngine", "bind_ask_user", "build_engine_factory"]

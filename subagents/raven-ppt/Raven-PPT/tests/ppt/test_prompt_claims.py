@@ -634,8 +634,16 @@ def _launch(launcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
     monkeypatch.setattr(
         sys,
         "argv",
-        ["run.py", "--job", "t", "--config", str(WRAPPER_CONFIG), "--no-deliver",
-         "--task", " ".join([task, *(str(path) for path in material)])],
+        [
+            "run.py",
+            "--job",
+            "t",
+            "--config",
+            str(WRAPPER_CONFIG),
+            "--no-deliver",
+            "--task",
+            " ".join([task, *(str(path) for path in material)]),
+        ],
     )
     launcher.main()
     assert recorded, "the child was never started, so the run did not reach the launch"
@@ -670,3 +678,39 @@ def test_a_run_with_material_keeps_the_sentence_that_fences_it(
     assert "Material staged for this run" in prompt
     assert "Use only files under" in prompt
     assert "notes.md" in prompt
+
+
+@_needs_wrapper
+def test_both_entry_points_hand_the_agent_the_same_material_block(launcher, tmp_path: Path) -> None:
+    """The one guard against the two paths drifting apart again.
+
+    The launcher is standard-library-only and lives outside this package, so the
+    text it builds cannot be imported into `raven.acp.materials` or shared with it.
+    Nothing but this comparison can keep them equal, and they had already diverged
+    once in both directions: over ACP a run with no material was refused outright
+    while the launcher gathered, and a declared `template` was honoured over ACP
+    while the launcher raised on it.
+    """
+    from raven.acp import materials
+
+    mats, out = tmp_path / "materials", tmp_path / "out"
+    for staged in ([], [("/elsewhere/notes.md", mats / "notes.md")]):
+        expected = launcher.material_section(staged, mats) + (
+            f" Compile the deck under {out}/ and end your final reply with the MEDIA line naming it."
+        )
+        assert materials.describe(staged, mats, out) == expected
+
+
+@_needs_wrapper
+def test_both_entry_points_refuse_a_declared_template(launcher, tmp_path: Path) -> None:
+    """Same declaration, same answer. The channel is `ppt_template` on both."""
+    from raven.acp import materials
+
+    task = '```raven-ppt\n{"materials": ["/a.md"], "template": "/house.pptx"}\n```'
+    with pytest.raises(SystemExit):
+        launcher.inputs_from_prompt(task)
+    with pytest.raises(materials.StagingError):
+        materials.inputs_from_prompt(task)
+    # And the same declaration without a path is a style name on both, not a channel.
+    styled = '```raven-ppt\n{"materials": ["/a.md"], "template": "minimal"}\n```'
+    assert launcher.inputs_from_prompt(styled) == materials.inputs_from_prompt(styled) == ["/a.md"]

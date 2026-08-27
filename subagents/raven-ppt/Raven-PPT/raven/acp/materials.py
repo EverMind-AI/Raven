@@ -78,18 +78,27 @@ class StagingError(Exception):
     """
 
 
-def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
-    """What a dispatching agent declared as a fenced JSON object.
+def inputs_from_prompt(text: str) -> list[str]:
+    """What a dispatching agent declared, as a fenced JSON object: its materials.
 
-    ``([], None)`` when it declared nothing, which leaves the prose scan as the
-    only reader.
+    ``[]`` when it declared nothing, which leaves the prose scan below as the only
+    reader.
 
-    A quoted string survives what prose does not: a path with a space in it, and a
-    path followed by punctuation that is not ASCII (``notes.md`` plus a full-width
-    full stop has no ``.md`` suffix to match). It is also the only way the run
-    learns which file is the *template* -- named in prose that is a sentence only
-    the model downstream can read, and a model that misreads it builds the deck in
-    the wrong file.
+    The sub-agent contract carries one content channel, the task text, and prose is
+    not a reliable one. A path in prose is delimited by whitespace, so
+    ``/tmp/my deck.pptx`` splits in two; a full stop in a script whose punctuation
+    is not ASCII stays attached, so ``notes.md`` plus a full-width full stop matches
+    no known type. Either way the file is dropped without a word, which is exactly
+    the silence ``stage`` refuses to allow for a file it cannot copy. A quoted
+    string has neither problem.
+
+    A declared ``template`` path is refused rather than ignored, and refused the
+    same way the launcher refuses it: the channel is gone from both entry points,
+    and a deck delivered without the house file the caller named would read as if
+    it had been used. A ``.pptx`` named among the materials is still staged like
+    any other document, and ``ppt_template`` binds it -- that tool is the template
+    channel now, on either transport. A non-path value under that key (a style name
+    in an unrelated JSON block) is not a path declaration and is left alone.
     """
     for block in _INPUTS_FENCE.findall(text):
         try:
@@ -98,11 +107,16 @@ def inputs_from_prompt(text: str) -> tuple[list[str], str | None]:
             continue
         if not isinstance(declared, dict) or not declared.keys() & {"materials", "template"}:
             continue
-        listed = declared.get("materials")
-        materials = [item for item in listed if isinstance(item, str)] if isinstance(listed, list) else []
         template = declared.get("template")
-        return materials, template if isinstance(template, str) and template else None
-    return [], None
+        if isinstance(template, str) and template.startswith("/"):
+            raise StagingError(
+                "the template channel was removed. The deck is built in the file the "
+                "run publishes; drop the template declaration and name the .pptx among "
+                "the materials, where ppt_template can bind it."
+            )
+        listed = declared.get("materials")
+        return [item for item in listed if isinstance(item, str)] if isinstance(listed, list) else []
+    return []
 
 
 def materials_from_prompt(text: str) -> list[str]:
@@ -170,34 +184,40 @@ def stage(materials_dir: Path, sources: list[str], taken: set[str]) -> list[tupl
     return staged
 
 
-def describe(
-    staged: list[tuple[str, Path]],
-    materials_dir: Path,
-    out_dir: Path,
-    template: Path | None,
-) -> str:
+def describe(staged: list[tuple[str, Path]], materials_dir: Path, out_dir: Path) -> str:
     """The block appended to the prompt naming what was staged and where to build.
 
-    Built from the staging pairing rather than re-derived from the source paths,
-    so the agent is told where each file actually is -- a collision-suffixed copy
-    has a name the source does not.
+    Word for word what the launcher's ``material_section`` produces for the same
+    inputs, plus the same compile sentence it appends at its call site, because the
+    agent behind both entry points is one agent: a deck author told to gather its
+    own material over one transport and refused over the other is two products
+    wearing one name. ``tests/ppt/test_prompt_claims.py`` drives both and asserts
+    they agree, which is the only thing that can keep them equal -- the launcher is
+    standard-library-only and outside this package, so the text cannot be shared.
+
+    Built from the staging pairing rather than re-derived from the source paths, so
+    the agent is told where each file actually is: a collision-suffixed copy has a
+    name the source does not.
     """
-    lines = [
-        f"- {Path(source).name} (from {source}) -> {target}" + ("  [template]" if target == template else "")
-        for source, target in staged
-    ]
-    text = "\n\n# Material staged for this run\n" + "\n".join(lines)
-    text += (
-        f"\nUse only files under {materials_dir} as factual source material. "
-        f"Compile the deck under {out_dir}/ and end your final reply with the "
-        "MEDIA line naming it."
-    )
-    if template is not None:
-        text += (
-            f"\nBuild this deck in {template}. It is the template, not source "
-            "material: bind it first, and do not quote it as evidence."
+    if staged:
+        listing = "\n".join(f"- {Path(source).name} (from {source}) -> {target}" for source, target in staged)
+        text = (
+            f"\n\n# Material staged for this run\n{listing}"
+            f"\nUse only files under {materials_dir} as factual source material."
         )
-    return text
+    else:
+        text = (
+            "\n\n# No material staged for this run\n"
+            "Nothing was named, so this deck's material has to be gathered rather than "
+            "read: web_search for the sources and the pictures, "
+            'web_fetch(extractMode="images") on the URLs they cite -- which returns each '
+            "picture with the caption its author wrote -- and ppt_fetch what you will use, "
+            "so the ingest reads it in. Fetch into the project rather than placing anything "
+            "straight onto a page: what this deck never ingested is what its provenance "
+            "checks cannot see, and on a run with no staged material that is everything. "
+            "What you still cannot verify is a guess, and it is presented as one."
+        )
+    return text + (f" Compile the deck under {out_dir}/ and end your final reply with the MEDIA line naming it.")
 
 
 def slide_count(deck: Path) -> int:

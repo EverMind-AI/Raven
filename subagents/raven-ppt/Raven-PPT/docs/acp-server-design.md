@@ -257,16 +257,21 @@ Stated so they are decisions rather than surprises.
    subtrees) exist to stop a per-turn `git add -A` checkpoint from committing
    provider keys; this surface runs with `interactive=False`, so no checkpoint
    runs, and `cwd` here is only a delivery destination.
-3. **`discover_vendored_rows` cannot see an acp manifest.** It validates every
-   `*/subagent.json` as `ThirdPartyCliSubagentConfig`, whose `kind` is
-   `Literal["cli"]`, and skips a folder that fails with a warning. Changing that
-   is a one-line edit in the *host* (`raven/agent/subagent/vendored_agents.py`)
-   and out of scope here. So the acp manifest ships as a second file,
-   `subagent.acp.json`, registered by `install.py --acp`; `subagent.json` stays
-   `cli` and auto-discovery keeps working exactly as before. The write path
-   already supports it: `raven/config/update_subagents.py` validates on `kind`
-   and `merge_vendored_seeds` lets a config row of the same name win over the
-   discovered one.
+3. ~~**`discover_vendored_rows` cannot see an acp manifest.**~~ **Resolved in the
+   host; this folder shipped the workaround anyway.** When this was written the
+   scan validated every `*/subagent.json` as `ThirdPartyCliSubagentConfig`, whose
+   `kind` is `Literal["cli"]`, so a lone acp manifest was skipped with a warning.
+   The fix was called out here as "a one-line edit in the *host*
+   (`raven/agent/subagent/vendored_agents.py`) and out of scope", and the
+   workaround was a second file, `subagent.acp.json`, registered by
+   `install.py --acp`.
+
+   That edit has since landed -- the scan now picks the schema from the
+   manifest's own `kind` -- and `raven-code` and `raven-research` both ship a
+   single `subagent.json` declaring `kind: "acp"`. The workaround outlived the
+   constraint it was for: this folder carried two manifests, two descriptions
+   that drifted apart, and an installer flag to choose between them. It is one
+   manifest now, like the other three.
 4. **`session/update` for a turn nobody prompted.** The host's translator
    correlates a turn id so a runtime-submitted turn's ending cannot answer this
    prompt (`updates.py:540-550`). Nothing here submits background turns -- no
@@ -312,7 +317,8 @@ published would hand the caller a deck the agent never finished reviewing.
 |---|---|
 | 1 | This document. |
 | 2 | `protocol.py`, `capabilities.py`, `tool_kinds.py`, `session.py`, `spine.py` (`AcpOutlet` + `build_acp`), `materials.py`, `methods.py`. |
-| 3 | `stdio.py`, `server.py`, `engine.py`, `raven/cli/acp_commands.py` (`raven acp`), `subagents/raven-ppt/acp.py`, `subagents/raven-ppt/subagent.acp.json`, `install.py --acp`. |
+| 3 | `stdio.py`, `server.py`, `engine.py`, `raven/cli/acp_commands.py` (`raven acp`), `subagents/raven-ppt/run.py --acp`, `subagents/raven-ppt/subagent.json` (`kind: "acp"`). |
+| 4 | `outbound.py`, `questions.py`: the agent-to-client direction, which nothing above had. `ask_user` is answerable over ACP because of it. |
 
 Tests: `tests/test_acp_{spine,methods,materials,server,stdio}.py` and
 `tests/test_cli_acp_commands.py`. None starts a subprocess or opens a socket: the
@@ -322,15 +328,13 @@ onto temp files and restore them.
 
 Verified beyond the unit tests:
 
-- `subagent.acp.json` validated against the host's own
-  `ThirdPartyAcpSubagentConfig`, its write-path rejector, the discriminated union
-  the roster is built from, and `build_third_party_backend` -- which yields an
-  `AcpAgentBackend` with `cwd=None` (so the host's session workspace is used) and
-  `stateful=False` (so no instance handle is bound to a session that cannot be
-  reopened).
-- `subagent.json` still validates as a `cli` row, so folder auto-discovery is
-  unchanged; and an acp manifest at that path was confirmed to be rejected, which
-  is why it ships as a second file.
+- `subagent.json` validated against the host's own `ThirdPartyAcpSubagentConfig`,
+  its write-path rejector, the discriminated union the roster is built from, and
+  `build_third_party_backend` -- which yields an `AcpAgentBackend` with `cwd=None`
+  (so the host's session workspace is used) and `stateful=False` (so no instance
+  handle is bound to a session that cannot be reopened).
+- `discover_vendored_rows` run over the folder tree, which now returns
+  `Raven-PPT kind=acp enabled=True` beside `Raven-Code` and `Raven-Research`.
 - A real `raven acp` process, handshaked over a pipe: two clean frames on stdout,
-  diagnostics on stderr, exit 0 -- and the same through `acp.py`, which rendered
-  the config and exec'd into it.
+  diagnostics on stderr, exit 0 -- and the same through `run.py --acp`, which
+  rendered the config and exec'd into it.
