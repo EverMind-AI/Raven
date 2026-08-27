@@ -22,7 +22,8 @@ from typing import Any
 
 import pytest
 
-from raven.config.loader import load_config
+from raven.config import loader as loader_module
+from raven.config.loader import drain_migration_notices, load_config
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods.session import _default_session_info
 
@@ -267,13 +268,28 @@ def test_resolve_context_window_helper_removed() -> None:
     )
 
 
-async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, config) -> None:
+async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, config, monkeypatch) -> None:
     """wire-shape lock — info dict has exactly the 12 expected keys.
 
     Anti-drift gate: adding a new field to the init bundle MUST update this
     expected set, forcing an explicit spec amendment, until the dict is
     promoted to an OpenRPC ``SessionInitBundle`` component schema.
+
+    The gate reads the shape the bundle ALWAYS has, which means supplying its
+    own migration-notice state rather than inheriting the process's.
+    ``config_notices`` is conditional -- the bundle carries it only when a
+    config migration recorded a notice -- and that notice list is a module
+    global in ``raven.config.loader``, appended by every load of a config
+    without the current watermark and emptied only by a drain. So any of the
+    12000-odd tests that writes a plain config file leaves one there, the
+    suite runs on four xdist workers, and whether the leaver and this gate
+    share a worker changes run to run: the gate went red on trunk having
+    caught a neighbour rather than a drift, and green again on a re-run. Seeded
+    and drained here so that the drain is what holds it, not the schedule; the
+    conditional key keeps its own two tests further down.
     """
+    monkeypatch.setattr(loader_module, "_migration_notices", ["left behind by another test"])
+    drain_migration_notices()
     info = await _default_session_info(fake_agent_loop, config)
     expected_keys = {
         # backward-compat / existing
