@@ -384,8 +384,22 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   const rowRef = useRef<HTMLDivElement | null>(null)
   const elapsed = useTick(!c.done, c.t0)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
-  const state = c.done ? (c.ok ? 'ok' : 'bad') : 'run'
-  const cost = c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
+  const head = c.kind === 'spawn' ? store.spawnHead(c) : null
+  /* Everything below asks the RUN, not the tool call, and `live` is the one
+     predicate all three read. A spawn returns when the work is DISPATCHED: `done`
+     goes true within a second of a run that may take minutes, so a card built on
+     it settled early, stopped its clock early, and kept saying `ok` if the run
+     later failed. */
+  const live = store.spawnLive(c)
+  const state = head ? store.spawnState(c) : c.done ? (c.ok ? 'ok' : 'bad') : 'run'
+  /* The clock ticks while the RUN is going, not while the dispatch is. Without
+     this the duration froze the moment dispatch returned and only moved again
+     when the stream happened to change -- and through a long tool call, or a cli
+     run with no per-step visibility at all, it does not change. */
+  const elapsedRun = useTick(live, c.spawnT0 || c.t0)
+  const cost = head
+    ? store.spawnCost(c, Date.now()) || (elapsedRun >= 1000 ? store.durText(elapsedRun) : '')
+    : c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
   const a = c.args as { agent?: string; instance?: string; task?: string }
   const who = store.spawnAgentOf(a) ? store.spawnAgentOf(a) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
   const openTask = (): void => {
@@ -406,33 +420,114 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   }
   kv('task', t('gui.deleg.d_task'), c.label || String(a.task || '').slice(0, 160), true)
   kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
+  /* `c.res` is the DISPATCH's result, so it is never the run's error. On a spawn
+     whose run failed it reads `Subagent [...] started`, and beside the failure
+     word that is a contradiction. The run's own account is its conversation,
+     which the pane below shows, so the word stands alone rather than borrowing a
+     sentence that means the opposite.
+
+     A spawn refused BEFORE it ran is the exception: it has no run and no pane,
+     and there `c.res` genuinely is the failure. An empty `spawnStatus` is what
+     marks that -- the run never reported, because there was none. */
+  const stateErr = head && c.spawnStatus ? '' : store.firstErrLine(c.res)
   kv('state', t('gui.deleg.d_state'),
-    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})} />)
+    <DelegState state={state} {...(state === 'bad' && stateErr ? { err: stateErr } : {})} />)
   /* Only when there is something to say. Both clocks here can come up empty --
      a call that finished carrying no duration, and a graph that stopped
      without leaving an end stamp -- and a labelled row with an empty value
      cell reads as a broken render rather than as an absent number. */
   if (cost) kv('cost', t('gui.deleg.d_cost'), cost)
+  /* A spawn's run outlives its tool row, so the row's own `done` cannot end the
+     stream -- `spawnLive` reads the run's word instead. The beat is the card's,
+     not a store timer's: it stops when the run settles or the card unmounts,
+     with nothing to reap. */
+  useEffect(() => {
+    if (!live) return
+    store.readSpawn(lane, c)
+    const beat = setInterval(() => store.readSpawn(lane, c), 1000)
+    return () => clearInterval(beat)
+  }, [live, c.spawnId, lane, c])
+  /* One last read after the run settles: the final message lands with the
+     terminal frame, and a stream that stopped one beat early ends mid-sentence. */
+  useEffect(() => {
+    if (c.kind === 'spawn' && c.spawnId && !live) store.readSpawn(lane, c)
+  }, [live, c.spawnId, lane, c])
+  /* A restored card has a task id and no record id. Resolved on open and not at
+     restore, the same rule `hydrateDag` follows: a transcript can hold a dozen
+     delegated calls, and asking for all of them would be a dozen requests for
+     detail nobody has looked at. */
+  useEffect(() => {
+    if (c.kind === 'spawn' && c.open) store.resolveSpawn(lane, c)
+  }, [c.open, c.kind, lane, c])
+  const tail = c.kind === 'spawn' ? store.tailText(c.stream) : ''
   return (
     <>
-      <div ref={rowRef} className={'wrow' + (c.done ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}
+      <div ref={rowRef} className={'wrow' + (c.done && !live ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}
         tabIndex={0} onClick={flip} onKeyDown={onKeyToggle(flip)}>
         <Ico d={c.done && !c.ok ? ACT_ICO.bad as string : actIco(c.name)} cls="ic" />
         <span className="vb">
           {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
-          {c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
+          {head ? t('gui.deleg.spawn_verb') : c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
         </span>
-        <span className="ar">{c.rowLabel || ''}</span>
+        <span className="ar">{head
+          ? `${head.instance ? head.instance + '@' : ''}${head.agent}: ${head.task}`
+          : c.rowLabel || ''}</span>
         <Chev />
       </div>
+      {/* The second line the reader watches. Only while the run is producing:
+          a settled run's newest line is its answer, which the fold already
+          shows, and leaving it here would freeze a line that had been moving. */}
+      {head && live ? (
+        <div className="dlgtail" onClick={flip} title={t('gui.deleg.tail_hint')}>
+          <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
+          <span className="tl">{tail || t('gui.deleg.tail_wait')}</span>
+        </div>
+      ) : null}
       <div className="dtl dlg" hidden={!c.open}>
         <div className="bd">
           <div className="dgr">{grid}</div>
+          {/* Only with a record id, which only `subagent.status` supplies. A
+              conversation restored from history saw none of those frames -- the
+              contract does not replay terminal ones -- so its card has nothing
+              to read, and drawing the pane anyway told the reader the run had
+              said nothing when it had said plenty. Reconciling a restored card
+              against `subagent.list` (by `spawn_task_id`, the way ui-tui's
+              domain/spawnRun.ts does) is what would fill it; until then the
+              restored card is the grid it has always been. */}
+          {head && c.spawnId ? <SpawnStream c={c} live={live} /> : null}
         </div>
       </div>
     </>
   )
 })
+
+/* The run's own conversation, inside the card that dispatched it.
+
+   A lane of its own rather than segments on the trail's: `agentPaintLane` is
+   what turns `subagent.context` messages into segments, it is already built for
+   a stream that grows and rewrites its last message, and it keys off the lane's
+   `agentKey`. The panel paints the same thing into a workspace pane through the
+   same function, so the two surfaces cannot drift.
+
+   No composer: this is a run being watched, not a conversation being had. The
+   one that can be talked to is the instance panel. */
+function SpawnStream({ c, live }: { c: CallData; live: boolean }): ReactElement {
+  const laneRef = useRef<Lane | null>(null)
+  if (!laneRef.current) laneRef.current = store.newLane(`spawn:${c.spawnId || c.id}`, false)
+  const lane = laneRef.current
+  useEffect(() => () => store.dropLane(lane), [lane])
+  useEffect(() => {
+    store.agentPaintLane(lane, { messages: c.stream, status: live ? 'run' : 'ok' }, {
+      key: c.spawnId,
+      empty: t('gui.deleg.stream_empty'),
+    })
+  }, [lane, c.stream, c.spawnId, live])
+  return (
+    <div className="dlgchat" data-composer="false">
+      <AgentStageView lane={lane} />
+    </div>
+  )
+}
 
 /* ── the dag card ───────────────────────────────────────────────────────────
    A `run_subagent_dag` call is a row like every other one; what is behind its

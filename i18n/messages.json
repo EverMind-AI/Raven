@@ -483,6 +483,22 @@
       "en": "completed",
       "zh": "已完成"
     },
+    "gui.deleg.spawn_verb": {
+      "en": "Spawn",
+      "zh": "Spawn"
+    },
+    "gui.deleg.tail_hint": {
+      "en": "Open what this run is doing",
+      "zh": "展开这次运行正在做的事"
+    },
+    "gui.deleg.tail_wait": {
+      "en": "starting up",
+      "zh": "正在启动"
+    },
+    "gui.deleg.stream_empty": {
+      "en": "This run has not said anything yet.",
+      "zh": "这次运行还没有产生消息。"
+    },
     "gui.deleg.st_bad": {
       "en": "failed",
       "zh": "失败"

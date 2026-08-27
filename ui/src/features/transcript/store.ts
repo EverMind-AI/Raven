@@ -9,7 +9,7 @@ import type { DeliveryRow, WsChange } from '../workspace/types'
 import type {
   AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
-  StatusData, StepData, StepHandle, TranscriptSource,
+  SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
 import type { Shell } from '../../shell/bridge'
 
@@ -307,6 +307,7 @@ export function dropLane(lane: Lane): void {
   for (const [id, f] of dagLive) if (f.lane === lane) dagLive.delete(id)
   for (const [id, f] of dagByCall) if (f.lane === lane) dagByCall.delete(id)
   if (dagPending && dagPending.lane === lane) dagPending = null
+  for (const [id, f] of spawnByCall) if (f.lane === lane) spawnByCall.delete(id)
 }
 
 export function subscribe(lane: Lane, l: () => void): () => void {
@@ -642,6 +643,286 @@ function openFirstFailure(call: CallData): void {
 export const _earlyForTests = (): Array<[string, string]> =>
   [...dagEarly].flatMap(([id, evs]) => evs.map((e): [string, string] => [id, e[0]]))
 
+/* Terminal words for a spawned RUN, which are not the tool call's.
+
+   `subagent.status` reports the manager's own vocabulary; anything outside this
+   set is the run still going. Read as a closed set rather than as "not running",
+   so a word this build has never seen keeps the stream open instead of freezing
+   a live run at whatever it had said last. */
+const SPAWN_SETTLED = new Set(['completed', 'failed', 'cancelled', 'aborted'])
+
+/* Whether this card's run is still producing. `done` is deliberately not
+   consulted: the spawn tool returns when the work is DISPATCHED, so the tool row
+   settles while the sub-agent is still working -- which is the whole reason this
+   card looked finished on a live run. */
+export function spawnLive(c: CallData): boolean {
+  return c.kind === 'spawn' && !!c.spawnId && !SPAWN_SETTLED.has(c.spawnStatus)
+}
+
+/* Which of the three words the card's state cell says, for a spawn.
+
+   `done`/`ok` describe the DISPATCH: the tool row settles `ok` within a second
+   of a run that may go on for minutes, and stays `ok` if that run later fails.
+   Before the run has said anything the dispatch is all there is, which is what
+   the fallback is for -- a spawn refused before it ran never reports at all. */
+/* Settled without succeeding. `cancelled` belongs here and not with `completed`:
+   stopping is not finishing, and this front end already decided that two files
+   away -- features/subagents/history.ts puts `cancelled` in its own BAD set, and
+   the comment there names this exact failure, "how a running instance and a
+   failed one both came to wear the green finished dot". */
+const SPAWN_BAD = new Set(['failed', 'aborted', 'cancelled', 'interrupted'])
+
+export function spawnState(c: CallData): 'ok' | 'bad' | 'run' {
+  if (SPAWN_BAD.has(c.spawnStatus)) return 'bad'
+  if (SPAWN_SETTLED.has(c.spawnStatus)) return 'ok'
+  if (c.spawnStatus) return 'run'
+  return c.done ? (c.ok ? 'ok' : 'bad') : 'run'
+}
+
+const msOfIso = (raw: unknown): number => {
+  const ms = Date.parse(String(raw || ''))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/* How long the RUN took, or has been going. Empty when nothing named its clock,
+   so the row is dropped rather than printed with a blank -- a labelled row with
+   no value reads as a broken render. */
+export function spawnCost(c: CallData, now: number): string {
+  if (!c.spawnT0) return ''
+  const end = c.spawnT1 || now
+  const ms = end - c.spawnT0
+  return ms > 0 ? durText(ms) : ''
+}
+
+/* `subagent.list` and `subagent.status` name the same states differently -- the
+   list says `run | ok | error | cancelled | queued | skipped`, the event says
+   `pending | running | completed | failed | cancelled`. Translated here rather
+   than by teaching `SPAWN_SETTLED` both, so a card holds one vocabulary and the
+   difference lives at the one boundary it crosses.
+
+   This was a real bug, and the test that should have caught it did not: its
+   fixture spoke the event's words where the server sends the list's, so a
+   restored card carried `ok`, `SPAWN_SETTLED` did not recognise it, and a run
+   that had ended days ago drew a live second line.
+
+   An unknown word settles rather than runs. The opposite default is what
+   produced the bug, and a restored card is a finished run far more often than
+   not. */
+const LIST_STATUS: Record<string, string> = {
+  run: 'running',
+  queued: 'pending',
+  ok: 'completed',
+  error: 'failed',
+  cancelled: 'cancelled',
+  skipped: 'cancelled',
+}
+
+const fromListStatus = (raw: unknown): string => LIST_STATUS[String(raw || '')] || 'completed'
+
+/* One `subagent.list` read for the whole conversation, shared by every restored
+   card in it. The promise is memoised rather than the rows, so two cards opened
+   in the same tick share one request. */
+let spawnRoster: Promise<SpawnListRow[]> | null = null
+
+/* Turn a restored card's task id into the record id its stream is read by.
+
+   A spawn record's directory is `<stamp>-<task_id>` (the manager's own
+   `make_call_id`), and the task id is what the tool's result sentence names --
+   stamped onto the transcript row as `spawn_task_id` by the server that writes
+   that sentence. So the row is found by suffix, the same match
+   ui-tui/src/domain/spawnRun.ts makes.
+
+   Called on open, not at restore: a transcript can hold a dozen delegated calls
+   and asking for all of them would be a dozen requests for detail nobody has
+   looked at -- the rule `hydrateDag` already follows.
+
+   The list also supplies the header a restored card could not otherwise draw: its
+   arguments hold no minted handle, so a resumed conversation named the agent and
+   never the instance. Nothing the card already knows is overwritten -- a live
+   card never comes here, and if one did, the event is the fresher word. */
+export function resolveSpawn(lane: Lane, c: CallData): void {
+  if (c.spawnId || !c.spawnTaskId || c.spawnAsked) return
+  const read = source().spawnList
+  if (!read) return
+  c.spawnAsked = true
+  if (!spawnRoster) spawnRoster = read()
+  const want = `-${c.spawnTaskId}`
+  spawnRoster.then((rows) => {
+    const row = (rows || []).find((r) => (r.kind || 'spawn') === 'spawn' && String(r.id || '').endsWith(want))
+    if (!row || !row.id) return
+    c.spawnId = String(row.id)
+    c.spawnAgent = c.spawnAgent || String(row.agent || '')
+    c.spawnInstance = c.spawnInstance || String(row.instance || '')
+    c.spawnLabel = c.spawnLabel || String(row.label || '')
+    c.spawnStatus = c.spawnStatus || fromListStatus(row.status)
+    c.spawnT0 = c.spawnT0 || msOfIso(row.started_at)
+    c.spawnT1 = c.spawnT1 || msOfIso(row.ended_at)
+    bump(lane, c)
+    readSpawn(lane, c)
+  }).catch(() => {
+    /* Asked again if the reader reopens the card, and the memoised promise goes
+       with it -- kept, every later card would inherit this one rejection. */
+    c.spawnAsked = false
+    spawnRoster = null
+  })
+}
+
+/* Read one spawned run's messages, once.
+
+   Called on a beat by the card that draws it, not by a store-owned timer: the
+   card's own mount decides when the read is worth making, so a run scrolled out
+   of the trail or a session left mid-run stops costing anything without a
+   reaper.
+
+   `reading` rather than a queue: a read slower than the beat is answered by the
+   next beat, and stacking them would multiply requests against a sub-agent that
+   is already the slow part. A failure clears the flag and keeps whatever the card
+   had -- the failure is about the read, not about the run. */
+export function readSpawn(lane: Lane, c: CallData): void {
+  const read = source().spawnRecord
+  if (!read || !c.spawnId || c.reading) return
+  c.reading = true
+  read(c.spawnId).then((rec) => {
+    c.reading = false
+    const msgs = (rec && rec.messages) || []
+    /* Length, not identity: the method rebuilds the list from the activity
+       collector on every call, so every answer is a fresh array and a reference
+       check would repaint on every beat. A stream only ever grows, and the last
+       row's own text moves as it streams -- so both are compared. */
+    if (msgs.length === c.stream.length && tailText(msgs) === tailText(c.stream)) return
+    c.stream = msgs
+    bump(lane, c)
+  }).catch(() => {
+    c.reading = false
+  })
+}
+
+/* The newest thing the run said, flattened to one line for the collapsed row.
+
+   Three sources in falling order of "is this what it is doing right now": the
+   message's own text, the thought it is forming, and failing both the tool it
+   just reached for. The third matters most -- a sub-agent spends most of a run
+   inside tool calls, where there is no text yet, and a tail that went blank
+   there would stop moving during exactly the stretch the reader is watching.
+
+   Scanned from the newest backwards rather than reading the last row: the last
+   row can be one with nothing to show yet, and taking it would blank a tail that
+   had been moving. */
+export function tailText(msgs: HistoryMessage[]): string {
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i] as HistoryMessage
+    const body = flat(m.text) || flat(m.reasoning_content) || flat(toolNames(m))
+    if (!body) continue
+    /* A tool's result named by the tool that produced it. The name alone is the
+       row before this one; what makes this row worth a line is that an answer
+       came back, and whose. */
+    return m.role === 'tool' && m.name ? `${m.name} · ${body}` : body
+  }
+  return ''
+}
+
+
+
+/* The calls one message reached for, named. Joined rather than counted: a name
+   says what is happening, `2 calls` does not. */
+function toolNames(m: HistoryMessage): string {
+  return (m.tool_calls || []).map((call) => call && call.name).filter(Boolean).join(', ')
+}
+
+/* `defence` and not a marker-stripping regex: the fence is nonce-tagged on both
+   ends precisely so a forged close cannot end it, and the one place that check
+   lives is `defence`. Without it the tail spent whole tool calls showing
+   `[BEGIN UNTRUSTED list_dir #7d8064e3 - everything below until the matching...]`
+   -- a boundary written for the model -- instead of what the run had found. */
+const flat = (v: unknown): string =>
+  (typeof v === 'string' ? defence(v).replace(/\s+/g, ' ').trim() : '')
+
+/* The header one spawn card carries: `Spawn <instance>@<agent>: <task_summary>`.
+
+   The event's values win over the model's arguments wherever it has landed. It
+   has to: a caller that names no `instance` has one minted for it, so the
+   arguments hold no handle at all while the run has a real one -- and the header
+   must name the handle the conversation can actually be resumed by. Before the
+   first frame the arguments are all there is, which is the whole reason for the
+   fallbacks rather than an empty header.
+
+   `agent` empty means the built-in loop, which the arguments spell as absent
+   rather than as a name. */
+export function spawnHead(c: CallData): { agent: string; instance: string; task: string } {
+  const a = c.args as { instance?: string; task?: string }
+  return {
+    agent: c.spawnAgent || String(spawnAgentOf(a) || '') || t('gui.deleg.self'),
+    instance: c.spawnInstance || String(a.instance || ''),
+    task: c.spawnLabel || c.label || String(a.task || '').slice(0, 160),
+  }
+}
+
+/* A spawn card is bound to its run through this, the same way a dag card is
+   bound through `dagByCall` -- and for the same reason: `subagent.status`
+   publishes on the delivery spine while the spawn's own tool row rides the turn
+   channel, so nothing orders the two and a card that lost the race would drop
+   every frame for the rest of the run.
+
+   Separate maps rather than one shared with dag, because the two event families
+   name different things by `tool_call_id`: sharing would let a graph's
+   announcement land on a spawn card that happened to be keyed the same.
+
+   No `dagPending`-style fallback here. Measured on this host, every
+   `subagent.status` frame carries `tool_call_id` and it matches the spawn
+   `tool.start` exactly, so there is nothing to guess -- and guessing is the bug
+   the dag comment above describes. A frame without one is dropped: a spawn drawn
+   on the wrong card is worse than one drawn with no stream. */
+const spawnByCall = new Map<string, { lane: Lane; call: CallData }>()
+/* What a run said before its card existed, per tool call. Bounded like
+   `dagEarly` and for the same reason: a card that never arrives would otherwise
+   buffer for the life of the page. */
+const spawnEarly = new Map<string, SubagentStatusLike[]>()
+
+/* A spawn card just appeared: it takes whatever announced itself while the row
+   was in flight. */
+function claimSpawn(lane: Lane, call: CallData): void {
+  if (!call.callId) return
+  spawnByCall.set(call.callId, { lane, call })
+  const early = spawnEarly.get(call.callId)
+  if (!early) return
+  spawnEarly.delete(call.callId)
+  early.forEach((p) => spawnFeed(p))
+}
+
+/* One lifecycle frame for a spawned run.
+
+   The identity lands from `pending`, before any record exists: `instance`,
+   `agent` and `label` are all on the first frame, which is what lets the card
+   name the run it is waiting on rather than showing a bare tool call. The record
+   id arrives with `running` -- that is what `subagent.context` reads, so it is
+   what opens the stream. */
+export function spawnFeed(p: SubagentStatusLike | null): void {
+  if (!p) return
+  const callId = p.tool_call_id ? String(p.tool_call_id) : ''
+  if (!callId) return
+  const owner = spawnByCall.get(callId)
+  if (!owner) {
+    const waiting = spawnEarly.get(callId)
+    if (waiting) {
+      if (waiting.length < EARLY_MAX) waiting.push(p)
+    } else {
+      spawnEarly.set(callId, [p])
+    }
+    return
+  }
+  const { lane, call } = owner
+  call.spawnAgent = String(p.agent || '') || call.spawnAgent
+  call.spawnInstance = String(p.instance || '') || call.spawnInstance
+  call.spawnLabel = String(p.label || '') || call.spawnLabel
+  call.spawnStatus = String(p.status || '') || call.spawnStatus
+  /* Only from `running` onward, and never unset: a terminal frame carries it
+     too, and the finished stream is read through the same id. */
+  if (p.call_id) call.spawnId = String(p.call_id)
+  if (p.started_at) call.spawnT0 = Number(p.started_at) || 0
+  if (p.ended_at) call.spawnT1 = Number(p.ended_at) || 0
+  bump(lane, call)
+}
+
 export function dagFeed(type: string, p: DagFeedPayload | null): void {
   if (!p) return
   const callId = p.tool_call_id ? String(p.tool_call_id) : ''
@@ -763,6 +1044,8 @@ function newCallData(
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
     open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
     callId: callId ? String(callId) : '',
+    spawnAgent: '', spawnInstance: '', spawnLabel: '', spawnStatus: '', spawnId: '',
+    spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0, stream: [], reading: false,
   }
   if (kind === 'dag') c.runTitle = String(a.task_summary || '')
   if (kind === 'spawn') {
@@ -895,10 +1178,14 @@ export function newStep(lane: Lane): StepHandle {
       const grew = seg.calls.length === 1
       seg.calls.push(c)
       if (kind === 'dag') claimRun(lane, c)
+      else if (kind === 'spawn') claimSpawn(lane, c)
       poke(lane)
       paintWork(lane, seg, grew)
       bumpList(lane)
-      return { done: (ok, res, ms, diff, truncated) => callDone(lane, seg, c, ok, res, ms, diff, truncated) }
+      return {
+        done: (ok, res, ms, diff, truncated) => callDone(lane, seg, c, ok, res, ms, diff, truncated),
+        spawnTask: (taskId) => { c.spawnTaskId = String(taskId || '') },
+      }
     },
     seal() {
       thinkDone()
@@ -1179,6 +1466,27 @@ export const callParts = (raw: unknown): { name: string; display: string } => {
 }
 
 export function history(lane: Lane, messages: HistoryMessage[]): void {
+  /* A different conversation, so a different roster -- but only on the lane that
+     IS one.
+
+     `subagent.list` is asked per session and the memo was not, so a card restored
+     in the second conversation searched the first one's rows, matched nothing,
+     and stayed unresolved for good: `spawnAsked` is set once. Cleared here rather
+     than keyed by a session id the store does not hold -- this is the call that
+     means "the transcript is now showing a different conversation", and the cards
+     it is about to build are new objects anyway, so the memo and the flags that
+     read it reset together.
+
+     `lane.main` is load-bearing. `agentPaintLane` replays through here as well,
+     four times, to draw a delegated run's own messages; clearing on those threw
+     the memo away every time a card's stream painted, and the second card opened
+     in one conversation read the list all over again. One read per conversation
+     is the contract, and this is what separates the two callers.
+
+     A reconnect replay of the same conversation does come through and pays one
+     extra read, which is the right price: the list may have grown while the
+     socket was down. */
+  if (lane.main) spawnRoster = null
   const src = source()
   deliveries.reset()
   let toolRun: StepHandle | null = null
@@ -1349,6 +1657,11 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
       const hit = calls.get(String(m.tool_call_id || '')) || { name: '', args: null }
       const parts = callParts(hit.name || m.name || 'tool')
       const h = toolRun.tool(parts.name, hit.args || null, parts.display || null)
+      /* Before `done`, which is when a spawn card first has anything to resolve:
+         the server stamps the run's task id on the result row it wrote the
+         sentence for, and it is the only thread a restored card has back to the
+         record. */
+      if (m.spawn_task_id && h.spawnTask) h.spawnTask(String(m.spawn_task_id))
       const preview = src.clean(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
       h.done(src.okOf(m.name || '', preview), preview, m.duration_ms != null ? m.duration_ms : 0, m.diff)
     }
@@ -1500,6 +1813,9 @@ export function _resetForTests(): void {
   lanes.clear()
   dagLive.clear()
   dagByCall.clear()
+  spawnByCall.clear()
+  spawnEarly.clear()
+  spawnRoster = null
   dagEarly.clear()
   dagPending = null
   segId = 0
