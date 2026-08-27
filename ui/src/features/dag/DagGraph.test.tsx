@@ -29,8 +29,6 @@ const chain = (count: number): DagNode[] => Array.from({ length: count }, (_, i)
 
 let host: HTMLDivElement
 let root: Root
-let textPrototype: object
-let textMeasure: PropertyDescriptor | undefined
 
 beforeEach(() => {
   window.RavenShell = {
@@ -38,13 +36,6 @@ beforeEach(() => {
     confirmAsk: () => {},
     showPage: () => {},
   } satisfies Shell
-  const probe = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-  textPrototype = Object.getPrototypeOf(probe) as object
-  textMeasure = Object.getOwnPropertyDescriptor(textPrototype, 'getComputedTextLength')
-  Object.defineProperty(textPrototype, 'getComputedTextLength', {
-    configurable: true,
-    value(this: Element): number { return (this.textContent || '').length * 10 },
-  })
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -53,15 +44,13 @@ beforeEach(() => {
 afterEach(() => {
   act(() => { root.unmount() })
   delete window.RavenShell
-  if (textMeasure) Object.defineProperty(textPrototype, 'getComputedTextLength', textMeasure)
-  else delete (textPrototype as { getComputedTextLength?: () => number }).getComputedTextLength
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
 
-const draw = (nodes: DagNode[], surface: 'card' | 'sheet', active = true): void => {
+const draw = (nodes: DagNode[], surface: 'card' | 'sheet'): void => {
   act(() => {
-    root.render(<DagGraph active={active} dims={surface === 'card' ? CARD : SHEET} nodes={nodes}
+    root.render(<DagGraph dims={surface === 'card' ? CARD : SHEET} nodes={nodes}
       now={1000} onPick={() => {}} surface={surface} />)
   })
 }
@@ -88,12 +77,12 @@ describe('the shared DAG renderer', () => {
        model was required to write about the step. The id stays in the tooltip
        and in the node panel's fields, where a dependency and a run dir are
        keyed by it. */
-    const nodes = [{ ...node('daily-digest-36e275-scan'), node_summary: 'read the pages' }]
+    const nodes = [{ ...node('daily-digest-36e275-scan'), node_summary: 'read pages' }]
     draw(nodes, 'sheet')
 
-    expect(host.querySelector('.id')!.textContent).toBe('read the pages')
+    expect(host.querySelector('.id')!.textContent).toBe('read pages')
     expect(host.querySelector('.nd title')!.textContent)
-      .toBe('read the pages \u00b7 daily-digest-36e275-scan \u00b7 raven')
+      .toBe('read pages \u00b7 daily-digest-36e275-scan \u00b7 raven')
     /* Set in the reading face rather than the key face: a sentence in mono reads
        as an identifier. */
     expect(host.querySelector('.id')!.getAttribute('class')).toBe('id prose')
@@ -107,26 +96,45 @@ describe('the shared DAG renderer', () => {
     expect(host.querySelector('.id')!.getAttribute('class')).toBe('id')
   })
 
-  it('fits the card and sheet labels through the same measured pass', () => {
-    const nodes = [node('project-tag-fetch-metadata-and-normalise'), node('project-tag-parse')]
-    draw(nodes, 'card')
-    const card = [...host.querySelectorAll('.id')].map((el) => el.textContent || '')
-    expect(card[0]).not.toContain('project-tag-')
-    expect(card[0]!.endsWith('…')).toBe(true)
-    expect(card[1]).toBe('parse')
+  it('gives the label the width of its own box to end in, on both surfaces', () => {
+    /* The node's width IS the truncation rule. It used to be a measured pass
+       whose answer was written down, so a graph drawn where nothing has a
+       width -- inside a folded turn, or before its font arrived -- kept an
+       answer taken in the dark and its labels ran past the box for the rest of
+       the session. Nothing is measured now: the text is laid out inside the
+       box and cut by it. */
+    const long = { ...node('scan'), node_summary: 'read every page and say which two matter' }
+    draw([long], 'card')
+    const box = host.querySelector('.nd foreignObject') as SVGForeignObjectElement
+    expect(box.getAttribute('width')).toBe(String(CARD.W - 29 - 9))
+    expect(box.getAttribute('height')).toBe(String(CARD.H))
+    /* Whole, because it is the box that ends it. */
+    expect(host.querySelector('.id')!.textContent).toBe('read every page and say which two matter')
 
-    draw(nodes, 'sheet')
-    const sheet = [...host.querySelectorAll('.id')].map((el) => el.textContent || '')
-    expect(sheet[0]).not.toContain('project-tag-')
-    expect(sheet[0]!.endsWith('…')).toBe(true)
-    expect(sheet[1]).toBe('parse')
+    draw([long], 'sheet')
+    const wide = host.querySelector('.nd foreignObject') as SVGForeignObjectElement
+    expect(wide.getAttribute('width')).toBe(String(SHEET.W - 31 - 11))
+    expect(host.querySelector('.id')!.textContent).toBe('read every page and say which two matter')
   })
 
-  it('waits to measure a hidden card until its detail is open', () => {
-    const nodes = [node('project-tag-fetch-metadata'), node('project-tag-parse')]
-    draw(nodes, 'card', false)
-    expect(host.querySelector('.id')!.textContent).toBe('project-tag-fetch-metadata')
-    draw(nodes, 'card', true)
-    expect(host.querySelector('.id')!.textContent).not.toContain('project-tag-')
+  it('strips the namespace a graph of long ids all share, on both surfaces', () => {
+    /* The one cut that is not the box's to make: a playbook gives every node
+       the same twenty-character head, and the box cuts from the tail -- the
+       only part that tells them apart. */
+    const nodes = [node('project-tag-fetch-metadata-and-normalise'), node('project-tag-parse')]
+    draw(nodes, 'card')
+    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
+      .toEqual(['fetch-metadata-and-normalise', 'parse'])
+
+    draw(nodes, 'sheet')
+    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
+      .toEqual(['fetch-metadata-and-normalise', 'parse'])
+  })
+
+  it('leaves a graph of short ids their namespace', () => {
+    const nodes = [node('run-a12-ok'), node('run-a12-no')]
+    draw(nodes, 'card')
+    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
+      .toEqual(['run-a12-ok', 'run-a12-no'])
   })
 })

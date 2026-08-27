@@ -1,15 +1,17 @@
-/* What each node label should read, given the room it has.
+/* What each node label should read.
  *
- * Split out of the sheet's builder, where the deciding and the measuring were
+ * Split out of the sheet's builder, where the deciding and the drawing were
  * welded together -- which is the reason the transcript's dag card could not
  * reuse it and drew raw ids that ran past their box instead.
  *
- * The measuring stays with the caller, because only the caller knows what a
- * string is going to be wide in. It arrives as a function rather than as an
- * array of widths: truncation asks about strings that do not exist yet (each
- * candidate as characters come off the tail), so a table of the full labels'
- * widths cannot answer it without assuming a fixed advance per character. The
- * labels are monospace today and that assumption would hold today.
+ * Only the namespace decision lives here. Where a line actually ENDS is the
+ * node box's business and CSS answers it, at the real width, in the real font,
+ * every time either changes. This file used to answer that too, by measuring
+ * each candidate in the document and cutting until it fitted, and the answer
+ * was a string the render then cached: a graph measured before its font arrived
+ * or inside a folded ancestor -- where nothing has a width -- kept an answer
+ * taken in the dark for the rest of the session, and its labels ran past the
+ * box and across the node beside them.
  */
 
 /* The longest prefix every id shares, cut back to a separator so a label never
@@ -28,37 +30,32 @@ export function sharedPrefix(ids: string[]): string {
   return ids.every((s) => s.length > prefix.length) ? prefix : ''
 }
 
-/* Three properties, all of them deliberate and none of them free:
+/* Roughly how wide a label sets, without asking the document: a character from
+   the CJK and kana ranges takes about one em, everything else about six tenths
+   of one in the faces these are drawn in.
+
+   Rough is enough, because the only question it answers is whether the labels
+   are long enough to be worth stripping a namespace from. Being a few percent
+   out moves that decision at the margin; it cannot leave a label overflowing,
+   which is what a measurement used to be relied on for. */
+export function roughWidth(label: string, em: number): number {
+  let w = 0
+  for (const ch of label) w += (ch.codePointAt(0) as number) >= 0x1100 ? em : em * 0.6
+  return w
+}
+
+/* Two properties, both deliberate:
 
    - the shared prefix is decided for the WHOLE graph at once. A playbook
      namespaces every node with its own name and run tag, so the first twenty-odd
-     characters are identical across the graph, and cutting from the tail removes
+     characters are identical across the graph, and the box cuts from the tail --
      the only part that tells the nodes apart. Applied per label, one node would
      keep its namespace while its neighbour lost it, and the labels would stop
-     being comparable -- which is what a reader is doing with them.
-   - it fires only when something actually overflows. An id that fits is shown
-     as its author wrote it.
-   - the tail truncation re-measures each candidate rather than dividing a width
-     by a character count, so it is right for a proportional face too. */
-export function fitLabels(
-  ids: string[],
-  avail: number,
-  measure: (label: string, index: number) => number,
-): string[] {
-  if (!ids.some((id, i) => measure(id, i) > avail)) return [...ids]
-  const prefix = sharedPrefix(ids)
-  const cut = prefix ? ids.map((id) => id.slice(prefix.length)) : [...ids]
-  return cut.map((label, i) => {
-    /* Measures what is on screen, not the next candidate: a label that fits is
-       left alone even when one more character would not fit, which is what the
-       sheet has always done. Getting this backwards puts an ellipsis on a label
-       that had room. */
-    let s = label
-    let shown = label
-    while (s.length > 1 && measure(shown, i) > avail) {
-      s = s.slice(0, -1)
-      shown = s + '…'
-    }
-    return shown
-  })
+     being comparable, which is what a reader is doing with them.
+   - it fires only when something is long enough to be cut. Ids that all fit are
+     shown as their author wrote them, namespace and all. */
+export function trimShared(labels: string[], room: number, em: number): string[] {
+  if (!labels.some((label) => roughWidth(label, em) > room)) return [...labels]
+  const prefix = sharedPrefix(labels)
+  return prefix ? labels.map((label) => label.slice(prefix.length)) : [...labels]
 }

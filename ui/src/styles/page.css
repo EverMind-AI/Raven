@@ -891,19 +891,33 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .daggraph .nd:focus-visible rect,
 .daggraph .nd[data-sel="1"] rect { stroke: var(--amber); stroke-width: 1.2; }
 .daggraph .nd[data-sel="1"] rect { fill: color-mix(in oklab, var(--amber) 6%, var(--surface)); }
+/* The node's two lines, laid out inside the box instead of drawn beside it.
+   That is what binds the text to the node: the label is given the box's own
+   width, and where it ends is `text-overflow` reading the real width in the
+   real font, not a number something measured once. Clicks and hover belong to
+   the node, so they pass straight through to the group under this. */
+.daggraph .nd .lbl {
+  height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  min-width: 0; overflow: hidden; pointer-events: none;
+}
+.daggraph .nd .ln { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .daggraph .nd .id {
-  font-size: var(--dag-id-size); fill: var(--text); font-weight: 600; font-family: var(--mono);
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 600 var(--dag-id-size)/1.3 var(--mono); color: var(--text);
 }
 /* A node titled by its summary is titled by a sentence, and a sentence set in
    the key face reads as a key. The mono stays for the id, which is one. */
-.daggraph .nd .id.prose { font-family: inherit; font-weight: 600; }
-.daggraph .nd .ag { font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono); }
+.daggraph .nd .id.prose { font-family: inherit; }
+.daggraph .nd .ag {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: var(--dag-meta-size)/1.3 var(--mono); color: var(--faint);
+}
 .daggraph .nd .tm {
-  font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono);
+  flex: none; font: var(--dag-meta-size)/1.3 var(--mono); color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
 .daggraph .nd .workv { color: var(--amber); }
-.daggraph .nd[data-st="pending"] .id { fill: var(--muted); }
+.daggraph .nd[data-st="pending"] .id { color: var(--muted); }
 .daggraph .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
 .daggraph .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
 .daggraph .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }

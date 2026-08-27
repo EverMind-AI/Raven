@@ -91,7 +91,7 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
           <Glyph d={CROSS} />
         </button>
       </div>
-      <DagGraph active={host.isConnected} dims={SHEET} nodes={nodes} now={Date.now()} surface="sheet"
+      <DagGraph dims={SHEET} nodes={nodes} now={Date.now()} surface="sheet"
         selectedId={sel && sel.run_id === d.run_id ? sel.node : null}
         onPick={(n) => ds<TranscriptSource>('transcript').openDagNode?.(d.run_id, n.id)} />
     </>
