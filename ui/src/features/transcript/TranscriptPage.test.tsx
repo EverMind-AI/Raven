@@ -1453,6 +1453,151 @@ describe('transcript island, language', () => {
 })
 
 describe('transcript island, the agent stage', () => {
+  it('reads a run the same way whether it arrives whole or in slices', () => {
+    /* The pane polls: each paint hands over only what arrived since the last
+       one. "Is this the turn's answer" is a question about what comes AFTER a
+       message, so answered from inside one slice it is answered wrong -- the
+       last assistant message of every slice looked final, and a run came out
+       as a column of finished answers, one per poll, each with its own copy
+       button, where the reader should have seen narration folded under the
+       work it introduced. */
+    const t0 = Date.now() - 90000
+    const msgs = [
+      { role: 'user', text: 'scan social', timestamp: iso(t0) },
+      { role: 'assistant', text: 'Let me review the memory records.', timestamp: iso(t0 + 1000) },
+      { role: 'tool', name: 'web_fetch', text: 'result a', tool_call_id: 'c1' },
+      { role: 'assistant', text: 'The memory files are not written yet.', timestamp: iso(t0 + 2000) },
+      { role: 'tool', name: 'web_fetch', text: 'result b', tool_call_id: 'c2' },
+      { role: 'assistant', text: 'Now I have rich data. Let me compile.', timestamp: iso(t0 + 3000) },
+      { role: 'tool', name: 'web_fetch', text: 'result c', tool_call_id: 'c3' },
+      { role: 'assistant', text: 'Here is the digest.', timestamp: iso(t0 + 4000) },
+    ]
+    const paint = (box: HTMLElement, upto: number, status: string, key: string, reset = false): void => {
+      act(() => {
+        mount.agentStage(box, { status, messages: msgs.slice(0, upto) }, { key, reset })
+      })
+    }
+    const answers = (box: HTMLElement): (string | null)[] =>
+      [...box.querySelectorAll('.answer .prose')].map((n) => n.textContent)
+
+    const whole = document.createElement('div')
+    document.body.appendChild(whole)
+    paint(whole, msgs.length, 'ok', 'whole', true)
+
+    const polled = document.createElement('div')
+    document.body.appendChild(polled)
+    paint(polled, 2, 'run', 'polled', true)
+    paint(polled, 4, 'run', 'polled')
+    paint(polled, 6, 'run', 'polled')
+    paint(polled, msgs.length, 'ok', 'polled')
+
+    /* One answer, and it is the run's last words -- not its first slice's. */
+    expect(answers(whole)).toEqual(['Here is the digest.'])
+    expect(answers(polled)).toEqual(answers(whole))
+  })
+
+  it('reads a run the same way when its polls land after a tool result', () => {
+    /* The runtime records a tool result as soon as it has one, before the next
+       model round, so a poll lands on a snapshot whose last row is that
+       result. The narration above it is then the last thing said in the slice
+       and nothing follows it to say otherwise -- committed as the turn's
+       answer, it stood beside the real answer a round later, two finished
+       answers for one turn. */
+    const t0 = Date.now() - 90000
+    const msgs = [
+      { role: 'user', text: 'scan social', timestamp: iso(t0) },
+      { role: 'assistant', text: 'Let me review the memory records.', timestamp: iso(t0 + 1000) },
+      { role: 'tool', name: 'web_fetch', text: 'result a', tool_call_id: 'c1' },
+      { role: 'assistant', text: 'The memory files are not written yet.', timestamp: iso(t0 + 2000) },
+      { role: 'tool', name: 'web_fetch', text: 'result b', tool_call_id: 'c2' },
+      { role: 'assistant', text: 'Here is the digest.', timestamp: iso(t0 + 3000) },
+    ]
+    const paint = (box: HTMLElement, upto: number, status: string, key: string, reset = false): void => {
+      act(() => {
+        mount.agentStage(box, { status, messages: msgs.slice(0, upto) }, { key, reset })
+      })
+    }
+    const answers = (box: HTMLElement): (string | null)[] =>
+      [...box.querySelectorAll('.answer .prose')].map((n) => n.textContent)
+
+    const whole = document.createElement('div')
+    document.body.appendChild(whole)
+    paint(whole, msgs.length, 'ok', 'tool-whole', true)
+
+    const polled = document.createElement('div')
+    document.body.appendChild(polled)
+    /* Every poll but the last ends on a tool result. */
+    paint(polled, 3, 'run', 'tool-polled', true)
+    paint(polled, 5, 'run', 'tool-polled')
+    paint(polled, msgs.length, 'ok', 'tool-polled')
+
+    expect(answers(whole)).toEqual(['Here is the digest.'])
+    expect(answers(polled)).toEqual(answers(whole))
+  })
+
+  const T0 = Date.now() - 90000
+  const SETTLED = [
+    { role: 'user', text: 'scan social', timestamp: iso(T0) },
+    { role: 'assistant', text: 'Here is the digest.', timestamp: iso(T0 + 1000) },
+  ]
+  const ask2 = { role: 'user', text: 'now the weekly one', timestamp: iso(T0 + 5000) }
+  const pane = (key: string): HTMLElement => {
+    const box = document.createElement('div')
+    box.dataset.key = key
+    document.body.appendChild(box)
+    return box
+  }
+  const paintPane = (box: HTMLElement, messages: HistoryMessage[], status: string, reset = false): void => {
+    act(() => {
+      mount.agentStage(box, { status, messages }, { key: String(box.dataset.key), reset })
+    })
+  }
+
+  it('does not redraw a settled turn when the next question arrives', () => {
+    /* A pane that stays open across turns is handed the whole conversation
+       every poll. The hold walks back to the last thing said, and with a second
+       question in and nothing said for it yet, that is the PREVIOUS turn's
+       answer -- already committed and on screen. Held from there, it and the
+       new question were drawn a second time underneath themselves, until the
+       model finally said something. */
+    const box = pane('twoturn')
+    paintPane(box, SETTLED, 'ok')
+    paintPane(box, [...SETTLED, ask2], 'run')
+
+    expect([...box.querySelectorAll('.answer .prose')].map((n) => n.textContent))
+      .toEqual(['Here is the digest.'])
+    expect(box.querySelectorAll('.ask')).toHaveLength(2)
+  })
+
+  it('holds nothing from a settled turn when the pane opens mid-question', () => {
+    /* The same reading, on the paint that has committed nothing yet: switching
+       to an instance repaints its history from scratch, and the search would
+       walk back past the new question into the last turn's answer. Nothing
+       there is unsettled, so nothing there should be held -- what is held is
+       redrawn every poll, which is a settled answer flickering under a question
+       that has not been answered. Node identity is what says which side of the
+       line a row is on. */
+    const box = pane('mid')
+    paintPane(box, [...SETTLED, ask2], 'run', true)
+    const drawn = box.querySelector('.answer .prose')
+    paintPane(box, [...SETTLED, ask2], 'run')
+
+    expect(box.querySelector('.answer .prose')).toBe(drawn)
+  })
+
+  it('does not draw an answer twice when the record loses a row', () => {
+    /* An instance pane paints the reader's unsent line optimistically and drops
+       it again when the real message lands, so a poll can carry FEWER messages
+       than the last one committed. The hold then starts behind what is already
+       on screen, and everything from there is drawn a second time. */
+    const box = pane('shrink')
+    paintPane(box, [...SETTLED, ask2], 'ok')
+    paintPane(box, SETTLED, 'run')
+
+    expect([...box.querySelectorAll('.answer .prose')].map((n) => n.textContent))
+      .toEqual(['Here is the digest.'])
+  })
+
   it('paints a running record with the glyph, redrawing the streaming answer in place', () => {
     const box = document.createElement('div')
     document.body.appendChild(box)
