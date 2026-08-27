@@ -6,7 +6,9 @@ declaration.
 
 from __future__ import annotations
 
+import contextlib
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -48,6 +50,53 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Stash the real exit status so pytest_unconfigure can preserve it."""
     session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
+
+
+@contextlib.contextmanager
+def stopping_skill_watchers() -> Iterator[None]:
+    """Stop every SKILL.md watcher started inside the block.
+
+    ``LocalSkillCatalog`` starts one unless the caller passes
+    ``start_watcher=False``, and the daemon thread it starts holds a strong
+    reference back to the catalog through the ``on_change`` bound method -- so
+    nothing collects it when the test that built it returns. The catalog says as
+    much in its own comment, and every short-lived *production* consumer already
+    passes the flag; a test is a short-lived consumer that never did.
+
+    Tracking rather than suppressing: the watcher still starts, so a test that
+    asserts on watcher behaviour keeps working and a production path that
+    regresses into starting one is still visible. Only the cleanup is added.
+    """
+    from raven.memory_engine.skill_local.watcher import SkillFileWatcher
+
+    started: list[SkillFileWatcher] = []
+    real_start = SkillFileWatcher.start
+
+    def _tracking_start(self: SkillFileWatcher) -> bool:
+        ok = real_start(self)
+        if ok:
+            started.append(self)
+        return ok
+
+    SkillFileWatcher.start = _tracking_start  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        SkillFileWatcher.start = real_start  # type: ignore[method-assign]
+        for watcher in started:
+            watcher.stop()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_skill_watchers() -> Iterator[None]:
+    """Keep watcher threads from accumulating across the session.
+
+    Left alone this is not a slow leak: six of the catalog-building test files
+    finish with 81 live watcher threads between them, and a full xdist worker
+    carried hundreds, each holding its own inotify handles.
+    """
+    with stopping_skill_watchers():
+        yield
 
 
 @pytest.fixture(autouse=True)
