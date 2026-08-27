@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from raven.acp import protocol
+from raven.acp.loops import AcpLoops
 from raven.acp.redact import redact
 from raven.acp.tool_kinds import locations, title_for, tool_kind
-from raven.agent.spine_runner import AgentTurnRunner
 from raven.spine import (
     Deliverable,
     MediaOut,
@@ -58,17 +58,16 @@ from raven.spine.events import TurnEvent
 from raven.spine.runner import Drain, Emit, TurnOutcome
 from raven.spine.scheduler import TurnHandle
 
-USER_POOL = 1
-"""The ACP user pool is fixed at 1 and MUST NOT be made configurable.
+DEFAULT_USER_POOL = 1
+"""Concurrent user turns a connection runs when the caller names no size.
 
-Not a conservative default -- the only correct value for the current AgentLoop
-(plan §6 decision B): ``WebSearchTool`` / ``WebFetchTool`` keep their per-turn
-state (saturation, evidence round, seen sets, retry budgets) as plain instance
-attributes on shared tool objects, and ``run_turn`` resets them at every turn
-start. Two concurrent turns on one loop would silently clear each other's
-in-flight state -- no error, just a polluted generated distribution that
-``arm_env.json`` cannot record (AGENTS.md §0.2). Restoring parallelism means
-one AgentLoop per session, not a bigger semaphore.
+One, because a caller that has not thought about it may still be serving every
+session from a single engine, and two concurrent turns on one engine silently
+clear each other's in-flight tool state (saturation, evidence round, seen sets,
+retry budgets are instance attributes that ``run_turn`` resets at turn start)
+-- no error, just a polluted generated distribution that ``arm_env.json``
+cannot record (AGENTS.md §0.2). Anything above one therefore requires a
+per-session registry, which :func:`build_acp` enforces rather than trusts.
 """
 
 MAX_RESULT_PREVIEW = 64 * 1024
@@ -110,6 +109,15 @@ class AcpSessions:
 
     def get(self, session_id: str) -> AcpSession | None:
         return self._sessions.get(session_id)
+
+    def remove(self, session_id: str) -> None:
+        """Un-register a session whose opening failed.
+
+        Only for the rollback: a session left in the registry without an engine
+        is one whose next prompt fails mid-turn, which is the failure the
+        engine-on-open ordering exists to avoid.
+        """
+        self._sessions.pop(session_id, None)
 
     def sessions(self) -> tuple[AcpSession, ...]:
         return tuple(self._sessions.values())
@@ -171,8 +179,13 @@ class AcpSessions:
                 session.future.set_result("cancelled")
 
 
-class AcpTurnRunner(AgentTurnRunner):
+class AcpTurnRunner:
     """Runs the turn NON-streaming and captures the rich per-turn usage.
+
+    Not an ``AgentTurnRunner`` subclass any more: that base pins exactly one
+    engine for the runner's lifetime, and this one resolves the engine per turn
+    from the session registry. ``TurnRunner`` is a structural Protocol, so
+    ``run`` is the whole contract.
 
     ``stream=False`` is the answer-semantics decision, not a simplification.
     The consuming raven accumulates every ``agent_message_chunk`` as the
@@ -193,14 +206,15 @@ class AcpTurnRunner(AgentTurnRunner):
     ``tool_call_update`` for a toolCallId no ``tool_call`` introduced.
     """
 
-    def __init__(self, agent_loop: Any, usages: dict[str, dict[str, Any]]) -> None:
-        super().__init__(agent_loop, stream=False)
+    def __init__(self, loops: AcpLoops, usages: dict[str, dict[str, Any]]) -> None:
+        self._loops = loops
         self._usages = usages
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        agent_loop = await self._loops.get(cid)
         usage_sink: dict[str, Any] = {}
-        outcome = await self._loop.run_turn(req, emit, drain, stream=False, usage_sink=usage_sink)
+        outcome = await agent_loop.run_turn(req, emit, drain, stream=False, usage_sink=usage_sink)
         self._usages[cid] = dict(usage_sink)
         return outcome
 
@@ -224,11 +238,20 @@ class AcpOutlet:
     raven would read it as answer text), and MediaOut (named by path).
     """
 
-    def __init__(self, channel: str, emit: Callable[[dict[str, Any]], None], *, cwd: str | None = None) -> None:
+    def __init__(
+        self,
+        channel: str,
+        emit: Callable[[dict[str, Any]], None],
+        *,
+        cwd_for: Callable[[str], str | None] | None = None,
+    ) -> None:
         self.name = channel
         self.capabilities = Capabilities(streaming=True)
         self._emit = emit
-        self._cwd = cwd
+        # Resolved per session, not per connection: each session's file tools
+        # are rooted in its own subtree, so one anchor for the whole connection
+        # would report every path against the wrong directory.
+        self._cwd_for = cwd_for
 
     def update(self, session_id: str, update: dict[str, Any]) -> None:
         self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
@@ -243,7 +266,7 @@ class AcpOutlet:
                 self.update(cid, _text_chunk("agent_thought_chunk", out.content))
         elif isinstance(out, ToolEvent):
             if out.phase is ToolPhase.START:
-                self.update(cid, self._tool_call(out))
+                self.update(cid, self._tool_call(out, cid))
             else:
                 self.update(cid, self._tool_call_update(out))
         elif isinstance(out, Text):
@@ -269,7 +292,7 @@ class AcpOutlet:
             return
         self.update(stream_id, _text_chunk("agent_message_chunk", delta))
 
-    def _tool_call(self, ev: ToolEvent) -> dict[str, Any]:
+    def _tool_call(self, ev: ToolEvent, session_id: str) -> dict[str, Any]:
         # status "in_progress", not "pending": by the time this event exists the
         # call is running, and a pending row that never changes reads as a hang.
         # rawInput is deliberately absent -- for exec it is the whole command
@@ -282,7 +305,7 @@ class AcpOutlet:
             "kind": tool_kind(ev.name or None),
             "status": "in_progress",
         }
-        found = locations(ev.arguments, self._cwd)
+        found = locations(ev.arguments, self._cwd_for(session_id) if self._cwd_for else None)
         if found:
             update["locations"] = found
         return update
@@ -337,6 +360,7 @@ def _make_acp_sink(
     sessions: AcpSessions,
     usages: dict[str, dict[str, Any]],
     channel: str,
+    loops: AcpLoops,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """The scheduler's EventSink: deliverables route through the hub, and a
     turn's ending settles its session's prompt after the render barrier, so
@@ -345,6 +369,13 @@ def _make_acp_sink(
     async def _finish(conversation_id: str) -> None:
         await hub.close_stream(conversation_id)
         await hub.wait_idle(channel)
+
+    def _settle(conversation_id: str, stop: str) -> None:
+        sessions.settle(conversation_id, stop)
+        # A settled session is idle, and idle is the only state the engine cap
+        # can evict from. This is the one moment the registry can learn that a
+        # turn it had to keep an over-cap engine for is over.
+        loops.reclaim()
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnEnded):
@@ -358,7 +389,7 @@ def _make_acp_sink(
             update = _usage_update(usage)
             if update is not None:
                 outlet.update(cid, update)
-            sessions.settle(cid, "end_turn")
+            _settle(cid, "end_turn")
             return
         if isinstance(event, TurnFailed):
             cid = event.conversation_id or ""
@@ -367,7 +398,7 @@ def _make_acp_sink(
             if sessions.get(cid) is None:
                 return
             if event.cancelled:
-                sessions.settle(cid, "cancelled")
+                _settle(cid, "cancelled")
                 return
             # The failure is content, never a JSON-RPC error: an error in reply
             # to a turn-shaped request makes clients tear down the whole turn.
@@ -377,7 +408,7 @@ def _make_acp_sink(
             # answered it, this text would land on a turn that is over.
             if sessions.pending(cid):
                 outlet.say(cid, redact(f"The turn failed: {event.error or 'internal error'}"))
-            sessions.settle(cid, "end_turn")
+            _settle(cid, "end_turn")
             return
         if isinstance(event, TurnStarted):
             # The session/prompt request is itself the record that a turn began.
@@ -388,39 +419,55 @@ def _make_acp_sink(
 
 
 def build_acp(
-    agent_loop: Any,
+    loops: AcpLoops,
     emit: Callable[[dict[str, Any]], None],
     *,
     channel: str = "acp",
-    workspace: str | None = None,
+    user_pool: int = DEFAULT_USER_POOL,
 ) -> tuple[Scheduler, DeliveryHub, AcpSessions, Callable[[], Awaitable[None]]]:
     """Wire the spine pieces an ACP turn flows through.
 
     Returns the scheduler (``session/prompt`` submits to it), the hub, the
     session registry, and a ``teardown`` the server awaits on exit. ``emit``
-    writes one finished frame; ``workspace`` anchors relative tool-call paths
-    for ``locations``.
+    writes one finished frame; ``loops`` resolves each turn's engine and anchors
+    that session's relative tool-call paths for ``locations``.
     """
+    if user_pool > 1 and not loops.per_session:
+        # Fail at startup rather than serve turns that quietly corrupt each
+        # other: a pool above one on a single shared engine is the one
+        # misconfiguration that produces no error and no record of itself.
+        raise ValueError(
+            f"user_pool={user_pool} needs one engine per session; "
+            "this registry serves a single shared engine, on which concurrent "
+            "turns would clear each other's in-flight tool state"
+        )
     hub = DeliveryHub()
-    outlet = AcpOutlet(channel, emit, cwd=workspace)
+    outlet = AcpOutlet(channel, emit, cwd_for=loops.cwd_for)
     hub.register(outlet)
     sessions = AcpSessions()
+    # The cap may not evict an engine whose session is mid-turn; only the
+    # session registry knows which those are.
+    loops.set_busy(sessions.pending)
     usages: dict[str, dict[str, Any]] = {}
     scheduler = Scheduler(
-        AcpTurnRunner(agent_loop, usages),
-        OriginPools(user=USER_POOL, system=1),
-        _make_acp_sink(hub, outlet, sessions, usages, channel),
+        AcpTurnRunner(loops, usages),
+        OriginPools(user=user_pool, system=1),
+        _make_acp_sink(hub, outlet, sessions, usages, channel, loops),
     )
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=0.0)
         await hub.aclose()
+        # Last, and only after the scheduler has stopped: closing an engine
+        # drains its memory writes, and a turn still running would be adding to
+        # them.
+        await loops.aclose()
 
     return scheduler, hub, sessions, teardown
 
 
 __all__ = [
-    "USER_POOL",
+    "DEFAULT_USER_POOL",
     "AcpOutlet",
     "AcpSession",
     "AcpSessions",

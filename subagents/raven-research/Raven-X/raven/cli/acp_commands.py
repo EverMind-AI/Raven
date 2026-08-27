@@ -8,25 +8,37 @@ the logs somewhere else, opening stdin as a stream, and making a crash visible
 bytes on stdout must be frames.
 
 The protocol itself is :mod:`raven.acp.server`, which this hands the channel
-and the engine factory to.
+and the session-engine registry to.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import re
 import sys
 import threading
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import typer
 from loguru import logger
 
+from raven.acp.loops import AcpLoops
 from raven.acp.server import install_crash_handlers, serve
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.cli._log_file import redirect_loguru_to_file
 
 _THREAD_CHUNK = 64 * 1024
+
+_SAFE_LEAF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+"""A session id fit to be one directory name: no separators, no leading dot."""
+
+_SESSION_FILES_DIR = "acp_workspaces"
+"""Parent of the per-session file roots, under the shared workspace."""
 
 acp_app = typer.Typer(name="acp", help="Serve Raven-X as an ACP agent over stdio.")
 
@@ -68,17 +80,22 @@ async def _serve(config: str | None = None) -> None:
     install_crash_handlers()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)
-        agent_loop = _build_acp_agent_loop(config)
-        await _start_backend(agent_loop)
+        shared = build_shared(config)
+        await _start_backend(shared.backend)
+        loops = AcpLoops(
+            lambda conversation: build_loop(shared, conversation),
+            session_manager=shared.session_manager,
+            max_loops=shared.acp.max_loops,
+        )
         try:
             async with _open_stdin() as reader:
-                await serve(reader, out, agent_loop_factory=lambda: agent_loop)
+                await serve(reader, out, loops=loops, user_pool=shared.acp.user_pool)
             logger.info("acp: exiting")
         finally:
-            await _stop_backend(agent_loop)
+            await _stop_backend(shared.backend)
 
 
-async def _start_backend(agent_loop) -> None:
+async def _start_backend(backend) -> None:
     """Start the memory backend before the first frame, like every surface does.
 
     ``maybe_build_memory_backend`` hands back an unstarted backend, and start()
@@ -91,7 +108,6 @@ async def _start_backend(agent_loop) -> None:
     """
     from raven.memory_engine.backend import MemoryServiceUnavailableError
 
-    backend = getattr(agent_loop, "backend", None)
     if backend is None:
         return
     try:
@@ -106,14 +122,13 @@ async def _start_backend(agent_loop) -> None:
         logger.exception("acp: memory backend start failed; continuing with degraded memory")
 
 
-async def _stop_backend(agent_loop) -> None:
+async def _stop_backend(backend) -> None:
     """Flush the backend's teardown aggregates on the clean-exit path.
 
     Under the consuming raven the server usually dies by SIGKILL and never gets
     here; this is for the stdin-close exit, where stop() surfaces the session's
     fail-open store/recall losses in the log.
     """
-    backend = getattr(agent_loop, "backend", None)
     if backend is None:
         return
     try:
@@ -122,8 +137,38 @@ async def _stop_backend(agent_loop) -> None:
         logger.exception("acp: memory backend stop failed; continuing shutdown")
 
 
-def _build_acp_agent_loop(config_path: str | None = None):
-    """Construct the AgentLoop the ACP spine serves.
+@dataclass
+class AcpShared:
+    """What every session's engine on this connection is built from.
+
+    Split out of the per-session half because each of these is expensive or
+    single-writer: the provider owns one connection pool, the session manager is
+    the cache ``session/load`` and the turn after it must agree on, the memory
+    backend's start() pays a /health probe and a recall warm-up, TokenWise
+    telemetry is one JSONL a second writer would interleave, and
+    ``store_inflight`` is the process's cap on concurrent memory writes -- one
+    set per engine would multiply it by the number of live sessions.
+
+    ``pending_recovery`` is here for the opposite reason: not because it is
+    expensive, but because it must outlive any one engine. Its reader is the
+    session's next turn, and the engine cap can evict between the two.
+    """
+
+    config: Any
+    ec_config: Any
+    acp: Any
+    provider: Any
+    session_manager: Any
+    strategies: Any
+    plugin_registry: Any
+    backend: Any
+    plugin_tools: Any
+    store_inflight: set[asyncio.Task]
+    pending_recovery: dict[str, dict]
+
+
+def build_shared(config_path: str | None = None) -> AcpShared:
+    """Build the process-wide half of the engine stack, once.
 
     Mirrors ``tui_commands._build_tui_agent_loop`` minus the pieces that have
     no ACP consumer: no CronService (this deployment schedules nothing -- the
@@ -132,8 +177,6 @@ def _build_acp_agent_loop(config_path: str | None = None):
     (raven-research's config.json pins ``drFlow`` on), one process one
     configuration -- plan §3.
     """
-    from raven.agent.loop import AgentLoop
-    from raven.agent.loop.recovery import limits_from_defaults
     from raven.cli._helpers import load_runtime_config, make_provider
     from raven.cli._plugin_stack import (
         build_plugin_registry,
@@ -172,11 +215,46 @@ def _build_acp_agent_loop(config_path: str | None = None):
         ec_config,
         registry=plugin_registry,
     )
-
-    agent_loop = AgentLoop(
+    return AcpShared(
+        config=config,
+        ec_config=ec_config,
+        acp=config.acp,
         provider=provider,
+        session_manager=session_manager,
         strategies=strategies,
+        plugin_registry=plugin_registry,
+        backend=backend,
+        plugin_tools=plugin_tools,
+        store_inflight=set(),
+        pending_recovery={},
+    )
+
+
+def build_loop(shared: AcpShared, conversation: str | None = None):
+    """Build one session's engine on top of ``shared``.
+
+    ``conversation`` roots the session's file tools in a subtree of their own,
+    so two concurrent turns writing ``report.md`` do not overwrite each other.
+    Everything that follows the write root follows it: the file, exec and media
+    tools, and the per-turn Checkpoint, whose shadow repo would otherwise be one
+    repository every session's ``git add -A`` races. What does NOT move is
+    ``workspace``, the shared root the system prompt is assembled from
+    (MEMORY.md, the profile files, TOOLS.md) and the skill catalogue is read
+    from -- giving a session its own workspace would empty both, which is a
+    distribution change (AGENTS.md 0.2) and not the isolation being asked for.
+    """
+    from raven.agent.loop import AgentLoop
+    from raven.agent.loop.recovery import limits_from_defaults
+
+    config = shared.config
+    ec_config = shared.ec_config
+    agent_loop = AgentLoop(
+        provider=shared.provider,
+        strategies=shared.strategies,
         workspace=config.workspace_path,
+        file_workspace=_session_file_root(config.workspace_path, conversation),
+        store_inflight=shared.store_inflight,
+        pending_recovery=shared.pending_recovery,
         model=config.agents.defaults.model,
         max_iterations=config.agents.defaults.max_tool_iterations,
         empty_recovery=limits_from_defaults(config.agents.defaults),
@@ -192,7 +270,7 @@ def _build_acp_agent_loop(config_path: str | None = None):
         media_config=config.effective_media_config(),
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_manager=session_manager,
+        session_manager=shared.session_manager,
         mcp_servers=config.tools.mcp_servers,
         disabled_tools=config.tools.disabled_tools,
         tool_search_config=config.tools.tool_search,
@@ -207,8 +285,8 @@ def _build_acp_agent_loop(config_path: str | None = None):
         # stock Raven (tests/test_cli_agent_loop_wiring.py holds the contract).
         dr_flow=ec_config.dr_flow,
         memory_config=ec_config.memory,
-        backend=backend,
-        plugin_tools=plugin_tools,
+        backend=shared.backend,
+        plugin_tools=shared.plugin_tools,
         # An ACP session is a multi-turn interactive conversation: the DR
         # clarification gate's question comes back answered on the same
         # session.
@@ -293,6 +371,46 @@ def _spawn_stdin_feeder(reader: asyncio.StreamReader) -> threading.Thread:
     thread = threading.Thread(target=_pump, name="acp-stdin", daemon=True)
     thread.start()
     return thread
+
+
+def _session_file_root(workspace: Path, conversation: str | None) -> Path | None:
+    """Where one session's file tools may write.
+
+    ``None`` for a caller that named no session, which leaves the engine rooted
+    in the shared workspace exactly as before. The channel prefix is stripped
+    from the id because it is the same for every session here and a ``:`` in a
+    path name is a needless portability trap.
+
+    The id is not trusted as a path component: ``session/load`` and
+    ``session/resume`` take it from the wire, and ``..`` in it would put the
+    session's file root outside the workspace. Anything but a plain name is
+    replaced by a digest of the id, which is still one stable directory per
+    session.
+
+    Deliberately NOT under ``workspace/sessions``, which is ``SessionManager``'s
+    (``sessions/<channel>/<chat_id>.jsonl``): that store is listed with
+    ``glob("*/*.jsonl")``, so a report the model happened to write as ``.jsonl``
+    would come back as a session on a channel named after this directory.
+
+    Nothing reclaims these. Deliberate: the directory holds what the model
+    wrote, so deleting it on eviction would destroy the turn's output, and
+    retention is the operator's call. The written bytes are the same bytes the
+    one shared workspace already accumulated with no reclaim path -- this
+    partitions that growth rather than adding to it. What is genuinely new is
+    one Checkpoint shadow repo per session under ``.raven/`` instead of one for
+    the connection: the same snapshot objects, split, plus that repo's own
+    metadata per session. Both grow with the number of sessions served; the
+    deferral above covers both, and ``runtime.checkpoint.policy = "never"``
+    turns the second off.
+    """
+    if not conversation:
+        return None
+    leaf = conversation.split(":", 1)[-1]
+    if not _SAFE_LEAF.match(leaf):
+        leaf = hashlib.sha256(conversation.encode("utf-8")).hexdigest()[:32]
+    root = workspace / _SESSION_FILES_DIR / leaf
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 __all__ = ["acp_app"]

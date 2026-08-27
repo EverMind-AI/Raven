@@ -208,8 +208,10 @@ The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name 
 its `execute` under a timeout, returning the string result or a structured error.
 
 **Checkpoint** (`agent/loop/checkpoint.py`):
-A once-per-turn commit of the workspace into a shadow git repo (separate from the
-user's `.git`), so an interrupted or failed turn can be rolled back.
+A once-per-turn commit into a shadow git repo (separate from the user's `.git`), so an
+interrupted or failed turn can be rolled back. Covers the tree the engine's file tools
+are rooted in — the workspace everywhere but ACP, where it is the **Session File Root**,
+so concurrent sessions neither race one repo nor stage each other's edits.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
@@ -358,6 +360,34 @@ A TUI client's registration to receive turn events for a session.
 **Confirm Round-Trip**:
 The interaction pattern for destructive operations: one `confirm.request` Notification
 out, the turn pauses, one answering Request back.
+
+### ACP
+
+**Session Engine**:
+The `AgentLoop` serving one ACP session. One per session, not per process: the web
+tools keep their per-turn state (saturation, evidence round, seen sets, retry budgets)
+as instance attributes that `run_turn` resets at turn start, so two concurrent turns on
+one engine clear each other's.
+_Avoid_: "the engine" unqualified once more than one is resident.
+
+**Engine Registry**:
+`AcpLoops` — maps a conversation id to its Session Engine, builds one on first use, and
+holds the pieces every engine shares (provider, session manager, memory backend). Also
+the reclaim point: `session/delete` is not served, so the least recently used *idle*
+session's engine is evicted at `acp.maxLoops`. A build that finds every victim mid-turn
+goes over the cap rather than evict a running turn, so reclamation is retried whenever an
+engine is handed out and whenever a turn settles.
+Eviction is only lossless because everything a session needs across turns is held off the
+engine: the transcript in `SessionManager`, and the interrupted-turn recovery record in the
+shared map `AcpShared` hands every engine. Per-engine state added later has to answer the
+same question — a rebuilt engine starts empty.
+
+**Session File Root**:
+The subtree under the shared workspace where one session's file, exec and media tools are
+rooted (`acp_workspaces/<chat_id>`), and with them its **Checkpoint**, so two concurrent
+turns writing the same filename neither overwrite each other nor race one shadow repo. Distinct from the **workspace** itself, which stays shared
+because the system prompt's memory segments and the skill catalogue are read from it.
+_Avoid_: calling it "the session's workspace" — that reads as the whole workspace moving.
 
 ### Context
 

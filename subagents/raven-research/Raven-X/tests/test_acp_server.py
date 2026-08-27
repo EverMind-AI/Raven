@@ -5,6 +5,7 @@ import io
 import json
 
 from raven.acp import protocol
+from raven.acp.loops import AcpLoops
 from raven.acp.server import serve
 from raven.spine import Text, TurnOutcome, Usage
 
@@ -37,10 +38,11 @@ class _StubLoop:
 class _Client:
     """Drives serve() over an in-process reader, one request at a time."""
 
-    def __init__(self, loop_factory):
+    def __init__(self, loops, *, user_pool=1):
         self.reader = asyncio.StreamReader()
         self.out = _WireOut()
-        self.task = asyncio.ensure_future(serve(self.reader, self.out, agent_loop_factory=loop_factory))
+        self.loops = loops
+        self.task = asyncio.ensure_future(serve(self.reader, self.out, loops=loops, user_pool=user_pool))
         self._next_id = 0
 
     def send(self, method, params=None, *, notification=False):
@@ -75,7 +77,7 @@ class _Client:
 
 
 async def test_initialize_new_prompt_full_chain_and_wire_purity():
-    client = _Client(lambda: _StubLoop())
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
     try:
         rid = client.send("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         init = await client.response(rid)
@@ -108,7 +110,7 @@ async def test_cancel_reaches_a_suspended_prompt():
     # session/prompt suspends its handler task; the cancel notification must be
     # read and acted on while it is suspended -- the reason every frame runs in
     # its own task.
-    client = _Client(lambda: _StubLoop(hang=True))
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop(hang=True)))
     try:
         rid = client.send("initialize", {"protocolVersion": 1})
         await client.response(rid)
@@ -125,7 +127,7 @@ async def test_cancel_reaches_a_suspended_prompt():
 
 
 async def test_eof_settles_a_pending_prompt_as_cancelled():
-    client = _Client(lambda: _StubLoop(hang=True))
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop(hang=True)))
     rid = client.send("initialize", {"protocolVersion": 1})
     await client.response(rid)
     rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
@@ -140,7 +142,7 @@ async def test_eof_settles_a_pending_prompt_as_cancelled():
 
 
 async def test_malformed_input_is_answered_and_the_session_survives():
-    client = _Client(lambda: _StubLoop())
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
     try:
         client.reader.feed_data(b"this is not json\n")
         rid = client.send("initialize", {"protocolVersion": 1})
@@ -153,7 +155,7 @@ async def test_malformed_input_is_answered_and_the_session_survives():
 
 
 async def test_wire_carries_no_raw_newlines_inside_frames():
-    client = _Client(lambda: _StubLoop())
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
     try:
         rid = client.send("initialize", {"protocolVersion": 1})
         await client.response(rid)
@@ -182,7 +184,7 @@ async def test_load_replays_then_prompt_continues_the_stored_session(tmp_path):
 
     loop = _StubLoop()
     loop.sessions = manager
-    client = _Client(lambda: loop)
+    client = _Client(AcpLoops.single(loop))
     try:
         rid = client.send("initialize", {"protocolVersion": 1})
         await client.response(rid)
@@ -207,6 +209,170 @@ async def test_load_replays_then_prompt_continues_the_stored_session(tmp_path):
         rid = client.send("session/load", {"sessionId": "acp:never_existed", "mcpServers": []})
         missing = await client.response(rid)
         assert missing["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+    finally:
+        await client.close()
+
+
+# -- concurrency across sessions ------------------------------------------------
+
+
+class _SlowLoop:
+    """One turn takes ``delay`` seconds and records the engine it ran on."""
+
+    workspace = None
+
+    def __init__(self, delay, ran):
+        self.delay = delay
+        self.ran = ran
+
+    async def run_turn(self, req, emit, drain, stream=False, usage_sink=None, **_kw):
+        self.ran.append(id(self))
+        await asyncio.sleep(self.delay)
+        await emit(Text(content="done"))
+        return TurnOutcome(usage=Usage(1, 2, 3), explicit_reply=True)
+
+
+async def test_three_sessions_run_at_once_on_three_engines():
+    """The throughput this change exists for: three concurrent research prompts
+    take about as long as the slowest, not the sum, and each runs on its own
+    engine."""
+    delay = 0.3
+    ran: list[int] = []
+    client = _Client(
+        AcpLoops(lambda _conversation: _SlowLoop(delay, ran)),
+        user_pool=3,
+    )
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+
+        sids = []
+        for _ in range(3):
+            rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+            sids.append((await client.response(rid))["result"]["sessionId"])
+        assert len(set(sids)) == 3
+
+        started = asyncio.get_running_loop().time()
+        prompt_ids = [
+            client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "go"}]})
+            for sid in sids
+        ]
+        for prompt_id in prompt_ids:
+            assert (await client.response(prompt_id))["result"] == {"stopReason": "end_turn"}
+        elapsed = asyncio.get_running_loop().time() - started
+
+        # Serial would be >= 3 * delay. The bound is generous because the
+        # assertion is "they overlapped", not a latency budget.
+        assert elapsed < delay * 2.5, f"turns did not overlap: {elapsed:.2f}s"
+        assert len(set(ran)) == 3, "concurrent sessions shared an engine"
+    finally:
+        await client.close()
+
+
+async def test_the_pool_is_what_makes_them_overlap():
+    """The teeth of the test above: same three sessions, same engines, a pool of
+    one -- and the turns serialise. Without this a pool bug would leave the
+    overlap assertion passing for the wrong reason."""
+    delay = 0.2
+    client = _Client(AcpLoops(lambda _conversation: _SlowLoop(delay, [])), user_pool=1)
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+        sids = []
+        for _ in range(3):
+            rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+            sids.append((await client.response(rid))["result"]["sessionId"])
+
+        started = asyncio.get_running_loop().time()
+        prompt_ids = [
+            client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "go"}]})
+            for sid in sids
+        ]
+        for prompt_id in prompt_ids:
+            await client.response(prompt_id, timeout=10)
+        assert asyncio.get_running_loop().time() - started >= delay * 3
+    finally:
+        await client.close()
+
+
+async def test_a_second_prompt_on_one_session_is_still_refused():
+    """Concurrency is across sessions only. ACP's session/update carries a
+    session id and nothing that identifies the request, so two prompts in
+    flight on one session produce one stream that cannot be split apart --
+    widening the pool must not have removed that gate."""
+    client = _Client(
+        AcpLoops(lambda _conversation: _SlowLoop(0.3, [])),
+        user_pool=3,
+    )
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+        sid = (await client.response(rid))["result"]["sessionId"]
+
+        first = client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "one"}]})
+        await asyncio.sleep(0.05)
+        second = client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "two"}]})
+
+        refusal = await client.response(second)
+        assert refusal["error"]["code"] == protocol.INVALID_REQUEST
+        assert "in flight" in refusal["error"]["message"]
+        assert (await client.response(first))["result"] == {"stopReason": "end_turn"}
+    finally:
+        await client.close()
+
+
+async def test_an_engine_is_built_when_the_session_opens_not_at_the_first_turn():
+    """A construction failure has to land on session/new, where it can be
+    answered, rather than halfway through the first turn."""
+    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+        assert client.loops.resident() == ()
+
+        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+        sid = (await client.response(rid))["result"]["sessionId"]
+        assert client.loops.resident() == (sid,)
+    finally:
+        await client.close()
+
+
+async def test_a_failed_engine_build_fails_the_session_it_opened():
+    def boom(_conversation):
+        raise RuntimeError("no provider key")
+
+    client = _Client(AcpLoops(boom))
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+        response = await client.response(rid)
+        assert "error" in response
+        assert response["error"]["code"] == protocol.INTERNAL_ERROR
+    finally:
+        await client.close()
+
+
+async def test_a_prompt_for_a_session_that_never_opened_is_refused():
+    """The other half of the rollback: with no registry entry the prompt is a
+    clean 'unknown session', not a turn that dies on engine construction."""
+    def boom(_conversation):
+        raise RuntimeError("no provider key")
+
+    client = _Client(AcpLoops(boom))
+    try:
+        rid = client.send("initialize", {"protocolVersion": 1})
+        await client.response(rid)
+        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+        await client.response(rid)
+
+        rid = client.send(
+            "session/prompt",
+            {"sessionId": "acp:20260827_000000_ghost", "prompt": [{"type": "text", "text": "hi"}]},
+        )
+        response = await client.response(rid)
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
     finally:
         await client.close()
 
@@ -260,16 +426,19 @@ async def test_ask_user_round_trips_over_the_wire():
     update mid-turn, ``_raven/clarify_respond`` answers it, and the SAME
     prompt's reply carries the answer."""
     loop = _AskingLoop()
-    client = _Client(lambda: loop)
+    client = _Client(AcpLoops.single(loop))
     rid = client.send(
         "initialize",
         {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},
     )
     await client.response(rid)
-    assert loop.tool.broker is not None, "initialize did not arm the broker"
 
     rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
     sid = (await client.response(rid))["result"]["sessionId"]
+    # Armed as the session's engine is built, not at initialize: engines are
+    # per session and lazily created, so a declaration that only reached the
+    # engines alive when it arrived would reach none of them.
+    assert loop.tool.broker is not None, "opening the session did not arm the broker"
     prompt_id = client.send(
         "session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "research X"}]}
     )
@@ -291,7 +460,7 @@ async def test_an_undeclared_client_never_sees_a_question():
     """No capability, no broker: the tool stays unarmed and the turn takes its
     no-broker path — on the real loop that is the gate's handoff fallback."""
     loop = _AskingLoop()
-    client = _Client(lambda: loop)
+    client = _Client(AcpLoops.single(loop))
     rid = client.send("initialize", {"protocolVersion": 1})
     await client.response(rid)
     assert loop.tool.broker is None
@@ -309,7 +478,7 @@ async def test_eof_fail_safes_a_turn_blocked_on_a_question():
     turn holding its prompt on an unanswered question unwinds through the
     broker's default instead of spending the drain's grace."""
     loop = _AskingLoop()
-    client = _Client(lambda: loop)
+    client = _Client(AcpLoops.single(loop))
     rid = client.send(
         "initialize",
         {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},

@@ -733,6 +733,27 @@ class GatewayConfig(Base):
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
 
 
+class AcpConfig(Base):
+    """The ACP surface's own sizing.
+
+    Separate from ``gateway`` rather than reusing its pool: this pool's ceiling
+    is the LLM provider's rate limit, since every concurrent turn is a research
+    turn's worth of tokens, not a chat message. Two is deliberately small --
+    raise it against a measured provider limit, not on principle.
+    """
+
+    # Bounded because zero is not a smaller number here: OriginPools builds a
+    # Semaphore from it, and a semaphore of zero parks every turn forever with
+    # nothing on the wire to say why.
+    user_pool: int = Field(default=2, ge=1)
+
+    # A ceiling on resident memory, not on concurrency: each engine holds a full
+    # tool registry, executor and prompt state. Not a hard ceiling -- a session
+    # mid-turn is never evicted, so the count sits above this until that turn
+    # ends, which is when reclamation is retried.
+    max_loops: int = Field(default=8, ge=1)
+
+
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
@@ -860,6 +881,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    acp: AcpConfig = Field(default_factory=AcpConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)

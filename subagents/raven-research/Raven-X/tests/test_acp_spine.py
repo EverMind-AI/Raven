@@ -5,8 +5,9 @@ from typing import Any
 
 import pytest
 
+from raven.acp.loops import AcpLoops
 from raven.acp.spine import (
-    USER_POOL,
+    DEFAULT_USER_POOL,
     AcpOutlet,
     AcpSession,
     AcpSessions,
@@ -36,7 +37,7 @@ SRC = Source(channel="acp", chat_id="20260825_000000_abc123", sender_id="acp-cli
 
 
 def _outlet(frames: list[dict]) -> AcpOutlet:
-    return AcpOutlet("acp", frames.append, cwd="/work")
+    return AcpOutlet("acp", frames.append, cwd_for=lambda _session_id: "/work")
 
 
 def _update(frame: dict) -> dict:
@@ -201,12 +202,21 @@ async def test_close_settles_every_pending_prompt_as_cancelled():
     assert await fb == "cancelled"
 
 
-def test_user_pool_is_pinned_to_one():
-    # Plan §6 decision B: WebSearchTool/WebFetchTool keep per-turn state as
-    # shared instance attributes; a second concurrent turn silently pollutes
-    # the generated distribution. Widening this is a per-session-AgentLoop
-    # change, never a knob.
-    assert USER_POOL == 1
+def test_the_default_pool_is_one_and_a_shared_engine_refuses_more():
+    # WebSearchTool/WebFetchTool keep per-turn state as instance attributes, so
+    # two concurrent turns on ONE engine silently pollute the generated
+    # distribution. Widening the pool is legal only with an engine per session;
+    # on a shared engine it has to fail at startup, not at measurement time.
+    assert DEFAULT_USER_POOL == 1
+    loops = AcpLoops.single(_StubLoop())
+    with pytest.raises(ValueError, match="one engine per session"):
+        build_acp(loops, [].append, user_pool=2)
+
+
+async def test_a_per_session_registry_may_widen_the_pool():
+    loops = AcpLoops(lambda _conversation: _StubLoop())
+    _scheduler, _hub, _sessions, teardown = build_acp(loops, [].append, user_pool=4)
+    await teardown()
 
 
 # -- end to end through the real scheduler ------------------------------------
@@ -241,7 +251,7 @@ def _request() -> TurnRequest:
 
 
 async def _run_one(loop: Any, frames: list[dict]) -> str:
-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
+    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
     try:
         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
         future = sessions.begin_turn(SID)
@@ -285,7 +295,7 @@ async def test_failed_turn_lands_as_content_with_end_turn_and_no_secret():
 async def test_cancelled_turn_settles_cancelled_and_stays_silent():
     frames: list[dict] = []
     loop = _StubLoop(hang=True)
-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
+    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
     try:
         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
         future = sessions.begin_turn(SID)
@@ -336,7 +346,7 @@ async def test_a_cancelled_turns_late_ending_cannot_hijack_the_next_prompt():
 
     frames: list[dict] = []
     loop = _TwoTurnLoop()
-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
+    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
     try:
         methods = AcpMethods(submit=scheduler.submit, sessions=sessions, emit=frames.append, session_manager=None)
         await methods.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}})
@@ -377,7 +387,7 @@ async def test_turn_ending_for_a_foreign_lane_settles_nothing():
     # A subagent result re-injection ends on its own conversation id; it must
     # not answer an ACP session's prompt or put frames on its stream.
     frames: list[dict] = []
-    scheduler, _hub, sessions, teardown = build_acp(_StubLoop(), frames.append)
+    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(_StubLoop()), frames.append)
     try:
         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
         future = sessions.begin_turn(SID)
@@ -390,5 +400,37 @@ async def test_turn_ending_for_a_foreign_lane_settles_nothing():
         await asyncio.wait_for(handle.result(), timeout=5)
         await asyncio.sleep(0.05)
         assert not future.done()
+    finally:
+        await teardown()
+
+
+async def test_a_settled_turn_brings_the_engine_registry_back_under_its_cap():
+    """The registry is told a turn is over only here.
+
+    The engine cap is applied when an engine is built, and a build that finds
+    its only victim mid-turn goes over it deliberately rather than close an
+    engine a turn is running on. Nothing else on the connection knows when that
+    turn ends, so without a reclaim on settle the extra engine stays resident
+    past the configured ceiling for the life of the connection.
+    """
+    frames: list[dict] = []
+    other = "acp:other"
+    loops = AcpLoops(lambda _conversation: _StubLoop(), max_loops=1)
+    scheduler, _hub, sessions, teardown = build_acp(loops, frames.append)
+    try:
+        sessions.add(AcpSession(session_id=other, chat_id="other"))
+        held = sessions.begin_turn(other)
+        # Resident and mid-turn, so the engine the real turn below builds is not
+        # allowed to evict it and the registry goes over its cap of one.
+        await loops.get(other)
+
+        sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
+        future = sessions.begin_turn(SID)
+        handle = scheduler.submit(_request())
+        sessions.bind_handle(SID, handle)
+        assert await asyncio.wait_for(future, timeout=5) == "end_turn"
+
+        assert loops.resident() == (other,)
+        sessions.settle_future(held, "cancelled")
     finally:
         await teardown()

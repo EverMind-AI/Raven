@@ -1,12 +1,13 @@
-"""The ACP agent's run loop: one connection, its engine, and its teardown.
+"""The ACP agent's run loop: one connection, its engines, and their teardown.
 
 The shape is deliberately flat (main repo ``raven/acp/server.py``): the client
 spawns one process, speaks to it over one pipe pair, and kills it when done --
 no accept loop, no connection registry. What there is instead:
 
-* **one engine per process.** The caller's factory builds the agent loop once,
-  and :func:`raven.acp.spine.build_acp` wires the turn spine onto it with the
-  frame writer as its outbound face.
+* **one engine per session.** :class:`raven.acp.loops.AcpLoops` builds an agent
+  loop per conversation id and holds the process-wide pieces they share, and
+  :func:`raven.acp.spine.build_acp` wires the turn spine onto it with the frame
+  writer as its outbound face.
 * **every inbound frame in its own task.** ``session/prompt`` is suspended for
   as long as the turn takes, and ``session/cancel`` has to be read *during*
   it. Handling frames inline would make cancellation unreachable -- the one
@@ -22,14 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Callable
 from typing import Any, BinaryIO
 
 from loguru import logger
 
+from raven.acp.loops import AcpLoops
 from raven.acp.methods import AcpMethods
 from raven.acp.questions import build_question_broker
-from raven.acp.spine import build_acp
+from raven.acp.spine import DEFAULT_USER_POOL, build_acp
 from raven.acp.stdio import read_frames, write_frame
 
 SHUTDOWN_GRACE_S = 5.0
@@ -49,26 +50,26 @@ async def serve(
     reader: asyncio.StreamReader,
     out: BinaryIO,
     *,
-    agent_loop_factory: Callable[[], Any],
+    loops: AcpLoops,
     channel: str = ACP_CHANNEL,
+    user_pool: int = DEFAULT_USER_POOL,
 ) -> None:
     """Serve ACP on one reader/writer pair until the client closes stdin.
 
-    ``agent_loop_factory`` is a named seam so a test can drive this against a
-    stub loop instead of standing up providers and a memory backend to
-    exchange two frames. Everything built here is torn down on the way out.
+    ``loops`` is a named seam so a test can drive this against a stub engine
+    instead of standing up providers and a memory backend to exchange two
+    frames; it also decides how many sessions this process holds engines for.
+    Everything built here is torn down on the way out.
     """
 
     def emit(frame: dict[str, Any]) -> None:
         write_frame(out, frame)
 
-    agent_loop = agent_loop_factory()
-    workspace = getattr(agent_loop, "workspace", None)
     scheduler, _hub, sessions, teardown = build_acp(
-        agent_loop,
+        loops,
         emit,
         channel=channel,
-        workspace=str(workspace) if workspace else None,
+        user_pool=user_pool,
     )
     # The ask_user round trip (questions.py). Built unconditionally -- it is
     # inert until armed -- and armed only from initialize, when the client
@@ -77,27 +78,45 @@ async def serve(
     # registry without ask_user, arms nothing and the handoff stays the
     # transport.
     question_broker = build_question_broker(emit)
-    registry = getattr(agent_loop, "tools", None)
-    ask_tool = registry.get("ask_user") if registry is not None and hasattr(registry, "get") else None
+    # Latched, not applied once: the declaration arrives on initialize, and
+    # every engine built after it -- one per session, for the life of the
+    # connection -- has to be armed as it is created.
+    declared = {"ask_user": False}
 
-    def arm_ask_user(enabled: bool) -> None:
-        if ask_tool is None or not hasattr(ask_tool, "set_broker"):
+    def _ask_tool(agent_loop: Any) -> Any:
+        registry = getattr(agent_loop, "tools", None)
+        tool = registry.get("ask_user") if registry is not None and hasattr(registry, "get") else None
+        return tool if tool is not None and hasattr(tool, "set_broker") else None
+
+    def _arm_one(agent_loop: Any, enabled: bool) -> None:
+        tool = _ask_tool(agent_loop)
+        if tool is None:
             if enabled:
                 logger.info("acp: client declared askUser but no ask_user tool is registered")
             return
-        ask_tool.set_broker(question_broker if enabled else None)
+        tool.set_broker(question_broker if enabled else None)
+
+    def arm_ask_user(enabled: bool) -> None:
+        declared["ask_user"] = enabled
+        for agent_loop in loops.live():
+            _arm_one(agent_loop, enabled)
         logger.info("acp: ask_user round trip {}", "armed" if enabled else "disarmed")
+
+    loops.on_create(lambda agent_loop: _arm_one(agent_loop, declared["ask_user"]))
 
     methods = AcpMethods(
         submit=scheduler.submit,
         sessions=sessions,
         emit=emit,
-        # The engine's OWN manager: session/load reads through it, and the turn
-        # that follows must see the same cache (see AcpMethods docstring).
-        session_manager=getattr(agent_loop, "sessions", None),
+        # The engines' OWN manager: session/load reads through it, and the turn
+        # that follows must see the same cache (see AcpMethods docstring). It is
+        # the registry's because it is process-wide -- session/load peeks the
+        # store for a session no engine exists for yet.
+        session_manager=loops.session_manager,
         channel=channel,
         question_broker=question_broker,
         arm_ask_user=arm_ask_user,
+        on_session_open=loops.get,
     )
     logger.info("acp: engine ready on channel {}", channel)
 

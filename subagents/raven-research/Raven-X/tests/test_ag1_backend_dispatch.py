@@ -343,6 +343,189 @@ class TestDetachedStore:
 
 
 # ---------------------------------------------------------------------------
+# One process, several loops, one backend
+# ---------------------------------------------------------------------------
+
+
+class TestSharedInflightSet:
+    def test_each_loop_gets_its_own_set_by_default(self, tmp_path: Path) -> None:
+        first = _make_loop(tmp_path)
+        second = _make_loop(tmp_path)
+        assert first._store_inflight is not second._store_inflight
+
+    async def test_a_shared_set_caps_the_process_not_each_loop(
+        self,
+        tmp_path: Path,
+        tight_store_budget: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """N loops against ONE backend must not multiply the cap by N.
+
+        With a cap of 1 and a gate nothing can pass, the first loop's write
+        starts and the second loop's is refused -- the whole point of handing
+        both loops the same set. Per-loop sets would let both through and put
+        2N writes on a service the cap exists to protect.
+        """
+        monkeypatch.setattr(loop_main, "_STORE_MAX_INFLIGHT", 1)
+        shared: set = set()
+        b = _FakeBackend()
+        b.gate = asyncio.Event()
+        first = AgentLoop(
+            provider=_StubProvider(),
+            workspace=tmp_path,
+            model="stub",
+            backend=b,
+            store_inflight=shared,
+        )
+        second = AgentLoop(
+            provider=_StubProvider(),
+            workspace=tmp_path,
+            model="stub",
+            backend=b,
+            store_inflight=shared,
+        )
+        assert first._store_inflight is second._store_inflight
+
+        await first._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
+        await second._dispatch_backend_store("s1", [{"role": "user", "content": "x"}])
+
+        assert [c["session_id"] for c in b.store_calls] == ["s0"]
+        assert second._store_dropped == 1
+
+        b.gate.set()
+        await first.drain_backend_stores()
+        assert b.completed == ["s0"]
+
+    async def test_a_given_up_write_is_reported_once_across_every_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Found end to end: three engines sharing the set each drained it and
+        each warned about the same lost turn, so one loss read as three.
+
+        The count is per loop and the set is shared, so whoever gives up on a
+        task claims it. The task stays in the set -- it is still running and
+        still holds a slot against the backpressure cap, which is the other
+        reader of that set.
+        """
+        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
+        shared: set = set()
+        b = _FakeBackend()
+        b.gate = asyncio.Event()
+        loops = [
+            AgentLoop(
+                provider=_StubProvider(),
+                workspace=tmp_path,
+                model="stub",
+                backend=b,
+                store_inflight=shared,
+            )
+            for _ in range(3)
+        ]
+
+        await loops[0]._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
+        assert len(shared) == 1
+
+        await loops[0].drain_backend_stores(timeout=0.05)
+        assert loops[0]._store_dropped == 0, "the count is cleared by its own report"
+        assert len(shared) == 1, "a claimed write still counts against the cap"
+        assert loops[1]._store_inflight_count() == 1
+
+        # The other two find the write claimed, so they report nothing.
+        for other in loops[1:]:
+            await other.drain_backend_stores(timeout=0.05)
+            assert other._store_dropped == 0
+
+        b.gate.set()
+
+    async def test_concurrent_drains_report_a_lost_write_once(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Teardown closes every engine at once, which is the case that broke.
+
+        ``AcpLoops.aclose`` gathers the drains, so all of them snapshot the
+        shared set before any of them has given up on anything. A claim taken
+        after the wait is therefore taken by all of them at once, and each one
+        warns about the same lost turn -- three engines reported one loss as
+        three end to end.
+        """
+        from loguru import logger
+
+        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
+        shared: set = set()
+        b = _FakeBackend()
+        b.gate = asyncio.Event()
+        loops = [
+            AgentLoop(
+                provider=_StubProvider(),
+                workspace=tmp_path,
+                model="stub",
+                backend=b,
+                store_inflight=shared,
+            )
+            for _ in range(3)
+        ]
+
+        await loops[0]._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
+        assert len(shared) == 1
+
+        seen: list[str] = []
+        sink = logger.add(lambda m: seen.append(m.record["message"]), level="WARNING")
+        try:
+            await asyncio.gather(*(one.drain_backend_stores(timeout=0.05) for one in loops))
+        finally:
+            logger.remove(sink)
+
+        losses = [line for line in seen if "were not indexed" in line]
+        assert losses == ["1 turn(s) were not indexed: the memory service never caught up"]
+        # The read back the claim must not break: the write is still running, so
+        # it still counts against the cap every loop shares.
+        assert loops[1]._store_inflight_count() == 1
+
+        b.gate.set()
+
+    async def test_a_claimed_write_still_holds_its_slot_against_the_cap(
+        self,
+        tmp_path: Path,
+        tight_store_budget: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A drain is not only teardown -- a boundary flush drains a live process.
+
+        The cap is counted off the same shared set the drain claims from, so
+        claiming by dropping the task would take a running write out of the
+        count and let the next turn past a cap that is still full.
+        """
+        monkeypatch.setattr(loop_main, "_STORE_MAX_INFLIGHT", 1)
+        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
+        shared: set = set()
+        b = _FakeBackend()
+        b.gate = asyncio.Event()
+        first, second = (
+            AgentLoop(
+                provider=_StubProvider(),
+                workspace=tmp_path,
+                model="stub",
+                backend=b,
+                store_inflight=shared,
+            )
+            for _ in range(2)
+        )
+
+        await first._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
+        await first.drain_backend_stores(timeout=0.05)
+
+        await second._dispatch_backend_store("s1", [{"role": "user", "content": "x"}])
+        assert [c["session_id"] for c in b.store_calls] == ["s0"]
+        assert second._store_dropped == 1
+
+        b.gate.set()
+
+
+# ---------------------------------------------------------------------------
 # Legacy compatibility — pre-AG-1 callsites still pass
 # ---------------------------------------------------------------------------
 

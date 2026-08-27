@@ -291,6 +291,10 @@ _STORE_TURN_BUDGET_S: float = 5.0
 # land, so a slow memory service cannot grow an unbounded queue behind a fast
 # typist; if none lands, this turn's write is refused before it starts.
 _STORE_MAX_INFLIGHT: int = 4
+# Marks a detached write that some drain has taken responsibility for. Carried on
+# the task rather than in a second shared set, so the claim cannot desynchronize
+# from the set the cap above is counted from.
+_STORE_CLAIMED_ATTR = "_raven_store_drain_claimed"
 # Teardown's total budget for letting those writes finish.
 _STORE_DRAIN_BUDGET_S: float = 15.0
 # Teardown's total budget for promoting every session this process captured, and
@@ -497,6 +501,22 @@ class AgentLoop:
         # DR observers + prompt section + reshaped web tools + versioned
         # flow stamp. ``None`` / disabled keeps the chat flow byte-identical.
         dr_flow: "DRFlowConfig | None" = None,
+        # Root the file and exec tools somewhere other than ``workspace``.
+        # ``None`` keeps them on ``workspace``, which is every surface but ACP.
+        # Only the tools move: the system prompt and the skill catalogue are
+        # still assembled from ``workspace``.
+        file_workspace: Path | None = None,
+        # Shared in-flight set for detached memory writes. ``None`` gives this
+        # loop its own, which is right for a process with one loop; a process
+        # running several against ONE backend passes the same set to all of
+        # them, so ``_STORE_MAX_INFLIGHT`` caps the process and not each loop.
+        store_inflight: "set[asyncio.Task] | None" = None,
+        # Shared interrupted-turn recovery records, keyed by session key.
+        # ``None`` gives this loop its own, which is right for a process whose
+        # loop outlives every session it serves; a process that rebuilds a
+        # session's loop (ACP, where the engine cap evicts) passes the same dict
+        # to all of them, or the record dies with the engine that took it.
+        pending_recovery: "dict[str, dict] | None" = None,
     ):
         from raven.agent.hook import (
             CompositeHook,
@@ -528,6 +548,7 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
+        self.file_workspace = file_workspace or workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
@@ -681,7 +702,9 @@ class AgentLoop:
         self.backend: "MemoryBackend | None" = backend
         # Writes that outran their turn budget and are still running. Held so
         # teardown can drain them instead of dropping whatever was slowest.
-        self._store_inflight: set[asyncio.Task] = set()
+        # Shared when the caller passes a set: the cap and the drain both belong
+        # to whoever owns the backend, which is the process, not this loop.
+        self._store_inflight: set[asyncio.Task] = store_inflight if store_inflight is not None else set()
         # Writes refused because indexing never caught up. Reported at teardown:
         # a dropped write is a turn the user will not be able to recall.
         self._store_dropped = 0
@@ -817,8 +840,21 @@ class AgentLoop:
             from raven.agent.loop.checkpoint import CheckpointService
 
             try:
+                # Rooted in ``file_workspace``, which is the tree this engine's
+                # tools can actually write: every file tool, ExecTool's
+                # working_dir and the media tools take that root, so the shared
+                # ``workspace`` is strictly wider than the edits a turn here can
+                # make. The difference is load-bearing once one process serves
+                # several sessions from their own roots (ACP): a shadow repo per
+                # session under one shared work-tree has every session's
+                # ``git add -A`` racing the same ``shadow.git`` -- one turn wins
+                # and the other reports ``could not lock config file`` -- and
+                # even serialized, each snapshot stages the whole shared tree,
+                # so one session's edits land in another's ``edited_files`` and
+                # from there in its recovery prompt. Identical for every other
+                # surface, where ``file_workspace`` IS ``workspace``.
                 self._checkpoint = CheckpointService(
-                    workspace,
+                    self.file_workspace,
                     shadow_dir=runtime_config.checkpoint.shadow_dir,
                 )
             except ValueError as exc:
@@ -829,7 +865,13 @@ class AgentLoop:
                 logger.warning("runtime.checkpoint disabled — {}", exc)
         # session_key -> {"checkpoint_id", "files"} stashed when a turn is
         # interrupted (max-iter); consumed by the next turn's recovery prompt.
-        self._pending_recovery: dict[str, dict] = {}
+        # Shared when the caller passes a dict, because the record has to
+        # outlive the engine that took it: the reader is the session's NEXT
+        # turn, and on a surface where an idle engine is evicted between the two
+        # (ACP) a per-instance dict is rebuilt empty and the warning is silently
+        # dropped while the files and the shadow commit still exist. The session
+        # key is the discriminator, so one dict serves every session safely.
+        self._pending_recovery: dict[str, dict] = pending_recovery if pending_recovery is not None else {}
 
         self._sandbox_config = sandbox_config
         self._owned_ids: set[str] = set()
@@ -1058,12 +1100,12 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
+        allowed_dir = self.file_workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(cls(workspace=self.file_workspace, allowed_dir=allowed_dir))
         self.tools.register(
             ExecTool(
-                working_dir=str(self.workspace),
+                working_dir=str(self.file_workspace),
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
@@ -1118,7 +1160,7 @@ class AgentLoop:
                 self.tools.register(
                     cls(
                         tool_cfg,
-                        workspace=self.workspace,
+                        workspace=self.file_workspace,
                         proxy=media.proxy,
                         output_subdir=media.output_subdir,
                     )
@@ -1891,8 +1933,18 @@ class AgentLoop:
         """
         if timeout is None:
             timeout = _STORE_DRAIN_BUDGET_S
-        pending = {t for t in self._store_inflight if not t.done()}
+        pending = {t for t in self._store_inflight if not t.done() and not getattr(t, _STORE_CLAIMED_ATTR, False)}
         if pending:
+            # Claimed before the first await, which is what makes the claim
+            # exclusive: the set is shared across loops and both teardown and a
+            # boundary flush drain them concurrently, so a claim taken after the
+            # wait is taken by every drain at once and one lost turn reads as N.
+            # Marked rather than dropped from the set, because the other reader
+            # of that set is the backpressure cap and a write still running
+            # still holds a backend slot. Not cancelled -- the write keeps
+            # running, as everywhere else on this path.
+            for task in pending:
+                setattr(task, _STORE_CLAIMED_ATTR, True)
             _, still_pending = await asyncio.wait(pending, timeout=timeout)
             if still_pending:
                 # Counted, because ``backend.stop()`` closes the client pool

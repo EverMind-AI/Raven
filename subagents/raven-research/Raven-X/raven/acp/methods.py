@@ -20,7 +20,7 @@ Two rules run through the whole file (the main repo's, kept):
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -89,6 +89,11 @@ class AcpMethods:
     session loaded through one would be reloaded -- or missed -- by the turn
     that follows. ``None`` (a test without an engine) answers every
     ``session/load`` with -32002, which is honest for a store it cannot see.
+
+    ``on_session_open`` is awaited once per session as it enters the registry,
+    on all three routes in (new / load / resume). It is where the session's
+    engine gets built, so a construction failure is answered as a failed
+    ``session/new`` rather than surfacing halfway through the first turn.
     """
 
     def __init__(
@@ -101,12 +106,14 @@ class AcpMethods:
         channel: str = "acp",
         question_broker: Any = None,
         arm_ask_user: Callable[[bool], None] | None = None,
+        on_session_open: Callable[[str], Awaitable[Any]] | None = None,
     ) -> None:
         self._submit = submit
         self._sessions = sessions
         self._emit = emit
         self._session_manager = session_manager
         self._channel = channel
+        self._on_session_open = on_session_open
         # The ask_user round trip (raven/acp/questions.py). The broker resolves
         # ``_raven/clarify_respond``; ``arm_ask_user`` is the server's seam that
         # binds or unbinds it on the engine's tool, called from initialize with
@@ -240,6 +247,7 @@ class AcpMethods:
         chat_id = _new_chat_id()
         session = AcpSession(session_id=f"{self._channel}:{chat_id}", chat_id=chat_id)
         self._sessions.add(session)
+        await self._open_session(session.session_id)
         logger.info("acp: session {} created", session.session_id)
         return {"sessionId": session.session_id}
 
@@ -253,6 +261,7 @@ class AcpMethods:
         engine's session manager loading the same key from disk.
         """
         stored, session = self._reopen(params)
+        await self._open_session(session.session_id)
         for update in replay(stored.messages, cwd=None):
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
         logger.info("acp: loaded session {} ({} stored message(s))", session.session_id, len(stored.messages))
@@ -269,6 +278,7 @@ class AcpMethods:
         the key the consuming raven reads as statefulness (plan §6 decision A).
         """
         _, session = self._reopen(params)
+        await self._open_session(session.session_id)
         logger.info("acp: resumed session {}", session.session_id)
         return {}
 
@@ -298,6 +308,22 @@ class AcpMethods:
             session = AcpSession(session_id=session_id, chat_id=session_id[len(prefix) :])
             self._sessions.add(session)
         return stored, session
+
+    async def _open_session(self, session_id: str) -> None:
+        """Build the session's engine, or fail the method that opened it.
+
+        The registry entry is rolled back on failure: a session that answered
+        with an error and stayed registered would take a prompt, and the engine
+        it could not build would be built again halfway through that turn --
+        exactly the failure this ordering exists to prevent.
+        """
+        if self._on_session_open is None:
+            return
+        try:
+            await self._on_session_open(session_id)
+        except Exception:
+            self._sessions.remove(session_id)
+            raise
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         """Run one turn and answer with its stop reason.
