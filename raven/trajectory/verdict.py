@@ -105,23 +105,39 @@ def read_verdicts(
         return []
     wanted = set(attempt_ids) if attempt_ids is not None else None
     out: list[Verdict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    try:
+        raw_lines = path.read_bytes().splitlines()
+    except OSError:
+        return []
+    for raw_line in raw_lines:
+        # Decode per line: one invalid-UTF-8 byte must hide one record, not
+        # every record before and after it in the append-only file.
+        try:
+            line = raw_line.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            continue
         if not line:
             continue
         try:
             d = json.loads(line)
-            v = Verdict(
-                attempt_id=d["attempt_id"],
-                status=d["status"],
-                source=d["source"],
-                ts=d["ts"],
-                why=d.get("why"),
-                notes=d.get("notes"),
-                session_key=d.get("session_key"),
-            )
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except json.JSONDecodeError:
             continue
+        # Required fields must be non-empty strings: a list/dict attempt_id
+        # would blow up set lookups and dict keys in every consumer.
+        if not isinstance(d, dict):
+            continue
+        required = (d.get("attempt_id"), d.get("status"), d.get("source"), d.get("ts"))
+        if any(not isinstance(value, str) or not value for value in required):
+            continue
+        v = Verdict(
+            attempt_id=d["attempt_id"],
+            status=d["status"],
+            source=d["source"],
+            ts=d["ts"],
+            why=d.get("why"),
+            notes=d.get("notes"),
+            session_key=d.get("session_key"),
+        )
         if attempt_id is not None and v.attempt_id != attempt_id:
             continue
         if wanted is not None and v.attempt_id not in wanted:

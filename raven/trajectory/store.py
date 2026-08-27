@@ -70,6 +70,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _span_attrs(span: dict[str, Any]) -> dict[str, Any]:
+    """The span's attributes mapping, or {} — a JSON-legal record whose
+    "attributes" is a truthy non-object must degrade, not crash readers."""
+    attrs = span.get("attributes")
+    return attrs if isinstance(attrs, dict) else {}
+
+
+def _str_value(value: Any) -> str | None:
+    """``value`` when it is a non-empty string, else None.
+
+    Span records are unvalidated history: a list/dict id or key would blow up
+    hashing, sorting, or rendering downstream, so readers treat any non-string
+    field as absent."""
+    return value if isinstance(value, str) and value else None
+
+
 def pins(state_dir: Path | None = None) -> dict[str, dict[str, Any]]:
     """The pin registry: id -> {reason, ts}. Empty on missing/corrupt file."""
     path = _pins_path(state_dir)
@@ -303,17 +319,17 @@ def _expand_group(
     canonical = id_
     traces: list[str] = []
     for span in iter_spans(state_dir, attempt_id=id_):
-        legacy = (span.get("attributes") or {}).get("attempt.id")
+        legacy = _str_value(_span_attrs(span).get("attempt.id"))
         if legacy and legacy != id_:
             canonical = legacy
             break
-        trace_id = span.get("traceId")
+        trace_id = _str_value(span.get("traceId"))
         if trace_id and trace_id not in traces:
             traces.append(trace_id)
     if canonical != id_:
         traces = []
         for span in iter_spans(state_dir, attempt_id=canonical):
-            trace_id = span.get("traceId")
+            trace_id = _str_value(span.get("traceId"))
             if trace_id and trace_id not in traces:
                 traces.append(trace_id)
     if not traces:
@@ -377,9 +393,9 @@ def _merge_publish(ids: Sequence[str], state_dir: Path | None = None) -> tuple[s
         member_set = set(members)
         session_keys: dict[str, str] = {}
         for span in iter_spans(state_dir):
-            trace_id = span.get("traceId")
-            if trace_id in member_set and trace_id not in session_keys:
-                key = (span.get("attributes") or {}).get("session.key")
+            trace_id = _str_value(span.get("traceId"))
+            if trace_id and trace_id in member_set and trace_id not in session_keys:
+                key = _str_value(_span_attrs(span).get("session.key"))
                 if key:
                     session_keys[trace_id] = key
         distinct_sessions = sorted(set(session_keys.values()))
@@ -573,11 +589,11 @@ def is_pinned(
     registry = pins(state_dir) if _pins is None else _pins
     if not registry:
         return False
-    attrs = span.get("attributes") or {}
-    if span.get("traceId") in registry or attrs.get("attempt.id") in registry:
+    trace_id = _str_value(span.get("traceId"))
+    legacy = _str_value(_span_attrs(span).get("attempt.id"))
+    if (trace_id and trace_id in registry) or (legacy and legacy in registry):
         return True
     defs = definitions(state_dir) if _defs is None else _defs
-    trace_id = span.get("traceId")
     for def_id, entry in defs.items():
         if trace_id in (entry.get("traces") or []):
             return def_id in registry or any(alias in registry for alias in entry.get("aliases") or [])
@@ -598,7 +614,7 @@ def resolve_attempt_id(id_: str, state_dir: Path | None = None) -> str | None:
     found = False
     for span in iter_spans(state_dir, attempt_id=id_):
         found = True
-        attempt_id = (span.get("attributes") or {}).get("attempt.id")
+        attempt_id = _str_value(_span_attrs(span).get("attempt.id"))
         if attempt_id:
             return attempt_id
     return id_ if found else None
@@ -638,11 +654,16 @@ def iter_spans(
             match_ids = set(defs[owner]["traces"])
     for path in span_log_paths(state_dir):
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            raw_lines = path.read_bytes().splitlines()
         except OSError:
             continue
-        for line in lines:
-            line = line.strip()
+        for raw_line in raw_lines:
+            # Decode per line: one invalid-UTF-8 byte must hide one record,
+            # not the whole log file.
+            try:
+                line = raw_line.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
             if not line:
                 continue
             try:
@@ -651,14 +672,15 @@ def iter_spans(
                 continue
             if not isinstance(span, dict):
                 continue
-            attrs = span.get("attributes") or {}
+            attrs = _span_attrs(span)
+            span_trace_id = _str_value(span.get("traceId"))
             if attempt_id is not None:
                 if match_ids is not None:
-                    if span.get("traceId") not in match_ids:
+                    if span_trace_id not in match_ids:
                         continue
-                elif attrs.get("attempt.id") != attempt_id and span.get("traceId") != attempt_id:
+                elif attrs.get("attempt.id") != attempt_id and span_trace_id != attempt_id:
                     continue
-            if trace_id is not None and span.get("traceId") != trace_id:
+            if trace_id is not None and span_trace_id != trace_id:
                 continue
             if session_key is not None and attrs.get("session.key") != session_key:
                 continue

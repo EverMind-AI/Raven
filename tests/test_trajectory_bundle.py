@@ -323,6 +323,56 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
         _spans._store = None
 
 
+def test_bundle_tolerates_non_string_legacy_id(state, workspace):
+    """save by trace id still bundles when the span carries a list attempt.id
+    (unvalidated history must degrade, not crash the collector)."""
+    span = _span("trace-1", session_key="cli:chat1")
+    span["attributes"]["attempt.id"] = ["not", "a", "string"]
+    _write_log(state / "logs" / "audit-spans.log", [span])
+
+    bundle_dir = tbundle.collect_bundle("trace-1", state_dir=state, workspace=workspace)
+
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == "trace-1"
+    assert manifest["span_count"] == 1
+    assert "trace-1" in tstore.pins(state)
+
+
+def test_bundle_of_merged_attempt_survives_bad_neighbor_record(state):
+    """A list-traceId record elsewhere in the log must not break bundling a
+    merged attempt (the member filter is a set lookup)."""
+    bad = {"schemaVersion": "audit.span.v1", "traceId": ["x"], "attributes": {}}
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:chat1"), bad, _span("trace-2", session_key="cli:chat1")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    bundle_dir = tbundle.collect_bundle("trace-1", state_dir=state)
+
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == aid
+    assert manifest["span_count"] == 2
+
+
+def test_bundle_of_merged_attempt_tolerates_malformed_verdict_lines(state):
+    """The alias-set verdict filter must skip a list attempt_id line instead
+    of failing the whole collection."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:chat1"), _span("trace-2", session_key="cli:chat1")],
+    )
+    tverdict.record_verdict("trace-1", "fail", source="user", state_dir=state)
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    with (state / "verdicts.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"attempt_id": ["bad"], "status": "fail", "source": "user", "ts": "now"}) + "\n")
+
+    bundle_dir = tbundle.collect_bundle(aid, state_dir=state)
+
+    verdicts = _read_lines(bundle_dir / "verdicts.jsonl")
+    assert {v["attempt_id"] for v in verdicts} == {"trace-1"}
+
+
 def test_bundle_of_merged_attempt_collects_all_member_traces(state):
     _write_log(
         state / "logs" / "audit-spans.log",

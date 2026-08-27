@@ -96,6 +96,31 @@ class TestVerdicts:
         got = tverdict.read_verdicts(tmp_path)
         assert [x.attempt_id for x in got] == ["att-1"]
 
+    def test_non_string_required_fields_are_skipped(self, tmp_path):
+        """A shape-complete line with a list/dict attempt_id must not reach
+        set lookups or dict keys in consumers."""
+        tverdict.record_verdict("att-1", "pass", source="user", state_dir=tmp_path)
+        with (tmp_path / "verdicts.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"attempt_id": ["bad"], "status": "fail", "source": "user", "ts": "now"}) + "\n")
+            f.write(json.dumps({"attempt_id": {"k": "v"}, "status": "fail", "source": "user", "ts": "now"}) + "\n")
+            f.write(json.dumps({"attempt_id": "att-3", "status": 1, "source": "user", "ts": "now"}) + "\n")
+            f.write(json.dumps(["not", "an", "object"]) + "\n")
+        tverdict.record_verdict("att-2", "fail", source="user", state_dir=tmp_path)
+
+        assert [x.attempt_id for x in tverdict.read_verdicts(tmp_path)] == ["att-1", "att-2"]
+        assert [x.attempt_id for x in tverdict.read_verdicts(tmp_path, attempt_ids={"att-1", "att-2"})] == [
+            "att-1",
+            "att-2",
+        ]
+
+    def test_invalid_utf8_line_hides_only_itself(self, tmp_path):
+        tverdict.record_verdict("att-1", "pass", source="user", state_dir=tmp_path)
+        with (tmp_path / "verdicts.jsonl").open("ab") as f:
+            f.write(b"\xff\xfe not utf-8\n")
+        tverdict.record_verdict("att-2", "fail", source="user", state_dir=tmp_path)
+
+        assert [x.attempt_id for x in tverdict.read_verdicts(tmp_path)] == ["att-1", "att-2"]
+
 
 class TestPins:
     def test_pin_unpin_roundtrip(self, tmp_path):
@@ -192,6 +217,78 @@ class TestIterSpans:
         log.parent.mkdir(parents=True)
         log.write_text('not json\n["a list"]\n' + json.dumps(_span("trace-1")) + "\n", encoding="utf-8")
         assert [s["traceId"] for s in tstore.iter_spans(tmp_path)] == ["trace-1"]
+
+    def test_invalid_utf8_line_hides_only_itself(self, tmp_path):
+        """Per-line decoding: one bad byte must not hide the records before
+        and after it in the same log file."""
+        log = tmp_path / "logs" / "audit-spans.log"
+        log.parent.mkdir(parents=True)
+        log.write_bytes(
+            json.dumps(_span("trace-1")).encode("utf-8")
+            + b"\n\xff\xfe not utf-8\n"
+            + json.dumps(_span("trace-2")).encode("utf-8")
+            + b"\n"
+        )
+
+        assert [s["traceId"] for s in tstore.iter_spans(tmp_path)] == ["trace-1", "trace-2"]
+
+    def test_non_dict_attributes_degrade_instead_of_raising(self, tmp_path):
+        """A JSON-legal record whose attributes is a truthy non-object is
+        yielded as-is, and filters treat it as carrying no attributes."""
+        bad = {"schemaVersion": "audit.span.v1", "traceId": "trace-bad", "attributes": ["bad"]}
+        _write_log(tmp_path / "logs" / "audit-spans.log", [bad, _span("trace-1", session_key="cli:a")])
+
+        assert [s["traceId"] for s in tstore.iter_spans(tmp_path)] == ["trace-bad", "trace-1"]
+        assert [s["traceId"] for s in tstore.iter_spans(tmp_path, session_key="cli:a")] == ["trace-1"]
+        assert [s["traceId"] for s in tstore.iter_spans(tmp_path, attempt_id="trace-bad")] == ["trace-bad"]
+
+
+class TestMalformedRecordTolerance:
+    """Non-string ids/keys in JSON-legal records degrade to absent fields
+    instead of raising from hashing, sorting, or membership checks."""
+
+    @pytest.mark.parametrize("bad_id", [["not", "a", "string"], {"k": "v"}, 123], ids=["list", "dict", "int"])
+    def test_non_string_legacy_id_degrades_in_resolve_and_pin(self, tmp_path, bad_id):
+        span = _span("trace-1", session_key="cli:a")
+        span["attributes"]["attempt.id"] = bad_id
+        _write_log(tmp_path / "logs" / "audit-spans.log", [span])
+
+        assert tstore.is_pinned(span, tmp_path) is False  # nothing pinned yet, and no crash
+        assert tstore.resolve_attempt_id("trace-1", tmp_path) == "trace-1"
+        assert tstore.pin_attempt("trace-1", state_dir=tmp_path) == "trace-1"
+        assert set(tstore.pins(tmp_path)) == {"trace-1"}
+        assert tstore.is_pinned(span, tmp_path) is True  # via traceId, not the bad legacy id
+        assert tstore.unpin_attempt("trace-1", tmp_path) is True
+
+    def test_non_string_trace_id_never_matches_pins(self, tmp_path):
+        bad = {"schemaVersion": "audit.span.v1", "traceId": ["x"], "attributes": {}}
+        tstore.pin("trace-1", state_dir=tmp_path)
+        assert tstore.is_pinned(bad, tmp_path) is False
+
+    def test_merge_ignores_non_string_session_keys_and_trace_ids(self, tmp_path):
+        s1 = _span("trace-1", session_key="cli:a")
+        s2 = _span("trace-2", session_key="cli:a")
+        s2["attributes"]["session.key"] = 123
+        bad = {"schemaVersion": "audit.span.v1", "traceId": ["x"], "attributes": {"session.key": ["y"]}}
+        _write_log(tmp_path / "logs" / "audit-spans.log", [s1, s2, bad])
+
+        aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=tmp_path)
+
+        assert sorted(tstore.definitions(tmp_path)[aid]["traces"]) == ["trace-1", "trace-2"]
+
+    def test_definition_filter_skips_non_string_trace_ids(self, tmp_path):
+        """An unrelated record with a list traceId must not break reading a
+        merged attempt's members (the definition filter is a set lookup)."""
+        bad = {"schemaVersion": "audit.span.v1", "traceId": ["x"], "attributes": {}}
+        _write_log(
+            tmp_path / "logs" / "audit-spans.log",
+            [_span("trace-1", session_key="cli:a"), bad, _span("trace-2", session_key="cli:a")],
+        )
+        aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=tmp_path)
+
+        got = [s["traceId"] for s in tstore.iter_spans(tmp_path, attempt_id=aid)]
+
+        assert got == ["trace-1", "trace-2"]
 
 
 class TestResolveAttemptId:

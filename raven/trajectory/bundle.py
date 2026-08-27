@@ -143,13 +143,16 @@ def collect_bundle(
         start: str | None = None
         end: str | None = None
         for span in spans:
-            attrs = dict(span.get("attributes") or {})
-            if session_key is None and attrs.get("session.key"):
+            # Historical records are unvalidated JSON: a truthy non-object
+            # attributes value or non-string key/timestamp degrades per-field.
+            raw_attrs = span.get("attributes")
+            attrs = dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
+            if session_key is None and isinstance(attrs.get("session.key"), str) and attrs["session.key"]:
                 session_key = attrs["session.key"]
             span_start, span_end = span.get("startTime"), span.get("endTime")
-            if span_start and (start is None or span_start < start):
+            if isinstance(span_start, str) and span_start and (start is None or span_start < start):
                 start = span_start
-            if span_end and (end is None or span_end > end):
+            if isinstance(span_end, str) and span_end and (end is None or span_end > end):
                 end = span_end
             for key, value in attrs.items():
                 if not key.endswith(".artifact_path") or not isinstance(value, str) or not value:

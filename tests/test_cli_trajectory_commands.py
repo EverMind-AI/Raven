@@ -707,6 +707,20 @@ def test_list_merged_attempt_shows_verdict_via_alias(state) -> None:
     assert "pass" in r.stdout and "fail" not in r.stdout
 
 
+def test_list_tolerates_malformed_verdict_lines(state) -> None:
+    """A shape-complete verdict line with a list attempt_id must not break the
+    verdict column for the healthy rows."""
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    tverdict.record_verdict("trace-1", "pass", source="user", state_dir=state)
+    with (state / "verdicts.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"attempt_id": ["bad"], "status": "fail", "source": "user", "ts": "now"}) + "\n")
+
+    r = runner.invoke(trajectory_app, ["list"])
+
+    assert r.exit_code == 0
+    assert "pass" in r.stdout
+
+
 def test_list_empty(state) -> None:
     r = runner.invoke(trajectory_app, ["list"])
     assert r.exit_code == 0
@@ -751,9 +765,11 @@ def test_list_tolerates_malformed_span_attributes(state) -> None:
     spans[3]["attributes"]["session.key"] = 123
     spans[4]["startTime"] = 123
     spans.append({"schemaVersion": "audit.span.v1", "traceId": 456, "name": "session.turn", "attributes": {}})
+    spans.append({"schemaVersion": "audit.span.v1", "traceId": "trace-attrs-list", "attributes": ["bad"]})
+    spans.append({"schemaVersion": "audit.span.v1", "traceId": "trace-attrs-str", "attributes": "bad"})
     _write_log(state / "logs" / "audit-spans.log", spans)
 
-    r = runner.invoke(trajectory_app, ["list"])
+    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
 
     assert r.exit_code == 0
     squash = "".join(r.stdout.split())
@@ -761,6 +777,17 @@ def test_list_tolerates_malformed_span_attributes(state) -> None:
     # Non-string attempt.id falls back to the trace id; the rest degrade to "-".
     assert "trace-int" in squash and "trace-list" in squash
     assert "trace-badkey" in squash and "trace-badtime" in squash
+    # A truthy non-object attributes container degrades to no attributes.
+    assert "trace-attrs-list" in squash and "trace-attrs-str" in squash
+
+    # The session filter walks the same records inside iter_spans; a defective
+    # container must not shadow the matching rows there either.
+    r = runner.invoke(trajectory_app, ["list", "--session", "cli:a"], env={"COLUMNS": "200"})
+
+    assert r.exit_code == 0
+    squash = "".join(r.stdout.split())
+    assert "trace-1" in squash and "trace-badtime" in squash
+    assert "trace-attrs-list" not in squash and "trace-attrs-str" not in squash
 
 
 def test_markup_legacy_id_success_paths_are_safe(state) -> None:
@@ -813,6 +840,53 @@ def test_minimize_markup_manifest_id_error_is_safe(state, tmp_path) -> None:
 
     assert r.exit_code == 1
     assert "x[/red]y" in "".join(r.stdout.split())
+
+
+@pytest.mark.parametrize("bad_id", [123, ["a", "b"]], ids=["int", "list"])
+def test_minimize_non_string_manifest_id_fails_controlled(state, tmp_path, bad_id) -> None:
+    """A JSON-legal manifest whose attempt_id is not a string falls back to the
+    bundle directory name instead of blowing up the default-path join."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(json.dumps({"format_version": 1, "attempt_id": bad_id}), encoding="utf-8")
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
+
+    # The empty bundle is still rejected, but through the controlled error
+    # path (typer.Exit), never an uncaught TypeError from the path join.
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)
+
+
+@pytest.mark.parametrize(
+    "content", ['["not", "an", "object"]', '"just a string"', "{not json"], ids=["list", "string", "broken"]
+)
+def test_minimize_invalid_manifest_fails_controlled(state, tmp_path, content) -> None:
+    """A manifest that is not a JSON object (or not JSON at all) is refused
+    with a readable error instead of an AttributeError/JSONDecodeError."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(content, encoding="utf-8")
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
+
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)
+    assert "not a valid bundle manifest" in " ".join(r.stdout.split())
+
+
+def test_minimize_non_utf8_manifest_fails_controlled(state, tmp_path) -> None:
+    """Invalid UTF-8 in the manifest raises before JSON parsing; it must reach
+    the same controlled error path as broken JSON."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_bytes(b'\xff\xfe{"attempt_id": 1}')
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
+
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)
+    assert "not a valid bundle manifest" in " ".join(r.stdout.split())
 
 
 # ── replay ────────────────────────────────────────────────────────────

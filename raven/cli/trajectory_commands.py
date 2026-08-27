@@ -287,9 +287,18 @@ def trajectory_minimize(
     from raven.trajectory.cassette import minimize_bundle
 
     bundle_dir = _bundle_dir_or_exit(target)
-    attempt_id = (
-        json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8")).get("attempt_id") or bundle_dir.name
-    )
+    # The manifest is recorded data: broken JSON, a non-object top level, or a
+    # non-string attempt_id must fail controlled (or fall back to the
+    # directory name), never leak a parse/path-join traceback.
+    try:
+        manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        manifest = None
+    if not isinstance(manifest, dict):
+        console.print(f"[red]{escape(str(bundle_dir / 'manifest.json'))} is not a valid bundle manifest[/red]")
+        raise typer.Exit(code=1)
+    manifest_id = manifest.get("attempt_id")
+    attempt_id = manifest_id if isinstance(manifest_id, str) and manifest_id else bundle_dir.name
     out_dir = out
     if out_dir is None:
         # The manifest's attempt id is recorded data; refuse one that would
@@ -444,8 +453,10 @@ def trajectory_list(
     attempts: dict[str, dict] = {}
     for span in tstore.iter_spans(state, session_key=session):
         # Span attributes are unvalidated history: a JSON-legal record with a
-        # non-string id/key/timestamp must degrade per-field, never kill list.
-        attrs = span.get("attributes") or {}
+        # non-object attributes value or a non-string id/key/timestamp must
+        # degrade per-field, never kill list.
+        raw_attrs = span.get("attributes")
+        attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
         trace_id = _str(span.get("traceId"))
         aid = owner_by_trace.get(trace_id) or _str(attrs.get("attempt.id")) or trace_id
         if not aid:
