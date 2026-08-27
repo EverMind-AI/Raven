@@ -208,11 +208,23 @@ def render_config(source: Path) -> Path:
       separate knob for any of them; they all hang off this one path. What
       matters is that every consumer agrees on it - `cron_store` and `ops_home`
       derive from the same config path, so they follow automatically.
-    - It is a fixed name that is *not* deleted afterwards, unlike the other
-      launchers here. `ensure_wake_shell` starts a resident process holding this
-      path, and that process outlives the spawn by design: it re-reads the file
-      on every wake, so deleting it at the end of a run would strand the whole
-      campaign. Mode 600, and outside any published tree.
+    - It is a fixed name rather than a per-run one, and which hosting renders it
+      decides whether anything removes it. Mode 600 either way, and outside any
+      published tree.
+
+      Under cli hosting the file is *not* deleted: `ensure_wake_shell` starts a
+      resident process holding this path, that process outlives the spawn by
+      design, and it re-reads the file on every wake -- so deleting it at the
+      end of a run would strand the whole campaign.
+
+      Under acp hosting `serve_acp` deletes it when the child ends, and there is
+      nothing left to strand: that path never starts the detached shell. Its
+      child owns the cron service in-process, and the host's connection pool
+      keeps that child alive across runs -- a finished prompt detaches its sink
+      without closing the session or releasing the connection -- so a wake
+      scheduled in one turn fires inside the same server, with no file for a
+      third process to re-read. What the delete does prevent is a
+      credential-bearing config outliving the process that needed it.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = host_config()
@@ -659,6 +671,10 @@ def serve_acp(args: argparse.Namespace) -> int:
             proc.wait(timeout=5)
         return 0
     finally:
+        # Deleted here, unlike the cli path, which leaves it for the resident
+        # wake shell to re-read. Nothing detached is holding it under this
+        # hosting, so what survives a clean exit is only a file with the LLM key
+        # in it. See `render_config` for the lifetime the two paths each want.
         config.unlink(missing_ok=True)
 
 
@@ -742,6 +758,9 @@ def main() -> int:
 
     # Before the turn, not after: the agent can schedule a wake inside this turn,
     # and a shell started afterwards would race the job it is meant to fire.
+    # This is the cli path's answer to "what fires a wake after the spawn
+    # returns", and it is the only caller. `serve_acp` needs no equivalent: see
+    # `render_config` for why a pooled server is its own scheduler.
     shell_pid, shell_detail = (None, "not started (--no-wake-shell)")
     if not args.no_wake_shell:
         shell_pid, shell_detail = ensure_wake_shell(
@@ -867,9 +886,13 @@ def main() -> int:
     out = [answer]
     if timed_out and committed:
         # The answer above is the agent's own -- it reached the transcript
-        # before the kill landed, and `--wait-skill-extract` alone means the
-        # process routinely outlives the answer it already committed. But the
-        # run did not finish, so whatever it would have done next is gone.
+        # before the kill landed. That gap is routine: the process goes on
+        # doing its own end-of-turn work after committing an answer, so a
+        # deadline lands on a run that already has one. (The flag this used to
+        # cite, `--wait-skill-extract`, is no longer passed -- it was dropped
+        # upstream as inert; see the argv above. The gap it named outlived it.)
+        # But the run did not finish, so whatever it would have done next is
+        # gone.
         # Returning 0 without saying so is how a timed-out run reported as a
         # clean success. The `--keep-going` case says it in `answer` instead:
         # there is no committed answer there for this line to qualify.

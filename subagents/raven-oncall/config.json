@@ -46,7 +46,10 @@
       "image_generate",
       "text_to_speech",
       "video_generate"
-    ]
+    ],
+    "oncall": {
+      "enabled": true
+    }
   },
   "memory": {
     "backend": "everos",
