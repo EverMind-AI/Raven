@@ -58,20 +58,6 @@ def test_learn_with_decay_recent_routine_outweighs_stale_one():
         now_fn=lambda: _NOW,
     )
 
-    fresh_dates = [
-        _NOW - timedelta(days=0, hours=0),
-        _NOW - timedelta(days=7, hours=0),
-        _NOW - timedelta(days=14, hours=0),
-    ]
-    # Stale routine — same Tuesday-9am bin but 30+ days old
-    stale_dates = [
-        _NOW - timedelta(days=35),
-        _NOW - timedelta(days=42),
-        _NOW - timedelta(days=49),
-    ]
-    # Use different days-of-week so they're separate bins
-    # fresh: Friday 9am (weekday 4), stale: Tuesday 9am (weekday 1)
-    fresh_tuesdays = [d.replace(hour=9, minute=0) for d in [_NOW - timedelta(days=0)]]
     # Build entries for two clearly-distinct bins:
     fresh_entries = []
     stale_entries = []

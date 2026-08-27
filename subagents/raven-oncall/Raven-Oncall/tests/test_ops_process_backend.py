@@ -140,8 +140,9 @@ class FakeHost:
         }
 
 
-def _exe(host, budget=None):
-    return ProcessExecutor(host, remote_dir="/w", command=CMD, budget_minutes_total=budget)
+def _exe(host, budget=None, command=None):
+    return ProcessExecutor(host, remote_dir="/w", command=command or CMD,
+                           budget_minutes_total=budget)
 
 
 def _spec(cfg, key="j1"):
@@ -848,3 +849,87 @@ async def test_a_chained_command_reaches_a_shell_in_the_launcher() -> None:
             body = text
     assert "exec sh -c" in body, body
     assert "cp /srv/case/run.sh ." in body
+
+
+# ---- which shell runs the owner's command ----
+
+async def _staged_launcher(cmd: str) -> str:
+    """The launcher this backend actually stages for ``cmd``.
+
+    Read back out of the host's own traffic rather than rebuilt here: a test that
+    recomputes the body would keep passing after the body changed.
+    """
+    import base64 as _b64
+
+    host = FakeHost()
+    await _exe(host, command=cmd).submit(_spec({"lr": 1e-4}))
+    for seen in host.seen:
+        if ".raven-launch.sh" not in seen or "base64 -d" not in seen:
+            continue
+        for piece in seen.split("echo ")[1:]:
+            blob = piece.split(" | base64 -d", 1)[0].strip().strip("'")
+            try:
+                text = _b64.b64decode(blob).decode()
+            except Exception:  # noqa: BLE001 -- the config blob decodes too
+                continue
+            if text.startswith("#!/bin/sh"):
+                return text
+    raise AssertionError("no launcher was staged")
+
+
+@pytest.mark.asyncio
+async def test_a_compound_command_prefers_bash_and_falls_back_to_sh():
+    """Measured 2026-08-21: an arm declared an OpenFOAM case with
+    "source .../etc/bashrc && ..." -- correct in bash, and the standard way to
+    start that solver -- and round 0 died on "sh: 1: source: not found", because
+    /bin/sh on that box is dash. A whole task was lost to it.
+
+    The choice is made on the machine rather than here: no probe to make, no
+    cache to keep honest, and right even on a machine nobody has looked at.
+    """
+    body = await _staged_launcher("source /opt/env && cd x && ./run")
+
+    assert "exec bash -c" in body
+    assert "exec sh -c" in body, "a machine without bash still has to run it"
+    assert body.index("bash") < body.index("exec sh -c"), "bash is the preferred branch"
+
+
+@pytest.mark.asyncio
+async def test_a_single_command_still_execs_directly():
+    """No shell in front of it: the pid the launcher advertises has to be the
+    job's own, or cancelling reaches a shell that has already gone."""
+    body = await _staged_launcher("bash run_fea.sh")
+
+    assert "exec bash run_fea.sh" in body
+    assert "command -v" not in body
+
+
+# ---- whose pid decides whether the job is still alive ----
+
+def test_the_probe_asks_our_own_pid_before_the_shared_one():
+    """``pid`` is a plain name in the job's own directory and the owner's command
+    writes to it -- usually with the SOLVER's pid, so a cancel reaches the solver.
+    Measured 2026-08-21 on the OpenFOAM case: the solver reached endTime, all
+    twenty time directories were written, and the ledger still said "ended from
+    outside before it could record a result", because the probe read that pid
+    after the solver exited and while the script was still writing result.json.
+    """
+    from raven.ops.process_backend import _OWN_PID
+
+    cmd = ProcessExecutor(FakeHost(), remote_dir="/w", command=CMD)._probe_cmd("/w/j1")
+
+    assert _OWN_PID in cmd
+    assert cmd.index(_OWN_PID) < cmd.index("/pid"), "ours is consulted first"
+    assert "/pid" in cmd, "a directory staged before this file existed still has to work"
+
+
+@pytest.mark.asyncio
+async def test_the_launcher_writes_both_pids():
+    """One for a cancel to reach the solver through, one that stays live across
+    the wrap-up because exec carries it through every layer."""
+    from raven.ops.process_backend import _OWN_PID
+
+    body = await _staged_launcher("bash run_fea.sh")
+
+    assert "echo $$ > pid" in body
+    assert f"echo $$ > {_OWN_PID}" in body

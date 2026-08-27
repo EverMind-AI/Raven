@@ -25,6 +25,7 @@ export type JsonValue = string | number | boolean | null | unknown[] | {};
  */
 export type TurnEvent =
   | MessageStartEvent
+  | EpisodeStartEvent
   | TokenDeltaEvent
   | ThinkingDeltaEvent
   | ToolStartEvent
@@ -32,7 +33,8 @@ export type TurnEvent =
   | ToolCompleteEvent
   | MessageCompleteEvent
   | ErrorEvent
-  | CronDeliveredEvent;
+  | CronDeliveredEvent
+  | CronMissedEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -151,6 +153,39 @@ export interface ModelOptionProvider {
   total_models: number;
   needs_api_base: boolean;
   warning: string;
+  /**
+   * Keyed by the model id as it appears in `models`.
+   */
+  model_labels?: {
+    [k: string]: ModelLabel;
+  };
+}
+/**
+ * How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelLabel".
+ */
+export interface ModelLabel {
+  label: string;
+  description?: string;
+}
+/**
+ * One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ProviderEndpointInfo".
+ */
+export interface ProviderEndpointInfo {
+  label: string;
+  /**
+   * Redacted for display: `****set****` or `(empty)`.
+   */
+  api_key: string;
+  api_base?: string;
+  extra_headers?: {
+    [k: string]: string;
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -283,6 +318,16 @@ export interface MessageStartEvent {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "EpisodeStartEvent".
+ */
+export interface EpisodeStartEvent {
+  type: 'episode.start';
+  payload: {
+    index: number;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TokenDeltaEvent".
  */
 export interface TokenDeltaEvent {
@@ -313,6 +358,7 @@ export interface ToolStartEvent {
     arguments: {
       [k: string]: JsonValue;
     };
+    display?: string | null;
   };
 }
 /**
@@ -359,6 +405,7 @@ export interface ErrorEvent {
     code: number;
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
+    detail?: string;
   };
 }
 /**
@@ -372,6 +419,21 @@ export interface CronDeliveredEvent {
     name: string;
     text: string;
     fired_at: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronMissedEvent".
+ */
+export interface CronMissedEvent {
+  type: 'cron.missed';
+  payload: {
+    count: number;
+    items: {
+      name: string;
+      scheduled_at: string;
+      message: string;
+    }[];
   };
 }
 /**
@@ -615,6 +677,10 @@ export interface TurnSendParams {
   channel?: string;
   chat_id?: string;
   sender_id?: string;
+  /**
+   * @maxItems 64
+   */
+  media?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -775,7 +841,7 @@ export interface ModelOptionsResult {
  */
 export interface ModelSaveKeyParams {
   slug: string;
-  api_key: string;
+  api_key?: string;
   api_base?: string;
   session_id?: string;
 }
@@ -835,6 +901,55 @@ export interface ModelRemoveModelResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelEndpointsParams".
+ */
+export interface ModelEndpointsParams {
+  slug: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelEndpointsResult".
+ */
+export interface ModelEndpointsResult {
+  endpoints: ProviderEndpointInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddEndpointParams".
+ */
+export interface ModelAddEndpointParams {
+  slug: string;
+  label: string;
+  api_key?: string;
+  api_base?: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddEndpointResult".
+ */
+export interface ModelAddEndpointResult {
+  endpoints: ProviderEndpointInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRemoveEndpointParams".
+ */
+export interface ModelRemoveEndpointParams {
+  slug: string;
+  label: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRemoveEndpointResult".
+ */
+export interface ModelRemoveEndpointResult {
+  endpoints: ProviderEndpointInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ConfigGetParams".
  */
 export interface ConfigGetParams {
@@ -859,6 +974,9 @@ export interface ConfigGetResult {
 export interface ConfigSetParams {
   key: string;
   value: JsonValue;
+  session_id?: string;
+  provider?: string;
+  scope?: 'session' | 'default';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -867,6 +985,10 @@ export interface ConfigSetParams {
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
+  value?: string;
+  scope?: 'session' | 'default';
+  session_id?: string;
+  applies_to_session?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

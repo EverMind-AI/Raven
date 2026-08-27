@@ -1,13 +1,21 @@
-"""Unit tests for SandboxDebugServer — all run without boxlite or KVM."""
+"""Unit tests for SandboxDebugServer — all run without boxlite or KVM.
+
+That is enforced by the ``_boxlite_importable`` fixture below rather than merely
+intended: mock.patch needs its target importable, so the claim used to hold only
+where the optional extra happened to be installed.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +25,38 @@ from raven.sandbox.debug_server import (
     SandboxDebugServer,
     SandboxDebugServerError,
 )
+
+
+@pytest.fixture(autouse=True)
+def _boxlite_importable():
+    """Keep this file's promise of running without boxlite actually true.
+
+    Every reference here is ``patch("boxlite.Boxlite")`` -- the real package is
+    never called into -- but mock.patch has to import the target, and the server
+    itself probes availability with a bare ``import boxlite``. Without the
+    optional extra both failed outright rather than exercising anything. A
+    stand-in restores them, scoped so no other test starts seeing boxlite as
+    installed. The two tests that assert the not-installed path patch
+    ``builtins.__import__`` themselves, so they are unaffected.
+    """
+    try:
+        available = importlib.util.find_spec("boxlite") is not None
+    except ModuleNotFoundError:
+        available = False
+    if available:
+        yield
+        return
+    stub = types.ModuleType("boxlite")
+    # Exactly the two names raven reaches for: get_boxlite_runtime builds
+    # Boxlite(Options(home_dir=...)), and Boxlite is always the patched mock, so
+    # the Options instance is only ever handed to a mock and never inspected.
+    stub.Boxlite = object
+    stub.Options = lambda **kwargs: kwargs
+    sys.modules["boxlite"] = stub
+    try:
+        yield
+    finally:
+        sys.modules.pop("boxlite", None)
 
 
 @pytest.fixture

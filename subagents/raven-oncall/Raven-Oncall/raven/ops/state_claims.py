@@ -487,9 +487,19 @@ def basis_problems(basis: str, facts: StateFacts, *, last_seq: int) -> list[str]
     if not (basis or "").strip():
         return ["basis is empty"]
     if facts.probe_seq <= last_seq:
+        # Naming the tool that takes an observation, because nothing else does.
+        # Measured 2026-08-21: a watch campaign hit this refusal, went and ran a
+        # curl through exec -- which reads the world but records nothing, so the
+        # counter did not move -- and hit it again. Two turns to learn an order
+        # that one clause states. The same rule already governs wake messages
+        # ("every branch names the tool that performs it"); this refusal had been
+        # left out of it.
         problems.append(
             "no observation has been recorded since the previous decision; "
-            "a basis must cite a reading taken since then"
+            "a basis must cite a reading taken since then -- take one with "
+            "ops_tune_status, which is what records that a look happened "
+            "(a command run through exec reads the world but leaves no record, "
+            "so it does not count as one)"
         )
 
     values = [v for series in facts.metric_readings.values() for v in series]

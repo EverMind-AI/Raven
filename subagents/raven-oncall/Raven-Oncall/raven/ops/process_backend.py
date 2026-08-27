@@ -106,11 +106,26 @@ def _stated_cause(data: dict[str, Any]) -> str:
 # 2026-08-18, the first time a case was staged into a job directory.
 _LAUNCHER = ".raven-launch.sh"
 _MARKER = ".raven-started-at"
+# The pid of the whole job, written by the launcher and by nothing else.
+#
+# ``pid`` cannot answer that question: it is a plain name in the job's own
+# directory, and both the owner's script and the owner's command write to it --
+# usually with the SOLVER's pid, so that a cancel reaches the solver rather than
+# the wrapper around it. Measured 2026-08-21 on the OpenFOAM case: the solver
+# reached endTime, the run finished normally with all twenty time directories
+# written, and the ledger recorded "ended from outside before it could record a
+# result", because the probe read that pid after the solver had exited and while
+# the script was still tailing a large log to write result.json.
+#
+# The launcher's own pid is not the solver's -- exec keeps it across every layer
+# (bash -c, setpriv, the script itself), so it stays live through the wrap-up and
+# goes away only when the job is really over.
+_OWN_PID = ".raven-pid"
 # Which of the case's files a run has been seen to write, per case, remembered on
 # the machine. Not in the campaign's meta.json: that file is the apparatus'
 # declaration and is refused if it changes, while this list grows as rounds run.
 _WRITES_FILE = ".raven-case-writes.json"
-_RESERVED = ("config.json", "result.json", "pid", "job.log", _LAUNCHER, _MARKER)
+_RESERVED = ("config.json", "result.json", "pid", "job.log", _LAUNCHER, _MARKER, _OWN_PID)
 
 
 _SHELL_OPERATORS = frozenset({"&&", "||", "|", ";", ">", ">>", "<", "&"})
@@ -177,7 +192,16 @@ class ProcessExecutor(JobBackend):
             if budget_minutes_total is not None
             else None
         )
-        self._budget = self._budget_decl.total if self._budget_decl else None
+        # A budget the campaign meters itself -- wall-clock, or looks taken -- is
+        # not a number of minutes, and this is the only place that would treat it
+        # as one: a watch allowed 40 looks would have every job clamped to what
+        # was left of "40 minutes". Those ceilings belong to the campaign, which
+        # is the only thing that can count them, so here there is none.
+        self._budget = (
+            self._budget_decl.total
+            if self._budget_decl is not None and not self._budget_decl.off_machine
+            else None
+        )
         self._objective = dict(objective or {})
         self._staged_case = staged_case.rstrip("/")
         self._prefix = prefix
@@ -193,6 +217,15 @@ class ProcessExecutor(JobBackend):
 
     def _job_dir(self, idem_key: str) -> str:
         return f"{self._remote_dir}/jobs/{idem_key}"
+
+    def job_dir(self, idem_key: str) -> str:
+        """Where this trial's directory is on the machine.
+
+        Public because a declared reading taken after a trial has to run inside
+        it, and where a trial's directory is is this backend's layout rather than
+        something a tool layer should reconstruct from the campaign's meta.
+        """
+        return self._job_dir(idem_key)
 
     def _shadow_tree_cmd(self, job_dir: str) -> str:
         """Give this trial the owner's case without copying its bytes, or nothing.
@@ -417,11 +450,39 @@ class ProcessExecutor(JobBackend):
         # written, so the job looked started, and it never produced a result. Only
         # chaining commands pay the extra shell; a single command still execs
         # directly and keeps the pid pointing at the job.
-        body = f"exec {cmd}" if _is_simple(cmd) else f"exec sh -c {shlex.quote(cmd)}"
+        # A compound command needs a shell, and which shell is decided on the
+        # machine, at the moment of running, rather than here. The owner's own
+        # commands are written the way they would be typed there, and that means a
+        # login shell: measured 2026-08-21, an arm declared an OpenFOAM case with
+        # "source .../etc/bashrc && ..." -- correct in bash, and the standard way
+        # to start that solver -- and round 0 died on "sh: 1: source: not found"
+        # because /bin/sh on that box is dash. A whole task was lost to it.
+        #
+        # Deciding here would mean probing the host, caching the answer per
+        # connection, and keeping that cache honest. Deciding there costs one line
+        # and is right even on a machine nobody has looked at. It also narrows the
+        # spread rather than widening it: today the effective shell is whatever
+        # /bin/sh happens to point at, which is dash on Debian, bash on RHEL and
+        # ash on Alpine.
+        if _is_simple(cmd):
+            body = f"exec {cmd}"
+        else:
+            quoted = shlex.quote(cmd)
+            body = (
+                "if command -v bash >/dev/null 2>&1; then\n"
+                f"  exec bash -c {quoted}\n"
+                "else\n"
+                f"  exec sh -c {quoted}\n"
+                "fi"
+            )
         launcher = (
             "#!/bin/sh\n"
             f"cd {job_dir}\n"
+            # Both, and for different readers: ``pid`` is what a cancel and the
+            # owner's own script use, and either may overwrite it; _OWN_PID is
+            # this process, which exec carries through every layer below.
             "echo $$ > pid\n"
+            f"echo $$ > {_OWN_PID}\n"
             f"{body}\n"
         )
         staged = await self._arun(
@@ -465,6 +526,10 @@ class ProcessExecutor(JobBackend):
             f"if [ -f {job_dir}/result.json ]; then "
             f"  printf 'result '; python3 -c \"import json,sys;"
             f"print(json.load(open(sys.argv[1])).get('status','unknown'))\" {job_dir}/result.json 2>/dev/null || echo unknown; "
+            # _OWN_PID first: it is the whole job, wrap-up included. ``pid`` is the
+            # fallback for a job directory staged before this file existed.
+            f"elif [ -f {job_dir}/{_OWN_PID} ] && kill -0 $(cat {job_dir}/{_OWN_PID}) 2>/dev/null; then echo alive; "
+            f"elif [ -f {job_dir}/{_OWN_PID} ]; then echo gone; "
             f"elif [ -f {job_dir}/pid ] && kill -0 $(cat {job_dir}/pid) 2>/dev/null; then echo alive; "
             f"elif [ -f {job_dir}/pid ]; then echo gone; "
             f"else echo absent; fi"

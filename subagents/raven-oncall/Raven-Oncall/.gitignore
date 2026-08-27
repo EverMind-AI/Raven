@@ -30,6 +30,8 @@ poetry.lock
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
+coverage-baseline-candidate.json
 htmlcov/
 botpy.log
 nano.*.save
@@ -42,6 +44,7 @@ logs/
 .DS_Store
 .claude/
 tmp.sh
+.work_context/
 # Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
 

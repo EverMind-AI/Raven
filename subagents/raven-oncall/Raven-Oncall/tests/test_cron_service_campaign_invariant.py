@@ -32,7 +32,6 @@ def _add(svc: CronService, name: str, *, campaign: str | None = None, offset_ms:
         name=name,
         schedule=CronSchedule(kind="at", at_ms=svc._now_ms() + offset_ms),
         message=kw.pop("message", name),
-        deliver=True,
         channel="tui",
         to="default",
         delete_after_run=True,

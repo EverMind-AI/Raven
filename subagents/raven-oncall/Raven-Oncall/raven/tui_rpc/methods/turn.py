@@ -17,12 +17,14 @@ single-argument dispatcher handlers.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from loguru import logger
 from pydantic import ValidationError
 
-from raven.spine import ChatType, Origin, Source, TurnHandle, TurnRequest
+from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest
 from raven.spine.scheduler import Scheduler, SchedulerDrainingError
 from raven.tui_rpc.errors import RpcError, TurnInProgressError
 from raven.tui_rpc.models import (
@@ -37,6 +39,57 @@ if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
 
 _TURN_FAILED_CODE = -32099
+
+
+def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
+    """Turn the front end's attachment paths into ``Media`` for the spine.
+
+    Resolved with the filesystem tools' own policy rather than against the
+    process cwd. A caller sends what it holds, and what it holds is a workspace
+    path (``uploads/shot.png``) -- the same spelling every file tool takes, and
+    one that resolves to nothing from wherever ``raven serve`` happens to have
+    been started. The downstream check is a bare ``is_file()`` that drops a miss
+    in silence, so a cwd-relative resolve loses the attachment with no error
+    anywhere.
+
+    The mime is left generic on purpose: ``render.build_user_content`` sniffs
+    the magic bytes, and the channels' own intake does the same thing here.
+    A path that does not resolve, or resolves outside the allowed directory,
+    is dropped with a log line -- one bad attachment must not fail the turn.
+    """
+    if not paths:
+        return ()
+    from raven.agent.tools.filesystem import _resolve_path
+    from raven.config import load_config
+
+    try:
+        cfg = load_config()
+        workspace = Path(cfg.agents.defaults.workspace).expanduser()
+        allowed = workspace if cfg.tools.restrict_to_workspace else None
+    except Exception as exc:
+        logger.warning("turn.send: cannot resolve the workspace ({}); attachments dropped", exc)
+        return ()
+
+    out: list[Media] = []
+    for raw in paths:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            resolved = _resolve_path(raw.strip(), workspace, allowed)
+            if not resolved.is_file():
+                logger.warning("turn.send: attachment {} does not resolve to a file", raw)
+                continue
+        except Exception as exc:
+            # Every failure shape lands here on purpose. A path can be refused
+            # (PermissionError), embed a null byte or an unknown ~user
+            # (ValueError / RuntimeError), or exceed the filesystem's name
+            # limit (OSError) -- and each of those escaping would turn one bad
+            # attachment into a turn that never runs.
+            logger.warning("turn.send: attachment {} rejected: {}", raw, exc)
+            continue
+        out.append(Media(path=str(resolved), mime="application/octet-stream", kind="file"))
+    return tuple(out)
+
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -100,6 +153,7 @@ async def turn_send(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -143,12 +197,19 @@ async def turn_send(
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel=parsed.channel or "tui",
+            # The channel the delivery hub registered its outlet under. A turn
+            # stamped with one the hub does not know is accepted, runs, and has
+            # every deliverable dropped -- "no outlet for channel" in the log and
+            # an empty reply on the wire. Defaulted to "tui" so the socket path
+            # is unchanged; `raven acp` registers its outlet as "acp" and passes
+            # that here, and the two must agree or nothing is delivered at all.
+            channel=parsed.channel or default_channel,
             chat_id=parsed.chat_id or "default",
             sender_id=parsed.sender_id or "user",
             chat_type=ChatType.DM,
         ),
         text=parsed.content,
+        media=_resolve_media(parsed.media),
         # conversation == the front-end subscription key, so the runner's stream
         # and the sink's message.complete reach the right subscription.
         conversation=parsed.session_key,
@@ -270,6 +331,7 @@ def register_turn_methods(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -286,6 +348,7 @@ def register_turn_methods(
             scheduler=scheduler,
             turn_ids=turn_ids,
             build_error=build_error,
+            default_channel=default_channel,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:

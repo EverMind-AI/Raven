@@ -60,7 +60,7 @@ export const isCopyShortcut = (
  * ``config.yaml`` (default ``ctrl+b``).
  *
  * Documented in tips.py, the Python CLI prompt_toolkit handler, and the
- * config.yaml default. The TUI honours the same config knob (#18994);
+ * config.yaml default. The TUI honours the same config knob;
  * when ``voice.record_key`` is e.g. ``ctrl+o`` the TUI binds Ctrl+O.
  *
  * Only the documented default (``ctrl+b``) additionally accepts the
@@ -99,20 +99,15 @@ export const DEFAULT_VOICE_RECORD_KEY: ParsedVoiceRecordKey = {
  * modifier would produce a display/binding mismatch — a config like
  * ``cmd+b`` would render as ``Cmd+B`` but silently fire on Alt+B, or
  * never fire at all on legacy terminals even though the UI advertises
- * it (Copilot round-6 review on #19835). Users on modern kitty-style
- * terminals (iTerm2 CSI-u, Ghostty, Kitty, WezTerm, Alacritty) spell
- * the platform action modifier ``super`` / ``win``, which match the
- * unambiguous ``key.super`` bit. macOS users on Terminal.app stick
- * with the documented ``ctrl+b``.
+ * it. Users on modern kitty-style terminals (iTerm2 CSI-u, Ghostty,
+ * Kitty, WezTerm, Alacritty) spell the platform action modifier
+ * ``super`` / ``win``, which match the unambiguous ``key.super`` bit.
+ * macOS users on Terminal.app stick with the documented ``ctrl+b``.
  *
- * Cross-runtime parity: the ``ctrl`` / ``control`` / ``alt`` / ``option`` /
- * ``opt`` spellings are normalized identically in the classic CLI
- * (``raven_cli/voice.py::normalize_voice_record_key_for_prompt_toolkit``)
- * so one ``voice.record_key`` value binds the same shortcut in both
- * runtimes (Copilot round-9 review on #19835). The ``super`` /
- * ``win`` / ``windows`` spellings are TUI-only — prompt_toolkit has no
- * super modifier, so the CLI falls back to the documented default and
- * logs a warning at startup (Copilot round-11 review on #19835). */
+ * ``ctrl`` / ``control`` and ``alt`` / ``option`` / ``opt`` are accepted
+ * spellings of the same two modifiers, so a config written either way
+ * binds the same shortcut. ``super`` / ``win`` / ``windows`` only ever
+ * arrive as ``key.super`` on a kitty-style terminal. */
 const _MOD_ALIASES: Record<string, VoiceRecordKeyMod> = {
   alt: 'alt',
   control: 'ctrl',
@@ -148,13 +143,12 @@ const _NAMED_KEY_ALIASES: Record<string, VoiceRecordKeyNamed> = {
  * voice check runs, so a binding like ``ctrl+c`` (interrupt),
  * ``ctrl+d`` (quit), or ``ctrl+l`` (clear screen) would be advertised
  * in /voice status but never fire push-to-talk. Reject at parse time
- * so the user gets the documented Ctrl+B instead of a dead shortcut
- * (Copilot round-4 review on #19835).
+ * so the user gets the documented Ctrl+B instead of a dead shortcut.
  *
  * ``ctrl+x`` is intentionally NOT here — it's only claimed during
  * queue-edit (``queueEditIdx !== null``), so the voice binding works
  * for most of the session and matches CLI parity for ``ctrl+<letter>``
- * bindings (Copilot round-8 review on #19835). */
+ * bindings. */
 const _RESERVED_CTRL_CHARS = new Set(['c', 'd', 'l'])
 
 /** On macOS the action-modifier intercepts these editor chords via
@@ -166,7 +160,7 @@ const _RESERVED_CTRL_CHARS = new Set(['c', 'd', 'l'])
  * On Linux/Windows those globals key off Ctrl instead of Super, so
  * super+<letter> bindings don't collide. Gate the rejection to darwin
  * at parse time so kitty/CSI-u ``super+<key>`` configs still work for
- * non-mac users (Copilot round-8 review on #19835). */
+ * non-mac users. */
 const _RESERVED_SUPER_CHARS = new Set(['c', 'd', 'l', 'v'])
 
 /** On macOS ``isActionMod`` accepts ``key.meta`` as the action
@@ -174,8 +168,7 @@ const _RESERVED_SUPER_CHARS = new Set(['c', 'd', 'l', 'v'])
  * terminals. So on darwin a configured ``alt+c`` / ``alt+d`` / ``alt+l``
  * gets swallowed by ``isCopyShortcut`` / ``isAction`` before the voice
  * check runs. Block at parse time so /voice status doesn't advertise
- * a shortcut that actually copies / quits / clears (Copilot round-12
- * review on #19835). */
+ * a shortcut that actually copies / quits / clears. */
 const _RESERVED_ALT_CHARS_MAC = new Set(['c', 'd', 'l'])
 
 interface RuntimeKeyEvent {
@@ -227,10 +220,9 @@ const _matchesNamedKey = (named: VoiceRecordKeyNamed, key: RuntimeKeyEvent, ch: 
  * Accepts ``unknown`` because the source is raw YAML via
  * ``config.get full`` — a hand-edited ``voice.record_key: 1`` or
  * ``voice.record_key: true`` would otherwise crash ``.trim()`` on a
- * non-string scalar (Copilot round-3 review on #19835). Non-string /
- * empty / unrecognised values fall back to the documented Ctrl+B
- * default so a typo never silently disables the shortcut.
- */
+ * non-string scalar. Non-string / empty / unrecognised values fall
+ * back to the documented Ctrl+B default so a typo never silently
+ * disables the shortcut. */
 export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
   if (typeof raw !== 'string') {
     return DEFAULT_VOICE_RECORD_KEY
@@ -257,9 +249,9 @@ export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
   // Reject multi-modifier chords (``ctrl+alt+r``, ``cmd+ctrl+b``) rather
   // than silently dropping the extra modifier — the previous
   // single-token validator made a typo bind a different shortcut than
-  // the user configured (Copilot round-3 review on #19835). The classic
-  // CLI only supports single-modifier bindings via prompt_toolkit's
-  // ``c-x`` / ``a-x`` rewrite in ``cli.py``, so this matches CLI parity.
+  // the user configured. The classic CLI only supports single-modifier
+  // bindings via prompt_toolkit's ``c-x`` / ``a-x`` rewrite in
+  // ``cli.py``, so this matches CLI parity.
   if (modCandidates.length > 1) {
     return DEFAULT_VOICE_RECORD_KEY
   }
@@ -267,8 +259,7 @@ export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
   // Require an explicit modifier. A bare ``o`` / ``space`` / ``escape``
   // has no sensible mapping: the CLI's prompt_toolkit binds the raw
   // key (no rewrite) so bare-char configs would silently diverge
-  // between the two runtimes (Copilot round-4 review on #19835).
-  // Fall back to the documented default.
+  // between the two runtimes. Fall back to the documented default.
   if (modCandidates.length === 0) {
     return DEFAULT_VOICE_RECORD_KEY
   }
@@ -305,7 +296,7 @@ export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
   // accepts as the mac action modifier. So ``alt+c`` / ``alt+d`` / ``alt+l``
   // collide with copy / exit / clear in ``useInputHandlers()`` before the
   // voice check. Reject at parse time on darwin only — non-mac ``alt+<letter>``
-  // bindings are still usable (Copilot round-12 review on #19835).
+  // bindings are still usable.
   if (isMac && mod === 'alt' && last.length === 1 && _RESERVED_ALT_CHARS_MAC.has(last)) {
     return DEFAULT_VOICE_RECORD_KEY
   }
@@ -329,8 +320,7 @@ export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
  *
  * Platform-aware for the ``super`` modifier: renders ``Cmd`` on macOS and
  * ``Super`` elsewhere. Previously rendered ``Cmd`` universally, which told
- * Linux/Windows users the wrong modifier to press (Copilot review, round
- * 2 on #19835). */
+ * Linux/Windows users the wrong modifier to press. */
 export const formatVoiceRecordKey = (parsed: ParsedVoiceRecordKey): string => {
   const modLabel =
     parsed.mod === 'super' ? (isMac ? 'Cmd' : 'Super') : parsed.mod[0].toUpperCase() + parsed.mod.slice(1)
@@ -346,7 +336,7 @@ export const formatVoiceRecordKey = (parsed: ParsedVoiceRecordKey): string => {
  *
  * Compare on the parsed spec rather than ``raw`` so semantically-equal
  * aliases (``control+b``, ``ctrl + b``) still get the macOS Cmd+B
- * muscle-memory fallback (Copilot review, round 2 on #19835). */
+ * muscle-memory fallback. */
 const _isDefaultVoiceKey = (parsed: ParsedVoiceRecordKey): boolean =>
   parsed.mod === DEFAULT_VOICE_RECORD_KEY.mod &&
   parsed.ch === DEFAULT_VOICE_RECORD_KEY.ch &&
@@ -371,8 +361,7 @@ export const isVoiceToggleKey = (
   // The parser rejects multi-modifier configs (``ctrl+shift+b`` etc.),
   // so at match time Shift must always be clear — otherwise
   // ``ctrl+tab`` would also fire on Ctrl+Shift+Tab and ``alt+enter``
-  // on Alt+Shift+Enter, triggering a different chord than configured
-  // (Copilot round-5 review on #19835).
+  // on Alt+Shift+Enter, triggering a different chord than configured.
   if (key.shift === true) {
     return false
   }
@@ -387,14 +376,13 @@ export const isVoiceToggleKey = (
       //
       // Bare Escape on raven-ink can arrive as ``key.meta=true`` on some
       // terminals, so a configured ``alt+escape`` must not match that shape;
-      // require an explicit alt bit for escape chords (Copilot round-7
-      // follow-up on #19835).
+      // require an explicit alt bit for escape chords.
       return (key.alt === true || (key.meta && key.escape !== true)) && !key.ctrl && key.super !== true
 
     case 'ctrl':
       // Require the Ctrl bit AND a clear Alt/Super so a chord like
       // Ctrl+Alt+<key> / Ctrl+Cmd+<key> doesn't spuriously match
-      // ``ctrl+<key>`` (Copilot round-6 review on #19835).
+      // ``ctrl+<key>``.
       //
       // The documented default (``ctrl+b``) additionally accepts the
       // explicit ``key.super`` bit on macOS for Cmd+B muscle memory —
@@ -410,10 +398,10 @@ export const isVoiceToggleKey = (
     case 'super':
       // Require the explicit ``key.super`` bit (kitty-style protocol)
       // AND clear Ctrl/Alt/Meta so Ctrl+Cmd+X or Alt+Cmd+X don't
-      // spuriously fire the super binding (Copilot round-6 review on
-      // #19835). Legacy-terminal users whose Cmd arrives as
-      // ``key.meta`` need a kitty-protocol terminal — see the
-      // _MOD_ALIASES doc-comment for the rationale.
+      // spuriously fire the super binding. Legacy-terminal users
+      // whose Cmd arrives as ``key.meta`` need a kitty-protocol
+      // terminal — see the _MOD_ALIASES doc-comment for the
+      // rationale.
       return key.super === true && !key.ctrl && !key.alt && !key.meta
   }
 }

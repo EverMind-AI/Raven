@@ -3558,3 +3558,30 @@ class TestAcpEverosIdentity:
                 everos={"userId": "liv", "agentId": "coder"},
             )
         assert "everos" not in caplog.text
+
+
+def test_the_spawning_ravens_home_reaches_its_cli_subagent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``RAVEN_HOME`` overrides the login-shell capture, and is absent without one.
+
+    The capture answers "what can this child find" -- nvm, conda, a homebrew
+    PATH. It cannot answer "which raven spawned it", because ``RAVEN_HOME`` is
+    normally given on the command line rather than exported from a profile, so a
+    child that resolves it from the shell resolves the *default* home instead.
+
+    Measured 2026-08-26: a host started as ``RAVEN_HOME=~/.raven-main`` polls
+    that home's cron store, while a sub-agent handing a wake back to "the host's
+    store" wrote into ``~/.raven``. Both homes exist, so nothing errored -- the
+    hand-off simply landed in a file nobody reads and the wake never arrived.
+    """
+    from raven.agent.subagent.backends.cli_agent import _host_home_env
+
+    monkeypatch.delenv("RAVEN_HOME", raising=False)
+    assert _host_home_env() == {}, "a raven on the default home must not pin one on its children"
+
+    monkeypatch.setenv("RAVEN_HOME", "/tmp/raven-main")
+    assert _host_home_env() == {"RAVEN_HOME": "/tmp/raven-main"}
+
+    # Whitespace-only is how an unset variable often reaches a process through a
+    # shell wrapper, and it must read as unset rather than as an empty home.
+    monkeypatch.setenv("RAVEN_HOME", "   ")
+    assert _host_home_env() == {}

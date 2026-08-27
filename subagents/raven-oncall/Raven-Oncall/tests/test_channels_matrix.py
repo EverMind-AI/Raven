@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytest.importorskip("nio")
+
 from raven.channels.adapters.matrix import content
 from raven.channels.adapters.matrix.channel import MatrixChannel
 

@@ -175,13 +175,21 @@ def test_the_tools_say_a_campaign_is_already_there() -> None:
 
 
 def test_the_resident_tool_notes_point_at_the_campaign_first() -> None:
-    """TOOLS.md is in BOOTSTRAP_FILES, so unlike a skill it is in the system prompt
-    on every turn -- measured on the same day, skills reached 0 of 2 wake turns
-    while this file was present throughout. So the instruction to read the campaign
-    before hunting for the machine belongs here."""
+    """The workspace's TOOLS.md is in BOOTSTRAP_FILES, so unlike a skill it is in
+    the system prompt on every turn -- measured on the same day, skills reached 0
+    of 2 wake turns while this file was present throughout. So the instruction to
+    read the campaign before hunting for the machine belongs there.
+
+    The on-call half lives in its own template and is appended to the workspace
+    copy only for an instance that has machines registered (see raven.ops.gate):
+    a hundred lines about declaring campaigns is guidance an owner with no
+    machines cannot act on.
+    """
     from pathlib import Path
 
-    text = (Path(__file__).resolve().parents[1] / "raven" / "templates" / "TOOLS.md").read_text(encoding="utf-8")
+    text = (
+        Path(__file__).resolve().parents[1] / "raven" / "templates" / "TOOLS_ONCALL.md"
+    ).read_text(encoding="utf-8")
 
     assert "ops_tune_status` with no arguments" in text
     assert "do not ssh to the host to hunt for paths or ports" in text

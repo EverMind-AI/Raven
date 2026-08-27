@@ -139,6 +139,15 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class EpisodeStartPayload(_Strict):
+    index: int
+
+
+class EpisodeStartEvent(_Strict):
+    type: Literal["episode.start"]
+    payload: EpisodeStartPayload
+
+
 class TokenDeltaPayload(_Strict):
     text: str
 
@@ -161,6 +170,7 @@ class ToolStartPayload(_Strict):
     tool_call_id: str
     name: str
     arguments: dict[str, JsonValue]
+    display: str | None = None
 
 
 class ToolStartEvent(_Strict):
@@ -203,6 +213,7 @@ class ErrorEventPayload(_Strict):
     code: int
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
+    detail: str | None = None
 
 
 class ErrorEvent(_Strict):
@@ -222,9 +233,26 @@ class CronDeliveredEvent(_Strict):
     payload: CronDeliveredPayload
 
 
+class CronMissedItem(_Strict):
+    name: str
+    scheduled_at: str
+    message: str
+
+
+class CronMissedPayload(_Strict):
+    count: int
+    items: list[CronMissedItem]
+
+
+class CronMissedEvent(_Strict):
+    type: Literal["cron.missed"]
+    payload: CronMissedPayload
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
+        EpisodeStartEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -233,6 +261,7 @@ TurnEvent = Annotated[
         MessageCompleteEvent,
         ErrorEvent,
         CronDeliveredEvent,
+        CronMissedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -409,6 +438,14 @@ class TurnSendParams(_Strict):
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
+    # Attachment paths, workspace-relative or absolute. The same lane channels
+    # already use (``TurnRequest.media``): a vision-capable model gets the
+    # picture inlined in the user message, anything else gets a note naming it.
+    # Paths rather than bytes -- the caller has already put the file in the
+    # workspace, and every file tool is workspace-scoped. Bounded here so a
+    # malformed caller is refused at the schema rather than resolving thousands
+    # of paths; the renderer caps how many are inlined regardless.
+    media: list[str] | None = Field(default=None, max_length=64)
 
 
 class TurnSendResult(_Strict):
@@ -508,6 +545,18 @@ class SkillUnpinResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
+class ModelLabel(_Strict):
+    """How a model reads to a person, for the ids in ``models``.
+
+    Present only for models a catalogue describes; one released since the
+    bundled snapshot, or served by a local deployment, has no entry and the
+    picker shows its id.
+    """
+
+    label: str
+    description: str | None = None
+
+
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -518,6 +567,7 @@ class ModelOptionProvider(_Strict):
     auth_type: str
     key_env: str | None = None
     models: list[str]
+    model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
     warning: str
@@ -535,7 +585,9 @@ class ModelOptionsResult(_Strict):
 
 class ModelSaveKeyParams(_Strict):
     slug: str
-    api_key: str
+    # Empty for a local deployment, which is reached by address and has no key.
+    # The handler rejects an empty one for every other credential shape.
+    api_key: str = ""
     api_base: str | None = None
     session_id: str | None = None
 
@@ -573,6 +625,46 @@ class ModelRemoveModelResult(_Strict):
     provider: ModelOptionProvider
 
 
+class ProviderEndpointInfo(_Strict):
+    """One of a provider section's endpoints, as the picker shows it."""
+
+    label: str
+    api_key: str = Field(..., description="Redacted for display: `****set****` or `(empty)`.")
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
+
+
+class ModelEndpointsParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelEndpointsResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelAddEndpointParams(_Strict):
+    slug: str
+    label: str = Field(..., description="Idempotency key: an existing entry with this label is replaced wholesale.")
+    api_key: str = ""
+    api_base: str | None = None
+    session_id: str | None = None
+
+
+class ModelAddEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelRemoveEndpointParams(_Strict):
+    slug: str
+    label: str
+    session_id: str | None = None
+
+
+class ModelRemoveEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
 # ---------------------------------------------------------------------------
 # config.* methods
 # ---------------------------------------------------------------------------
@@ -592,6 +684,11 @@ class ConfigGetResult(_Strict):
 class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
+    # Model-switch extras. ``scope`` decides the reach of a ``key="model"``
+    # switch: this conversation, or the default a new one starts on.
+    session_id: str | None = None
+    provider: str | None = None
+    scope: Literal["session", "default"] | None = None
 
 
 class ConfigSetResult(_Strict):
@@ -601,6 +698,14 @@ class ConfigSetResult(_Strict):
     # already includes ``null``; the schema's redundant ``oneOf: [JsonValue,
     # null]`` collapses to the same canonical "any" form.
     previous: JsonValue = Field(...)
+    # Present on a model switch: what was applied, and where it reached.
+    value: str | None = None
+    scope: Literal["session", "default"] | None = None
+    session_id: str | None = None
+    # Does the asking conversation now run this model? A default-scoped switch
+    # moves the sessions that never chose one, so scope alone cannot answer it
+    # and a client that guesses shows a model the conversation is not on.
+    applies_to_session: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -846,6 +951,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
+    "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
+    "model.add_endpoint": (ModelAddEndpointParams, ModelAddEndpointResult),
+    "model.remove_endpoint": (ModelRemoveEndpointParams, ModelRemoveEndpointResult),
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
@@ -880,6 +988,7 @@ __all__ = [
     "McpToolInfo",
     "SkillInfo",
     "ModelOptionProvider",
+    "ProviderEndpointInfo",
     "UsageSnapshot",
     "CliResult",
     "StubResult",
@@ -896,6 +1005,7 @@ __all__ = [
     "SessionExportParams",
     "SessionExportResult",
     "MessageStartEvent",
+    "EpisodeStartEvent",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",
     "ToolStartEvent",
@@ -905,6 +1015,9 @@ __all__ = [
     "ErrorEvent",
     "CronDeliveredEvent",
     "CronDeliveredPayload",
+    "CronMissedEvent",
+    "CronMissedItem",
+    "CronMissedPayload",
     # registry
     "METHOD_MODELS",
 ]

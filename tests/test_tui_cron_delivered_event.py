@@ -345,3 +345,105 @@ def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
 
     stale = sorted(set(EXEMPT) - {rel for rel, _, _ in starters})
     assert not stale, f"EXEMPT names a file that no longer starts cron: {stale}"
+
+
+async def test_a_wake_addressed_to_an_instance_is_not_fanned_out(emitter_spy: MagicMock) -> None:
+    """Same "already delivered" rule the IM gate exists for, one lane over.
+
+    A wake naming a sub-agent instance runs as a direct turn on that instance's
+    lane, and that lane *does* have a subscriber -- the pane the operator is
+    looking at. Its reply is on screen before this wrapper ever sees it, so
+    fanning it out would print the round twice: once as the instance answering,
+    once as a reminder about it.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.tui_commands import _build_cron_callback_spine
+
+    async def base_on_cron(job):
+        return "round 2: submitted 60 kN"
+
+    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui")
+
+    to_instance = SimpleNamespace(
+        id="j1",
+        name="ops:beam-limit-load:r2",
+        payload=SimpleNamespace(channel="tui", direct_agent="Raven-Oncall", direct_handle="inst-7"),
+    )
+    assert await wrapped(to_instance) == "round 2: submitted 60 kN"  # delivery itself untouched
+    emitter_spy.emit.assert_not_awaited()
+
+    # Half a target is no target: an ordinary tui reminder still fans out, which
+    # is the only way this instance pane has of showing a plain reminder at all.
+    emitter_spy.emit.reset_mock()
+    plain = SimpleNamespace(
+        id="j2", name="hydrate", payload=SimpleNamespace(channel="tui", direct_agent="Raven-Oncall", direct_handle=None)
+    )
+    await wrapped(plain)
+    emitter_spy.emit.assert_awaited_once()
+
+
+async def test_a_wake_to_an_instance_binds_its_addressee_for_the_wire(emitter_spy: MagicMock) -> None:
+    """The client demultiplexes on ``target``; an untagged frame is the main agent's.
+
+    ``turn.send`` binds a typed message's addressee into ``direct_targets`` and the
+    outlet/sink read it back to stamp every event of that turn. A wake dispatched
+    from cron never went through ``turn.send``, so nothing bound it -- and the
+    round's reply reached the client with no ``target`` on it, which the TUI reads
+    as the main conversation's.
+
+    Measured 2026-08-26 on the live run: four rounds ran, the instance log grew to
+    match, and the pane showed none of them.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.tui_commands import _build_cron_callback_spine
+
+    seen: dict[str, dict[str, str]] = {}
+
+    async def base_on_cron(job):
+        # Read inside the turn: the binding has to be in place before the events
+        # are emitted, not after the callback returns.
+        assert seen == {
+            "tui:20260826_102911_ff4d5f#Raven-Oncall/raven-oncall-ca43bc": {
+                "agent": "Raven-Oncall",
+                "handle": "raven-oncall-ca43bc",
+            }
+        }, seen
+        return "round 2: submitted 85 kN"
+
+    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+
+    job = SimpleNamespace(
+        id="j1",
+        name="ops:beam-limit-load:r2",
+        payload=SimpleNamespace(
+            channel="tui",
+            to="20260826_102911_ff4d5f",
+            direct_agent="Raven-Oncall",
+            direct_handle="raven-oncall-ca43bc",
+        ),
+    )
+    assert await wrapped(job) == "round 2: submitted 85 kN"
+
+
+async def test_an_ordinary_reminder_binds_nothing(emitter_spy: MagicMock) -> None:
+    """A stale binding would tag the main agent's next stream as a sub-agent's."""
+    from types import SimpleNamespace
+
+    from raven.cli.tui_commands import _build_cron_callback_spine
+
+    seen: dict[str, dict[str, str]] = {}
+
+    async def base_on_cron(job):
+        assert seen == {}
+        return "记得喝水"
+
+    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+    job = SimpleNamespace(
+        id="j2",
+        name="hydrate",
+        payload=SimpleNamespace(channel="tui", to="default", direct_agent=None, direct_handle=None),
+    )
+    await wrapped(job)
+    assert seen == {}

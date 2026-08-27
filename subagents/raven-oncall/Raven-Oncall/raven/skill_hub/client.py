@@ -24,6 +24,7 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -146,10 +147,20 @@ class SkillHubClient:
         result = self._result(r.json() or {})
         return list(result.get("items", []))
 
+    @staticmethod
+    def _id_segment(skill_id: str) -> str:
+        """A skill id as one path segment.
+
+        Hub ids carry slashes (``openclaw/skills/tag-memory``), which
+        interpolate into a URL as extra path segments and reach the server as a
+        different route than the one intended.
+        """
+        return quote(str(skill_id), safe="")
+
     # ── Read body (skill_md) — no download ──────────────────────────
     async def get(self, skill_id: str) -> dict[str, Any]:
         r = await self._client.get(
-            f"{self._base}/openapi/v1/skills/{skill_id}",
+            f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}",
             headers=self._headers(),
         )
         r.raise_for_status()
@@ -158,7 +169,7 @@ class SkillHubClient:
     # ── Bundle (zip with scripts/assets) ────────────────────────────
     async def download(self, skill_id: str) -> bytes:
         r = await self._client.get(
-            f"{self._base}/openapi/v1/skills/{skill_id}/download",
+            f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}/download",
             params={"source": self._source},
             headers=self._headers(),
         )

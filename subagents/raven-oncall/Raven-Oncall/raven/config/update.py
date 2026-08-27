@@ -28,6 +28,11 @@ from raven.config.schema import CronConfig
 # supplies their own Bearer token.
 _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 
+# Default EverOS memory server endpoint, seeded into a fresh config's
+# plugins.config["everos-memory"]. Kept in sync with
+# raven.plugin.memory.everos._server.DEFAULT_EVEROS_BASE_URL.
+_DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
+
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,9 +70,9 @@ def update_cron_config(
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
-    Schema defaults (``forward_channels=["*"]`` / ``default_timezone="Asia/Shanghai"``)
-    take effect on next load. Stays consistent with the file's "never bake
-    defaults to disk" principle.
+    Schema defaults (``default_timezone="Asia/Shanghai"``) take effect on
+    next load. Stays consistent with the file's "never bake defaults to
+    disk" principle.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
@@ -157,6 +162,41 @@ def set_sentinel_nudge_quota(
     return changed
 
 
+def set_skill_blocked(
+    name: str,
+    blocked: bool,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Add/remove a skill name on ``skillForge.blocklist``; returns the new
+    list. Matching is case-insensitive; adding an already-listed name or
+    removing an absent one is a no-op (the file is still not rewritten).
+
+    The blocklist is read at process start (AgentLoop / context engine
+    construction), so a change takes effect on the next agent/gateway
+    start, not on a running process.
+    """
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    section = data.setdefault("skillForge", {})
+    current = [str(x) for x in (section.get("blocklist") or [])]
+    lowered = {x.casefold() for x in current}
+    if blocked:
+        if name.casefold() in lowered:
+            return current
+        current.append(name)
+    else:
+        if name.casefold() not in lowered:
+            return current
+        current = [x for x in current if x.casefold() != name.casefold()]
+    section["blocklist"] = current
+    _write_atomic(path, data)
+    logger.info(
+        "config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name
+    )
+    return current
+
+
 def set_language(
     language: str,
     *,
@@ -180,6 +220,7 @@ def set_language(
 def set_default_model(
     model: str,
     *,
+    provider: str | None = None,
     config_path: Path | None = None,
 ) -> str | None:
     """Patch ``agents.defaults.model`` on the on-disk config. Returns previous value.
@@ -188,14 +229,22 @@ def set_default_model(
     needs to swap the default model to one that matches the chosen provider
     (otherwise ``raven agent`` would still route to whatever the freshly
     created ``Config()`` baked in, which is typically a different vendor).
+
+    ``provider`` writes ``agents.defaults.provider`` in the same patch. That field
+    overrides what a model id says, so leaving it behind lets a stale pin route
+    the new model to the old vendor -- with the old vendor's key -- while the
+    write that was just reported as successful changes nothing. Callers that do
+    not know which provider serves the model pass None and leave it alone.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     defaults = data.setdefault("agents", {}).setdefault("defaults", {})
     prev = defaults.get("model")
     defaults["model"] = model
+    if provider is not None:
+        defaults["provider"] = provider
     _write_atomic(path, data)
-    logger.info("config/update: default model set to {} (was {})", model, prev)
+    logger.info("config/update: default model set to {} (was {}), provider={}", model, prev, provider)
     return prev
 
 
@@ -244,8 +293,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
       - ``skillForge.router.hub.endpoint`` is seeded to the live Skill Hub URL
         (the schema default is ``None`` so programmatic loads stay Hub-off);
         ``apiKey`` is left null for the user to fill with their own token;
-      - ``plugins.config["everos-memory"]`` is seeded with the plugin's identity
-        wiring so the block is never empty and the user can see/edit it.
+      - ``plugins.config["everos-memory"]`` is seeded with only ``base_url`` so
+        the block is never empty and the user can see/edit it. Identity
+        (``user_id`` / ``agent_id``) is deliberately NOT duplicated here — it
+        comes from ``memory.userId`` / ``memory.agentId`` via the host's
+        ``ServiceLocator`` at plugin activation time.
 
     The optional service fields on ``SkillForgeConfig`` (``embedding_url`` /
     ``embedding_api_key`` / ``reranker_url`` / ``reranker_api_key`` /
@@ -276,17 +328,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     plugins = data.setdefault("plugins", {})
     plugins.setdefault("disabled", list(PluginsConfig().disabled))
     # snake_case keys: plugins.config is handed to the plugin factory verbatim.
-    # user_id / agent_id mirror memory.* so the recall identities match (the
-    # backend stamps these onto stored messages; a mismatch makes memory
-    # unretrievable — see MemoryConfig docstring).
+    # Identity is not seeded here — it comes from ServiceLocator, sourced from
+    # memory.userId / memory.agentId at plugin activation, not duplicated.
     plugins.setdefault("config", {}).setdefault(
         "everos-memory",
-        {
-            "mode": "embedded",
-            "base_url": "http://localhost:1995",
-            "user_id": mem.user_id,
-            "agent_id": mem.agent_id,
-        },
+        {"base_url": _DEFAULT_EVEROS_BASE_URL},
     )
 
     router_defaults = SkillForgeRouterConfig()
@@ -311,6 +357,41 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     logger.info("config/update: seeded memory/plugins/skillForge extension defaults")
 
 
+def set_plugin_config_fields(
+    plugin_id: str,
+    fields: dict[str, Any],
+    *,
+    remove: tuple[str, ...] | None = None,
+    config_path: Path | None = None,
+) -> None:
+    """Merge ``fields`` into ``plugins.config[plugin_id]`` on the on-disk config.
+
+    A merge rather than a replace: the slice holds several independent decisions
+    (which EverOS root, whether raven owns it, its cached address) written at
+    different moments, and a replacing write would drop whichever the caller did
+    not happen to be carrying.
+
+    ``remove`` names keys that no longer apply, for the case a merge cannot
+    express. Switching to an EverOS the user runs has to retract the recorded
+    root, not merely stop updating it: left behind, it is still exported as
+    ``EVEROS_ROOT`` and still points raven at a directory it has just promised
+    to leave alone.
+    """
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
+    slice_.update(fields)
+    for key in remove or ():
+        slice_.pop(key, None)
+    _write_atomic(path, data)
+    logger.info(
+        "config/update: plugins.config.{} updated ({}{})",
+        plugin_id,
+        ", ".join(fields),
+        f"; removed {', '.join(remove)}" if remove else "",
+    )
+
+
 def set_memory_backend(
     backend: str | None,
     *,
@@ -319,7 +400,8 @@ def set_memory_backend(
     """Patch ``memory.backend`` on the on-disk config. Returns previous value.
 
     ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
-    memory (falls back to the native Markdown store). The onboarding wizard's
+    memory entirely -- there is no second backend to fall back to, so recall and
+    storage simply stop happening. The onboarding wizard's
     memory step writes the model sections to ``~/.everos/raven/everos.toml``
     and flips this flag here.
     """
@@ -341,5 +423,6 @@ __all__ = [
     "set_default_model",
     "set_sandbox_backend",
     "set_memory_backend",
+    "set_skill_blocked",
     "init_extension_block_defaults",
 ]

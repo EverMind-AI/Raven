@@ -206,7 +206,9 @@ async def build_rpc_stack(
                 default_channel=LOCAL_CHANNEL,
                 cron_service=agent_loop.cron_service,
             )
-            agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
+            agent_loop.cron_service.on_job = _build_cron_callback_spine(
+                base_on_cron, emitter, direct_targets=direct_targets
+            )
             await agent_loop.cron_service.start()
             # start() dropped past-due one-shot reminders on this runner's
             # partition. The served page reaches the runtime through here rather

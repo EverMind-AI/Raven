@@ -52,9 +52,30 @@ def _strip_runtime_logs(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _raven_soft_dnd_only() -> bool:
+    """Contrast-run toggle (#2). When ``LONGRUN_RAVEN_SOFT_DND`` is set, the
+    harness injects NO hard DND enforcement into raven — neither the
+    sentinel ``nudge_policy.do_not_disturb_windows`` config windows nor the
+    ``attention.md ## User overrides`` DSL that NudgePolicy hard-gates on.
+    Raven then relies only on the quiet-hours text in MEMORY.md, i.e. the
+    same soft, LLM-judged compliance regime hermes/OpenClaw run under. Both
+    hard paths derive the same windows, so gating only one is a near-no-op;
+    the toggle exists to measure raven's restraint without the disclosed
+    config-hardening asymmetry. Default (unset) keeps hard enforcement."""
+    return os.environ.get("LONGRUN_RAVEN_SOFT_DND", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _load_scorer_quiet_windows(persona_id: str) -> list[dict[str, Any]]:
-    """Derive DND windows from the persona's Type-C ``nudge_count_in_window
-    == 0`` outcomes so the policy enforces the scorer's hard quiet zones.
+    """Derive DND windows from the persona's *unconditional* Type-C
+    ``nudge_count_in_window == 0`` outcomes so the policy enforces the
+    scorer's hard quiet zones.
+
+    Only unconditional constraints are injected. A conditional restraint
+    (``nudge_count_in_window == 0 when topic=work``) bans nudges for one
+    topic, not the whole window — turning it into a blanket hard-DND would
+    both suppress rubric-allowed nudges and enforce a quiet zone that lives
+    only in the rubric (not in the persona's seeded memory), which would
+    hand raven a scoring answer-key the other agents cannot see.
 
     Both the scorer's ``_in_daily_window`` and ``DndWindow.matches`` use an
     exclusive end (``start <= t < end``), so each derived window maps 1:1
@@ -72,7 +93,8 @@ def _load_scorer_quiet_windows(persona_id: str) -> list[dict[str, Any]]:
     windows: list[dict[str, Any]] = []
     for o in data.get("type_c_restraint") or []:
         constraint = (o.get("constraint") or "").strip()
-        if not constraint.startswith("nudge_count_in_window == 0"):
+        base, _, condition = constraint.partition(" when ")
+        if base.strip() != "nudge_count_in_window == 0" or condition:
             continue
         wd = o.get("window_daily") or []
         if len(wd) != 2:
@@ -147,6 +169,31 @@ class AgentAdapter(ABC):
 # under the per-persona tempdir + ``~/.raven/sentinel/state.json``.
 
 
+def _cron_registered_event(
+    cron: dict,
+    *,
+    fake_now: datetime,
+    trigger: str,
+    trigger_content: str,
+) -> dict:
+    """Provenance record for a newly observed cron/reminder registration.
+
+    The scorecard's Type A decision-attribution reads ``trigger``:
+    ``user_turn`` (+ the turn's user text in ``trigger_content``) marks a
+    standing order the user asked for; ``cron_fire`` / ``between_turns``
+    mark the agent's own initiative.
+    """
+    return {
+        "kind": "cron_registered",
+        "fake_now": fake_now.isoformat(),
+        "cron_id": str(cron.get("id") or ""),
+        "cron_name": str(cron.get("name") or cron.get("message") or "")[:160],
+        "cron_prompt": str(cron.get("prompt") or cron.get("message") or "")[:200],
+        "trigger": trigger,
+        "trigger_content": (trigger_content or "")[:300],
+    }
+
+
 def _resolve_raven_repo() -> Path:
     """Find the raven checkout (in-repo eval lives inside it).
 
@@ -209,7 +256,38 @@ def _seed_raven_home(
     cfg = _json.loads(src.read_text(encoding="utf-8"))
     # Repoint workspace; preserve everything else (provider, model, etc).
     cfg.setdefault("agents", {}).setdefault("defaults", {})["workspace"] = str(workspace)
-    if persona is not None:
+    # Pin the Sentinel eval config instead of inheriting whatever the live
+    # ~/.raven/config.json happens to carry — an empty/disabled sentinel
+    # block silently turns the anticipatory channel off (zero ticks, zero
+    # warnings; caught in the 2026-07-22 pre-flight smoke). The nudge_policy
+    # values below equal the raven factory defaults (isolating the run from
+    # live-config drift only). ``enabled`` and ``task_discovery_enabled`` are
+    # the exception: both ship False by default and are explicitly opened here
+    # to exercise the anticipatory channel — that is NOT as-shipped, and the
+    # README discloses both opt-ins.
+    sent = cfg.setdefault("sentinel", {})
+    sent["enabled"] = True
+    # tick_interval matches the adapter's actual 1800s batch grid so the
+    # config never claims a denser cadence than what fires.
+    sent["tick_interval_seconds"] = 1800
+    sent["task_discovery_enabled"] = True
+    default_model = (cfg.get("agents", {}).get("defaults", {}) or {}).get("model")
+    if default_model:
+        sent.setdefault("evaluator_model", default_model)
+    np_cfg = sent.setdefault("nudge_policy", {})
+    # PRODUCTION quotas, pinned explicitly for determinism (the live
+    # ~/.raven/config.json must not leak into eval runs). Raven runs
+    # as-shipped like the competitors; note the 2026-06 historical
+    # baseline ran with opened quotas (200/h) — v2 numbers are therefore
+    # not comparable to that baseline on delivery volume.
+    np_cfg["max_nudges_per_hour"] = 3
+    np_cfg["max_nudges_per_day"] = 10
+    np_cfg["hour_quota_multiplier"] = 1.0
+    # Factory default is 0.5 (L6 weekend tightener). A stale 1.0 leftover from
+    # the opened-quota iteration used to disable it — which quietly doubled
+    # raven's weekend nudge cap and contradicted the "as-shipped" claim.
+    np_cfg["weekend_quota_multiplier"] = 0.5
+    if persona is not None and not _raven_soft_dnd_only():
         dnd_raw = list((persona.get("policy_overrides") or {}).get("do_not_disturb_windows") or [])
         # Append scorer-derived quiet windows (type_c_restraint
         # ``nudge_count_in_window == 0`` outcomes). End-minute is bumped
@@ -219,8 +297,21 @@ def _seed_raven_home(
             dnd_raw.extend(_load_scorer_quiet_windows(pid))
         if dnd_raw:
             cfg.setdefault("sentinel", {}).setdefault("nudge_policy", {})["do_not_disturb_windows"] = dnd_raw
+    # No config-level soft-DND stamp: raven's SentinelConfig is extra="forbid",
+    # so an unknown key would make the CLI reject the config. The durable
+    # markers are the driver's ``run_meta`` trajectory event + scorecard
+    # ``soft_dnd`` field; the absent ``do_not_disturb_windows`` corroborates.
     if overrides and overrides.get("planner_model"):
         cfg.setdefault("sentinel", {})["evaluator_model"] = overrides["planner_model"]
+    # Host-safety, eval-scoped (NOT a product default): this harness runs the
+    # raven agent UN-SANDBOXED on the operator's machine, so block host GUI
+    # automation (osascript / ``open -a|-b``) that would otherwise wake
+    # Music/Messages/Notes. Injected via config so raven's shipped default is
+    # untouched — the block lives here, in the eval, not in raven/agent/tools.
+    cfg.setdefault("tools", {}).setdefault("exec", {})["extra_deny_patterns"] = [
+        r"\bosascript\b",
+        r"\bopen\s+-[ab]\b",
+    ]
     dst = home_dir / "config.json"
     dst.write_text(_json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     return dst
@@ -312,6 +403,10 @@ def _seed_attention_user_overrides(workspace: Path, persona: dict[str, Any]) -> 
     ``policy.set_user_override_dnd``). Eliminates the
     persona-data-divergence bug where personas with free-text quiet
     hours had their preferences silently dropped."""
+    if _raven_soft_dnd_only():
+        # #2 contrast run: no hard DND enforcement — raven relies on the
+        # MEMORY.md quiet-hours text alone, matching the competitors' regime.
+        return
     lines = _derive_dnd_lines_from_persona(persona)
     if not lines:
         return
@@ -378,6 +473,32 @@ class RavenAdapter(AgentAdapter):
         self.persona = persona
         self._owns_workspace = owns_workspace
         self._last_sentinel_tick: datetime | None = None
+        self._pending_cron_events: list[dict] = []
+        self._known_cron_ids: set[str] = {str(j["id"]) for j in self._cron_jobs_snapshot()}
+
+    def _cron_jobs_snapshot(self) -> list[dict]:
+        path = self.workspace / "ec-home" / "cron" / "jobs.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        jobs = data.get("jobs") if isinstance(data, dict) else data
+        return [j for j in jobs or [] if isinstance(j, dict) and j.get("id")]
+
+    def _scan_new_crons(self, *, fake_now: datetime, trigger: str, trigger_content: str) -> None:
+        for j in self._cron_jobs_snapshot():
+            jid = str(j["id"])
+            if jid in self._known_cron_ids:
+                continue
+            self._known_cron_ids.add(jid)
+            self._pending_cron_events.append(
+                _cron_registered_event(j, fake_now=fake_now, trigger=trigger, trigger_content=trigger_content)
+            )
+
+    def _flush_cron_events(self, emit: EventEmitter) -> None:
+        for ev in self._pending_cron_events:
+            emit(ev)
+        self._pending_cron_events.clear()
 
     # ------------------------------------------------------------------
     # PendingDecisionStore observation
@@ -487,6 +608,7 @@ class RavenAdapter(AgentAdapter):
                 session_id=session_key,
             ),
         )
+        self._scan_new_crons(fake_now=fake_now, trigger="user_turn", trigger_content=content)
         if not response.ok:
             logger.warning(
                 "agent send_message returned rc={}: {}",
@@ -538,6 +660,12 @@ class RavenAdapter(AgentAdapter):
         state.json fresh and the topic_quota gate sees the cron fires,
         so Sentinel skips redundant proactive nudges on the same topic.
         """
+        # Registrations observed since the last turn: sentinel-tick
+        # subprocesses can also create crons — anything new here that
+        # wasn't buffered by send_user_message is the agent's own doing.
+        self._scan_new_crons(fake_now=current_fake_now, trigger="between_turns", trigger_content="")
+        self._flush_cron_events(emit)
+
         # ── F-J-medium: cron polling pass ────────────────────────────
         self._fire_due_crons(current_fake_now, target_fake_now, emit)
 
@@ -588,6 +716,8 @@ class RavenAdapter(AgentAdapter):
                 exc,
             )
             self._last_sentinel_tick = last_tick
+            self._scan_new_crons(fake_now=last_tick, trigger="between_turns", trigger_content="")
+            self._flush_cron_events(emit)
             return target_fake_now
 
         for r in results:
@@ -653,6 +783,11 @@ class RavenAdapter(AgentAdapter):
             )
 
         self._last_sentinel_tick = last_tick
+        # Crons created DURING the sentinel batch are the agent's own
+        # decisions — scan here, before the next user turn's scan would
+        # mislabel them trigger="user_turn" with unrelated content.
+        self._scan_new_crons(fake_now=last_tick, trigger="between_turns", trigger_content="")
+        self._flush_cron_events(emit)
         return target_fake_now
 
     # ──────────────────────────────────────────────────────────────────
@@ -715,6 +850,10 @@ class RavenAdapter(AgentAdapter):
             # from production's lastRunAtMs which is real-clock).
             last_fire = _ms_to_dt(state.get("evalLastFiredMs"))
             if kind == "at":
+                # One-shot: never re-fire once evalLastFiredMs is set —
+                # required because the due window has no lower bound.
+                if last_fire is not None:
+                    return None
                 return _ms_to_dt(sched.get("atMs"))
             if kind == "every":
                 ev_ms = sched.get("everyMs") or 0
@@ -754,7 +893,11 @@ class RavenAdapter(AgentAdapter):
                 nxt = _next_fire(j)
                 if nxt is None:
                     continue
-                if cur_n < nxt <= tgt_n:
+                # No lower bound: jobs registered mid-tick with a fire time
+                # inside the already-processed window fire late instead of
+                # never. Refire safety: "at" returns None once fired;
+                # "every"/"cron" anchor on evalLastFiredMs.
+                if nxt <= tgt_n:
                     out.append((nxt, j))
             out.sort(key=lambda x: x[0])
             return out
@@ -911,7 +1054,9 @@ class RavenAdapter(AgentAdapter):
             shutil.rmtree(self.workspace, ignore_errors=True)
 
     def final_memory_md(self) -> str | None:
-        mem = self.workspace / "memory" / "MEMORY.md"
+        # ``self.workspace`` is the tempdir ROOT (build passes workspace=root);
+        # the agent's actual workspace lives at root/workspace/.
+        mem = self.workspace / "workspace" / "memory" / "MEMORY.md"
         return mem.read_text(encoding="utf-8") if mem.exists() else None
 
 
@@ -939,6 +1084,32 @@ class HermesAdapter(AgentAdapter):
         self.hermes_src = hermes_src
         self.python_exe = python_exe
         self._session_id: str | None = None
+        self._pending_cron_events: list[dict] = []
+        self._known_cron_ids: set[str] = {str(j["id"]) for j in self._cron_jobs_snapshot()}
+
+    def _cron_jobs_snapshot(self) -> list[dict]:
+        path = self.hermes_home / "cron" / "jobs.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        jobs = data.get("jobs") if isinstance(data, dict) else data
+        return [j for j in jobs or [] if isinstance(j, dict) and j.get("id")]
+
+    def _scan_new_crons(self, *, fake_now: datetime, trigger: str, trigger_content: str) -> None:
+        for j in self._cron_jobs_snapshot():
+            jid = str(j["id"])
+            if jid in self._known_cron_ids:
+                continue
+            self._known_cron_ids.add(jid)
+            self._pending_cron_events.append(
+                _cron_registered_event(j, fake_now=fake_now, trigger=trigger, trigger_content=trigger_content)
+            )
+
+    def _flush_cron_events(self, emit: EventEmitter) -> None:
+        for ev in self._pending_cron_events:
+            emit(ev)
+        self._pending_cron_events.clear()
 
     @classmethod
     async def build(
@@ -962,9 +1133,15 @@ class HermesAdapter(AgentAdapter):
 
     def _seed_home_if_fresh(self) -> None:
         """Copy ~/.hermes/{config.yaml,.env,auth.json} into isolated home if
-        not already populated (from resume)."""
+        not already populated (from resume).
+
+        Honors HERMES_HOME_OVERRIDE (same contract as the pbench
+        HermesBackend) so eval runs can pin a model/endpoint config
+        without touching the user's live ~/.hermes.
+        """
         self.hermes_home.mkdir(parents=True, exist_ok=True)
-        real = Path.home() / ".hermes"
+        override = os.environ.get("HERMES_HOME_OVERRIDE")
+        real = Path(override).expanduser() if override else Path.home() / ".hermes"
         for fn in ("config.yaml", ".env", "auth.json"):
             src, dst = real / fn, self.hermes_home / fn
             if src.exists() and not dst.exists():
@@ -1019,8 +1196,10 @@ class HermesAdapter(AgentAdapter):
                 timeout=180,
             )
         except subprocess.TimeoutExpired:
+            self._scan_new_crons(fake_now=fake_now, trigger="user_turn", trigger_content=content)
             return "[hermes timeout]"
 
+        self._scan_new_crons(fake_now=fake_now, trigger="user_turn", trigger_content=content)
         if proc.returncode != 0:
             logger.warning("hermes turn failed rc={} stderr={}", proc.returncode, proc.stderr[-500:])
             return f"[hermes error rc={proc.returncode}]"
@@ -1050,6 +1229,11 @@ class HermesAdapter(AgentAdapter):
         ``kind=cron_fire`` events. Update next_run_at + last_run_at in
         jobs.json so the same cron doesn't fire twice in one window.
         """
+        # Stamp with the window START — target can be hours/days later
+        # (overnight gaps) and would shift suggestions across scoring
+        # windows.
+        self._emit_pending_suggestions(emit, current_fake_now)
+        self._flush_cron_events(emit)
         jobs_file = self.hermes_home / "cron" / "jobs.json"
         if not jobs_file.exists():
             return target_fake_now
@@ -1095,7 +1279,10 @@ class HermesAdapter(AgentAdapter):
                     nxt = _norm(datetime.fromisoformat(nxt_iso))
                 except ValueError:
                     continue
-                if cur_n < nxt <= tgt_n:
+                # No lower bound: a job registered mid-tick with next_run_at
+                # inside the already-processed window fires late instead of
+                # never (next_run_at advance / enabled=False prevent refires).
+                if nxt <= tgt_n:
                     out.append((nxt, j))
             out.sort(key=lambda x: x[0])
             return out
@@ -1177,6 +1364,11 @@ class HermesAdapter(AgentAdapter):
                 }
             )
 
+            # Hermes can register NEW jobs while answering a cron prompt —
+            # that's the agent's own initiative, not a user order.
+            self._scan_new_crons(fake_now=fire_time, trigger="cron_fire", trigger_content=prompt)
+            self._flush_cron_events(emit)
+
             # Mark as fired; recompute next_run for recurring crons.
             # Hermes schedule schema: {"kind": "cron"|"interval"|"once",
             # "expr": "<cronexpr>" | "every_seconds": N | "run_at": "iso"}.
@@ -1216,10 +1408,36 @@ class HermesAdapter(AgentAdapter):
                     except ValueError:
                         pass
 
-        # Persist updated jobs.json so subsequent ticks see new next_run_at
+        # Persist updated jobs.json so subsequent ticks see new next_run_at.
+        # Merge into a FRESH read instead of writing our stale snapshot: a
+        # cron-fire turn can register new jobs (hermes writes jobs.json
+        # itself mid-tick) and persisting the snapshot would drop them.
         if fire_count > 0:
             try:
-                if jobs_envelope is not None:
+                try:
+                    fresh = json.loads(jobs_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    fresh = None
+                # Graft only our scheduler bookkeeping onto the fresh jobs —
+                # replacing whole objects would revert any OTHER field
+                # hermes edited mid-tick (prompt, schedule, name).
+                ours_by_id = {j.get("id"): j for j in jobs if j.get("id")}
+
+                def _graft(fresh_job: dict) -> dict:
+                    upd = ours_by_id.get(fresh_job.get("id"))
+                    if upd is not None:
+                        for k in ("last_run_at", "next_run_at", "enabled"):
+                            if k in upd:
+                                fresh_job[k] = upd[k]
+                    return fresh_job
+
+                if isinstance(fresh, dict) and isinstance(fresh.get("jobs"), list):
+                    fresh["jobs"] = [_graft(j) for j in fresh["jobs"]]
+                    fresh["updated_at"] = target_fake_now.isoformat()
+                    payload = fresh
+                elif isinstance(fresh, list):
+                    payload = [_graft(j) for j in fresh]
+                elif jobs_envelope is not None:
                     jobs_envelope["jobs"] = jobs
                     jobs_envelope["updated_at"] = target_fake_now.isoformat()
                     payload = jobs_envelope
@@ -1230,6 +1448,51 @@ class HermesAdapter(AgentAdapter):
                 logger.warning("Failed to persist hermes jobs.json: {}", exc)
 
         return target_fake_now
+
+    def _emit_pending_suggestions(self, emit: EventEmitter, fake_now: datetime) -> None:
+        """Surface hermes cron suggestions (v0.19 pull-only channel) as
+        ``kind=cron_suggestion`` trajectory events. Observability only —
+        nothing is accepted or delivered on the user's behalf, because
+        pull-only delivery is hermes's own product semantics; the events
+        let the scorecard count proposals the user never saw.
+        """
+        sf = self.hermes_home / "cron" / "suggestions.json"
+        if not sf.exists():
+            return
+        try:
+            records = json.loads(sf.read_text(encoding="utf-8")).get("suggestions", [])
+        except (json.JSONDecodeError, OSError, AttributeError):
+            return
+        seen_file = self.root / "suggestions_seen.json"
+        try:
+            seen = set(json.loads(seen_file.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            seen = set()
+        new = [r for r in records if isinstance(r, dict) and r.get("id") and r["id"] not in seen]
+        if not new:
+            return
+        for r in new:
+            emit(
+                {
+                    "kind": "cron_suggestion",
+                    "fake_now": fake_now.isoformat(),
+                    "delivered": False,
+                    "action": "suggest",
+                    "route": "suggestion",
+                    "topic_tag": f"suggestion_{str(r['id'])[:12]}",
+                    "suggestion_id": r["id"],
+                    "title": r.get("title") or "",
+                    "source": r.get("source") or "",
+                    "status": r.get("status") or "",
+                    "created_at": r.get("created_at") or "",
+                    "reason": "hermes suggestion registered (pull-only; not auto-delivered)",
+                }
+            )
+            seen.add(r["id"])
+        try:
+            seen_file.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to persist suggestions_seen.json: {}", exc)
 
     async def stop(self) -> None:
         pass
@@ -1351,7 +1614,7 @@ class OpenClawAdapter(AgentAdapter):
         self.persona = persona
         self.root = root
         self.oc_home = root / "oc_home"
-        self._session_id = f"sim-{persona['id']}-{os.getpid()}"
+        self._session_prefix = f"sim-{persona['id']}-{os.getpid()}"
         # longrun needs MCP server support (OC ≥ 2026.3.31). The legacy
         # ``openclaw:local`` image is 2026.2.x — no MCP. ``openclaw:local-mcp``
         # is the official ghcr.io/openclaw/openclaw image retagged locally;
@@ -1367,6 +1630,31 @@ class OpenClawAdapter(AgentAdapter):
         # (which fabricated fires from the intent calendar without the LLM
         # actually choosing to register them).
         self._cron_store = self.oc_home / ".openclaw" / "cron-store.json"
+        self._pending_cron_events: list[dict] = []
+        self._known_cron_ids: set[str] = {str(r["id"]) for r in self._cron_jobs_snapshot()}
+
+    def _cron_jobs_snapshot(self) -> list[dict]:
+        try:
+            data = json.loads(self._cron_store.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        reminders = (data or {}).get("reminders") or []
+        return [r for r in reminders if isinstance(r, dict) and r.get("id")]
+
+    def _scan_new_crons(self, *, fake_now: datetime, trigger: str, trigger_content: str) -> None:
+        for r in self._cron_jobs_snapshot():
+            rid = str(r["id"])
+            if rid in self._known_cron_ids:
+                continue
+            self._known_cron_ids.add(rid)
+            self._pending_cron_events.append(
+                _cron_registered_event(r, fake_now=fake_now, trigger=trigger, trigger_content=trigger_content)
+            )
+
+    def _flush_cron_events(self, emit: EventEmitter) -> None:
+        for ev in self._pending_cron_events:
+            emit(ev)
+        self._pending_cron_events.clear()
 
     @classmethod
     async def build(
@@ -1419,6 +1707,22 @@ class OpenClawAdapter(AgentAdapter):
         if not (self.oc_home / ".openclaw" / "openclaw.json").exists():
             write_openclaw_home(self.oc_home, cfg)
 
+    def _sync_mcp_sim_clock(self, fake_now: datetime) -> None:
+        """Write the current sim time into the MCP cron bridge's env in
+        openclaw.json. Each docker turn spawns a fresh MCP child, so the
+        bridge picks this up at spawn and can validate ``when`` against the
+        fake clock — without it, past-time registrations are accepted
+        silently and can never fire (host window is strictly cur < when).
+        """
+        cfg_path = self.oc_home / ".openclaw" / "openclaw.json"
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            env = cfg["mcp"]["servers"]["longrun_cron"].setdefault("env", {})
+            env["LONGRUN_FAKE_NOW"] = fake_now.isoformat()
+            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to sync sim clock into openclaw.json: {}", exc)
+
     async def start(self) -> None:
         pass
 
@@ -1444,6 +1748,15 @@ class OpenClawAdapter(AgentAdapter):
         from .openclaw import extract_response_text
 
         wrapped = _sim_time_preamble(fake_now) + content
+        self._sync_mcp_sim_clock(fake_now)
+        # One session per sim-day (boundary 04:00), mirroring OpenClaw's own
+        # production default (config session_reset: at_hour 4, mode both).
+        # Embedded `agent --local` never rotates or compacts on its own —
+        # a fixed 30-day session hits "Context overflow" around day 5
+        # (observed on 2026.6.34) and every later turn dies. Cross-day
+        # continuity comes from its workspace MEMORY.md bootstrap, exactly
+        # as in production after a session reset.
+        session_id = f"{self._session_prefix}-{(fake_now - timedelta(hours=4)).date().isoformat()}"
         container_name = f"oc-lr-{self.persona['id']}-{_time.monotonic_ns()}"
         cmd = [
             "docker",
@@ -1460,7 +1773,7 @@ class OpenClawAdapter(AgentAdapter):
             "agent",
             "--local",
             "--session-id",
-            self._session_id,
+            session_id,
             "--message",
             wrapped,
             "--thinking",
@@ -1483,7 +1796,9 @@ class OpenClawAdapter(AgentAdapter):
                 capture_output=True,
                 timeout=5,
             )
+            self._scan_new_crons(fake_now=fake_now, trigger="user_turn", trigger_content=content)
             return "[openclaw timeout]"
+        self._scan_new_crons(fake_now=fake_now, trigger="user_turn", trigger_content=content)
         text = extract_response_text(proc.stdout, proc.stderr)
         if text is None:
             dump_dir = os.environ.get("OC_NO_TEXT_DUMP")
@@ -1511,6 +1826,7 @@ class OpenClawAdapter(AgentAdapter):
         synthetic '[Reminder] ...' user turn at the fire time. Emits
         ``kind=cron_fire`` events mirroring HermesAdapter.tick_to.
         """
+        self._flush_cron_events(emit)
         if not self._cron_store.exists():
             return target_fake_now
         try:
@@ -1526,28 +1842,53 @@ class OpenClawAdapter(AgentAdapter):
         def _norm(dt: datetime) -> datetime:
             return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
-        cur_n = _norm(current_fake_now)
         tgt_n = _norm(target_fake_now)
 
-        due: list[tuple[datetime, dict]] = []
-        for r in reminders:
-            if r.get("fired"):
-                continue
-            when_iso = r.get("when")
-            if not isinstance(when_iso, str):
-                continue
-            try:
-                when_dt = _norm(datetime.fromisoformat(when_iso))
-            except ValueError:
-                continue
-            if cur_n < when_dt <= tgt_n:
-                due.append((when_dt, r))
-        due.sort(key=lambda x: x[0])
+        def _next_occurrence(dt: datetime, repeat: str) -> datetime:
+            if repeat == "weekly":
+                return dt + timedelta(days=7)
+            nxt = dt + timedelta(days=1)
+            if repeat == "weekdays":
+                while nxt.weekday() >= 5:
+                    nxt += timedelta(days=1)
+            return nxt
 
-        # Cap fires per tick_to to match Hermes safeguard.
-        for fire_time, reminder in due[:200]:
-            reminder["fired"] = True
-            reminder["fired_at"] = fire_time.isoformat()
+        # Drain loop: a recurring reminder advances `when` after each fire
+        # and may legitimately fire several times inside one window (e.g. a
+        # daily med reminder across a multi-day tick). Cap matches the
+        # Hermes safeguard.
+        fires_done = 0
+        while fires_done < 200:
+            due: list[tuple[datetime, dict]] = []
+            for r in reminders:
+                if r.get("fired"):
+                    continue
+                when_iso = r.get("when")
+                if not isinstance(when_iso, str):
+                    continue
+                try:
+                    when_dt = _norm(datetime.fromisoformat(when_iso))
+                except ValueError:
+                    continue
+                # No lower bound: an unfired reminder whose `when` slipped
+                # behind the window (registered mid-tick, or clock drift
+                # past a +60s bump) fires late instead of never — the
+                # fired flag / repeat advance prevent double fires.
+                if when_dt <= tgt_n:
+                    due.append((when_dt, r))
+            if not due:
+                break
+            due.sort(key=lambda x: x[0])
+            fire_time, reminder = due[0]
+
+            repeat = (reminder.get("repeat") or "").strip().lower()
+            if repeat in ("daily", "weekdays", "weekly"):
+                reminder["when"] = _next_occurrence(fire_time, repeat).isoformat()
+                reminder["fire_count"] = int(reminder.get("fire_count") or 0) + 1
+                reminder["last_fired_at"] = fire_time.isoformat()
+            else:
+                reminder["fired"] = True
+                reminder["fired_at"] = fire_time.isoformat()
             # Persist immediately so a mid-tick crash doesn't double-fire.
             try:
                 self._cron_store.write_text(
@@ -1560,6 +1901,24 @@ class OpenClawAdapter(AgentAdapter):
             msg = reminder.get("message", "") or ""
             synthetic = f"[Reminder fired at {fire_time.strftime('%Y-%m-%d %H:%M')}] {msg}"
             response = await self._run_oc_turn(synthetic, fire_time)
+
+            # The container can rewrite the store during the fire turn
+            # (set_reminder / cancel_reminder). It built on top of our
+            # pre-turn persist, so the FILE is authoritative — reload it
+            # for the next iteration instead of re-persisting this stale
+            # snapshot (which would delete new registrations and resurrect
+            # cancellations).
+            try:
+                fresh = json.loads(self._cron_store.read_text(encoding="utf-8"))
+                if isinstance(fresh, dict):
+                    store = fresh
+                    reminders = (store or {}).get("reminders") or []
+            except (OSError, json.JSONDecodeError):
+                pass
+            # Reminders the agent registered while ANSWERING a reminder are
+            # its own initiative — mirror HermesAdapter's cron_fire scan.
+            self._scan_new_crons(fake_now=fire_time, trigger="cron_fire", trigger_content=msg)
+            self._flush_cron_events(emit)
 
             emit(
                 {
@@ -1577,6 +1936,7 @@ class OpenClawAdapter(AgentAdapter):
                     "reason": f"reminder fired: {msg[:80]}",
                 }
             )
+            fires_done += 1
 
         return target_fake_now
 

@@ -1354,11 +1354,14 @@ function renderModelOutputCard(span, artifacts) {
   ]
     .filter(Boolean)
     .join(' · ');
+  // Reasoning precedes the answer chronologically (the model thinks, then
+  // responds), so render it above the body — collapsed, since it is long and
+  // diagnostic.
   return `
     <article class="content-card wide-card">
       <header><h4>Model Output</h4>${note ? `<span class="card-note">${escapeHtml(note)}</span>` : ''}</header>
-      ${body}
       ${reasoningBlock}
+      ${body}
     </article>`;
 }
 

@@ -54,7 +54,7 @@ class _CompleteBackend:
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return [Memory(text=f"hit:{query}", score=0.5)]
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         return None
 
     async def feedback(self, signals):
@@ -73,7 +73,7 @@ class _IncompleteBackend:
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return []
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         return None
 
     async def start(self):
@@ -139,7 +139,7 @@ class _EmptyRecallBackend:
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return []
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         pass
 
     async def feedback(self, signals):

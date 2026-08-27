@@ -16,6 +16,7 @@ from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.tracing import semconv, trace
@@ -24,6 +25,10 @@ from raven.utils.helpers import build_assistant_message
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
 _SPAWN_WINDOW_SECONDS = 3600
+_ABORTED_ACTION_RESULT = (
+    "The subtask stopped because a safety decision terminated the requested operation. "
+    "No alternative method was attempted."
+)
 
 
 class SubagentManager:
@@ -46,7 +51,6 @@ class SubagentManager:
     ):
         from raven.config.schema import ExecToolConfig
 
-        self.provider = provider
         self.workspace = workspace
         # Spine submit, late-bound (the scheduler pins its home loop at
         # construction and is built inside each entry point's run loop; this
@@ -54,7 +58,7 @@ class SubagentManager:
         # set_submit before any announce; the result re-injection submits a
         # SUBAGENT-origin turn.
         self._submit = None
-        self.model = model or provider.get_default_model()
+        self._fallback = ModelBinding(provider, model or provider.get_default_model())
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -70,6 +74,23 @@ class SubagentManager:
         # per-process) so one busy session can't throttle others. Each deque is
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Only the out-of-turn fallback moves. A spawn requested during a turn
+        takes that turn's binding, so a subagent follows the conversation
+        that asked for it rather than whatever this manager was built with.
+        """
+        self._fallback = ModelBinding(provider, model)
+
+    @property
+    def provider(self) -> LLMProvider:
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        return resolve(None, self._fallback).model
 
     async def spawn(
         self,
@@ -103,7 +124,15 @@ class SubagentManager:
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
 
-        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
+        # The binding of the turn that asked for this spawn, snapshotted here
+        # rather than where the task starts running: it queues behind the
+        # concurrency gate and a sandbox boot first, and a switch landing in
+        # that window would hand it an endpoint chosen after it was asked for.
+        # A subagent has no model of its own, so it follows its conversation.
+        binding = resolve(None, self._fallback)
+        bg_task = asyncio.create_task(
+            self._run_subagent(task_id, task, display_label, origin, binding.provider, binding.model)
+        )
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
@@ -127,6 +156,8 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
@@ -137,7 +168,7 @@ class SubagentManager:
             async with self._gate:
                 executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
                 async with executor:
-                    await self._run_subagent_inner(task_id, task, label, origin, executor)
+                    await self._run_subagent_inner(task_id, task, label, origin, executor, provider, model)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
@@ -150,6 +181,8 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
         executor: Any,
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         try:
             # Build subagent tools (no message tool, no spawn tool)
@@ -166,6 +199,7 @@ class SubagentManager:
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
                     executor=executor,
+                    extra_deny_patterns=self.exec_config.extra_deny_patterns,
                 )
             )
             # Withheld without a key, same as the main loop: a sub-agent that
@@ -186,14 +220,15 @@ class SubagentManager:
             max_iterations = 15
             iteration = 0
             final_result: str | None = None
+            final_status = "ok"
 
             while iteration < max_iterations:
                 iteration += 1
 
-                response = await self.provider.chat_with_retry(
+                response = await provider.chat_with_retry(
                     messages=messages,
                     tools=tools.get_definitions(),
-                    model=self.model,
+                    model=model,
                 )
 
                 if response.has_tool_calls:
@@ -213,7 +248,7 @@ class SubagentManager:
                         logger.debug(
                             "Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str
                         )
-                        result = await tools.execute(tool_call.name, tool_call.arguments)
+                        result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                         # The subagent's loop is an untrusted-data path too — fence its
                         # tool output like the main loop does in add_tool_result.
                         messages.append(
@@ -224,6 +259,17 @@ class SubagentManager:
                                 "content": wrap_untrusted(result, source=tool_call.name),
                             }
                         )
+                        if getattr(result, "abort_action", False):
+                            # Subagents must enforce the same terminal safety
+                            # signal as the main loop. Returning to the model
+                            # would let it translate a rejected operation into
+                            # another command or interpreter, while continuing
+                            # this batch would execute already-proposed siblings.
+                            final_result = _ABORTED_ACTION_RESULT
+                            final_status = "error"
+                            break
+                    if final_result is not None:
+                        break
                 else:
                     final_result = response.content
                     break
@@ -231,8 +277,8 @@ class SubagentManager:
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
 
-            logger.info("Subagent [{}] completed successfully", task_id)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            logger.info("Subagent [{}] finished with status {}", task_id, final_status)
+            await self._announce_result(task_id, label, task, final_result, origin, final_status)
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"

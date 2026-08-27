@@ -66,6 +66,8 @@ class ToolEvent:
     tool_call_id: str
     name: str = ""
     arguments: dict[str, Any] | None = None
+    # Tool-authored call label for the start phase; None -> UI derives one.
+    display: str | None = None
     result_preview: str = ""
     truncated: bool = False
     source: Source | None = None
@@ -110,7 +112,18 @@ class Notice:
     conversation_id: str | None = None
 
 
-RunnerEvent = ToolEvent | Text | MediaOut | StreamDelta | Reasoning | Notice
+@dataclass(frozen=True)
+class EpisodeStart:
+    """Boundary marker: a new model call (episode) begins. ``index`` is the
+    0-based step within the turn. Outlets that group a turn into per-call
+    episodes use it to start a fresh bucket; others ignore it."""
+
+    index: int
+    source: Source | None = None
+    conversation_id: str | None = None
+
+
+RunnerEvent = ToolEvent | Text | MediaOut | StreamDelta | Reasoning | Notice | EpisodeStart
 # Same union, named for its delivery role: what the hub routes and an Outlet renders.
 Deliverable = RunnerEvent
 TurnEvent = TurnStarted | TurnFailed | TurnEnded | RunnerEvent

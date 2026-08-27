@@ -34,14 +34,15 @@ class UnderstandMediaTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read and understand the contents of one or more attached files "
-            "or web pages that you cannot read directly — images (OCR / "
-            "description), PDFs, audio (transcription), Office documents "
+            "Extract the contents of attachments you cannot read directly, as "
+            "text: PDFs, audio (transcription), Office documents "
             "(docx/xlsx/pptx), and http(s) URLs (fetched and parsed by "
             "content type). Pass the file path(s) shown in the "
-            "'[Attachment: ...]' notes of the user message, and/or http(s) "
-            "URLs. Returns the extracted content as text. Video is not "
-            "supported."
+            "'[Attachment: ...]' or '[Image: ...]' notes of the user message, "
+            "and/or http(s) URLs. For an image prefer read_file, which hands you the picture "
+            "itself; reach for this tool on an image only when you cannot see "
+            "images or when a scan needs OCR — it returns another model's "
+            "transcription, not the original. Video is not supported."
         )
 
     @property
@@ -54,7 +55,8 @@ class UnderstandMediaTool(Tool):
                     "items": {"type": "string"},
                     "description": (
                         "File path(s) to understand, exactly as shown in the "
-                        "'[Attachment: <name> (path: <path>)]' notes, and/or "
+                        "'[Attachment: <name> (path: <path>)]' or "
+                        "'[Image: <name> (path: <path>)]' notes, and/or "
                         "http(s) URL(s) to fetch and read."
                     ),
                 },
@@ -123,10 +125,21 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     del ctx
     # Point EverOS at raven's ~/.everos/raven home before any everos import
     # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+    from raven.config.update_everos import (
+        configure_everos_env,
+        ensure_everos_home,
+        everos_owned,
+        everos_root,
+    )
 
-    configure_everos_env()
-    ensure_everos_home()
+    root = everos_root()
+    configure_everos_env(root)
+    # Templates only into a root raven owns. Multimodal parsing reads the same
+    # EverOS config the memory does -- one machine, one user, one set of keys --
+    # but reusing a root the user manages must not write to it, and "the files
+    # are usually already there" is not a basis for that promise.
+    if everos_owned():
+        ensure_everos_home(root)
     if not _multimodal_available():
         return None
     return UnderstandMediaTool()

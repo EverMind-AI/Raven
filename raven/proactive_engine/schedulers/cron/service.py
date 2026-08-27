@@ -216,6 +216,8 @@ class CronService:
                                 channel=channel,
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
+                                direct_agent=j["payload"].get("directAgent"),
+                                direct_handle=j["payload"].get("directHandle"),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -267,6 +269,8 @@ class CronService:
                         "channel": j.payload.channel,
                         "to": j.payload.to,
                         "topicTag": j.payload.topic_tag,
+                        "directAgent": j.payload.direct_agent,
+                        "directHandle": j.payload.direct_handle,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -694,6 +698,8 @@ class CronService:
         delete_after_run: bool = False,
         topic_tag: str | None = None,
         job_id: str | None = None,
+        direct_agent: str | None = None,
+        direct_handle: str | None = None,
     ) -> CronJob:
         """Add a new job, or update an existing job with the same
         (schedule, channel, to) triple — agents often re-register the
@@ -880,6 +886,8 @@ class CronService:
                     channel=channel,
                     to=to,
                     topic_tag=topic_tag,
+                    direct_agent=direct_agent,
+                    direct_handle=direct_handle,
                 ),
                 state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
                 created_at_ms=now,

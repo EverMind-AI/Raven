@@ -65,6 +65,18 @@ def test_top_level_command_help_does_not_crash(command: str) -> None:
     assert r.exception is None, f"{command} --help raised an unexpected exception: {r.exception!r}"
 
 
+def test_chat_is_not_a_registered_command() -> None:
+    """Tripwire for a `raven chat` REPL landing.
+
+    The e2e tier carried an xfail-strict placeholder that spawned `raven chat`
+    to prove it does not exist -- a real subprocess per run for a command that
+    is neither implemented nor planned. This is the same signal for free, and
+    unlike that file it actually runs. Whoever adds a chat REPL will see this
+    fail and can write coverage for the real thing.
+    """
+    assert "chat" not in _registered_command_names()
+
+
 def test_root_help_does_not_crash() -> None:
     """``raven --help`` should list every command without crashing."""
     r = runner.invoke(app, ["--help"])
@@ -155,13 +167,19 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
 # Full set of top-level commands + subcommand groups registered on the root
 # app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
 REGISTERED_COMMAND_NAMES = {
+    # Serves this install to an ACP client -- the host raven calling it as a
+    # sub-agent, where a cli row can only be read out of a transcript after the
+    # process exits and an acp one reports while it works.
+    "acp",
     "agent",
     "channels",
     "cron",
     "deep-research",
     "doctor",
     "gateway",
+    "import",
     "onboard",
+    "ops",
     "plugins",
     "provider",
     "sandbox",

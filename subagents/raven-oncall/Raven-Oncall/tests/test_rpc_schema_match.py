@@ -420,7 +420,6 @@ EXPECTED_ERROR_CODES = {
     -32006: "skill_not_found",
     -32007: "skill_pin_conflict",
     -32008: "model_not_available",
-    -32009: "model_switch_in_turn",
     -32010: "config_field_readonly",
     -32011: "config_validation_error",
     -32012: "not_supported_in_v01",

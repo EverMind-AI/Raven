@@ -102,7 +102,7 @@ async def test_a_missing_basis_is_refused_rather_than_recorded_empty(tmp_path, m
     out = await OpsCheckLaterTool(cron_service=None).execute(
         campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis="")
 
-    assert "REFUSED" in out
+    assert "REFUSED" in out.model_text and out.ends_turn is False
     events = [json.loads(x) for x in (cdir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert not [e for e in events if e["kind"] == "check_later"]
 

@@ -8,6 +8,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
+  ApprovalRespondResponse,
   ClarifyRespondResponse,
   ClipboardPasteResponse,
   GatewayEvent,
@@ -23,6 +24,7 @@ import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
+import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
@@ -87,6 +89,17 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
 
   return t.muted
 }
+
+/** What a picker selection becomes on the command line.
+ *
+ * Its own function because the scope has to survive the trip: `/model --default`
+ * opens the picker, and a callback that dropped the flag here sent a
+ * session-scoped switch that looked like it had changed the default. The
+ * overlay value is passed in rather than read, so the rule can be pinned
+ * without mounting the app.
+ */
+export const modelSelectCommand = (model: string, providerSlug: string, pending: boolean | 'default'): string =>
+  `/model ${model} --provider ${providerSlug}${pending === 'default' ? ' --default' : ''}`
 
 export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const { exit } = useApp()
@@ -397,7 +410,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     // alive (stdin listener keeps the event loop open), so the process.on('exit')
     // handler in entry.tsx — which sends the final resetTerminalModes() — never
     // fires.  This leaves kitty keyboard protocol, mouse modes, etc. enabled
-    // in the parent shell.  See issue #19194.
+    // in the parent shell.
     process.exit(0)
   }, [exit, gw])
 
@@ -506,14 +519,20 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
         }
 
         if (answer) {
-          turnController.persistedToolLabels.add(label)
-          appendMessage({
-            kind: 'trail',
-            role: 'system',
-            text: '',
-            tools: [buildToolTrailLine('clarify', clarify.question)]
-          })
-          appendMessage({ role: 'user', text: answer })
+          // Legacy transcript: record the clarify as a tool-trail panel plus the
+          // answer as a message. In episodes mode the ask_user / deep_research
+          // tool already renders this Q&A as a step, so committing them here would
+          // double it — and the answer would masquerade as a typed user message.
+          if (getUiState().transcript !== 'episodes') {
+            turnController.persistedToolLabels.add(label)
+            appendMessage({
+              kind: 'trail',
+              role: 'system',
+              text: '',
+              tools: [buildToolTrailLine('clarify', clarify.question)]
+            })
+            appendMessage({ role: 'user', text: answer })
+          }
           patchUiState({ status: 'running…' })
         } else {
           sys('prompt cancelled')
@@ -734,13 +753,42 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string) =>
-      respondWith('approval.respond', { choice, session_id: ui.sid }, () => {
+    (choice: string) => {
+      const approval = overlay.approval
+
+      if (!approval) {
+        return
+      }
+
+      if (choice === 'deny') {
+        // Denial changes no host state, so the frontend can commit it locally
+        // before the RPC round-trip. Approval is different: the overlay remains
+        // until the backend confirms that the exact request was still live.
+        // This asymmetry prevents stale UI from granting authority while also
+        // ensuring a network failure cannot keep a rejected prompt interactive.
+        patchOverlayState({ approval: null })
+        patchTurnState({ outcome: 'denied' })
+        patchUiState({ status: 'running…' })
+      }
+
+      rpc<ApprovalRespondResponse>(
+        'approval.respond',
+        buildApprovalRespond(approval.approvalId, approval.conversationId, choice)
+      ).then(response => {
+        if (choice === 'deny') {
+          return
+        }
+
+        if (!approvalResponseAccepted(response)) {
+          return
+        }
+
         patchOverlayState({ approval: null })
         patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
         patchUiState({ status: 'running…' })
-      }),
-    [respondWith, ui.sid]
+      })
+    },
+    [overlay.approval, rpc]
   )
 
   const answerSudo = useCallback(
@@ -787,10 +835,16 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [overlay.confirm, respondWith]
   )
 
-  const onModelSelect = useCallback((model: string, providerSlug: string) => {
-    patchOverlayState({ modelPicker: false })
-    slashRef.current(`/model ${model} --provider ${providerSlug}`)
-  }, [])
+  const onModelSelect = useCallback(
+    (model: string, providerSlug: string) => {
+      // Read the pending scope before clearing it -- clearing first would make
+      // every selection session-scoped.
+      const command = modelSelectCommand(model, providerSlug, overlay.modelPicker)
+      patchOverlayState({ modelPicker: false })
+      slashRef.current(command)
+    },
+    [overlay.modelPicker]
+  )
 
   const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
 

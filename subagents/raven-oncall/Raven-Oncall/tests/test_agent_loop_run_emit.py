@@ -14,9 +14,12 @@ from dataclasses import dataclass, field
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
+from raven.agent.tools.deep_research import DeepResearchOfferTool
+from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
 from raven.sandbox import SandboxInitError
+from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut
 from raven.spine.events import Notice as EvNotice
 from raven.spine.events import NoticeKind, ToolPhase
@@ -53,6 +56,31 @@ class _FakeTool(Tool):
 
     async def execute(self, **kwargs) -> str:
         return "tool-ran"
+
+
+class _SplitTool(Tool):
+    """Returns ToolResult so the loop's unwrap branch is actually exercised."""
+
+    MODEL_TEXT = 'User answered: "Which base?" -> "main". Continue.'
+    DISPLAY_TEXT = "Which base? -> main"
+
+    @property
+    def name(self) -> str:
+        return "splittool"
+
+    @property
+    def description(self) -> str:
+        return "fake tool with distinct model-facing and display-facing text"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    def display_call(self, args: dict) -> str | None:
+        return "Which base?"
+
+    async def execute(self, **kwargs) -> ToolResult:
+        return ToolResult(model_text=self.MODEL_TEXT, display_text=self.DISPLAY_TEXT)
 
 
 class _FakeDeepResearch(Tool):
@@ -225,8 +253,10 @@ async def test_run_streams_then_dissolves_main_response(tmp_path):
 
     outcome = await loop.run_turn(_req("hi"), sink, _drain)
 
-    assert [type(e).__name__ for e in sink.events] == ["StreamDelta", "StreamDelta"]
-    assert [e.delta for e in sink.events] == ["Hel", "lo"]
+    # The turn opens with an episode boundary, then the two streamed deltas.
+    assert isinstance(sink.events[0], EvEpisodeStart) and sink.events[0].index == 0
+    deltas = [e for e in sink.events if isinstance(e, EvStreamDelta)]
+    assert [e.delta for e in deltas] == ["Hel", "lo"]
     assert not any(isinstance(e, EvText) for e in sink.events)  # dissolved, no double
     assert outcome.usage.total_tokens == 5
     assert outcome.explicit_reply is True
@@ -243,7 +273,9 @@ async def test_run_emits_reasoning_then_stream(tmp_path):
 
     await loop.run_turn(_req("hi"), sink, _drain)
 
-    assert isinstance(sink.events[0], EvReasoning) and sink.events[0].content == "think"
+    assert isinstance(sink.events[0], EvEpisodeStart)
+    reasoning = next(e for e in sink.events if isinstance(e, EvReasoning))
+    assert reasoning.content == "think"
     assert any(isinstance(e, EvStreamDelta) and e.delta == "answer" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)
 
@@ -284,6 +316,83 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
+
+
+async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
+    # The ToolResult branch: the model's context gets model_text while the UI
+    # event's preview carries display_text. Every other fake tool in this file
+    # returns a bare str, so without this the unwrap branch never runs.
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t9", "function": {"name": "splittool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SplitTool())
+
+    recorded: list[tuple[str, str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result):
+        recorded.append((tool_call_id, tool_name, result))
+        return original_add(messages, tool_call_id, tool_name, result)
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    # What the model reads.
+    assert recorded and recorded[0][:2] == ("t9", "splittool")
+    assert recorded[0][2] == _SplitTool.MODEL_TEXT
+    # What the transcript shows -- display_text, not the model sentence.
+    complete = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert complete.result_preview == _SplitTool.DISPLAY_TEXT
+    assert complete.truncated is False
+    # display_call rides tool.start so the row can label itself.
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display == "Which base?"
+
+
+async def test_run_emits_one_episode_start_per_model_call(tmp_path):
+    # Episode boundary: run() emits one EpisodeStart per model call, 0-based and
+    # increasing. This turn has two calls (a tool-call iteration, then a stop
+    # iteration), so indices are [0, 1], and the first boundary precedes the
+    # first tool event of that call.
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    episodes = [e for e in sink.events if isinstance(e, EvEpisodeStart)]
+    assert [e.index for e in episodes] == [0, 1]
+    first_ep = next(i for i, e in enumerate(sink.events) if isinstance(e, EvEpisodeStart))
+    first_tool = next(i for i, e in enumerate(sink.events) if isinstance(e, EvToolEvent))
+    assert first_ep < first_tool
 
 
 # ── deep_research inline streaming: run_turn's _route_deep_research (2a) ──
@@ -367,6 +476,32 @@ async def test_no_inline_tool_stream_leaves_deep_research_callback_unset(tmp_pat
 
     assert not any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
     assert not any(isinstance(e, EvText) and e.content == "ANSWER-BODY" for e in sink.events)
+
+
+async def test_mid_session_promotion_streams_on_the_promoting_turn(tmp_path, monkeypatch):
+    # Regression guard: promotion must run BEFORE run_turn wires the stream
+    # callback, so a tool promoted on this very turn still streams (progress +
+    # receipt), not just next turn. If promotion moved after the wiring, the
+    # promoted tool would miss the callback and this progress event would vanish.
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
+    _stub_edges(loop)
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # starts unconfigured
+
+    import raven.config.update_tools as ut
+
+    monkeypatch.setattr(
+        ut,
+        "get_deep_research",
+        lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""},
+    )
+    # Promote to a streaming fake (not the real HTTP tool) so we observe wiring only.
+    monkeypatch.setattr(loop, "_register_real_deep_research", lambda cfg: loop.tools.register(_FakeDeepResearch()))
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("q"), sink, _drain, stream=True, inline_tool_stream=True)
+
+    assert any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
 
 
 async def test_inject_message_merged_before_next_iteration(tmp_path):
@@ -693,7 +828,7 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     seen: dict = {}
     real = loop._set_tool_context
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None, **_):
         seen["message_id"] = message_id
         return real(channel, chat_id, message_id, session_key=session_key)
 
@@ -840,7 +975,7 @@ async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     _stub_edges(loop)
     seen: dict = {"message_id": "sentinel"}
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None, **_):
         seen["message_id"] = message_id
 
     loop._set_tool_context = _spy

@@ -72,6 +72,8 @@ def _backend_overrides(args: argparse.Namespace) -> dict[str, Any]:
         out["max_iterations"] = args.max_iter
     if args.agent_timeout:
         out["agent_timeout_s"] = args.agent_timeout
+    if getattr(args, "raven_config", None):
+        out["raven_config"] = args.raven_config
     # Shared memory toggle (honored by Hermes + OpenClaw backends)
     if args.with_memory:
         out["with_memory"] = True
@@ -102,6 +104,7 @@ def _build_driver(args: argparse.Namespace) -> BenchmarkDriver:
             agent_name=args.agent,
             context_mode=args.context_mode,
             synthesizer_name=args.synthesizer,
+            prompts_dir=Path(args.prompts_dir) if getattr(args, "prompts_dir", None) else None,
         )
     if args.benchmark == "cases":
         return get_driver("cases")
@@ -314,6 +317,12 @@ def main() -> None:
     # pbench-specific
     ap.add_argument("--context-mode", choices=["cold", "warm"], default="cold")
     ap.add_argument("--synthesizer", default="keyword")
+    ap.add_argument(
+        "--prompts-dir",
+        default=None,
+        help="pbench: directory of <agent>_agent.yaml prompt templates "
+        "(default: runners/prompts/). For prompt-swap ablations.",
+    )
 
     # openclaw-specific
     ap.add_argument("--thinking", default=None, choices=["off", "minimal", "low", "medium", "high", "xhigh"])
@@ -334,6 +343,13 @@ def main() -> None:
     # raven-specific
     ap.add_argument("--max-iter", type=int, default=None, help="Raven AgentLoop max_iterations")
     ap.add_argument("--agent-timeout", type=int, default=None, help="Raven agent per-sample wall timeout (s)")
+    ap.add_argument(
+        "--raven-config",
+        default=None,
+        help="Raven: --config passed to every raven subprocess (also "
+        "redirects the raven data dir to the config's parent). For "
+        "model/endpoint ablations without touching ~/.raven.",
+    )
 
     # shared
     ap.add_argument(

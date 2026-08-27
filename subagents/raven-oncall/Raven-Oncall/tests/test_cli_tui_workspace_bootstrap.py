@@ -50,9 +50,12 @@ def test_a_hand_made_workspace_gets_its_bootstrap_files(tmp_path: Path) -> None:
     assert (workspace / "TOOLS.md").exists()
 
 
-def test_the_tools_file_names_the_ops_surface(tmp_path: Path) -> None:
+def test_the_tools_file_names_the_ops_surface(tmp_path: Path, on_call_enabled) -> None:
     """The failure was not a missing file in the abstract: it was the loop having
-    nothing that named `ops_submit`."""
+    nothing that named `ops_submit`.
+
+    Asserted for an instance with a machine registered, which is the only shape
+    the on-call notes are written for -- see raven.ops.gate."""
     workspace = _home(tmp_path) / "workspace"
 
     sync_workspace_templates(workspace, silent=True)

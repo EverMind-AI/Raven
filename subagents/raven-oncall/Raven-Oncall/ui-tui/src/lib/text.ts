@@ -3,6 +3,8 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { stringWidth } from '@hermes/ink'
+
 import type { ThinkingMode } from '../types.js'
 
 import {
@@ -55,6 +57,42 @@ export const compactPreview = (s: string, max: number) => {
   const one = s.replace(WS_RE, ' ').trim()
 
   return !one ? '' : one.length > max ? one.slice(0, max - 1) + '…' : one
+}
+
+// Clip to a display-cell budget (CJK/emoji aware). Needed wherever a row must
+// fit a known column count and the surrounding markup nests <Text> (a nested
+// Text makes ink's own `truncate-end` a no-op, so the text would overflow).
+export const clipToWidth = (raw: string, width: number) => {
+  const one = raw.replace(WS_RE, ' ').trim()
+
+  if (width <= 0 || stringWidth(one) <= width) {
+    return one
+  }
+
+  let out = ''
+  let w = 0
+
+  for (const ch of one) {
+    const cw = stringWidth(ch)
+
+    if (w + cw > width - 1) {
+      break
+    }
+
+    out += ch
+    w += cw
+  }
+
+  return `${out}…`
+}
+
+// Like compactPreview but keeps the tail — for live-streaming text (reasoning)
+// where the most recent tokens matter, so the view follows the stream instead
+// of freezing on the first `max` chars.
+export const tailPreview = (s: string, max: number) => {
+  const one = s.replace(WS_RE, ' ').trim()
+
+  return !one ? '' : one.length > max ? '…' + one.slice(one.length - (max - 1)) : one
 }
 
 export const estimateTokensRough = (text: string) => (!text ? 0 : (text.length + 3) >> 2)

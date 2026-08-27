@@ -24,6 +24,7 @@ from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -40,6 +41,15 @@ class TurnContext:
     channel: str | None = None
     chat_id: str | None = None
     selected_skills: list[Any] | None = None
+    # Whether this turn's model can see a picture. Decided by the loop (it owns
+    # the provider and the model id) and carried here because the message is
+    # built down in render, which knows neither. Defaults True so a caller that
+    # does not set it keeps the old inline-everything behavior.
+    can_see_images: bool = True
+    # Name of a registered tool that can read an attachment the model cannot,
+    # or None when none is (it comes from an optional plugin). Naming a tool the
+    # model does not have reads as an instruction it cannot follow.
+    describe_tool: str | None = None
 
 
 @dataclass
@@ -338,10 +348,9 @@ class CuratorAssembler:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         context_window_tokens: int,
     ):
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.get_tool_definitions = get_tool_definitions
-        self.context_window_tokens = context_window_tokens
+        self._fallback_window = int(context_window_tokens)
         self.trimmer = HistoryTrimmer(
             provider,
             model,
@@ -351,6 +360,41 @@ class CuratorAssembler:
         # Per-turn system prefix (seg1–5) + user message; set by
         # CuratorSegmentBuilder before any build/validate call.
         self.prefix: "AssembledPrefix | None" = None
+
+    @property
+    def provider(self) -> "LLMProvider":
+        """The provider of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        """The model of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).model
+
+    @property
+    def context_window_tokens(self) -> int:
+        """The running turn's window; the one built with, outside a turn.
+
+        A property because this object outlives any number of turns and two
+        sessions can be on models of different sizes at once -- an int copied
+        at construction answers for whichever session happened to build it.
+        """
+        return active_window(self._fallback_window)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, tokens: int) -> None:
+        self._fallback_window = int(tokens)
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built."""
+        self._fallback = ModelBinding(provider, model)
+        self.trimmer.set_provider(provider, model)
+
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch: the trimmer must budget against the
+        new model's window, not the one it was built with."""
+        self.context_window_tokens = tokens
+        self.trimmer.context_window_tokens = tokens
 
     @staticmethod
     def working_state_segment(working_state: str | None) -> str:

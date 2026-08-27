@@ -15,7 +15,16 @@ from __future__ import annotations
 
 import pytest
 
-from raven.ops.budget import ADDITIVE, SHARED, Budget, accumulate, from_meta
+from raven.ops.budget import (
+    ADDITIVE,
+    COMPUTE,
+    LOOKS,
+    SHARED,
+    WALL_CLOCK,
+    Budget,
+    accumulate,
+    from_meta,
+)
 
 MINUTE = 60.0
 
@@ -70,6 +79,33 @@ def test_no_budget_is_none_and_not_zero() -> None:
 
 def test_a_malformed_total_is_no_budget_rather_than_a_wrong_one() -> None:
     assert from_meta({"budget": {"unit": "u", "total": "soon"}}) is None
+
+
+def test_the_machine_holds_the_reading_unless_the_campaign_says_otherwise() -> None:
+    """Every campaign on disk was metered by the host, and none of them says so."""
+    assert from_meta({"budget": {"unit": "core-minute", "total": 150}}).meter == COMPUTE
+    assert from_meta({"budget_minutes_total": 140}).meter == COMPUTE
+
+
+def test_a_watch_declares_what_measures_it() -> None:
+    """A campaign sitting on a price feed runs no jobs, so the host's answer for
+    what it has spent is zero however long it has been watching."""
+    wall = from_meta({"budget": {"unit": "minute", "total": 240, "meter": "wall-clock"}})
+    looks = from_meta({"budget": {"unit": "look", "total": 40, "meter": "look"}})
+
+    assert (wall.meter, wall.off_machine) == (WALL_CLOCK, True)
+    assert (looks.meter, looks.off_machine) == (LOOKS, True)
+    assert from_meta({"budget": {"unit": "core-minute", "total": 150}}).off_machine is False
+
+
+def test_an_unknown_meter_falls_back_to_the_host_rather_than_guessing() -> None:
+    assert from_meta({"budget": {"unit": "u", "total": 1, "meter": "vibes"}}).meter == COMPUTE
+
+
+def test_the_meter_is_never_inferred_from_the_unit() -> None:
+    """"minute" is a wall-clock minute on a watch and a core-minute on a solver
+    campaign. Guessing puts a spend nobody measured against a total somebody set."""
+    assert from_meta({"budget": {"unit": "minute", "total": 240}}).meter == COMPUTE
 
 
 def test_additive_pays_for_every_span() -> None:

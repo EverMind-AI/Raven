@@ -52,6 +52,17 @@ _OUTCOMES = frozenset({DONE, FAILED, STOPPED})
 # reports.jsonl written before and after this change reads one column.
 _REPORT_KIND = {DONE: "finished", FAILED: "failed", STOPPED: "finished"}
 
+# How long after an unanswered blocking question to come back and look. The
+# broker's own wait runs first and is not ours to set (measured 2026-08-21: five
+# minutes), so the owner has roughly a quarter of an hour in total.
+#
+# What happens at that wake is the point, not the number. Three ways out, and the
+# wake message names all three: do work that does not depend on the answer, wait
+# once more, or hand back what there is. What it must not do is nothing, which is
+# what happened on 2026-08-21 -- two campaigns sat untouched for three hours with
+# 86% and 81% of their budgets unspent.
+_ASK_WAKE_MINUTES = 10
+
 GUARD_FILE = "interruptions.json"
 REPORTS_FILE = "reports.jsonl"
 
@@ -141,11 +152,34 @@ class OpsAskOwnerTool(Tool):
     interruption metric would be of something that never happened.
     """
 
-    def __init__(self, registry: Any = None, broker: Any = None) -> None:
+    def __init__(self, registry: Any = None, broker: Any = None,
+                 cron_service: Any = None) -> None:
         self._registry = registry
         self._broker = broker
+        # Needed only on the branch below where the wait ends with no answer: the
+        # turn is about to end and nothing else would bring the campaign back.
+        self._cron = cron_service
         self._channel = ""
         self._chat_id = ""
+        # Where the SAFETY WAKE is armed, which is not where the question is
+        # delivered, and the two were one field until this split them.
+        #
+        # Delivery deliberately has no context: passing the turn's channel would
+        # send a wake turn's question to "cron", which no front end subscribes to,
+        # so it is left empty and the messaging tool's own default is used -- that
+        # is how this tool has been reaching the operator all along.
+        #
+        # The wake is a different question -- which store to write into, and which
+        # window owns it -- and answering it from the same empty field meant
+        # ``_schedule_ops_wake`` returned "No session context to schedule a wake"
+        # and armed nothing, on every ask, since the wake was written. Measured
+        # 2026-08-26: a campaign asked a blocking question with all four trials
+        # terminal, no wake anywhere, and sat until someone went looking. The
+        # 2026-08-21 incident this wake exists for describes the same three hours;
+        # the wake shipped and never once armed.
+        self._wake_channel = ""
+        self._wake_chat_id = ""
+        self._session_key = ""
 
     def set_broker(self, broker: Any) -> None:
         """Late-bound, the same way ask_user gets one: the broker exists before
@@ -157,6 +191,16 @@ class OpsAskOwnerTool(Tool):
 
     def set_context(self, channel: str, chat_id: str) -> None:
         self._channel, self._chat_id = channel, chat_id
+
+    def set_wake_context(self, channel: str, chat_id: str, session_key: str = "") -> None:
+        """Where to arm the safety wake, without touching where the question goes.
+
+        Deliberately not folded into ``set_context``: the loop calls this one and
+        not that one, so delivery keeps falling to the messaging tool's default
+        while the wake gets the turn's own routing and the window that owns it.
+        """
+        self._wake_channel, self._wake_chat_id = channel, chat_id
+        self._session_key = session_key or ""
 
     async def _deliver(self, text: str) -> tuple[bool, str]:
         """Hand the message to the messaging tool. Returns (sent, detail)."""
@@ -286,7 +330,43 @@ class OpsAskOwnerTool(Tool):
                 log_event(cdir, "ask_owner_delivery", sent=True, detail="answered inline")
                 return f"The owner answered: {str(answer).strip()[:500]}"
             log_event(cdir, "ask_owner_delivery", sent=True, detail="asked inline, no answer yet")
+            # The wait is over and nothing is running, so this turn is about to end
+            # with no pending wake -- and then nothing brings the campaign back.
+            # Measured 2026-08-21: two campaigns asked a blocking question, waited
+            # out the broker, and sat untouched for three hours with their budgets
+            # 86% and 81% unspent. The old text promised "the owner's reply will
+            # reach the next round"; there was no next round.
+            woke = ""
+            if self._cron is not None:
+                from raven.agent.tools.ops import _schedule_ops_wake
+
+                woke = _schedule_ops_wake(
+                    # No set_context on this tool by design (see the registration
+                    # comment in the loop), so there is no session key to own the wake.
+                    self._cron, self._wake_channel, self._wake_chat_id,
+                    owner=getattr(self, "_session_key", ""),
+                    name=f"ops:{campaign}:after-ask",
+                    message=(
+                        f"[Ops campaign '{campaign}'] {_ASK_WAKE_MINUTES} minutes ago you "
+                        f"asked the owner and nobody answered. A reply would have reached you "
+                        f"the moment it was typed, so this wake means there was none: decide "
+                        f"without them now, one of three.\n"
+                        f"  ops_submit -- there is work worth doing that does not depend on "
+                        f"the answer. Do that work.\n"
+                        f"  ops_check_later -- you truly cannot choose the next step without "
+                        f"the owner. Wait once more, briefly. If that wake also finds no "
+                        f"answer, finish then: waiting a third time buys nothing.\n"
+                        f"  ops_finish -- the work is done, or the answer can no longer "
+                        f"change the result. Say in the report which decision was never made. "
+                        f"If ops_finish refuses over the unanswered question, record with "
+                        f"ops_note why the answer no longer matters, then finish.\n"
+                        f"(An answer left by some other route -- another window, ops_note from "
+                        f"the CLI -- would show in ops_tune_status. Worth one look, not a wait.)"
+                    ),
+                    eta_seconds=_ASK_WAKE_MINUTES * 60,
+                )
             return (
+                (woke + "\n" if woke else "") +
                 "Asked, and nobody answered while you waited. Nothing is running, so nothing "
                 "was lost by waiting. The question stays on the record and the campaign stays "
                 "open; the owner's reply will reach the next round.\n"
@@ -306,6 +386,39 @@ class OpsAskOwnerTool(Tool):
                 f"The contract allowed this, but it was NOT delivered: {detail}\n"
                 "Nobody has seen it."
             )
+        # A wake here too, on the same reasoning as the blocking branch above: the
+        # turn is about to end and nothing else is guaranteed to bring the campaign
+        # back. Idempotent per campaign, so a submit or check_later later in this
+        # same turn simply replaces it. Measured 2026-08-21: two of the four asks
+        # that day were non-blocking by default (the parameter is required and was
+        # not passed), and both campaigns then sat untouched for three hours.
+        # Only when nothing is running. A trial in flight already has a wake set for
+        # when it should be done, and scheduling here would REPLACE it (wakes are
+        # idempotent per campaign) with a sooner one -- waking to find the job still
+        # going, and throwing away the eta the loop had reasoned about.
+        woke = ""
+        if self._cron is not None and not _anything_running(cdir):
+            from raven.agent.tools.ops import _schedule_ops_wake
+
+            woke = _schedule_ops_wake(
+                self._cron, self._wake_channel, self._wake_chat_id,
+                owner=getattr(self, "_session_key", ""),
+                name=f"ops:{campaign}:after-ask",
+                message=(
+                    f"[Ops campaign '{campaign}'] {_ASK_WAKE_MINUTES} minutes ago you asked "
+                    f"the owner and nobody answered. A reply would have reached you the moment "
+                    f"it was typed, so this wake means there was none: decide without them "
+                    f"now, one of three.\n"
+                    f"  ops_submit -- there is work worth doing that does not depend on the "
+                    f"answer. Do that work.\n"
+                    f"  ops_check_later -- you truly cannot choose the next step without the "
+                    f"owner. Wait once more, briefly. If that wake also finds no answer, "
+                    f"finish then: waiting a third time buys nothing.\n"
+                    f"  ops_finish -- the work is done, or the answer can no longer change "
+                    f"the result. Say in the report which decision was never made."
+                ),
+                eta_seconds=_ASK_WAKE_MINUTES * 60,
+            )
         note = "" if decision.estimated else " (recorded as an interruption you could not price)"
         follows = (
             "You called this blocking, so no more trials go out until it is answered. Looking "
@@ -315,6 +428,7 @@ class OpsAskOwnerTool(Tool):
             "answer -- that was the reading that made it non-blocking."
         )
         return (
+            (woke + "\n" if woke else "") +
             f"Delivered to the owner{note}. "
             "They may take a long time to reply, or never reply.\n"
             f"{follows} Do not close the campaign over silence -- that is the one step that "
@@ -323,7 +437,7 @@ class OpsAskOwnerTool(Tool):
 
 
 def _finish_summary(campaign: str, subject: str, outcome: str, observed: dict,
-                    baseline: dict | None, narrative: str) -> str:
+                    baseline: dict | None, narrative: str, watch: str = "") -> str:
     """The report, as a message a person reads.
 
     Carries the operands and nothing else: the same observed values, the same
@@ -336,10 +450,39 @@ def _finish_summary(campaign: str, subject: str, outcome: str, observed: dict,
         lines.append("observed: " + ", ".join(f"{k}={v}" for k, v in observed.items()))
     if baseline:
         lines.append("started at: " + ", ".join(f"{k}={v}" for k, v in baseline.items()))
+    if watch:
+        lines.append(watch)
     if narrative.strip():
         lines.append("")
         lines.append(narrative.strip())
     return "\n".join(lines)
+
+
+def _watch_kept(cdir) -> str:
+    """How many times this campaign looked, and over how long. "" if unknown.
+
+    Read from the trail and attached rather than asked of the loop, for the same
+    reason the trail exists: it is the one part of the report that cannot be
+    written from memory after a cold start. It also separates two endings the
+    report gate cannot -- a watch whose correct outcome was to stay silent, and
+    one that never looked, file identical reports otherwise (20 of SentinelBench's
+    100 tasks are of the first kind).
+
+    A count, no verdict. Whether twelve looks over four hours was attentive
+    depends on what was being watched, and that is the reader's call.
+    """
+    from raven.ops.attendance import attendance
+
+    kept = attendance(cdir)
+    if not kept.looks and not kept.wakes:
+        return ""
+    parts = [f"{kept.looks} look{'' if kept.looks == 1 else 's'}"]
+    if kept.minutes_open is not None:
+        hours, minutes = divmod(int(kept.minutes_open), 60)
+        parts.append(f"over {hours}h {minutes}m" if hours else f"over {minutes}m")
+    if kept.wakes:
+        parts.append(f"{kept.wakes} wake{'' if kept.wakes == 1 else 's'} arranged")
+    return "watch kept: " + ", ".join(parts) + " (from the campaign's own record)"
 
 
 def blocking_question_open(cdir) -> str:
@@ -441,7 +584,8 @@ def _unanswered_question(cdir) -> str:
 
 
 def _write_report_md(cdir, campaign: str, subject: str, outcome: str,
-                     observed: dict, baseline: dict | None, narrative: str) -> "Path | None":
+                     observed: dict, baseline: dict | None, narrative: str,
+                     watch: str = "") -> "Path | None":
     """The report as a file, next to the campaign. Returns its path, or None.
 
     A campaign's result lived in reports.jsonl and in one delivered message.
@@ -466,7 +610,10 @@ def _write_report_md(cdir, campaign: str, subject: str, outcome: str,
         lines = [f"# {subject}", "",
                  f"- campaign: `{campaign}`",
                  f"- outcome: **{outcome}**",
-                 f"- filed: {_dt.now().isoformat(timespec='seconds')}", ""]
+                 f"- filed: {_dt.now().isoformat(timespec='seconds')}"]
+        if watch:
+            lines.append(f"- {watch}")
+        lines.append("")
         if observed:
             lines += ["## Observed", ""]
             lines += [f"- {k}: {v}" for k, v in observed.items()]
@@ -779,7 +926,11 @@ class OpsFinishTool(Tool):
                         removed += 1
             except Exception:  # noqa: BLE001 -- the report is already filed either way
                 pass
-        log_event(cdir, "concluded", reason=subject, outcome=outcome, wakes_removed=removed)
+        # Counted before the report is written, so the figure in the report and
+        # the figure in the trail are the same reading.
+        watch = _watch_kept(cdir)
+        log_event(cdir, "concluded", reason=subject, outcome=outcome, wakes_removed=removed,
+                  watch_kept=watch)
 
         # Put it in front of a person. This is the one message that has already
         # been checked -- condition_type, the state-claim check, missing_fields
@@ -787,8 +938,8 @@ class OpsFinishTool(Tool):
         # unverified content. Sent AFTER the close, and its failure is reported
         # rather than raised: a finished campaign whose announcement did not go
         # out is still finished.
-        md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative)
-        summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative)
+        md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative, watch)
+        summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative, watch)
         if md is not None:
             summary += f"\n\nWritten to {md}"
         sent, detail = await self._deliver(summary)

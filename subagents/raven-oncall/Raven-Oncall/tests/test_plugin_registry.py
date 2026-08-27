@@ -120,7 +120,7 @@ class TestActivation:
         )
         ctx = PluginContext(
             config={"mode": "embedded"},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         result = reg.get_memory_backend_factory("everos")(ctx)
         assert result == ("backend", {"mode": "embedded"})

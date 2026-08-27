@@ -113,12 +113,29 @@ def read_verdict(text: str | None) -> Verdict:
 
 
 def provenance_line() -> str:
-    """What a tool adds to its result when it touched one of those paths."""
+    """What a tool adds to its result when it touched one of those paths.
+
+    Two shapes, because the line used to name only one of them -- "ops_submit runs
+    a round against it", "a working directory per round" -- and a campaign that
+    watches something runs no rounds and needs no directory. Measured 2026-08-21
+    on a watch task: everything the loop was told about the on-call path described
+    an experiment, and it built its own monitor out of write_file and cron instead.
+    Nothing was wrong with the mechanism; it did not recognise itself in the sign.
+    """
     return (
-        "\n\nThis path came from what the owner asked for, and what they asked for is "
-        "work to run and watch. That belongs on a machine and in a ledger: "
-        "ops_connections shows the machines and what each has, ops_declare records the "
-        "experiment once and costs nothing, and ops_submit runs a round against it -- "
-        "which is what gives it a budget that is counted, a working directory per round "
-        "that leaves the owner's case alone, and a wake when the result lands."
+        "\n\nThis came from what the owner asked for, and what they asked for is work to "
+        "stay with over time rather than a look you take once. That belongs on a machine "
+        "and in a ledger, and ops_declare records it once, costs nothing, and runs "
+        "nothing:\n"
+        "  something to RUN and watch -- ops_declare then ops_submit, which gives it a "
+        "budget that is counted, a working directory per round, and a wake when the "
+        "result lands.\n"
+        "  something to WATCH that you do not run -- a price, a disk, a queue, somebody "
+        "else's job -- ops_declare with objective_kind='condition' and a readings table "
+        "saying what to read and when. The starting value is taken as you declare it, "
+        "which is the one thing a later wake cannot reconstruct, and the budget can be "
+        "counted in looks rather than machine time.\n"
+        "Either way ops_connections shows the machines, and coming back is "
+        "ops_check_later rather than a cron job you keep yourself: a wake through the "
+        "campaign carries the record with it."
     )

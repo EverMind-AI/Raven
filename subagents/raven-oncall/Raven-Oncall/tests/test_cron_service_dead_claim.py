@@ -33,7 +33,7 @@ def _job(pid: int | None, claimed_at_ms: int | None) -> CronJob:
         name="ops:cfd-dambreak:r1",
         enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1),
-        payload=CronPayload(kind="agent_turn", message="check"),
+        payload=CronPayload(message="check"),
         state=CronJobState(claimed_by_pid=pid, claimed_at_ms=claimed_at_ms),
     )
 
@@ -80,7 +80,7 @@ def _owned_job(owner_pid: int | None) -> CronJob:
         name="ops:fea-contact:r1",
         enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1),
-        payload=CronPayload(kind="agent_turn", message="check", owner="tui:a",
+        payload=CronPayload(message="check", owner="tui:a",
                             owner_pid=owner_pid),
         state=CronJobState(),
     )
@@ -91,13 +91,13 @@ def test_a_wake_whose_window_is_closed_is_not_taken_by_another_window():
     different experiment's ledger and submitted jobs. A wake with an owner is
     that owner's alone; when the owner is gone it waits to be claimed by name."""
     job = _owned_job(_dead_pid())
-    assert CronService._owner_is_elsewhere(job, os.getpid()) is True
+    assert CronService._owning_pid(job, os.getpid()) is not None
 
 
 def test_a_window_runs_its_own_wake():
-    assert CronService._owner_is_elsewhere(_owned_job(os.getpid()), os.getpid()) is False
+    assert CronService._owning_pid(_owned_job(os.getpid()), os.getpid()) is None
 
 
 def test_a_wake_written_before_the_owner_field_still_runs():
     """Jobs from before ownership existed carry no owner and must not stall."""
-    assert CronService._owner_is_elsewhere(_owned_job(None), os.getpid()) is False
+    assert CronService._owning_pid(_owned_job(None), os.getpid()) is None

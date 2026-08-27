@@ -25,16 +25,18 @@ Known divergence: ``system.hello`` still advertises ``default_session_key``
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.config.loader import load_config
+from raven.cli.update_notice import update_notice
+from raven.config.loader import drain_migration_notices, load_config
+from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
-from raven.token_wise.pricing import resolve_context_window
 from raven.tui_rpc.errors import TurnInProgressError
 from raven.tui_rpc.methods import turn as turn_module
 from raven.tui_rpc.methods.system import _raven_version
@@ -95,7 +97,7 @@ def _enumerate_skills(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
     return {source: sorted(names) for source, names in grouped.items()}
 
 
-def _baseline_usage(
+async def _baseline_usage(
     agent_loop: "AgentLoop | None",
     config: "Config",
 ) -> dict[str, Any]:
@@ -103,21 +105,36 @@ def _baseline_usage(
 
     All counters are zero at session.create: a fresh session_key carries no
     prior LLM calls. Each turn's ``message.complete`` event updates them
-    post-turn. ``context_max`` is the model's real window — live from the
-    provider table when LiteLLM lags (e.g. OpenRouter), else config default.
+    post-turn. ``context_max`` follows the same ladder ``AgentLoop`` uses: a
+    pinned ``context_window_tokens`` wins outright; otherwise the model's real
+    window (live from the provider table when LiteLLM lags, e.g. OpenRouter),
+    or 0 when neither is known — the UI's empty state, not a borrowed number.
     Usage starts at zero for a fresh session by design. Resume reuses the
     zero baseline; counters refresh on the next turn.
+
+    Cost is the exception: on a subscription there is no per-token figure, so the
+    banner says so rather than opening at $0.00. Zero here read as free until the
+    first turn replaced it, which is the answer this session will never have.
+
+    ``resolve_context_window`` defaults to ``allow_fetch=True``, so a cold
+    OpenRouter model can reach for a synchronous 10s HTTP call; this handler
+    runs on the event loop (an RPC method), so that call is pushed to a
+    thread rather than blocking every other session in flight.
     """
-    context_max = config.agents.defaults.context_window_tokens
+    from raven.providers.rates import is_plan_billed
+
     model = getattr(agent_loop, "model", None)
-    if model:
-        live_window = resolve_context_window(model)
-        if live_window:
-            context_max = live_window
+    configured = config.agents.defaults.context_window_tokens
+    if configured:
+        context_max = configured
+    elif model:
+        context_max = await asyncio.to_thread(resolve_context_window, model) or 0
+    else:
+        context_max = 0
     return {
         "input": 0,
         "output": 0,
-        "cost_usd": 0.0,
+        "cost_usd": None if model and is_plan_billed(str(model)) else 0.0,
         "calls": 0,
         "context_max": context_max,
         "context_used": 0,
@@ -125,29 +142,84 @@ def _baseline_usage(
     }
 
 
-def _default_session_info(
+def _restore_session_model(agent_loop: "AgentLoop", session_key: str) -> None:
+    """Re-apply the model this session was last switched to.
+
+    Overrides live in the loop's memory, so a restart would otherwise move
+    every switched session back to the default. The session record is the only
+    place that choice survives, and this is the only reader of it.
+    """
+    restore = getattr(agent_loop, "restore_session_model", None)
+    sessions = getattr(agent_loop, "sessions", None)
+    if not callable(restore) or sessions is None:
+        return
+    try:
+        record = sessions.peek(session_key)
+    except Exception:
+        return
+    metadata = getattr(record, "metadata", None) or {}
+    model = metadata.get("model")
+    if model:
+        restore(session_key, model, metadata.get("provider"))
+
+
+async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
+    session_key: str | None = None,
 ) -> dict[str, Any]:
     """Build the init bundle returned by ``session.create`` / ``session.resume``.
 
     ``agent_loop=None`` triggers graceful fallback (``tools={}``, ``skills={}``,
     zero usage, ``lazy=True``); version is always real (cached at module load).
+
+    The model reported is the one this session runs on, not the configured
+    default: a session that switched has its own, and reporting the default
+    would show every other session's user the wrong model. With no
+    ``session_key`` (a session being created) the default is the right answer,
+    because that is what a new session starts on.
     """
     model_id = config.agents.defaults.model
-    return {
+    if session_key and agent_loop is not None:
+        session_model = getattr(agent_loop, "session_model", None)
+        if callable(session_model):
+            model_id = session_model(session_key)
+    usage = await _baseline_usage(agent_loop, config)
+    info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
         "provider": config.agents.defaults.provider,
-        "context_window": config.agents.defaults.context_window_tokens,
+        "context_window": usage["context_max"],
         "lazy": agent_loop is None,
         "skills": _enumerate_skills(agent_loop),
         "tools": _enumerate_tools(agent_loop),
-        "usage": _baseline_usage(agent_loop, config),
+        "usage": usage,
         "version": _RAVEN_VERSION,
         "cwd": os.getcwd(),
         "mcp_servers": [],
+        # Which of a multi-endpoint provider's endpoints this session is on.
+        # None for every single-endpoint provider -- there is one address and it
+        # carries no label worth showing.
+        "endpoint": getattr(getattr(agent_loop, "provider", None), "active_endpoint_label", None),
     }
+
+    # Nudge the status bar to run `raven upgrade` when the cached latest release
+    # is newer. Reading the cache is pure/fast; the cache is refreshed once per
+    # launch from the `raven tui` entrypoint (see cli/tui_commands.py), so a
+    # freshly published release shows up on the next launch.
+    notice = update_notice(_RAVEN_VERSION)
+    if notice is not None:
+        info["update_available"], info["update_command"] = notice
+
+    # Anything a config migration changed on the user's behalf while this
+    # backend booted. The CLI prints these itself; a TUI/served-page user never
+    # sees that terminal, so the first session of the launch carries them into
+    # the transcript instead. Drained, so a later resume does not repeat them.
+    migrated = drain_migration_notices()
+    if migrated:
+        info["config_notices"] = migrated
+
+    return info
 
 
 def _get_or_build_manager(config: "Config") -> SessionManager:
@@ -223,7 +295,7 @@ async def session_create(
     session_id = f"tui:{new_chat_id()}"
     return {
         "session_id": session_id,
-        "info": _default_session_info(agent_loop, load_config()),
+        "info": await _default_session_info(agent_loop, load_config()),
     }
 
 
@@ -267,8 +339,10 @@ async def session_resume(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    info = _default_session_info(agent_loop, config)
     session_key = params.get("session_id")
+    if isinstance(session_key, str) and session_key and agent_loop is not None:
+        _restore_session_model(agent_loop, session_key)
+    info = await _default_session_info(agent_loop, config, session_key if isinstance(session_key, str) else None)
 
     if session_key:
         try:
@@ -362,6 +436,15 @@ async def session_delete(
         config = load_config()
         mgr = _manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
+        if agent_loop is not None:
+            # Not gated on ``removed``: a session that switched model before its
+            # first save has a binding in memory and no file on disk, and
+            # ``delete`` answers False for exactly that case. Clearing what is
+            # not there costs nothing; leaving it behind leaks for the life of
+            # the process.
+            clear = getattr(agent_loop, "clear_session_binding", None)
+            if callable(clear):
+                clear(session_key)
     return {"deleted": session_key if removed else None}
 
 
@@ -413,7 +496,7 @@ async def session_title(
 
     if title is not None:
         session = mgr.get_or_create(session_key)
-        session.metadata["title"] = title
+        session.set_title(title)
         if mgr.exists(session_key):
             try:
                 mgr.save(session)
@@ -518,6 +601,14 @@ async def session_branch(
     config = load_config()
     mgr = _manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
+    if child is not None and agent_loop is not None:
+        # A fork continues its parent's conversation, so it continues on the
+        # parent's model; without this it would silently drop to the default.
+        binding_for = getattr(agent_loop, "binding_for_session", None)
+        setter = getattr(agent_loop, "set_session_binding", None)
+        has_own = getattr(agent_loop, "has_session_binding", None)
+        if callable(binding_for) and callable(setter) and callable(has_own) and has_own(session_key):
+            setter(child.key, binding_for(session_key))
     if child is None:
         return {"session_id": None, "title": None}
     return {

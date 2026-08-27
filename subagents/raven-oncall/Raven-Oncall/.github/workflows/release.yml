@@ -73,6 +73,17 @@ jobs:
           print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules")
           PY
 
+      # 4b) Export the locked dependency set as a constraints file. The install
+      #     scripts pass this to `uv tool install -c` so a one-click install gets
+      #     the exact versions we lock and test, instead of re-resolving to the
+      #     newest versions allowed by pyproject (which drifts, and can pull a
+      #     source-only build with no wheel on the user's platform). --locked
+      #     fails the release if uv.lock is stale vs pyproject, so we never ship
+      #     constraints that conflict with the wheel's own metadata; --all-extras
+      #     covers the channel SDKs behind raven[channels].
+      - name: Export locked constraints
+        run: uv export --locked --all-extras --no-hashes --no-emit-project -o dist/raven-constraints.txt
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -121,10 +132,20 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            gh release create "$tag" dist/*.whl dist/*.tar.gz \
-              --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre
+            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
+              --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre)
+            # A draft lives at releases/tag/untagged-<hash> and keeps serving that
+            # stale page after publication, with no redirect to the real tag. Print
+            # both URLs so nobody shares the draft one by copying the address bar.
+            {
+              echo "### Release $tag"
+              echo ""
+              echo "- Draft (temporary, do not share): $draft_url"
+              echo "- Public URL once published: https://github.com/$repo/releases/tag/$tag"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Release $tag already published (id=$id); leaving as-is."
+            echo "Release $tag already published: https://github.com/$repo/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # (Optional, wire up when ready) publish to PyPI on tag:

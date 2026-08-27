@@ -9,36 +9,60 @@ import { useEffect, useRef, useState } from 'react'
 import type { Theme } from '../theme.js'
 import type { ApprovalReq, ClarifyReq, ConfirmReq } from '../types.js'
 
+import { APPROVAL_OPTIONS, approvalRemainingSeconds } from '../lib/approval.js'
 import { CONFIRM_COUNTDOWN_SECONDS, tickCountdown } from '../lib/confirmCountdown.js'
 import { isMac } from '../lib/platform.js'
 import { TextInput } from './textInput.js'
 
-const OPTS = ['once', 'session', 'always', 'deny'] as const
-const LABELS = { always: 'Always allow', deny: 'Deny', once: 'Allow once', session: 'Allow this session' } as const
 const CMD_PREVIEW_LINES = 10
 
 export function ApprovalPrompt({ onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
+  const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
+  const expired = useRef(false)
+
+  useEffect(() => {
+    expired.current = false
+
+    const update = () => {
+      // The runtime sends an absolute wall-clock deadline rather than a duration.
+      // Recomputing from that value matters when rendering is delayed or the
+      // terminal process is briefly suspended: mounting the component must not
+      // accidentally grant a fresh approval window. The ref makes auto-denial
+      // edge-triggered while the interval continues to render the 0-second state.
+      const remaining = approvalRemainingSeconds(req.expiresAt)
+      setRemainingSeconds(remaining)
+      if (remaining === 0 && !expired.current) {
+        expired.current = true
+        onChoice('deny')
+      }
+    }
+
+    update()
+    const timer = setInterval(update, 250)
+
+    return () => clearInterval(timer)
+  }, [onChoice, req.approvalId, req.expiresAt])
 
   useInput((ch, key) => {
     if (key.upArrow && sel > 0) {
       setSel(s => s - 1)
     }
 
-    if (key.downArrow && sel < OPTS.length - 1) {
+    if (key.downArrow && sel < APPROVAL_OPTIONS.length - 1) {
       setSel(s => s + 1)
     }
 
     const n = parseInt(ch, 10)
 
-    if (n >= 1 && n <= OPTS.length) {
-      onChoice(OPTS[n - 1]!)
+    if (n >= 1 && n <= APPROVAL_OPTIONS.length) {
+      onChoice(APPROVAL_OPTIONS[n - 1]!.choice)
 
       return
     }
 
     if (key.return) {
-      onChoice(OPTS[sel]!)
+      onChoice(APPROVAL_OPTIONS[sel]!.choice)
     }
   })
 
@@ -68,16 +92,18 @@ export function ApprovalPrompt({ onChoice, req, t }: ApprovalPromptProps) {
 
       <Text />
 
-      {OPTS.map((o, i) => (
-        <Text key={o}>
+      {APPROVAL_OPTIONS.map((option, i) => (
+        <Text key={option.choice}>
           <Text bold={sel === i} color={sel === i ? t.color.warn : t.color.muted} inverse={sel === i}>
             {sel === i ? '▸ ' : '  '}
-            {i + 1}. {LABELS[o]}
+            {i + 1}. {option.label}
           </Text>
         </Text>
       ))}
 
-      <Text color={t.color.muted}>↑/↓ select · Enter confirm · 1-4 quick pick · Ctrl+C deny</Text>
+      <Text color={t.color.muted}>
+        ↑/↓ select · Enter confirm · 1-2 quick pick · Ctrl+C deny · expires in {remainingSeconds}s
+      </Text>
     </Box>
   )
 }

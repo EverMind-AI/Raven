@@ -16,8 +16,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from raven.cli.ops_connection_commands import connection_app
+
 ops_app = typer.Typer(help="Ops: run long-running orchestration campaigns.")
 console = Console()
+
+ops_app.add_typer(connection_app, name="connection")
 
 
 @ops_app.command()

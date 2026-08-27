@@ -7,6 +7,7 @@ it replaces the dormant pub/sub ``bus``.
 
 from raven.spine.events import (
     Deliverable,
+    EpisodeStart,
     MediaOut,
     Notice,
     NoticeKind,
@@ -32,6 +33,7 @@ __all__ = [
     "ChatType",
     "Deliverable",
     "Emit",
+    "EpisodeStart",
     "Media",
     "MediaOut",
     "Notice",

@@ -249,6 +249,23 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
+    // Runtime-only: `display` is not a persisted config block, so this never
+    // touches config.json (writing it there fails the backend Config schema
+    // and breaks every raven that reads the shared file). Session-scoped.
+    help: 'transcript style: episodes (one line per step) or legacy',
+    name: 'transcript',
+    run: (arg, ctx) => {
+      const a = arg.trim().toLowerCase()
+      const next: 'episodes' | 'legacy' =
+        a === 'episodes' || a === 'legacy' ? a : ctx.ui.transcript === 'episodes' ? 'legacy' : 'episodes'
+
+      patchUiState({ transcript: next })
+
+      queueMicrotask(() => ctx.transcript.sys(`transcript: ${next} (this session)`))
+    }
+  },
+
+  {
     aliases: ['detail'],
     help: 'control agent detail visibility (global or per-section)',
     name: 'details',

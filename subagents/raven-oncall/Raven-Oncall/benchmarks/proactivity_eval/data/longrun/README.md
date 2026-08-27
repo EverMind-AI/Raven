@@ -137,7 +137,7 @@ flowchart TB
     RL["RoutineLearner<br/>mines repeated user<br/>patterns over weeks"]:::sentinel
     MW["SentinelMemoryWriter<br/>MEMORY.md · SOUL.md"]:::sentinel
 
-    VLLM[("Backing LLM<br/>vLLM @ qwen3.5-27B<br/><i>OpenAI-compatible endpoint</i>")]:::backend
+    VLLM[("Backing LLM<br/>qwen/qwen3.5-27b<br/><i>OpenAI-compatible endpoint</i>")]:::backend
 
     OUT(["📤 nudge delivered<br/>to active user channel<br/>(in-app / push)"]):::io
 
@@ -286,7 +286,7 @@ You will need:
 
 | Component | Default |
 |---|---|
-| Backing LLM | OpenAI-compatible endpoint serving **`qwen3.5-27B`** (LAN vLLM in our setup) |
+| Backing LLM | OpenAI-compatible endpoint serving **`qwen/qwen3.5-27b`** (OpenRouter in the reference run; any OpenAI-compatible endpoint, incl. LAN vLLM, works) |
 | User simulator | OpenRouter `anthropic/claude-sonnet-4.5` (default; override with `--simulator-model`) |
 | Raven agent | `pip install raven==0.1.0` |
 | Hermes agent | `hermes-agent==0.10.0` source tree on disk (`$HERMES_AGENT_SRC`) |
@@ -351,7 +351,8 @@ HERMES_AGENT_SRC=~/path/to/hermes-agent uv run python \
 
 ### 3. OpenClaw (reactive + MCP-gateway cron baseline)
 
-OpenClaw has no anticipatory layer, so it still scores 0 on Type A. But
+OpenClaw has no anticipatory layer, so it scores ~0 on Type A (1/43 — a
+single autonomous cron that happened to match; no L3 prediction). But
 since OC ≥ 2026.3.31 supports MCP, the harness bundles a Node-based
 MCP cron server (`runners/_common/mcp_cron_server.mjs`) and pre-wires it
 into the per-persona `OPENCLAW_HOME`. The OC agent's LLM can then call
@@ -362,14 +363,14 @@ Requires the MCP-enabled image (`openclaw:local-mcp`); the legacy
 `openclaw:local` (2026.2.x) has no MCP support and will silently produce
 zero cron fires.
 
-The MCP `set_reminder` registers **one-shot** reminders (not recurring),
-so the agent must re-arm a daily reminder every day. In practice OC's LLM
-re-arms the caregiver meds for the first ~15 days, then stops re-registering
-and cron fires dry up — even though the conversation runs the full 30 days
-(the harness keeps firing whatever is still registered). By contrast Hermes
-registers the meds as recurring jobs, which keep firing on 05-27..05-30 with
-no conversation at all. So OpenClaw's 61 is an *under-delivery* floor of its
-one-shot model failing to sustain recurring reminders — not restraint.
+The MCP `set_reminder` now supports `repeat` (daily/weekdays/weekly). In
+this run OC's LLM both re-registers reminders aggressively and uses
+recurring jobs, so its crons pile up: for caregiver alone, 92 registrations
+firing 170 times, and 267 across all personas — well above the ~81–110
+ground-truth band. So OpenClaw's 267 is an *over*-delivery, not superior
+scheduling (nor restraint). The legacy one-shot bridge, before `repeat`
+support, instead *under*-fired as the agent failed to re-arm daily
+reminders — either way this row is not a capability ranking.
 
 ```bash
 # Re-tag the upstream MCP-capable image as openclaw:local-mcp once:
@@ -459,14 +460,14 @@ rubric:
 
 Per-persona total: `sum(per_outcome_points × pass_fraction) / total_points`.
 
-### Reference results (qwen3.5-27B backend, 6 personas × 30 days)
+### Reference results (qwen/qwen3.5-27b backend via OpenRouter, 6 personas × 30 days)
 
-| Dimension | Raven | Hermes (v0.10) | OpenClaw |
+| Dimension | Raven | Hermes (v0.19.0) | OpenClaw |
 |---|---|---|---|
-| **A. Anticipatory proactivity** (Type A hits / lift) | **19/43 (44%)**, lift = 60 | 0/43, lift = 0 | 0/43, lift = 0 |
-| **B. Reactive Q&A** (Type B hits) | 15/21 (71%) | **18/21 (86%)** | 11/21 (52%) |
-| **D. Restraint** (Type C hits) | 10/21 (48%) | **16/21 (76%)** | **16/21 (76%)** |
-| **C. Scheduled execution** (delivered **cron** fires across personas)¹ | **109** (+155 sentinel anticipatory) | 115 (all cron) | 61 (MCP-gateway) |
+| **A. Anticipatory proactivity** (Type A hits / lift) | **19/43 (44%)**, lift = 59 | 1/43 (2%), lift = 4 | 1/43 (2%), lift = 3 |
+| **B. Reactive Q&A** (Type B hits) | 6/21 (29%) | **10/21 (48%)** | 5/21 (24%) |
+| **D. Restraint** (Type C hits) | 12/21 (57%) | **17/21 (81%)** | 16/21 (76%) |
+| **C. Scheduled execution** (delivered **cron** fires across personas)¹ | **109** (+87 sentinel anticipatory) | 103 (all cron) | **267** (MCP-gateway) |
 
 ¹ Scheduled execution counts **cron fires only** (delivered scheduled
 reminders). Raven's sentinel anticipatory fires are shown as an aside
@@ -477,12 +478,14 @@ freelancer (3 one-shots) issue explicit `set_reminder` intents; the other
 4 personas issue none. Ground-truth cron for the whole longrun ≈ 81–93
 (explicit requests) up to ~110 (incl. agent-derived contextual todos such
 as parent's kid/family items). Raven's 109 sits in that band (caregiver
-87 ≈ correct, parent 18 context-derived); OpenClaw's 61 is *under*-firing
-(missed reminders), not restraint. **Do not read this row as a capability
-ranking** — the real differentiator is row A. OpenClaw runs via the
-MCP-gateway cron path (`openclaw:local-mcp`, OC ≥ 2026.3.31); the legacy
-`openclaw:local` (2026.2.x) image had no MCP and bottomed out at zero.
-All three re-scored with the current `longrun_scorecard.py` for a
+81 ≈ correct, parent 24 context-derived); Hermes's 103 likewise (caregiver
+94). OpenClaw's 267 is *over*-firing — with the MCP bridge's `repeat`
+support its recurring reminders re-fire daily and pile up (caregiver 170,
+parent 78) — not superior scheduling. **Do not read this row as a
+capability ranking** — the real differentiator is row A. OpenClaw runs via
+the MCP-gateway cron path (`openclaw:local-mcp`, OC ≥ 2026.3.31); the
+legacy `openclaw:local` (2026.2.x) image had no MCP and bottomed out at
+zero. All three scored with the current `longrun_scorecard.py` for a
 consistent metric.
 
 These numbers are *measurements of architecture, not just of model
@@ -530,7 +533,7 @@ of time, never *anticipate* what the user has yet to mention.
 - **No held-out test split.** All 6 personas are public. A hidden split
   is planned for the eventual NeurIPS-D&B-style release.
 - **Single backing model in reference numbers.** The reference table
-  reports qwen3.5-27B for all three agents. Cross-model studies (GPT-4o
+  reports qwen/qwen3.5-27b for all three agents. Cross-model studies (GPT-4o
   agent vs Claude agent vs local Qwen) are not yet in this release.
 
 ---

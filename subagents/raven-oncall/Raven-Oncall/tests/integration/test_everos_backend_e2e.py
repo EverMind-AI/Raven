@@ -24,21 +24,23 @@ import pytest
 
 from raven.memory_engine import Memory
 from raven.plugin import PluginContext, ServiceLocator
-from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
+from raven.plugin.memory.everos.backend import EverosBackend, _HttpEverosAdapter
 
 pytestmark = pytest.mark.real_llm
 
 
-def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
+def _backend(tmp_path: Path, *, user_id: str, agent_id: str) -> EverosBackend:
+    # Identity comes from the host, not the plugin config: passing it as
+    # `config={"agent_id": ...}` writes every agent-track row under the
+    # services default while recall queries the tag, so the per-hit assertions
+    # below run over an empty list and the xfail absorbs it.
     be = EverosBackend(
         PluginContext(
-            config={"mode": "embedded", "agent_id": agent_id},
-            services=ServiceLocator(workspace=tmp_path),
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
         )
     )
-    # Embedded mode must resolve the real adapter now that everos is
-    # installed — if it degraded to no-op the e2e would be meaningless.
-    assert isinstance(be._adapter, _RealEverosAdapter), "embedded backend did not bind the real everos adapter"
+    assert isinstance(be._adapter, _HttpEverosAdapter), "backend did not bind the HTTP adapter"
     return be
 
 
@@ -73,7 +75,7 @@ async def test_user_track_recall_through_backend(
     tmp_path: Path,
     pipeline_drain: Any,
 ) -> None:
-    be = _backend(tmp_path, agent_id=ids.agent_id)
+    be = _backend(tmp_path, user_id=ids.user_id, agent_id=ids.agent_id)
     await be.start()
     try:
         facts = _stamp_user(corpus["user_facts"]["messages"], ids.user_id)
@@ -85,7 +87,11 @@ async def test_user_track_recall_through_backend(
             user_id=ids.user_id,
             top_k=5,
         )
-        assert isinstance(hits, list)
+        # Recall returning nothing is a best-effort miss per this module's
+        # strategy, but it must not read as a pass: the per-hit assertions below
+        # are vacuous on an empty list.
+        if not hits:
+            pytest.xfail("recall returned no hits; the per-hit assertions would be vacuous")
         for h in hits:
             assert isinstance(h, Memory)
             assert h.metadata.get("owner_type") == "user"
@@ -101,7 +107,7 @@ async def test_agent_skill_recall_through_backend(
     tmp_path: Path,
     pipeline_drain: Any,
 ) -> None:
-    be = _backend(tmp_path, agent_id=ids.agent_id)
+    be = _backend(tmp_path, user_id=ids.user_id, agent_id=ids.agent_id)
     await be.start()
     try:
         demo = corpus["skill_demo"]
@@ -141,7 +147,7 @@ async def test_dual_track_isolation(
     pipeline_drain: Any,
 ) -> None:
     """A user-track query must never surface agent skills/cases."""
-    be = _backend(tmp_path, agent_id=ids.agent_id)
+    be = _backend(tmp_path, user_id=ids.user_id, agent_id=ids.agent_id)
     await be.start()
     try:
         await _store_repeated(

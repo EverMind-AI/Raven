@@ -139,6 +139,17 @@ def _human_failure(stdout: str, stderr: str) -> str:
     return ""
 
 
+def _host_home_env() -> dict[str, str]:
+    """This raven's own ``RAVEN_HOME``, or nothing when it is running on the default.
+
+    Read from ``os.environ`` at spawn time rather than captured once: a test (and
+    ``raven serve``) may point a process at a different home between spawns, and
+    a value frozen at import would outlive the change.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip()
+    return {"RAVEN_HOME": home} if home else {}
+
+
 class CliAgentTimeoutError(RuntimeError):
     """Raised when a CLI invocation exceeds its configured ``timeout``.
 
@@ -385,7 +396,20 @@ class CliAgentBackend:
             # The capture shells out and can block for real seconds on a slow
             # profile (nvm/conda init); to_thread keeps that off the event loop.
             env_base = await asyncio.to_thread(login_shell_env)
-            env = {**env_base, **self.env}
+            # Which raven spawned this child is not something a login shell can
+            # answer. The capture is there so the child finds the same tools the
+            # user's own shell would (nvm, conda, a homebrew PATH); RAVEN_HOME is
+            # a different kind of fact -- it names the install this process IS,
+            # and it is normally set on the command line rather than in a profile,
+            # so the capture comes back without it and the child resolves the
+            # default home instead.
+            #
+            # The failure that costs is silent, because both homes exist: started
+            # as RAVEN_HOME=~/.raven-main, the host polls that home's cron store
+            # while a sub-agent writing back to "the host's store" writes into
+            # ~/.raven. The hand-off lands in a file nobody reads and the wake
+            # simply never arrives.
+            env = {**env_base, **_host_home_env(), **self.env}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,

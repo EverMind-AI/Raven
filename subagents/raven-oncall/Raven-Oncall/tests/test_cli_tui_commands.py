@@ -246,6 +246,9 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     fake_agent_loop = MagicMock()
     fake_agent_loop.backend = spy_backend
+    # Awaited during teardown before backend.stop(); a bare MagicMock is not
+    # awaitable and would swallow the stop it is supposed to precede.
+    fake_agent_loop.drain_backend_stores = AsyncMock()
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
@@ -279,11 +282,23 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
         lambda **kw: fake_emitter,
     )
 
+    # Load the lazily imported module before patching its attributes; otherwise
+    # this fixture can depend on test order through Python's import cache.
+    from raven.tui_rpc.methods import system as _system_module
+
+    assert _system_module is not None
     fake_confirm_broker = MagicMock()
     fake_confirm_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
         "raven.tui_rpc.confirm_broker.ConfirmBroker",
         lambda **kw: fake_confirm_broker,
+    )
+
+    fake_approval_broker = MagicMock()
+    fake_approval_broker.cancel_all = MagicMock()
+    monkeypatch.setattr(
+        "raven.tui_rpc.approval_broker.ApprovalBroker",
+        lambda **kw: fake_approval_broker,
     )
 
     fake_question_broker = MagicMock()
@@ -310,16 +325,16 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     async def _fake_turn_teardown():
         pass
 
-    monkeypatch.setattr(
-        "raven.tui_rpc.spine.build_tui",
-        lambda *a, **kw: (fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown),
-    )
+    fake_build_tui = MagicMock(return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown))
+    monkeypatch.setattr("raven.tui_rpc.spine.build_tui", fake_build_tui)
 
     monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
     monkeypatch.setattr("raven.tui_rpc.methods.turn.clear_active", MagicMock())
 
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
+    ctx["fake_approval_broker"] = fake_approval_broker
+    ctx["fake_build_tui"] = fake_build_tui
     ctx["dispatcher"] = fake_dispatcher
     return ctx
 
@@ -374,6 +389,17 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
+
+
+async def test_rpc_runner_wires_and_cancels_approval_broker(rpc_server_deps, monkeypatch) -> None:
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    approval_broker = rpc_server_deps["fake_approval_broker"]
+    assert rpc_server_deps["fake_build_tui"].call_args.kwargs["approval_responder"] is approval_broker
+    registration = __import__("raven.tui_rpc.methods", fromlist=["register"])
+    register_mock = registration.register_aligned_methods_except_system
+    assert register_mock.call_args.kwargs["approval_broker"] is approval_broker
+    approval_broker.cancel_all.assert_called_once_with()
 
 
 async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, monkeypatch) -> None:
@@ -456,67 +482,6 @@ async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(rpc_ser
 
 
 # ---------------------------------------------------------------------------
-# fd-level stdout/stderr redirect spans the serve region
-# ---------------------------------------------------------------------------
-
-
-async def test_rpc_runner_activates_fd_redirect_before_backend_start(rpc_server_deps, monkeypatch, tmp_path) -> None:
-    """``_run_rpc_server_until_done`` must activate redirect_terminal_fds_to_file
-    before calling backend.start() so that everos structlog PrintLogger output
-    during start and serve lands in the log file, not on the terminal.
-
-    Spies on the CM entry/exit and on start/stop to assert ordering:
-    redirect_enter < start ... stop < redirect_exit (held through the finally).
-    """
-    import contextlib
-
-    call_log: list[str] = []
-
-    original_start = rpc_server_deps["backend"].start
-    original_stop = rpc_server_deps["backend"].stop
-
-    async def _spy_start():
-        call_log.append("start")
-        await original_start()
-
-    async def _spy_stop():
-        call_log.append("stop")
-        await original_stop()
-
-    rpc_server_deps["backend"].start = _spy_start
-    rpc_server_deps["backend"].stop = _spy_stop
-
-    @contextlib.contextmanager
-    def _spy_redirect(path):
-        call_log.append("redirect_enter")
-        try:
-            yield
-        finally:
-            call_log.append("redirect_exit")
-
-    monkeypatch.setattr(
-        "raven.cli.tui_commands.redirect_terminal_fds_to_file",
-        _spy_redirect,
-    )
-    monkeypatch.setattr(
-        "raven.config.paths.get_logs_dir",
-        lambda: tmp_path,
-    )
-
-    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
-
-    assert "redirect_enter" in call_log, "redirect_terminal_fds_to_file must be entered"
-    enter_idx = call_log.index("redirect_enter")
-    start_idx = call_log.index("start")
-    assert enter_idx < start_idx, "redirect must be activated BEFORE backend.start()"
-
-    assert "redirect_exit" in call_log, "redirect_terminal_fds_to_file must be exited (restored)"
-    exit_idx = call_log.index("redirect_exit")
-    stop_idx = call_log.index("stop")
-    assert stop_idx < exit_idx, "redirect must be held THROUGH backend.stop()"
-
-
-# ---------------------------------------------------------------------------
 # log-path notice: surfaced only on abnormal child exit (#131)
 # ---------------------------------------------------------------------------
 
@@ -571,3 +536,69 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
         assert f"(exit {exit_code})" in result.stderr
     else:
         assert "TUI logs" not in result.stderr
+
+
+def test_the_tui_is_told_which_raven_to_call_back_into(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The picker signs a user in by running ``raven provider login``, and that
+    writes a credential. Resolved through PATH it can be a different install --
+    one that writes it where this process does not look, so the login reports
+    success and the provider stays unauthenticated."""
+    from raven.cli import tui_commands
+
+    entry = tmp_path / "raven"
+    entry.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(entry), "tui"])
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == str(entry)
+
+
+def test_an_explicitly_pointed_raven_bin_is_left_alone(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from raven.cli import tui_commands
+
+    entry = tmp_path / "raven"
+    entry.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(entry), "tui"])
+    monkeypatch.setenv("RAVEN_BIN", "/somewhere/else/raven")
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == "/somewhere/else/raven"
+
+
+def test_an_unnameable_entry_point_leaves_the_variable_unset(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Unset, not empty: the TUI reads ``RAVEN_BIN?.trim() || 'raven'``, so an
+    empty value falls back to PATH while looking like it had been answered."""
+    from raven.cli import tui_commands
+
+    monkeypatch.setattr("sys.argv", ["/nowhere/pytest", "tui"])
+    monkeypatch.setattr("sys.executable", str(tmp_path / "bin" / "python"))
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert "RAVEN_BIN" not in tui_commands.child_env()
+
+
+def test_python_dash_m_finds_the_script_beside_the_interpreter(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``python -m raven`` puts a module path in argv[0]; the console script sits
+    in the same directory as the interpreter that is running."""
+    from raven.cli import tui_commands
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "raven").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(tmp_path / "raven" / "__main__.py"), "tui"])
+    monkeypatch.setattr("sys.executable", str(bin_dir / "python"))
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == str(bin_dir / "raven")
+
+
+def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both RPC transports build the child environment, and a third spawn site
+    added later must not be the one that forgets."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    for fn in (tui_commands._spawn_with_rpc_pipes, tui_commands._spawn_with_rpc_socket):
+        source = inspect.getsource(fn)
+        assert "child_env()" in source, f"{fn.__name__} builds its own env"
+        assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"

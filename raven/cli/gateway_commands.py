@@ -788,7 +788,10 @@ def register(app: typer.Typer) -> None:
                     from raven.cli.tui_commands import _build_cron_callback_spine
 
                     cron.on_job = _build_cron_callback_spine(
-                        cron.on_job, page_mount.emitter, default_channel=pro_channel
+                        cron.on_job,
+                        page_mount.emitter,
+                        default_channel=pro_channel,
+                        direct_targets=page_mount.direct_targets,
                     )
                     console.print(f"[green]✓[/green] Page: {page_mount.url} (rpc: {page_mount.url}/rpc)")
 

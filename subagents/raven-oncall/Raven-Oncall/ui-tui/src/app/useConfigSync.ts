@@ -3,10 +3,10 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
-import type { ConfigFullResponse, ConfigMtimeResponse, ReloadMcpResponse } from '../gatewayTypes.js'
+import type { ConfigFullResponse } from '../gatewayTypes.js'
 
 import { resolveDetailsMode, resolveSections } from '../domain/details.js'
 import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
@@ -18,7 +18,6 @@ import {
   type IndicatorStyle,
   type StatusBarMode
 } from './interfaces.js'
-import { turnController } from './turnController.js'
 import { patchUiState } from './uiStore.js'
 
 const STATUSBAR_ALIAS: Record<string, StatusBarMode> = {
@@ -39,13 +38,11 @@ export const normalizeStatusBar = (raw: unknown): StatusBarMode =>
 
 const BUSY_MODES = new Set<BusyInputMode>(['interrupt', 'queue', 'steer'])
 
-// TUI defaults to `queue` even though the framework default
-// (`raven_cli/config.py`) is `interrupt`.  Rationale: in a full-screen
-// TUI you're typically authoring the next prompt while the agent is
-// still streaming, and an unintended interrupt loses work.  Set
-// `display.busy_input_mode: interrupt` (or `steer`) explicitly to
-// opt out per-config; CLI / messaging adapters keep their `interrupt`
-// default unchanged.
+// `queue` rather than `interrupt`: in a full-screen TUI you're
+// typically authoring the next prompt while the agent is still
+// streaming, and an unintended interrupt loses work.  Set
+// `display.busy_input_mode: interrupt` (or `steer`) explicitly to opt
+// out per-config.
 const TUI_BUSY_DEFAULT: BusyInputMode = 'queue'
 
 export const normalizeBusyInputMode = (raw: unknown): BusyInputMode => {
@@ -83,8 +80,6 @@ export const normalizeMouseTracking = (display: { mouse_tracking?: unknown; tui_
   return typeof raw === 'string' ? !FALSEY_MOUSE.has(raw.trim().toLowerCase()) : true
 }
 
-const MTIME_POLL_MS = 5000
-
 const quietRpc = async <T extends object = Record<string, unknown>>(
   gw: GatewayClient,
   method: string,
@@ -105,11 +100,9 @@ const _voiceRecordKeyFromConfig = (cfg: ConfigFullResponse | null): ParsedVoiceR
 
 /** Fetch ``config.get full`` and fan the result through ``applyDisplay``.
  *
- * Extracted so the mtime-reload path can be exercised by the test
- * suite without a React runtime (Copilot round-12 review on #19835).
- * Both the initial hydration and the mtime poller use this shared
- * helper, so a regression in the fetch/apply plumbing now fails the
- * useConfigSync tests instead of only being visible at runtime. */
+ * Extracted so the fetch/apply plumbing can be exercised by the test suite
+ * without a React runtime, and a regression in it fails a test rather than only
+ * showing up at runtime. */
 export async function hydrateFullConfig(
   gw: GatewayClient,
   setBell: (v: boolean) => void,
@@ -130,13 +123,10 @@ export const applyDisplay = (
 
   setBell(!!d.bell_on_complete)
 
-  // Only push the voice record key when the RPC actually returned a
-  // config payload. ``quietRpc()`` collapses failures to ``null``; if we
-  // reset the cached shortcut on every null we would clobber a custom
-  // binding after one transient RPC error until the next config edit
-  // (Copilot round-8 review on #19835). The mtime-poll loop advances
-  // ``mtimeRef`` before this call, so staying silent on null preserves
-  // the last-good state and lets the next successful poll refresh it.
+  // Only push the voice record key when the RPC actually returned a config
+  // payload. ``quietRpc()`` collapses failures to ``null``; resetting the cached
+  // shortcut on every null would clobber a custom binding after one transient
+  // RPC error, so staying silent preserves the last-good state.
   if (setVoiceRecordKey && cfg) {
     setVoiceRecordKey(_voiceRecordKeyFromConfig(cfg))
   }
@@ -148,12 +138,23 @@ export const applyDisplay = (
     detailsModeCommandOverride: false,
     indicatorStyle: normalizeIndicatorStyle(d.tui_status_indicator),
     inlineDiffs: d.inline_diffs !== false,
-    mouseTracking: normalizeMouseTracking(d),
+    // Only when the config says something. Every other field here would fall back
+    // to the value the store already holds, but mouse tracking does not: its
+    // default comes from RAVEN_TUI_DISABLE_MOUSE, and normalizing a silent config
+    // to `true` turned the environment's opt-out back on at startup.
+    //
+    // The conditional is what makes that safe, not the fetch: the request below
+    // asks `config.get {key:'full'}` while the handler reads `keys` (plural), so
+    // no display block is served today and this whole block runs on `{}`.
+    ...(hasOwn(d, 'mouse_tracking') || hasOwn(d, 'tui_mouse') ? { mouseTracking: normalizeMouseTracking(d) } : {}),
     sections: resolveSections(d.sections),
     showCost: !!d.show_cost,
     showReasoning: d.show_reasoning !== false,
     statusBar: normalizeStatusBar(d.tui_statusbar),
     streaming: d.streaming !== false
+    // NOTE: `transcript` is intentionally NOT synced here. It is a runtime-only
+    // session flag toggled by `/transcript` (`display` is not a persisted config
+    // block), so hydrating it would revert the user's choice.
   })
 }
 
@@ -164,8 +165,6 @@ export function useConfigSync({
   setVoiceRecordKey,
   sid
 }: UseConfigSyncOptions) {
-  const mtimeRef = useRef(0)
-
   useEffect(() => {
     if (!sid) {
       return
@@ -176,44 +175,8 @@ export function useConfigSync({
     // Environment flags are enough to initialize the UI bit; the heavier status
     // check still runs when the user opens /voice.
     setVoiceEnabled(process.env.RAVEN_VOICE === '1')
-    quietRpc<ConfigMtimeResponse>(gw, 'config.get', { key: 'mtime' }).then(r => {
-      mtimeRef.current = Number(r?.mtime ?? 0)
-    })
     void hydrateFullConfig(gw, setBellOnComplete, setVoiceRecordKey)
   }, [gw, setBellOnComplete, setVoiceEnabled, setVoiceRecordKey, sid])
-
-  useEffect(() => {
-    if (!sid) {
-      return
-    }
-
-    const id = setInterval(() => {
-      quietRpc<ConfigMtimeResponse>(gw, 'config.get', { key: 'mtime' }).then(r => {
-        const next = Number(r?.mtime ?? 0)
-
-        if (!mtimeRef.current) {
-          if (next) {
-            mtimeRef.current = next
-          }
-
-          return
-        }
-
-        if (!next || next === mtimeRef.current) {
-          return
-        }
-
-        mtimeRef.current = next
-
-        quietRpc<ReloadMcpResponse>(gw, 'reload.mcp', { session_id: sid, confirm: true }).then(
-          r => r && turnController.pushActivity('MCP reloaded after config change')
-        )
-        void hydrateFullConfig(gw, setBellOnComplete, setVoiceRecordKey)
-      })
-    }, MTIME_POLL_MS)
-
-    return () => clearInterval(id)
-  }, [gw, setBellOnComplete, setVoiceRecordKey, sid])
 }
 
 export interface UseConfigSyncOptions {

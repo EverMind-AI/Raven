@@ -141,6 +141,29 @@ or setting `"enabled": false` in its own `subagent.json`.
 _Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
 "builtin" — that is the in-process row, which has no subprocess and no venv.
 
+**Machine** (`raven/agent/subagent_dag/_machines.py`):
+A compute host the owner registered with a vendored agent's own Raven install
+via `raven ops connection add`, reported by that agent's
+`raven ops connection doctor --json` as a `{name, usable}` row. A vendored
+on-call-style agent runs outside the dispatching Raven process — on a GPU
+box, a lab workstation, another machine entirely — so the DAG gate consults
+the agent before dispatching a graph that names it and refuses the run with
+an explicit `raven ops connection add` prompt if no usable machine is
+registered. A graph whose nodes would land on more machines than the agent
+lists is refused under the same gate with the missing ones named; once
+settled the chosen machine is injected into every node's prompt so the
+writing and reporting halves of the graph agree on where the numbers came
+from. The check is silent — returning no `Verdict` rather than a blocking
+one — for graphs that name no machine-running vendored agent, for installs
+that have not wired one up, and for agent checkouts where the doctor cannot
+be run at all; in those cases the graph dispatches exactly as it used to.
+_Avoid_: "host" / "server" / "node" (too broad, no link to the
+`ops connection` registry that supplies the rows); "GPU box" (only some are
+GPU hosts, and the term covers any registered compute destination);
+"connection" (a `connection` in Raven channels is a chat-room binding, and
+here the rows name compute destinations with that binding as an
+implementation detail).
+
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
@@ -1128,6 +1151,21 @@ record keeps as a user row marked `steer`, in the position they were said.
 _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, and the spine's
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
+
+**Unprompted Turn** (`raven/agent/acp/unprompted.py`):
+A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
+schedule is the case it exists for. Every other sink on the session router is attached for
+one run and detached at its end, so these frames used to be dropped as a late usage report;
+a resident recorder now takes what no run claims, streams it to the pane as the same
+`message.start` / `token.delta` / `message.complete` a typed direct-chat turn produces
+(the client cannot tell the two apart, which is the point), and logs it under its own
+`kind` beside `spawn` and `dag`, with a stated-fact `user` row for the fold boundary the
+wake's real message never reaches this process to provide. The turn's end is `usage_update`
+when the agent reports one and silence otherwise - `message.complete` produces no wire
+frame without usage, so a fixed quiet period (sized over the longest healthy tool-call gap)
+is the fallback ending.
+_Avoid_: "background turn" - nothing about it is backgrounded; it runs and streams like any
+other turn, and only its *origin* differs.
 
 **Elicitation Pass-Through** (`raven/agent/acp/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised

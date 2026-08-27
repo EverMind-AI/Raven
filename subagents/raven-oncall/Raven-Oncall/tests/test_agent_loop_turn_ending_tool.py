@@ -102,6 +102,27 @@ def test_the_loop_withholds_tools_after_such_a_call(declared, expected_second_ca
 
 
 @pytest.mark.asyncio
+async def test_one_call_may_say_it_did_not_wait_after_all(tmp_path):
+    """The class default says "and now we wait"; a refused call did not wait.
+    Closing the turn there leaves an ops campaign with nothing pending and nothing
+    reported, so the call's own answer wins over the tool's default."""
+    from raven.agent.tools.base import ToolResult
+    from raven.agent.tools.registry import ToolRegistry
+
+    class _RefusingWaiter(_Waiter):
+        async def execute(self, **kwargs):
+            return ToolResult("REFUSED: nothing was scheduled.", ends_turn=False)
+
+    registry = ToolRegistry()
+    registry.register(_RefusingWaiter())
+
+    out = await registry.execute("waiter", {})
+
+    assert out.ends_turn is False
+    assert _RefusingWaiter().ends_turn is True
+
+
+@pytest.mark.asyncio
 async def test_the_second_call_is_made_with_no_tools(tmp_path):
     """The behaviour itself, driven through the real loop with a recording
     provider: first call asks for the waiting tool, and the call after it must

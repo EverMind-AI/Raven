@@ -11,6 +11,10 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+pytest.importorskip("botpy")
+
 from raven.channels.adapters.qq import parsing as qp
 from raven.channels.adapters.qq.channel import QQChannel
 

@@ -312,6 +312,28 @@ describe('createChatStream — cancel preserves streamed content', () => {
     expect(assistant!.text).toContain('[interrupted]')
   })
 
+  it('appends the failure detail to the error line when present', async () => {
+    const sysCalls: string[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: () => {},
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', detail: "No module named 'orjson'" }
+    })
+
+    expect(sysCalls).toContain("error: turn_failed (code=-32099): No module named 'orjson'")
+  })
+
   it('keeps the streamed partial in the transcript on a local forceReset', async () => {
     const appended: Msg[] = []
     const fake = makeFakeRpc()
@@ -386,5 +408,74 @@ describe('createChatStream — cancel preserves streamed content', () => {
 
     expect(appended.some(m => m.role === 'assistant')).toBe(false)
     expect(sysCalls).toContain('interrupted')
+  })
+})
+
+describe('createChatStream — cron.missed startup notice', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+
+  it('renders one compact summary block via sys with per-item name and scheduled HH:MM', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+
+    fake.__pushEvent({
+      type: 'cron.missed',
+      payload: {
+        count: 2,
+        items: [
+          { message: '记得喝水', name: 'hydrate', scheduled_at: '2025-06-04T10:03:00+00:00' },
+          { message: '起来活动一下', name: 'stretch', scheduled_at: '2025-06-04T10:40:00+00:00' }
+        ]
+      }
+    })
+
+    expect(sysCalls).toHaveLength(1)
+    const block = sysCalls[0]
+    expect(block).toContain('missed 2 reminders')
+    // Fixed 2025 timestamps are never "today" in any timezone: the dated
+    // form must render — but the calendar day is LOCAL while the fixture is
+    // UTC, so assert the shape, never a literal date.
+    expect(block).toMatch(/hydrate — scheduled \d{2}-\d{2} \d{2}:\d{2}: 记得喝水/)
+    expect(block).toMatch(/stretch — scheduled \d{2}-\d{2} \d{2}:\d{2}: 起来活动一下/)
+    // Non-today timestamps render the dated local form (shape only: the
+    // local calendar day shifts with the machine's timezone).
+    expect(block).toMatch(/scheduled \d{2}-\d{2} \d{2}:\d{2}/)
+    // A missed notice is a transcript block, not a turn — the UI must stay idle.
+    expect(stream.isTurnActive()).toBe(false)
+  })
+
+  it('renders a bare HH:MM when the missed reminder was scheduled today', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+
+    const today = new Date()
+    today.setHours(9, 30, 0, 0)
+    fake.__pushEvent({
+      type: 'cron.missed',
+      payload: {
+        count: 1,
+        items: [{ message: 'drink water', name: 'hydrate', scheduled_at: today.toISOString() }]
+      }
+    })
+
+    expect(sysCalls).toHaveLength(1)
+    expect(sysCalls[0]).toContain('hydrate — scheduled 09:30: drink water')
+    expect(sysCalls[0]).not.toMatch(/scheduled \d{2}-\d{2} /)
   })
 })

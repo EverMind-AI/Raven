@@ -20,13 +20,53 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
+from raven.ops.actions import RUN as ACTION_RUN
 from raven.ops.budget import from_meta as budget_from_meta
 
 if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+def _refuse_foreign_instance(ledger: Path) -> None:
+    """Refuse an explicit ledger that lives inside ANOTHER raven instance.
+
+    The explicit-ledger branch exists so a caller can point a tool at exactly
+    the campaign it means, and it stays that way for everything inside this
+    instance, for test fixtures in scratch directories, and for plain files
+    anywhere else. What it must not do is reach into a different instance:
+    measured 2026-08-25, a woken subagent turn was handed (by a wake message a
+    misconfigured shell wrote) the DEFAULT instance's path for a same-named
+    campaign, read the wrong experiment's ledger, and then concluded it --
+    writing a finished report into a paused experiment it had nothing to do
+    with. The 2026-08-14 rule closed this door for wakes; this closes the same
+    door where a path is the key.
+
+    Another instance is recognised by its shape rather than a list nobody
+    maintains: some ancestor of the ledger holds a config.json beside the ops/
+    tree the ledger sits in. No such ancestor -- a tmp dir, an archive copy, a
+    bare file -- is nobody's instance, and stays reachable.
+    """
+    try:
+        own_root = _ops_home().expanduser().resolve().parent
+        led = ledger.resolve()
+    except OSError:
+        return
+    for a in led.parents:
+        if a.name != "ops":
+            continue
+        root = a.parent
+        if (root / "config.json").is_file():
+            if root != own_root:
+                raise ValueError(
+                    f"the ledger at {ledger} belongs to a different raven instance "
+                    f"(rooted at {root}); this instance's campaigns live under "
+                    f"{own_root / 'ops'}. Name the campaign instead of a foreign path -- "
+                    f"another instance's experiment is not this one's to read or close."
+                )
+            return
+
+
 def _ops_home() -> Path:
     """The ops root for this instance, resolved per call rather than bound at
     import so that it follows ``--config``. See ``config.paths.get_ops_home``."""
@@ -61,7 +101,9 @@ def _resolve_campaign_dir(
     the right one, and the loop would drive somebody else's experiment.
     """
     if ledger and str(ledger).strip():
-        return Path(ledger).expanduser().parent
+        led = Path(ledger).expanduser()
+        _refuse_foreign_instance(led)
+        return led.parent
     if campaign:
         d = _ops_home() / _slug(campaign)
         # Naming a campaign IS this window saying what it is working on. Claiming
@@ -285,6 +327,12 @@ def _campaign_gist(campaign_dir: Path) -> str:
     if isinstance(obj, dict) and obj.get("metric"):
         arrow = {"max": "max", "min": "min"}.get(str(obj.get("direction")), "")
         bits.append(f"{arrow} {obj['metric']}".strip())
+    elif isinstance(obj, dict) and obj.get("condition"):
+        # A campaign with no metric still has a target, and it is the one thing
+        # that tells two watches on the same machine apart.
+        bits.append(f"watching for {str(obj['condition'])[:60]}")
+    elif isinstance(obj, dict) and obj.get("kind"):
+        bits.append(str(obj["kind"]))
     return "   ".join(bits) or "(meta.json names nothing to tell it by)"
 
 
@@ -423,6 +471,7 @@ def _budget_line(
     remaining: float | None = None,
     unmeasured: dict | None = None,
     spend_error: str | None = None,
+    cdir: Path | None = None,
 ) -> str:
     """The campaign's allowance and what is left of it, in its own unit.
 
@@ -451,10 +500,18 @@ def _budget_line(
 
     A spend that could not be read says so. A zero would read as "nothing spent
     yet", which is the state a loop acts on most freely.
+
+    Not every budget is machine time, and the ones that are not are answered from
+    the campaign's own record rather than from the host -- a watch that ran no
+    jobs has spent no compute however long it has been watching, so the host's
+    reading would be zero and would read as untouched. Which of the two applies
+    is the declaration's to say (``budget.meter``), never inferred from the unit.
     """
     declared = budget_from_meta(meta)
     if declared is None:
         return "Campaign compute budget: none declared (nothing will stop a run on the total)."
+    if declared.off_machine:
+        return _watch_budget_line(declared, cdir)
     line = f"Campaign compute budget: {declared.total:g} {declared.unit} in total"
     if spend_error:
         return f"{line}; spend could not be read from the host ({spend_error})."
@@ -471,6 +528,229 @@ def _budget_line(
         # line, three of six trials recorded no duration at all.
         line += f" Spend not measurable for: {named}."
     return line
+
+
+def _watch_budget_line(declared, cdir: Path | None) -> str:
+    """The allowance for a watch, and what the trail says is left of it.
+
+    Both figures come off the campaign's own record, so the wording says so: the
+    host is not the source here and a line that read "measured on the host" would
+    misattribute it. Without a campaign directory the total is still printed --
+    which budget applies is a fact about the campaign, and withholding it because
+    the spend could not be located is how a loop ends up carrying the number in
+    its head.
+    """
+    from raven.ops.attendance import off_machine_spend
+    from raven.ops.budget import LOOKS
+
+    counted = "looks" if declared.meter == LOOKS else "watching"
+    line = f"Campaign watch budget: {declared.total:g} {declared.unit} of {counted} in total"
+    if cdir is None:
+        return f"{line} (spend is read from the campaign's own record)."
+    spent = off_machine_spend(cdir, declared)
+    if spent is None:
+        return f"{line}; spend could not be read from the campaign's record."
+    left = max(0.0, declared.total - spent)
+    return (
+        f"{line}; {round(spent, 2):g} used, {round(left, 2):g} left "
+        f"(counted from this campaign's own record, not the host)."
+    )
+
+
+def _campaign_meta(cdir: Path) -> dict:
+    """The campaign's declaration, or {}. Never raises."""
+    import json as _j
+
+    try:
+        return _j.loads((cdir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _resolve_meta(meta: dict) -> dict:
+    """The campaign's meta with its connection's address filled in.
+
+    The same seam the backends use: a campaign names a machine and the registry
+    holds the address, so anything that wants to run a command has to go through
+    here rather than read meta["host"], which a declared campaign does not have.
+    """
+    from raven.ops.connections import resolve_into
+
+    return resolve_into(dict(meta))
+
+
+def _advance_probe_seq(cdir: Path) -> None:
+    """Count this look. Best-effort; a lost count is better than a lost answer."""
+    try:
+        from raven.ops.state_claims import read_facts, write_facts
+
+        facts = read_facts(cdir)
+        write_facts(cdir, _dataclasses.replace(facts, probe_seq=facts.probe_seq + 1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _take_wake_readings(cdir: Path, meta: dict | None = None) -> None:
+    """Take the each_wake readings. Once per look, whatever else the look found."""
+    from raven.ops import readings as ops_readings
+
+    try:
+        await ops_readings.take(meta if meta is not None else _campaign_meta(cdir),
+                                cdir, ops_readings.EACH_WAKE)
+    except Exception:  # noqa: BLE001 -- a reading never costs the caller its answer
+        pass
+
+
+async def _take_during_readings(meta: dict, cdir: Path, backend, idem_key: str) -> None:
+    """Take the during_trial readings for a trial that is still running."""
+    from raven.ops import readings as ops_readings
+
+    try:
+        job_dir = _job_dir_of(backend, idem_key)
+        if not job_dir:
+            return
+        await ops_readings.take(meta, cdir, ops_readings.DURING_TRIAL,
+                                job_dir=job_dir, trial=idem_key)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _take_after_trial_readings(meta: dict, cdir: Path, backend, led, rec) -> None:
+    """Take a finished trial's readings, once, and file the numbers with it.
+
+    Once per trial and per name: a job directory that has been cleaned up fails
+    the same way on every look, and retrying would write one error per wake
+    forever. The numeric values are merged into the trial's metrics as well as
+    the readings record, because that is the field every existing reader ranks
+    and reports on.
+    """
+    import dataclasses as _dc
+
+    from raven.ops import readings as ops_readings
+
+    try:
+        table = [r for r in ops_readings.declared(meta) if r.when == ops_readings.AFTER_TRIAL]
+        if not table:
+            return
+        done = ops_readings.taken_for(cdir, rec.idem_key)
+        due = [r for r in table if r.name not in done]
+        if not due:
+            return
+        job_dir = _job_dir_of(backend, rec.idem_key)
+        if not job_dir:
+            return
+        rows = await ops_readings.take(
+            {**meta, "readings": [{"name": r.name, "command": r.command, "when": r.when}
+                                  for r in due]},
+            cdir,
+            ops_readings.AFTER_TRIAL,
+            job_dir=job_dir,
+            trial=rec.idem_key,
+        )
+        numbers = {}
+        for row in rows:
+            value = ops_readings.numeric(row.get("value"))
+            if value is not None:
+                numbers[str(row["name"])] = value
+        if numbers:
+            merged = dict(rec.result.metrics or {})
+            # The trial's own metrics win: those came from the run's own result
+            # file, and a reading is a second way of getting at the same thing.
+            merged.update({k: v for k, v in numbers.items() if k not in merged})
+            led.set_result(rec.idem_key, _dc.replace(rec.result, metrics=merged))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _job_dir_of(backend, idem_key: str) -> str:
+    """Where this trial's directory is, if the backend can say."""
+    getter = getattr(backend, "job_dir", None)
+    if not callable(getter):
+        return ""
+    try:
+        return str(getter(idem_key) or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _reading_series_lines(cdir: Path, limit: int = 12) -> list[str]:
+    """Every declared reading's record, oldest first, with its starting value.
+
+    The series and not the latest value. F2's four rounds read -70.88, -0.44,
+    -10.47 and 9.9e-07: the fact worth having is that the sequence is not
+    monotone, and no single point carries it. Same for the timestep that
+    collapsed over an hour -- every individual sample is just a small number.
+
+    Operands only. No trend word, no "improving", no best-so-far: which way a
+    series is going is the reading the caller is here to do.
+    """
+    from raven.ops import readings as ops_readings
+
+    series = ops_readings.series(cdir, limit=limit)
+    if not series:
+        return []
+    start = ops_readings.baseline(cdir)
+    out = ["Readings (taken by this campaign, oldest first):"]
+    for name, rows in sorted(series.items()):
+        shown = []
+        for row in rows:
+            if row.get("when") == ops_readings.AT_DECLARE:
+                continue
+            if "error" in row:
+                shown.append(f"[could not read: {str(row['error'])[:60]}]")
+            else:
+                shown.append(_short(row.get("value")))
+        head = f"  {name}"
+        if name in start:
+            head += f"   at declare {_short(start[name])}"
+        out.append(head + (("   " + " -> ".join(shown)) if shown else "   (nothing since)"))
+    return out
+
+
+def _short(value) -> str:
+    """One reading, short enough to sit in a series line."""
+    import json as _j
+
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, (dict, list)):
+        text = _j.dumps(value, ensure_ascii=False)
+        return text if len(text) <= 80 else text[:77] + "..."
+    text = str(value)
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+def _watch_budget_spent(cdir: Path, *, attempting: str = "more") -> str:
+    """Why this campaign may not go on, or "".
+
+    Only for a budget the campaign itself meters. A compute budget is enforced
+    where the compute is bought -- the backend refuses a submit it cannot pay for
+    -- and arranging another look costs no machine time, so nothing there stops a
+    watch that has run out of the thing it was actually spending.
+    """
+    import json as _j
+
+    try:
+        meta = _j.loads((cdir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    declared = budget_from_meta(meta)
+    if declared is None or not declared.off_machine:
+        return ""
+    from raven.ops.attendance import off_machine_spend
+
+    spent = off_machine_spend(cdir, declared)
+    if spent is None or spent < declared.total:
+        return ""
+    return (
+        f"REFUSED: this campaign's watch budget is spent -- {round(spent, 2):g} of "
+        f"{declared.total:g} {declared.unit}, counted from its own record -- so {attempting} "
+        f"is beyond what it was given.\n"
+        f"The watch is over; what remains is to say what it saw. Finish with ops_finish, "
+        f"reporting what you observed and what it started from. 'The condition never held' "
+        f"is a result and belongs in that report, with the readings behind it. Nothing was "
+        f"started or scheduled by this call, and the turn is still yours."
+    )
 
 
 def _meta_lines(meta_path: Path) -> list[str]:
@@ -496,7 +776,7 @@ def _meta_lines(meta_path: Path) -> list[str]:
     except (OSError, ValueError):
         return []
     out: list[str] = []
-    out.append(_budget_line(meta))
+    out.append(_budget_line(meta, cdir=meta_path.parent))
     refs = meta.get("reference_values")
     if isinstance(refs, dict) and refs:
         stated = ", ".join(f"{k} = {v}" for k, v in sorted(refs.items()))
@@ -859,9 +1139,22 @@ class OpsTuneStatusTool(Tool):
         if not path.exists():
             # Not started yet is not a reason to withhold what the campaign states:
             # this is precisely when the loop decides how much budget to ask for.
+            # And a watch may live entirely on this path: a campaign waiting for a
+            # condition submits nothing, so if the readings were only taken where
+            # trials are reconciled, the tool would tell it about the world by
+            # never looking at it.
+            await _take_wake_readings(path.parent)
+            # This was a look, and on this path nothing else would say so. The
+            # counter is what a look budget is spent from and what tells a
+            # decision whether an observation has happened since the last one --
+            # a campaign that never submits a trial would otherwise watch all day
+            # against a spend that stayed at zero.
+            _advance_probe_seq(path.parent)
+            # Rendered after the count, so the spend the caller reads includes the
+            # look it is reading it on.
             pre = _meta_lines(path.with_name("meta.json"))
             notice = f"No campaign ledger at {path} yet; round 0 has not been submitted."
-            return "\n".join([notice, *pre]) if pre else notice
+            return "\n".join([notice, *pre, *_reading_series_lines(path.parent)])
 
         led = Ledger(path)
         # Reconcile against the remote before reporting: submit only records a
@@ -892,11 +1185,21 @@ class OpsTuneStatusTool(Tool):
         budget_remaining: float | None = None
         budget_unmeasured: dict = {}
         budget_spend_error: str | None = None
+        # Whether the look got counted by the probe below. A campaign with no job
+        # backend still looked, and a look budget is spent from that count.
+        probe_counted = False
         if meta_path.exists():
+            meta = _campaign_meta(meta_path.parent)
+            # Before the backend, and not inside its try: a campaign that watches
+            # something runs nothing, so it has no job backend at all -- and its
+            # readings are the only thing it has. Measured 2026-08-21: a watch
+            # campaign was refused for having no command and invented
+            # ``echo "condition watch - no trial to run"`` to get past it, because
+            # everything downstream assumed a backend could be built.
+            await _take_wake_readings(path.parent, meta=meta)
             try:
                 from raven.ops.instrument import log_event
 
-                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
                 backend = backend_from_meta(meta)
                 try:
                     budget_spent = await backend.spent_minutes()
@@ -918,6 +1221,13 @@ class OpsTuneStatusTool(Tool):
                     else:
                         if st is not rec.status:
                             led.set_status(rec.idem_key, st)
+                        # Progress, in the campaign's own terms. The backend's
+                        # feed below is whatever the job happens to write; this
+                        # is what the campaign said to watch while it runs, and
+                        # for the case that burned 152 core-minutes on a
+                        # collapsing timestep it is the only thing that would
+                        # have shown it.
+                        await _take_during_readings(meta, path.parent, backend, rec.idem_key)
                         # The tail of the still-running trial's progress feed. What
                         # the numbers in it mean is the caller's reading, so neither
                         # this line nor the header that precedes it names a verdict:
@@ -969,6 +1279,16 @@ class OpsTuneStatusTool(Tool):
                                     progress_lines.append(
                                         f"  {rec.idem_key} {field}, as logged: {series}"
                                     )
+                # Each finished round's result in the terms the campaign
+                # declared. The numeric ones join that trial's metrics, which is
+                # what makes them rankable -- the FEA campaign that optimised
+                # max_penetration had it nowhere in the ledger, so nothing could
+                # order its rounds by the number it existed to move. (The
+                # each_wake readings were taken above, before the backend, since
+                # a campaign that watches has no backend to build.)
+                for rec in led.all():
+                    if rec.is_terminal and rec.result is not None:
+                        await _take_after_trial_readings(meta, path.parent, backend, led, rec)
                 # Record what was just probed, so a later report's claims about
                 # budget, job state and which checkpoints exist can be checked
                 # against a reading rather than against nothing. Written here
@@ -1001,8 +1321,15 @@ class OpsTuneStatusTool(Tool):
                     probe_seq=read_facts(path.parent).probe_seq + 1,
                 )
                 write_facts(path.parent, facts)
+                probe_counted = True
             except Exception:
                 pass
+            if not probe_counted:
+                # The probe above is what normally counts a look, and it needs a
+                # backend. A campaign that watches has none, and its look still
+                # happened: without this its look budget never moves and every
+                # decision it takes is refused for resting on no new observation.
+                _advance_probe_seq(path.parent)
 
         records = led.all()
         if not records:
@@ -1015,7 +1342,7 @@ class OpsTuneStatusTool(Tool):
             # file that exists and holds nothing is a different branch.
             pre = _meta_lines(meta_path)
             notice = f"Campaign ledger {path} is empty (starting up)."
-            return "\n".join([notice, *pre]) if pre else notice
+            return "\n".join([notice, *pre, *_reading_series_lines(path.parent)])
 
         # Resolved after the reconcile above, so a result fetched on this pass can
         # supply the name for a campaign that never declared one.
@@ -1051,6 +1378,7 @@ class OpsTuneStatusTool(Tool):
                     _json.loads(meta_path.read_text(encoding="utf-8")),
                     spent=budget_spent, remaining=budget_remaining,
                     unmeasured=budget_unmeasured, spend_error=budget_spend_error,
+                    cdir=meta_path.parent,
                 ))
             except (OSError, ValueError):
                 pass
@@ -1074,6 +1402,10 @@ class OpsTuneStatusTool(Tool):
             if isinstance(refs, dict) and refs:
                 stated = ", ".join(f"{k} = {v}" for k, v in sorted(refs.items()))
                 lines.append(f"Campaign recorded starting value: {stated}")
+        # What the campaign declared it watches, as a series. Next to the budget
+        # and the starting values because it is the same kind of line: operands,
+        # in the campaign's own terms, with the reading left to the caller.
+        lines.extend(_reading_series_lines(path.parent))
         # The campaign's operating procedure, verbatim and in the configured order.
         #
         # A wake turn starts cold from disk, so procedure stated in the task text
@@ -1254,12 +1586,25 @@ class OpsTuneStatusTool(Tool):
                 # No name asked for, none declared, and the records do not settle it
                 # either. Picking one of several would rank the campaign by a number
                 # nobody chose, and that reads exactly like a real ranking.
-                lines.append(
-                    "This campaign declares no objective, so there is no metric to rank by. "
-                    + (f"The trials report: {', '.join(available)}. Pass metric= to read one of them, "
-                       if available else "The trials report no metrics at all. ")
-                    + "or set objective {metric, direction} on the campaign so every round reads the same one."
-                )
+                kind = str(((meta or {}).get("objective") or {}).get("kind") or "")
+                if kind in ("complete", "condition"):
+                    # It declared a target; it declared no number. Telling this
+                    # campaign to set a metric is what produced invented ones --
+                    # a case whose task is "run to endTime" has nothing to rank.
+                    lines.append(
+                        f"This campaign's target is '{kind}', so there is no metric ranking one "
+                        f"round above another; whether the work holds up is read from the run "
+                        f"itself. "
+                        + (f"The trials report: {', '.join(available)}. Pass metric= to read one."
+                           if available else "The trials report no metrics at all.")
+                    )
+                else:
+                    lines.append(
+                        "This campaign declares no objective, so there is no metric to rank by. "
+                        + (f"The trials report: {', '.join(available)}. Pass metric= to read one of them, "
+                           if available else "The trials report no metrics at all. ")
+                        + "or set objective {metric, direction} on the campaign so every round reads the same one."
+                    )
         else:
             lines.append("No successful trial yet.")
         lines.extend(_case_isolation_lines(records, bool((meta or {}).get("staged_case"))))
@@ -1465,7 +1810,6 @@ def _schedule_ops_wake(
             name=name,
             schedule=CronSchedule(kind="at", at_ms=int(at.timestamp() * 1000)),
             message=message,
-            deliver=True,
             channel=channel,
             to=chat_id,
             # Which window asked for this, and the process that is that window.
@@ -1604,6 +1948,23 @@ class OpsSubmitTool(_OpsScheduler):
                                    "estimate of the run: it is how long you choose to leave it "
                                    "before deciding anything. The pace is yours.",
                 },
+                "action": {
+                    "type": "string",
+                    "description": "Which of the campaign's declared actions to take, when this "
+                                   "round is an ACT rather than a run -- placing the order the "
+                                   "campaign was watching for, say. Omit to submit trials, which "
+                                   "is the usual case. The name has to be in the campaign's action "
+                                   "table: that table is the list of what may be done, and it "
+                                   "cannot be added to once results exist. An action goes here "
+                                   "rather than through exec because only this path records it, "
+                                   "and a wake that comes back after your turn is gone has nothing "
+                                   "but that record to tell it the thing was already done.",
+                },
+                "values": {
+                    "type": "object",
+                    "description": "This call's values for the {placeholders} in that action's "
+                                   "command, e.g. {\"qty\": 3}. Every placeholder must get one.",
+                },
             },
             "required": ["configs", "eta_seconds"],
         }
@@ -1621,6 +1982,8 @@ class OpsSubmitTool(_OpsScheduler):
         # Only reached by a campaign whose declaration names no cap. Matches
         # ops_declare's default: a runaway stop, not a round count anyone chose.
         max_rounds: int = 50,
+        action: str = "",
+        values: dict | None = None,
         port: int = 22,
         key: str = "~/.ssh/id_rsa",
         remote_dir: str = "/root/raven-ops",
@@ -1666,6 +2029,25 @@ class OpsSubmitTool(_OpsScheduler):
                 ).name
             except ValueError as exc:
                 return f"Cannot tell which campaign to submit to: {exc}"
+        # A watch that has spent its own budget cannot buy a round with what is
+        # left of it either. Checked here rather than in the backend, which meters
+        # machine time and would find this campaign's allowance untouched.
+        try:
+            spent = _watch_budget_spent(
+                _resolve_campaign_dir(campaign, ledger, "", ""), attempting="another round"
+            )
+        except ValueError:
+            spent = ""
+        if spent:
+            return spent
+        # An act, not a round. Handled before any of the trial machinery: none of
+        # it applies -- there is no config to stage, no job to poll, no wake to
+        # arrange, because the thing is over when the command returns. What it
+        # does share with a trial is the ledger and the idempotency key, and that
+        # is the whole reason it comes through here rather than through exec.
+        if action and action != ACTION_RUN:
+            return await self._take_action(campaign, ledger, action, values or {}, basis,
+                                           eta_seconds)
         # This window is working on this campaign. Written here rather than at the
         # end because every later unnamed call in this window resolves through it,
         # including the ones this round's own wake will make.
@@ -2096,7 +2478,17 @@ class OpsSubmitTool(_OpsScheduler):
         log_event(led.parent, "submit", round=round, trials=submitted)
         if round >= 1:
             _record_basis(led.parent, basis, "submit")
-        log_event(led.parent, "wake_scheduled", round_due=round, eta_seconds=eta_seconds)
+        # Recorded from what actually happened, not from having asked. This event
+        # is what attendance counts as a wake and what a reader checks to answer
+        # "will this campaign come back on its own" -- and with no scheduler in
+        # the process (a one-shot `raven agent -m` turn), _schedule_ops_wake
+        # declines and nothing is pending. Measured 2026-08-25: a subagent
+        # campaign's trail said wake_scheduled while the cron store said
+        # {"jobs": []}, and the wake shell polled that empty store forever.
+        if wake_note.startswith("Scheduled a wake"):
+            log_event(led.parent, "wake_scheduled", round_due=round, eta_seconds=eta_seconds)
+        else:
+            log_event(led.parent, "wake_unavailable", round_due=round, note=wake_note[:200])
         drift_note = ""
         if submitted_note:
             # Stated as fact, with no verdict attached. Whether a given edit was the
@@ -2111,6 +2503,164 @@ class OpsSubmitTool(_OpsScheduler):
         return (
             f"Submitted {len(submitted)} job(s) for campaign '{campaign}' round {round} on {_where(meta)}: "
             f"{', '.join(submitted)}.\nLedger: {ledger}\n{drift_note}{wake_note}"
+        )
+
+    async def _take_action(self, campaign: str, ledger: str, name: str,
+                           values: dict, basis: str, eta_seconds: int = 0) -> str:
+        """Do one of the campaign's declared actions, once, and record it.
+
+        Everything here is about the record. The command itself is one line that
+        the transport could have run directly -- and running it directly is the
+        failure this exists to prevent: a wake turn is a cold start, so an order
+        placed through ``exec`` leaves nothing behind, and the next wake reads the
+        ledger, sees no order, and places it again. Six shares.
+
+        So the key comes from the action and its values, the ledger holds the
+        result, and a repeat of a harmful action meets its own record instead of
+        the broker.
+        """
+        from raven.ops import Ledger
+        from raven.ops import actions as ops_actions
+        from raven.ops.backend import JobResult, JobStatus
+        from raven.ops.instrument import log_event
+        from raven.ops.transport import runner_from
+
+        cdir = _resolve_campaign_dir(campaign, ledger, "", "")
+        meta = _campaign_meta(cdir)
+        if name == ops_actions.NONE:
+            # "I looked and nothing needed doing" is a real and common outcome --
+            # 65 of SentinelBench's 100 tasks end that way -- and it already has a
+            # door. ops_check_later records the basis and arranges the next look,
+            # and the readings this campaign declared record what was seen. A
+            # second door here would write the same three facts under a different
+            # name.
+            return (
+                "Nothing to do here: an action of 'none' is ops_check_later.\n"
+                f"  ops_check_later(campaign='{campaign}', eta_seconds=..., basis='what you read "
+                f"and why it does not call for anything yet')\n"
+                "That records the look and its basis and brings you back; the values you read are "
+                "already in the campaign's readings. Nothing was done."
+            )
+        chosen = ops_actions.find(meta, name)
+        if chosen is None:
+            declared = ", ".join(sorted(a.name for a in ops_actions.declared(meta))) or "none"
+            return (
+                f"REFUSED: {name!r} is not one of this campaign's declared actions.\n"
+                f"  declared  {declared}\n"
+                f"The action table is the list of what this campaign may do, and it is fixed "
+                f"before anything runs -- so an action that is not in it cannot be taken now. "
+                f"Nothing was done."
+            )
+        # The shape of the call first, then the decision behind it: a caller that
+        # left out the quantity is told about the quantity, not about its basis.
+        command, missing = ops_actions.fill(chosen, values)
+        if missing:
+            return (
+                f"REFUSED: action {name!r} needs {', '.join(missing)}, and this call gave "
+                f"{'nothing' if not values else ', '.join(sorted(values))}.\n"
+                f"  the command  {chosen.command}\n"
+                f"Pass values={{...}} with one entry per placeholder. A command missing its "
+                f"quantity is not a smaller order. Nothing was done."
+            )
+        # Acting is a decision, and it gets the same gate waiting and killing get:
+        # a basis resting on an observation taken since the last decision. Exempting
+        # it would put the friction on every branch except the irreversible one.
+        refusal = _basis_refusal(cdir, basis, f"action:{name}")
+        if refusal:
+            return refusal
+        led = Ledger(Path(ledger).expanduser() if ledger else cdir / "ledger.json")
+        prior = [r for r in led.all() if (r.config or {}).get("action") == name]
+        key = ops_actions.idem_key(chosen, values, already=len(prior))
+        done = led.get(key)
+        if done is not None and done.is_terminal:
+            # The cold-start guarantee, in the one place it can be given.
+            out = (done.result.output if done.result else {}) or {}
+            return (
+                f"ALREADY DONE: this campaign already did {name!r} with these values.\n"
+                f"  when      {out.get('at') or 'earlier'}\n"
+                f"  it said   {str(out.get('stdout') or '').strip()[:200] or '(nothing)'}\n"
+                f"Repeating it was declared harmful, so nothing was done now. If this needs "
+                f"doing again with DIFFERENT values, pass those; if the record is wrong, say so "
+                f"with ops_note rather than acting twice."
+            )
+        try:
+            runner = runner_from(_resolve_meta(meta), what="campaign", cap_seconds=120.0)
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not reach the campaign's machine to act: {exc}. Nothing was done."
+        import asyncio
+
+        led.record(key, campaign=campaign, config={"action": name, "values": dict(values or {})})
+        try:
+            rc, out = await asyncio.to_thread(runner, command)
+        except Exception as exc:  # noqa: BLE001
+            led.set_result(key, JobResult(status=JobStatus.FAILED, output={"command": command},
+                                          error=f"{type(exc).__name__}: {exc}"))
+            log_event(cdir, "action_failed", action=name, error=str(exc)[:200])
+            return f"Action {name!r} could not be run: {exc}. It is recorded as failed."
+        at = datetime.now().isoformat(timespec="seconds")
+        body = str(out).strip()
+        led.set_result(key, JobResult(
+            status=JobStatus.SUCCEEDED if rc == 0 else JobStatus.FAILED,
+            output={"command": command, "rc": rc, "stdout": body[:2000], "at": at},
+            error=None if rc == 0 else f"exit {rc}",
+        ))
+        log_event(cdir, "action_taken", action=name, values=dict(values or {}), rc=rc,
+                  idem_key=key)
+        _record_basis(cdir, basis, f"action:{name}")
+        woke = self._wake_after_action(campaign, cdir, led, name, key, at, eta_seconds)
+        if rc != 0:
+            return (
+                f"Action {name!r} ran and failed (exit {rc}). Recorded as {key}.\n"
+                f"  it said  {body[:400] or '(nothing)'}\n"
+                f"Whether it took effect anyway is not something this can tell you -- read the "
+                f"world before deciding to try again.\n{woke}"
+            )
+        return (
+            f"Did {name!r} for campaign '{campaign}'. Recorded as {key}, so a later wake will "
+            f"see it was done.\n  it said  {body[:400] or '(nothing)'}\n{woke}"
+        )
+
+    def _wake_after_action(self, campaign: str, cdir: Path, led, name: str, key: str,
+                           at: str, eta_seconds: int) -> str:
+        """Leave something that will bring this campaign back, or say why not.
+
+        The invariant every branch of an on-call turn owes: when the turn ends,
+        either something is running or a wake is pending, or the campaign simply
+        stops with whatever budget it had left. Measured 2026-08-21 -- three
+        campaigns asked the owner a question, heard nothing, and sat untouched for
+        three hours with 86% and 81% of their budgets unspent, because neither
+        return path of ops_ask_owner scheduled anything. An action is the same
+        shape: it finishes the moment the command returns, so nothing about it
+        outlives the turn.
+
+        Naming ops_check_later in the reply is not the same thing. That is a
+        sentence the loop may or may not act on; this is a timer.
+
+        The exception is a trial still running: its own wake is already pending,
+        and arranging another would replace it with an earlier one and wake the
+        loop to a round that is not finished.
+        """
+        if any(not rec.is_terminal for rec in led.all()):
+            return ("A trial of this campaign is still running, and its own wake is already "
+                    "pending -- so nothing further was scheduled here.")
+        if self._cron is None:
+            return ("Nothing is scheduled and no timer is available here: arrange the next look "
+                    "with ops_check_later, or end the campaign with ops_finish, before this turn "
+                    "ends.")
+        delay = int(eta_seconds) if int(eta_seconds or 0) > 0 else 600
+        return _schedule_ops_wake(
+            self._cron, self._channel, self._chat_id, owner=self._session_key,
+            name=f"ops:{campaign}:after-act",
+            message=(
+                f"[Ops campaign '{campaign}'] You did {name!r} at {at}, recorded as {key}. "
+                f"It is in the ledger, so it must not be done again -- a repeat of a harmful "
+                f"action is refused, and this wake is not an instruction to retry.\n"
+                f"Read the campaign with ops_tune_status and decide what the action changed: "
+                f"ops_finish to report what was done and end it, ops_check_later if this "
+                f"campaign is still watching for something, or ops_submit for another action "
+                f"the situation now calls for."
+            ),
+            eta_seconds=delay,
         )
 
 
@@ -2186,9 +2736,16 @@ class OpsCheckLaterTool(_OpsScheduler):
         # entire context a wake turn gets.
         campaign = campaign or cdir.name
         ledger = ledger or str(cdir / "ledger.json")
+        # Both refusals below leave the turn open, and have to: this tool's
+        # default is that the turn is over because a wake was arranged, and on a
+        # refusal none was. A closed turn then leaves the campaign with nothing
+        # pending and nothing reported, which is the one state no wake recovers.
+        spent = _watch_budget_spent(cdir, attempting="another look")
+        if spent:
+            return ToolResult(spent, ends_turn=False)
         refusal = _basis_refusal(cdir, basis, "check_later")
         if refusal:
-            return refusal
+            return ToolResult(refusal, ends_turn=False)
         # No metric named here: the status tool reads the campaign's declared
         # objective, so pinning one in the wake message can only override it.
         # Every branch names the tool that performs it. "stop" was a verb with no

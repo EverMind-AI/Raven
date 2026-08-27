@@ -47,7 +47,7 @@ _DOC_EXTS = {
 
 
 class MultimodalUnavailableError(RuntimeError):
-    """EverOS's multimodal parser/LLM isn't installed or configured.
+    """EverOS's multimodal parser/LLM isn't installed, configured, or compatible.
 
     Raised once for the whole call (not per file) so the tool can surface
     a single actionable message instead of repeating it per attachment.
@@ -116,8 +116,9 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
     which EverOS doesn't parse yet) doesn't abort the rest.
 
     Raises:
-        MultimodalUnavailableError: EverOS multimodal extra not installed, or the
-            multimodal LLM isn't configured (``EVEROS_MULTIMODAL__*``).
+        MultimodalUnavailableError: EverOS multimodal extra not installed, the
+            multimodal LLM isn't configured (``EVEROS_MULTIMODAL__*``), or its
+            parser API no longer matches the call made here.
     """
     try:
         from everos.component.llm.client import (
@@ -136,7 +137,10 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
 
     try:
         require_multimodal()
-        llm = get_multimodal_llm_client()
+        # Probe the client here even though the parser resolves its own: it
+        # does so per file, so an unconfigured deployment would otherwise
+        # report the same failure once per attachment.
+        get_multimodal_llm_client()
     except (MultimodalNotEnabledError, LLMNotConfiguredError) as e:
         raise MultimodalUnavailableError(str(e)) from e
 
@@ -164,10 +168,17 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             # to this item and never aborts the rest of the batch. The broad
             # catch is intentional: this is a best-effort per-item enrichment,
             # not a place to surface bugs.
-            await enrich_content_items([item], llm=llm)
+            await enrich_content_items([item])
         except UnsupportedModalityError as e:
             out.append({"path": p, "name": name, "error": str(e)})
             continue
+        except TypeError as e:
+            # Our call no longer matches EverOS's parser API, which is true of
+            # every attachment. Degrading it per item would report a version
+            # mismatch as "this file could not be understood".
+            raise MultimodalUnavailableError(
+                f"EverOS's multimodal parser API does not match this Raven build: {e}"
+            ) from e
         except Exception as e:  # noqa: BLE001 — per-item isolation is the contract
             logger.warning("understand_media: failed to parse %r (%s)", name, e)
             out.append(

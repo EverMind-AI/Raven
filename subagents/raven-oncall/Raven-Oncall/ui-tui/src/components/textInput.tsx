@@ -739,9 +739,9 @@ export function TextInput({
 
       // Configured voice shortcut wins over composer-level defaults like
       // paste/copy so users who bind voice to ctrl+v / alt+v / cmd+v
-      // actually get voice toggled instead of a paste (Copilot round-7
-      // follow-up on #19835). The pass-through predicate is a no-op for
-      // ordinary typing and plain paste when voice is unbound to 'v'.
+      // actually get voice toggled instead of a paste. The pass-through
+      // predicate is a no-op for ordinary typing and plain paste when
+      // voice is unbound to 'v'.
       if (shouldPassThroughToGlobalHandler(inp, k, voiceRecordKey)) {
         return
       }

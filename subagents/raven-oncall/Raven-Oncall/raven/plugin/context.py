@@ -3,9 +3,10 @@
 A factory (the ``module.path:callable`` named in a manifest) receives
 exactly one :class:`PluginContext`. From it, the factory pulls:
 
-- ``config``  — the plugin's own config slice from RavenConfig
-  (already validated against the manifest's ``config_schema`` by the
-  registry; the dict is passed through verbatim).
+- ``config``  — the plugin's own config slice from RavenConfig, passed
+  through verbatim. The manifest's ``config_schema`` is parsed but NOT
+  validated and its defaults are NOT applied (see EM-2); a plugin must
+  supply its own defaults in code.
 - ``services`` — a :class:`ServiceLocator` exposing only the host
   services a backend is allowed to touch. The locator is intentionally
   narrow so plugins don't grow ambient dependencies on arbitrary host
@@ -38,6 +39,19 @@ class ServiceLocator:
 
     workspace: Path
     """Root workspace path (``~/.raven/<workspace>``)."""
+
+    user_id: str
+    """User-track owner identity.
+
+    The single source of truth is ``MemoryConfig.user_id`` (the ``userId``
+    key of the ``memory`` block in ``~/.raven/config.json``). A backend must
+    never take this from its own plugin config slice: that is a second place
+    holding the same value, and a user who edits only one silently splits
+    store and recall onto different owner ids, making every written memory
+    unrecallable with no warning."""
+
+    agent_id: str
+    """Agent-track owner identity. Same single-source rule as ``user_id``."""
 
 
 @dataclass(frozen=True)

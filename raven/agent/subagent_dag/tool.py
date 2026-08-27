@@ -38,6 +38,10 @@ from raven.agent.subagent_dag import DagNodeSpec, SubAgentDagSpec, make_run_id, 
 from raven.agent.subagent_dag._capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import validate_and_order
+from raven.agent.subagent_dag._machines import refusal as machines_refusal
+from raven.agent.subagent_dag._machines import unnamed_machine
+from raven.agent.subagent_dag._machines import verdict_for_async as machines_verdict_async
+from raven.agent.subagent_dag._machines import with_facts as with_machine_facts
 from raven.agent.subagent_dag._reader import read_node as _read_node
 from raven.agent.subagent_dag._reader import read_run as _read_run
 from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_index, read_session_nodes
@@ -199,7 +203,12 @@ _NODE_SCHEMA: dict[str, Any] = {
             "description": (
                 'Per-key literal string, {"file": <path>}, or {"node": <id>} to take another node\'s '
                 "output -- a dependency of this node, or any node from an earlier run in this "
-                "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
+                "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path. "
+                "One key is reserved: 'machine' names which of the owner's machines this node's work "
+                "runs on, and a node on an agent that runs work on them is rejected without it. Settle "
+                "it when you write the graph -- every node in the run is then told what that machine is "
+                "and works to it, and code written before the machine is known is written for an "
+                "imagined one."
             ),
         },
         "instance": {
@@ -762,6 +771,20 @@ class SubAgentDagTool(Tool):
                         f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
                         f"machine -- enable it in the agents settings, or point the node at another agent"
                     )
+            # Last of the pre-dispatch checks because it is the only one that
+            # leaves this process: an agent that runs work on the owner's
+            # machines is asked whether it has one, and a graph whose work has
+            # nowhere to go is refused while the owner is still here to be asked.
+            # Silent when nothing could be established -- see _machines.
+            if verdict := await machines_verdict_async([n.subagent for n in spec.nodes]):
+                if verdict.usable == 0:
+                    raise DagValidationError(machines_refusal(verdict))
+                if problem := unnamed_machine(spec.nodes, verdict):
+                    raise DagValidationError(problem)
+                # Settled once and told to every node: the one writing the code
+                # needs what the machine has, and the one reporting afterwards
+                # needs to say where the numbers came from.
+                spec = spec.model_copy(update={"nodes": with_machine_facts(spec.nodes, verdict)})
         except DagValidationError as exc:
             return self._validation_error(exc)
 

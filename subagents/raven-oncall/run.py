@@ -37,6 +37,7 @@ stderr for a human running this by hand.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import errno
 import fcntl
 import json
@@ -104,6 +105,33 @@ RUN_ROOT = Path(env_value("ONCALL_RUN_ROOT") or STATE_ROOT / "runs")
 # imported from raven: this launcher is standard-library only and has to run
 # under a bare python3 that may not have the runtime installed at all.
 HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
+
+
+def connections_registry() -> Path:
+    """The machine registry this install reads: the owner's, not a copy of it.
+
+    `raven.ops.connections` resolves its own path as
+    `get_config_path().parent / "connections.json"`, which is STATE_ROOT here --
+    so without an answer the on-call tools see no machines at all, and a task
+    naming a remote path is read as naming a local one. Measured 2026-08-25: a
+    `case_legA` under /home/cfd on the CPU box was looked for on this laptop,
+    then attempted in a docker image pulled here.
+
+    Answered with a pointer rather than a copy. A copy has to be made once and is
+    then wrong from the first machine the owner adds, with nothing to say so --
+    five byte-identical copies were on this computer when that was noticed. The
+    machines belong to the owner, `raven ops connection add` writes to the
+    owner's file, and the host's graph check reads that same file before it will
+    dispatch an on-call node. Three readers, one file.
+
+    An install that predates this and keeps its own list stays on it: stranding a
+    working install to make the point is not worth it.
+    """
+    host = HOST_CONFIG.parent / "connections.json"
+    if host.is_file():
+        return host
+    own = STATE_ROOT / "connections.json"
+    return own if own.is_file() else host
 
 
 def host_config() -> dict:
@@ -305,7 +333,9 @@ def pid_is_wake_shell(pid: int) -> bool:
         return True
 
 
-def ensure_wake_shell(config: Path, *, checkout: Path) -> tuple[int | None, str]:
+def ensure_wake_shell(
+    config: Path, *, checkout: Path, dispatch_agent: str | None = None
+) -> tuple[int | None, str]:
     """Guarantee exactly one wake shell is polling this install's cron store.
 
     Returns (pid, detail). Taken under an exclusive lock for the whole
@@ -344,6 +374,10 @@ def ensure_wake_shell(config: Path, *, checkout: Path) -> tuple[int | None, str]
             # every process, and this shell starts one process per wake.
             env["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
             env.setdefault("RAVEN_TRACING_DIR", str(state_dir / "traces"))
+            # A woken turn reads the same machines as a spawned one. Without this
+            # it falls back to whatever sits beside this install's own config,
+            # and a wake is exactly where nobody is watching to notice.
+            env.setdefault("RAVEN_CONNECTIONS", str(connections_registry()))
 
             argv = [
                 str(python),
@@ -357,7 +391,21 @@ def ensure_wake_shell(config: Path, *, checkout: Path) -> tuple[int | None, str]
                 # looked at. Without this the service drops it at startup and the
                 # campaign stalls with nothing in any log saying why.
                 "--fire-missed",
+                # Where "this campaign concluded" surfaces for a person: the HOST
+                # raven's cron store, whose TUI already polls it for reminders.
+                # Without this, a campaign that ran and finished entirely in
+                # wake-spawned turns ends in silence (measured 2026-08-25).
+                "--notify-store",
+                str(HOST_CONFIG.parent / "cron" / "jobs.json"),
             ]
+            # Only when the host is holding an instance of us. Passed through from
+            # the caller rather than decided here, because this file cannot tell
+            # the two hostings apart: the argv is identical whether a person ran it
+            # by hand for a benchmark or the host spawned it as a sub-agent, and
+            # only the caller knows which. Off, a wake is answered in a child
+            # process here, cold, exactly as before.
+            if dispatch_agent:
+                argv += ["--dispatch-agent", dispatch_agent]
             handle = shell_log.open("a", encoding="utf-8")
             try:
                 proc = subprocess.Popen(
@@ -471,7 +519,17 @@ def pending_wakes(config: Path) -> list[str]:
     for job in store.get("jobs", []):
         if not isinstance(job, dict) or not job.get("enabled", True):
             continue
-        at = (job.get("state") or {}).get("next_run_at_ms")
+        # camelCase: that is how CronService serialises state (`nextRunAtMs`).
+        # Read as `next_run_at_ms` this never matched, so every job fell through
+        # the isinstance guard and the footer said "no wake is scheduled" on every
+        # turn that had just scheduled one -- the one line the agent cannot write
+        # about itself, and it was telling the operator the loop was dead while
+        # the wake it had armed fired on time. The dataclass spelling is accepted
+        # too, so a store written by anything using the python field names reads.
+        state = job.get("state") or {}
+        at = state.get("nextRunAtMs")
+        if not isinstance(at, int):
+            at = state.get("next_run_at_ms")
         if not isinstance(at, int):
             continue
         delta = (at - now_ms) // 1000
@@ -543,6 +601,67 @@ def build_task(task: str, *, config: Path, resuming: bool) -> str:
     )
 
 
+def serve_acp(args: argparse.Namespace) -> int:
+    """Serve this install to an ACP client, over the config the launcher renders.
+
+    ``raven acp`` finds its config through ``RAVEN_HOME``. A vendored folder does
+    not work that way: its config lives beside the checkout, and -- more to the
+    point -- the published one holds no credentials. This launcher is what merges
+    them, from ``.env`` or by inheriting the host's provider, into a 0600 copy
+    under STATE_ROOT. Point an ACP row at the published file and the child comes
+    up with no key at all, which surfaces as an internal error on the first
+    prompt rather than as anything naming a config.
+
+    So the same ``render_config`` the cli path uses runs here too, and the child
+    is told to use its output. Secret merging is *adaptation*, and adaptation
+    belongs in this file rather than in the checkout: the checkout is replaced
+    wholesale by an upstream drop, and anything patched into it has to be patched
+    in again every time.
+
+    stdio is inherited untouched -- it IS the protocol transport, and a pipe of
+    our own here would leave the client talking to a launcher that does not speak
+    ACP. This process then exists only to hold the rendered config's lifetime:
+    it waits, and deletes the file when the child is done.
+    """
+    root = Path(args.checkout).expanduser().resolve()
+    raven_bin = root / ".venv" / "bin" / "raven"
+    if not raven_bin.is_file():
+        raise SystemExit(f"error: venv missing at {raven_bin}; run `uv sync` in {root}")
+
+    global _LOG_FILE, _VERBOSE
+    _VERBOSE = args.verbose
+    state_dir = RUN_ROOT / "acp"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _LOG_FILE = state_dir / "launcher.log"
+
+    config = render_config(Path(args.config).expanduser().resolve())
+    if not config.is_file():
+        raise SystemExit(f"error: no config at {config}")
+    log(f"[acp] serving from {config}")
+
+    env = {**os.environ}
+    env["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    env.setdefault("RAVEN_TRACING_DIR", str(config.parent / "traces"))
+    # The same registry the cli path gives a woken turn: the machines belong to
+    # the owner, and an ACP-served turn reads them for the same reason.
+    env.setdefault("RAVEN_CONNECTIONS", str(connections_registry()))
+
+    try:
+        proc = subprocess.Popen(
+            [str(raven_bin), "acp", "--config", str(config)], cwd=str(root), env=env
+        )
+        return proc.wait()
+    except KeyboardInterrupt:
+        # The client went away. The child watches its own stdin for EOF, so it is
+        # already on its way out; wait briefly rather than leaving it holding the
+        # config we are about to delete.
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=5)
+        return 0
+    finally:
+        config.unlink(missing_ok=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the Raven-Oncall watch agent for one turn")
     ap.add_argument("--task", help="The task")
@@ -565,7 +684,33 @@ def main() -> int:
     )
     ap.add_argument("--keep-going", action="store_true", help="Do not fail when no answer was committed")
     ap.add_argument("--verbose", action="store_true", help="Mirror diagnostics to stderr; never when spawned")
+    ap.add_argument(
+        "--acp",
+        action="store_true",
+        help=(
+            "Serve the Agent Client Protocol on stdio instead of running one turn. "
+            "The host calls this for a `kind: \"acp\"` row; the credentials are "
+            "merged into a rendered config exactly as they are for a cli turn."
+        ),
+    )
+    ap.add_argument(
+        "--dispatch-agent",
+        default=None,
+        help=(
+            "The name the host raven knows this agent by. Set it in subagent.json's "
+            "command templates and a woken turn runs in this instance's pane instead "
+            "of in a child process nobody reads; leave it off for a headless "
+            "benchmark run, where a wake is a cold start by design. NOTE: the wake "
+            "shell is one per install and keeps whatever mode it was started in, so "
+            "switching modes means stopping the running shell first."
+        ),
+    )
     args = ap.parse_args()
+
+    # Before the task check: an ACP session carries its prompts over the wire,
+    # so there is no --task to give and requiring one would refuse every start.
+    if args.acp:
+        return serve_acp(args)
 
     if args.prompt_file:
         task = Path(args.prompt_file).read_text(encoding="utf-8").strip()
@@ -599,7 +744,9 @@ def main() -> int:
     # and a shell started afterwards would race the job it is meant to fire.
     shell_pid, shell_detail = (None, "not started (--no-wake-shell)")
     if not args.no_wake_shell:
-        shell_pid, shell_detail = ensure_wake_shell(config, checkout=root)
+        shell_pid, shell_detail = ensure_wake_shell(
+            config, checkout=root, dispatch_agent=args.dispatch_agent
+        )
     log(f"[run] wake shell: {shell_detail}")
 
     workspace = Path(
@@ -621,16 +768,9 @@ def main() -> int:
         "--session",
         f"cli:{conversation}",
         "--no-markdown",
-        # Without this the process exits as soon as the answer is ready and
-        # interpreter shutdown cancels the in-flight everos extraction, so
-        # nothing reaches long-term memory.
-        "--wait-skill-extract",
-        # And without the flush, extraction never runs at all: a lone `-m` turn
-        # does not trip a boundary on its own, and most spawns are exactly one
-        # turn. The cost is one extraction pass per turn rather than one per
-        # detected boundary. Session continuity is unaffected either way - it
-        # lives in the transcript, not in everos's buffer.
-        "--flush-skill-buffer",
+        # `--wait-skill-extract` / `--flush-skill-buffer` were dropped upstream by
+        # PR #334 (059e1c1e, 2026-08-17) as inert, and this checkout is past that
+        # commit -- passing them makes `raven agent` exit 2 before the turn starts.
         "-m",
         build_task(task, config=config, resuming=resuming),
     ]
@@ -644,6 +784,7 @@ def main() -> int:
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "RAVEN_TRACING_DIR": os.environ.get("RAVEN_TRACING_DIR", str(config.parent / "traces")),
     }
+    env.setdefault("RAVEN_CONNECTIONS", str(connections_registry()))
     started = time.time()
     timed_out = False
     try:

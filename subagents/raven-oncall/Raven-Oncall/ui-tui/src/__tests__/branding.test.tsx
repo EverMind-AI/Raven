@@ -26,16 +26,17 @@ describe('Branding', () => {
 })
 
 describe('SessionPanel', () => {
-  it('recommends the real raven upgrade command', () => {
+  it('does not render the update nudge in the banner (it lives in the status bar)', () => {
     const info: SessionInfo = {
       model: 'anthropic/claude-sonnet-4-6',
       skills: {},
       tools: {},
-      update_behind: 1
+      update_available: true,
+      update_command: 'raven upgrade'
     }
     const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="test" t={DEFAULT_THEME} />)
-    expect(lastFrame()).toContain('raven upgrade')
-    expect(lastFrame()).not.toContain('raven update')
+    expect(lastFrame()).not.toContain('Update available')
+    expect(lastFrame()).not.toContain('upgrade')
   })
 })
 
