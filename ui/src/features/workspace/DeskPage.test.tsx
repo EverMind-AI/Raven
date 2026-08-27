@@ -153,26 +153,81 @@ describe('asking for the instance list', () => {
     expect(launcher()?.hasAttribute('data-working')).toBe(false)
   })
 
-  it('stops asking once the desk is shut and the turn is over', async () => {
+  /* The case both conditions were blind to, and the ordinary one: a playbook
+     runs in the BACKGROUND. The turn that launched it says so and ends -- in
+     seconds -- and its sub-agents go on working for minutes afterwards. So
+     there is never a moment when a turn is busy AND a run is known to be live,
+     which is the only way the old pair of conditions could bootstrap: nothing
+     asked, so nothing was known, so nothing asked. The glyph the reader is
+     relying on while the desk is down never came on at all. */
+  it('lights the glyph for a run that outlives the turn that started it', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
-    await tick(0)
-
     await act(async () => { desk.update({ paletteOpen: false }) })
-    const before = asked.length
-    await tick(30000)
+    /* No turn is ever dispatched: the launching one is already over. */
+    expect(turn.busy()).toBe(false)
+    agentRows = [inst('h1', 'running')]
+    await tick()
 
-    expect(asked.length).toBe(before)
+    expect(desk.working()).toBe(true)
+    expect(launcher()?.hasAttribute('data-working')).toBe(true)
   })
 
-  it('leaves the agents tab to refresh its own list', async () => {
+  /* Nothing else refreshes this list while the desk sits on the agents tab.
+     The panel asks once when it mounts; the recurring poll in the subagents
+     store gates on `wsShows('agents')`, which is the LEGACY panel's tab and is
+     never set by the desk palette. Skipping the tab here on the belief that
+     "the panel refreshes its own" therefore froze the list at whatever it held
+     when the tab was opened. */
+  it('keeps asking while the desk sits on the agents tab', async () => {
     render(<DeskApp />)
     await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    agentRows = [inst('h1', 'running')]
+    await tick()
+    expect(desk.working()).toBe(true)
     const before = asked.length
+
+    agentRows = [inst('h1', 'completed')]
+    await tick()
+
+    expect(asked.length).toBeGreaterThan(before)
+    expect(desk.working()).toBe(false)
+  })
+
+  /* The reversal, recorded rather than left as an absence. Both of these used
+     to be "stops asking", and both of those were the bug: with the desk shut
+     and no turn up is exactly the state a background playbook leaves behind. */
+  it('keeps asking with the desk shut and no turn running', async () => {
+    render(<DeskApp />)
+    await act(async () => { desk.update({ paletteOpen: false }) })
+    await tick(0)
+    const before = asked.length
+
     await tick(30000)
 
-    /* The panel asks for itself while it is the tab on screen; a second
-       request from here is the same answer twice. */
+    expect(asked.length).toBeGreaterThan(before)
+  })
+
+  /* The saving that IS still available, and the only one: there is nothing to
+     ask about until a conversation is open. Held by the agents store's own
+     guard rather than by a condition here, which is why removing the
+     conditions did not turn this into a request every 8s from a blank page. */
+  it('asks nothing at all until a conversation is open', async () => {
+    setCurrent(null)
+    render(<DeskApp />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await tick(30000)
+
+    expect(asked.length).toBe(0)
+  })
+
+  it('stops when the desk goes away', async () => {
+    const view = render(<DeskApp />)
+    await tick(0)
+    view.unmount()
+    const before = asked.length
+
+    await tick(30000)
+
     expect(asked.length).toBe(before)
   })
 })

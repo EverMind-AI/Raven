@@ -2,10 +2,8 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 
-import * as turn from '../composer/turn'
 import * as agents from '../subagents/store'
 import { DeskPalette } from './DeskPalette'
-import * as desk from './deskStore'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as workspace from './store'
 
@@ -28,39 +26,45 @@ export {
    spinner. The agents store keeps its own 2.5s floor besides. */
 const AGENTS_POLL_MS = 8000
 
-/* Whether anyone needs the instance list refreshed right now.
+/* Nobody tells the desk about background work, so the desk asks.
  *
- * Both of the desk's readings of that list are told nothing: a write reaches
- * the workspace record and a delivery reaches the delivery registry on the
- * turn's own events, but the instance list is ASKED for -- by the panel when it
- * draws, and by a resume -- and nothing asks while a turn quietly spawns a
- * sub-agent. So the two places that report background work, the agents tab's
- * bubble and the launcher's own glyph, were both reporting an answer from
- * whenever the list was last fetched.
+ * Its other two readings are pushed: a write reaches the workspace record and a
+ * delivery reaches the delivery registry on the turn's own events. The instance
+ * list is not -- it is ASKED for, by the panel when it draws and by a resume --
+ * so the two places that report delegated work, the agents tab's bubble and the
+ * launcher's glyph, are only ever as current as the last fetch.
  *
- * Asked from here rather than from the palette, which is where it used to live:
- * the launcher badges the same list with the palette DOWN, and a timer mounted
- * with the palette cannot feed it. And asked on a condition rather than always,
- * because an idle conversation with nothing running has nothing to discover and
- * polling it all afternoon buys nothing.
+ * Asked from here rather than from the palette, because the launcher badges the
+ * same list with the palette DOWN and a timer mounted with the palette cannot
+ * feed it.
  *
- * Two conditions, not one, and the second is the glyph's way back to off. A run
- * STARTING can only happen under a live turn -- but a run ENDING is read from
- * this same list, and by then the turn is idle and the desk is still down, so a
- * condition of `turn.busy()` alone stopped asking and left the launcher
- * breathing forever. It settled only when the reader opened the desk or sent
- * the next message: stuck on for exactly as long as they were relying on it
- * instead of the palette. So we also ask while we still believe something is
- * live, which is the only state in which the answer can change anything, and it
- * converges one tick after the run settles.
+ * Asked unconditionally, which is the part worth reading before changing.
+ * Twice this was given a condition meant to spare an idle conversation, and
+ * both times the condition cost the feature outright:
  *
- * The agents tab is the exception in the other direction: the panel refreshes
- * its own list while it is the one on screen, so asking again here is a second
- * request for what is already in flight. */
-function wanted(): boolean {
-  if (desk.showing()) return desk.getState().tab !== 'agents'
-  return turn.busy() || desk.working()
-}
+ *   1. `turn.busy()` -- on the argument that only a live turn can spawn a
+ *      sub-agent. True of a run STARTING. A run ENDING is read from this same
+ *      list, and by then the turn is idle, so nothing asked again and the glyph
+ *      breathed forever.
+ *   2. `turn.busy() || working()` -- which fixed that end and left the start
+ *      deadlocked. A playbook runs in the BACKGROUND: the launching turn says
+ *      so and finishes in seconds while its sub-agents work for minutes. There
+ *      is then no moment when a turn is busy and a run is already known to be
+ *      live, and `working()` can only become true from a fetch this condition
+ *      is refusing to make. Nothing asked, so nothing was known, so nothing
+ *      asked -- and the glyph never came on in the ordinary case.
+ *
+ * The saving those were defending is one request every 8s on an open page, with
+ * the agents store's own 2.5s floor underneath it and an early return when no
+ * conversation is open. That is smaller than the feature. Anyone reaching for a
+ * condition here again needs a test for a run that outlives the turn that
+ * started it -- `DeskPage.test.tsx` has one.
+ *
+ * The agents tab is not excepted either. It looks like it should be, since the
+ * panel refreshes when it draws -- but only when it draws. The recurring poll
+ * in the subagents store gates on `wsShows('agents')`, which reports the LEGACY
+ * panel's tab and is never set by the desk palette, so excepting the tab froze
+ * its list at whatever it held when the reader opened it. */
 
 export function DeskApp(): JSX.Element {
   useSyncExternalStore(workspace.subscribe, workspace.getState)
@@ -68,14 +72,9 @@ export function DeskApp(): JSX.Element {
     document.documentElement.classList.add('desk-ready')
     return () => document.documentElement.classList.remove('desk-ready')
   }, [])
-  /* One timer for the desk, mounted for as long as the desk is, with the
-     condition inside it. The condition is re-read on every tick rather than
-     turned into an effect dependency because a turn starting is not something
-     this component is told about -- the turn machine has no subscription, and
-     giving it one to save a comparison every 8s would be the tail wagging the
-     dog. */
+  /* One timer for the desk, mounted for as long as the desk is. */
   useEffect(() => {
-    const ask = (): void => { if (wanted()) void agents.refreshInstances() }
+    const ask = (): void => { void agents.refreshInstances() }
     ask()
     const timer = setInterval(ask, AGENTS_POLL_MS)
     return () => clearInterval(timer)
