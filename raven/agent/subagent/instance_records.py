@@ -117,6 +117,36 @@ def spawn_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list
     return out
 
 
+def _graph_nodes(run: Path) -> dict[str, Any]:
+    """A manifest-shaped view of ``graph.json``, for a run that never finalized.
+
+    The manifest is written when a run finalizes, so a run killed mid-flight
+    holds only its ``graph.json`` -- reading nothing left every node of a dead
+    run invisible here, the finished ones included. The graph knows each node's
+    agent and instance but no clocks or file names: the conventions fill in the
+    file names (``<node>.prompt.md`` / ``<node>.out.md``, the same defaults the
+    manifest loop already applies), and the prompt file's own mtime is the only
+    reading of when the node started.
+    """
+    graph = _read_json(run / "graph.json")
+    nodes: dict[str, Any] = {}
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict) or not node.get("id"):
+            continue
+        node_id = str(node["id"])
+        try:
+            started = int((run / f"{node_id}.prompt.md").stat().st_mtime * 1000)
+        except OSError:
+            started = 0
+        nodes[node_id] = {
+            "subagent": node.get("subagent"),
+            "instance": node.get("instance"),
+            "started_at": started,
+            "ended_at": started,
+        }
+    return nodes
+
+
 def dag_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list[dict[str, Any]]]]:
     """The DAG nodes that ran against this instance.
 
@@ -132,7 +162,7 @@ def dag_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list[d
 
     out: list[tuple[int, list[dict[str, Any]]]] = []
     for run in runs:
-        manifest = _read_json(run / "manifest.json")
+        manifest = _read_json(run / "manifest.json") or _graph_nodes(run)
         for node_id, node in manifest.items():
             if not isinstance(node, dict) or node.get("subagent") != agent:
                 continue

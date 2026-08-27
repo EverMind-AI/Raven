@@ -17,8 +17,10 @@ import { toTranscriptMessages } from '../domain/messages.js'
 import { estimatedMsgHeight } from './virtualHeights.js'
 
 // What the box's own rendering does, so the fit is measured against the same
-// thing it draws: a `MessageLine` with no details expanded.
-const TRACE_ESTIMATE = { compact: false, details: false }
+// thing it draws: a `MessageLine` with no details expanded, dense -- the
+// breathing rows between segments are blank lines a fixed-height box cannot
+// afford, so the boxes render without them and this measures without them.
+const TRACE_ESTIMATE = { compact: false, dense: true, details: false }
 
 /**
  * The newest wire messages that fit `rows` once folded, and how many wire

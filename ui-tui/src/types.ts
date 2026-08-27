@@ -4,6 +4,7 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import type { DagRunState } from './domain/dagRun.js'
+import type { SpawnRunState } from './domain/spawnRun.js'
 
 export interface ActiveTool {
   context?: string
@@ -156,6 +157,10 @@ export interface EpisodeTool {
   // live store is cleared at turn end and the tool result is clamped to 200
   // chars, so this is what keeps the graph in the transcript.
   dag?: DagRunState
+  // A spawn call's run, pinned here from its subagent.status frames -- or, on
+  // resume, rebuilt from the row's spawn_task_id. Same survival story as `dag`:
+  // the live store is turn-scoped and the result text is one line.
+  spawn?: SpawnRunState
   diff?: string
   added?: number
   removed?: number

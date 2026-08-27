@@ -113,6 +113,7 @@ class SpawnTool(Tool):
         self._manager = manager
         self._default = _SpawnOrigin(channel="cli", chat_id="direct", session_key="cli:direct")
         self._origin: ContextVar[_SpawnOrigin] = ContextVar("spawn_origin")
+        self._tool_call_id: ContextVar[str | None] = ContextVar("spawn_tool_call_id", default=None)
         # Written by execute and popped by take_metadata in the loop's own task,
         # so the handoff cannot rely on a ContextVar write propagating upward.
         # Keyed by session so concurrent turns never read each other's handle.
@@ -124,6 +125,16 @@ class SpawnTool(Tool):
     def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
         self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key))
+
+    def set_tool_call_id(self, tool_call_id: str | None) -> None:
+        """Turn-local: record which tool call this spawn's run belongs to.
+
+        A consumer that draws the run under the tool row it came from cannot get
+        there from the task id alone -- it is minted inside the manager, after
+        the row exists -- so the loop hands the call id in and every
+        ``subagent.status`` frame carries it back out.
+        """
+        self._tool_call_id.set(tool_call_id)
 
     def take_metadata(self) -> dict[str, Any] | None:
         return self._pending.pop(self._cur().session_key, None)
@@ -344,6 +355,7 @@ class SpawnTool(Tool):
             instance_auto=minted,
             workspace=workdir.current(),
             authored_task=authored_task,
+            tool_call_id=self._tool_call_id.get(),
         )
         # Published only once the manager has taken the spawn. A refusal (delegation
         # paused, hourly cap) comes back as the result rather than as an exception,

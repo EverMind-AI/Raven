@@ -909,15 +909,26 @@ class TestTheShippedManifests:
             left = [p for p in ACP_PROMPT_PLACEHOLDERS if p in str(entry.get("command", ""))]
             assert not left, f"{folder}: task placeholder(s) in an acp command: {left}"
 
-    def test_every_acp_manifest_pins_its_cwd(self) -> None:
-        """An acp entry with no ``cwd`` falls back to the calling task's
-        workspace, and ``cwd`` is part of the pool's launch key -- so every new
-        workspace would relaunch the server and kill the sessions the old one was
-        serving."""
+    def test_a_pinned_acp_cwd_is_the_folder_placeholder(self) -> None:
+        """Whether to pin ``cwd`` is per folder, but the value is not.
+
+        Pinning keeps the pool's launch key constant, so one server serves every
+        workspace -- which is right for a folder whose agent does not work in the
+        caller's tree, and wrong for one that does: the agent's own working
+        directory can only reach it as the launch cwd, so a folder that must edit
+        the caller's files has to leave this unset and accept a connection per
+        workspace. raven-research pins it and ignores the session cwd outright;
+        raven-code leaves it unset because its ``run.py`` reads the process
+        working directory to set the engine's workspace.
+
+        What is asserted is only that a folder which does pin it names its own
+        directory rather than a literal path, since an absolute path baked into a
+        manifest is wrong on every machine but the one it was written on.
+        """
         for folder, entry in self._manifests():
-            if entry.get("kind") != "acp":
+            if entry.get("kind") != "acp" or "cwd" not in entry:
                 continue
-            assert entry.get("cwd") == "{SUBAGENT_DIR}", f"{folder}: acp manifest must pin cwd to the folder"
+            assert entry["cwd"] == "{SUBAGENT_DIR}", f"{folder}: a pinned acp cwd must be the folder placeholder"
 
     def test_no_manifest_ships_an_env_block(self) -> None:
         """``env`` is per-install: the ACP child is built from the login shell's

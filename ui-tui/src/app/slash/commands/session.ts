@@ -17,7 +17,13 @@ import type {
 import type { PanelSection } from '../../../types.js'
 import type { SlashCommand } from '../types.js'
 
-import { attachedImageNotice, hydrateDagRuns, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
+import {
+  attachedImageNotice,
+  hydrateDagRuns,
+  hydrateSpawnRuns,
+  introMsg,
+  toTranscriptMessages
+} from '../../../domain/messages.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
 import { fmtK } from '../../../lib/text.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
@@ -295,9 +301,9 @@ export const sessionCommands: SlashCommand[] = [
           }
 
           if (Array.isArray(r.messages)) {
-            const rows = await hydrateDagRuns(
+            const rows = await hydrateSpawnRuns(
               r.messages,
-              toTranscriptMessages(r.messages),
+              await hydrateDagRuns(r.messages, toTranscriptMessages(r.messages), ctx.gateway.rpc, ctx.sid ?? ''),
               ctx.gateway.rpc,
               ctx.sid ?? ''
             )

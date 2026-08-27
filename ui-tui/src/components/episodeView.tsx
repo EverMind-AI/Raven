@@ -24,10 +24,12 @@ import {
   totalDurationMs
 } from '../domain/episodeSummary.js'
 import { fmtDuration } from '../domain/messages.js'
+import { spawnRunSettled } from '../domain/spawnRun.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { boundedLiveRenderText, compactPreview, tailPreview, clipToWidthFromEnd } from '../lib/text.js'
 import { DagPanel } from './dagPanel.js'
 import { Md } from './markdown.js'
+import { SpawnPanel } from './spawnPanel.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { Spinner } from './thinking.js'
 
@@ -406,9 +408,9 @@ const WorkSegment = memo(function WorkSegment({
   // A dag call has no row of its own: its panel is a titled box carrying the
   // call, the graph and the tally, and the row above it said the first of those
   // a second time -- with the node ids spelled out again, which is what the box
-  // header replaced.
+  // header replaced. A spawn call renders as a panel on the same terms.
   const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void) => {
-    if (tool.dag) {
+    if (tool.dag || tool.spawn) {
       return null
     }
 
@@ -441,6 +443,23 @@ const WorkSegment = memo(function WorkSegment({
     tool.dag ? (
       <Box key={`g:${tool.id}`} paddingLeft={depth}>
         <DagPanel now={now} run={tool.dag} t={t} width={Math.max(28, width - depth)} />
+      </Box>
+    ) : null
+
+  // A spawn call renders on the dag call's terms: a titled panel that carries
+  // the call, at every depth -- including the folded summary row. Its trace box
+  // opens itself while the run works (see `spawnOpen`), which is what a single
+  // delegated run has instead of a graph to watch.
+  const spawnFor = (tool: EpisodeTool, depth: number) =>
+    tool.spawn ? (
+      <Box key={`s:${tool.id}`} paddingLeft={depth}>
+        <SpawnPanel
+          now={now}
+          prompt={toolArgument(tool)}
+          run={tool.spawn}
+          t={t}
+          width={Math.max(28, width - depth)}
+        />
       </Box>
     ) : null
 
@@ -503,6 +522,7 @@ const WorkSegment = memo(function WorkSegment({
         <Box flexDirection="column">
           {callRow(latest, INDENT, toggleSelf)}
           {dagFor(latest, INDENT)}
+          {spawnFor(latest, INDENT)}
           {isOpen ? detailFor(latest, INDENT, toggleSelf) : null}
         </Box>
       )
@@ -526,6 +546,7 @@ const WorkSegment = memo(function WorkSegment({
             <Box flexDirection="column" key={tool.id}>
               {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
               {dagFor(tool, INDENT + STEP)}
+              {spawnFor(tool, INDENT + STEP)}
               {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
             </Box>
           ))
@@ -533,7 +554,7 @@ const WorkSegment = memo(function WorkSegment({
           <>
             {/* The spinner above already says "in flight"; a second one on the
                 call in hand just makes two things twitch at once. */}
-            {latest.dag ? null : (
+            {latest.dag || latest.spawn ? null : (
               <ActivityRow
                 depth={INDENT + STEP}
                 label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
@@ -544,6 +565,7 @@ const WorkSegment = memo(function WorkSegment({
               />
             )}
             {dagFor(latest, INDENT + STEP)}
+            {spawnFor(latest, INDENT + STEP)}
             {openCalls.has(latest.id) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
           </>
         )}
@@ -561,6 +583,7 @@ const WorkSegment = memo(function WorkSegment({
       <Box flexDirection="column">
         {callRow(tool, INDENT, toggleSelf)}
         {dagFor(tool, INDENT)}
+        {spawnFor(tool, INDENT)}
         {isOpen ? detailFor(tool, INDENT, toggleSelf) : null}
       </Box>
     )
@@ -583,11 +606,12 @@ const WorkSegment = memo(function WorkSegment({
             <Box flexDirection="column" key={tool.id}>
               {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
               {dagFor(tool, INDENT + STEP)}
+              {spawnFor(tool, INDENT + STEP)}
               {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
             </Box>
           ))
         : defaultOpen
-          ? tools.map(tool => dagFor(tool, INDENT + STEP))
+          ? tools.map(tool => [dagFor(tool, INDENT + STEP), spawnFor(tool, INDENT + STEP)])
           : null}
     </Box>
   )
@@ -604,6 +628,7 @@ export const EpisodeView = memo(function EpisodeView({
   closedKeys,
   cols,
   compact,
+  dense = false,
   episodes,
   live = false,
   openKeys,
@@ -614,6 +639,10 @@ export const EpisodeView = memo(function EpisodeView({
   closedKeys?: readonly string[]
   cols?: number
   compact?: boolean
+  /** Trace-box rendering: no breathing rows between segments, and a static
+   *  reasoning row carries a tail of its text instead of standing bare. The
+   *  height estimator's own `dense` must agree (see `estimatedMsgHeight`). */
+  dense?: boolean
   episodes: Episode[]
   live?: boolean
   openKeys?: readonly string[]
@@ -646,7 +675,15 @@ export const EpisodeView = memo(function EpisodeView({
   const toggle = (key: string) => toggleFold(scope, key)
 
   const lastIdx = episodes.length - 1
-  const now = useNow(live && episodes.length > 0)
+  // A delegated run outlives its turn: the panel pinned onto its tool row only
+  // re-renders on status frames, which for a long run means minutes between
+  // repaints -- and an elapsed column frozen at whatever the clock said when
+  // the reply committed. So the ticker also runs while any pinned run is still
+  // working, not only while the turn itself is live.
+  const working = episodes.some(ep =>
+    ep.tools.some(tool => (tool.dag && !tool.dag.done) || (tool.spawn && !spawnRunSettled(tool.spawn)))
+  )
+  const now = useNow((live || working) && episodes.length > 0)
   const width = cols ? Math.max(20, cols - 4) : 116
   const proseWidth = Math.max(20, width - INDENT)
   const liveIndex = live ? episodes[lastIdx]?.index : undefined
@@ -698,7 +735,9 @@ export const EpisodeView = memo(function EpisodeView({
               onToggle={() => toggle(`rsn:${ep.index}`)}
               running={thinking}
               t={t}
-              tail={thinking && !rsnOpen ? reasoning : ''}
+              // In a trace box the row is static, so without the tail it reads
+              // as a bare label -- the one word "reasoning" says nothing.
+              tail={(thinking || dense) && !rsnOpen ? reasoning : ''}
               time={durationLabel(reasoningMs, Boolean(thinking))}
               width={width}
             />
@@ -714,7 +753,7 @@ export const EpisodeView = memo(function EpisodeView({
         ) : null}
 
         {narration || (live && running && text) ? (
-          <Box marginTop={hasReasoning ? 1 : 0}>
+          <Box marginTop={hasReasoning && !dense ? 1 : 0}>
             {prose(
               narration ? (
                 <Md avail={proseWidth} compact={compact} t={t} text={narration} />
@@ -729,10 +768,10 @@ export const EpisodeView = memo(function EpisodeView({
   }
 
   const renderWork = (seg: Extract<Segment, { kind: 'work' }>) => {
-    // The one tool whose result is a picture: a summary line cannot say which
-    // node failed, so a stretch holding one opens itself, and folding it by hand
-    // still leaves the graph.
-    const hasDag = seg.tools.some(tool => tool.dag)
+    // The tools whose result is a panel: a summary line cannot say which node
+    // failed or what a delegated run is doing, so a stretch holding one opens
+    // itself, and folding it by hand still leaves the panel.
+    const hasPanel = seg.tools.some(tool => tool.dag || tool.spawn)
     // A solo stretch has no "expanded" depth of its own: its fold state gates the
     // detail block directly (WorkSegment's solo branch above), so defaulting that
     // state open would auto-expand the detail block, not just draw the graph
@@ -744,12 +783,12 @@ export const EpisodeView = memo(function EpisodeView({
     // also decides whether every call gets a row, and a stretch that unfolds
     // itself as the calls land is the churn the compressed live view exists to
     // avoid. A reader's own open still stands -- `foldOpen` reads it first.
-    const detailDefaultOpen = hasDag && seg.tools.length > 1 && !seg.live
+    const detailDefaultOpen = hasPanel && seg.tools.length > 1 && !seg.live
 
     return (
       <WorkSegment
         compact={compact}
-        defaultOpen={hasDag}
+        defaultOpen={hasPanel}
         isOpen={foldOpen(`seg:${seg.key}`, detailDefaultOpen)}
         key={`w:${seg.key}`}
         live={seg.live}
@@ -779,14 +818,14 @@ export const EpisodeView = memo(function EpisodeView({
         <Box
           flexDirection="column"
           key={seg.kind === 'talk' ? `t:${seg.episode.index}` : `w:${seg.key}`}
-          marginTop={i > 0 ? 1 : 0}
+          marginTop={i > 0 && !dense ? 1 : 0}
         >
           {seg.kind === 'talk' ? renderTalk(seg.episode) : renderWork(seg)}
         </Box>
       ))}
 
       {text && (!live || !liveTalk) ? (
-        <Box marginTop={segments.length > 0 ? 1 : 0}>
+        <Box marginTop={segments.length > 0 && !dense ? 1 : 0}>
           {prose(
             live ? (
               <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(text)} />
@@ -856,11 +895,13 @@ const messageFoldId = (msg: Msg): string => {
 export const EpisodeMessage = memo(function EpisodeMessage({
   cols,
   compact,
+  dense,
   msg,
   t
 }: {
   cols?: number
   compact?: boolean
+  dense?: boolean
   msg: Msg
   t: Theme
 }) {
@@ -869,5 +910,15 @@ export const EpisodeMessage = memo(function EpisodeMessage({
   // message part keeps two turns in that view from sharing a fold.
   const scope = turnFoldScope(viewKeyOf(useStore($directChat).active), messageFoldId(msg))
 
-  return <EpisodeView cols={cols} compact={compact} episodes={msg.episodes ?? []} scope={scope} t={t} text={msg.text} />
+  return (
+    <EpisodeView
+      cols={cols}
+      compact={compact}
+      dense={dense}
+      episodes={msg.episodes ?? []}
+      scope={scope}
+      t={t}
+      text={msg.text}
+    />
+  )
 })

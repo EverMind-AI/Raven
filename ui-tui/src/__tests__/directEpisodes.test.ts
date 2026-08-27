@@ -41,6 +41,22 @@ describe('callSubject', () => {
 })
 
 describe('foldDirectTurns', () => {
+  it('says so when the trailing prompt was interrupted with its session', () => {
+    const msgs = foldDirectTurns([turn({ content: 'dig in', interrupted: true, role: 'user' })])
+
+    expect(msgs.map(m => m.role)).toEqual(['user', 'system'])
+    expect(msgs[msgs.length - 1]!.text).toContain('interrupted')
+  })
+
+  it('adds no marker to a conversation whose turns all answered', () => {
+    const msgs = foldDirectTurns([
+      turn({ content: 'ask', role: 'user' }),
+      turn({ content: 'answer', role: 'assistant' })
+    ])
+
+    expect(msgs.some(m => m.text.includes('interrupted'))).toBe(false)
+  })
+
   it('carries a steer row into the turn instead of opening one', () => {
     const msgs = foldDirectTurns([
       turn({ call_id: 'log-0', content: 'do it', role: 'user' }),

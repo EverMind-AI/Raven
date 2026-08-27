@@ -39,6 +39,15 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const directChat = useStore($directChat)
   const showStreamingArea = Boolean(streaming)
 
+  // Everything this draws is the MAIN conversation's live turn: a direct turn
+  // never fills `$turnState` (see chatStream's dispatchDirect). In a direct
+  // view this layer belongs to a conversation that is not on screen, and
+  // rendering it leaked the main turn's reasoning and streaming answer into
+  // every instance's chat.
+  if (directChat.active !== null) {
+    return null
+  }
+
   if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length) {
     return null
   }
@@ -146,6 +155,14 @@ export const LiveTodoPanel = memo(function LiveTodoPanel() {
   const ui = useStore($uiState)
   const todos = useTurnSelector(state => state.todos)
   const collapsed = useTurnSelector(state => state.todoCollapsed)
+  const directChat = useStore($directChat)
+
+  // Same view guard as StreamingAssistant: the todos are the main turn's, and
+  // the row index this panel rides is a main-history index that can collide
+  // with an instance row's in a direct view.
+  if (directChat.active !== null) {
+    return null
+  }
 
   return <TodoPanel collapsed={collapsed} onToggle={toggleTodoCollapsed} t={ui.theme} todos={todos} />
 })

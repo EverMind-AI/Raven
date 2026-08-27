@@ -537,8 +537,13 @@ class SubagentManager:
         instance_auto: bool = False,
         workspace: Path | None = None,
         authored_task: str | None = None,
+        tool_call_id: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
+
+        ``tool_call_id`` is the call that dispatched this run, when the host
+        correlates the two; it rides ``origin`` so every ``subagent.status``
+        frame can name the tool row the run belongs to.
 
         ``authored_task`` is the task as the dispatching model wrote it, given
         when ``task`` is a rendering of it that a caller resolved file inputs
@@ -596,6 +601,7 @@ class SubagentManager:
             "handle": handle,
             "workspace": effective_workspace,
             "authored_task": authored_task,
+            "tool_call_id": tool_call_id,
         }
         instance_key = (quota_key, agent, handle)
 
@@ -1196,6 +1202,8 @@ class SubagentManager:
         }
         if call_id is not None:
             payload["call_id"] = call_id
+        if origin.get("tool_call_id"):
+            payload["tool_call_id"] = origin["tool_call_id"]
         if origin.get("instance"):
             payload["instance"] = origin["instance"]
         if started_at is not None:

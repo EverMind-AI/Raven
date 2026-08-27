@@ -74,6 +74,7 @@ function ArtifactSection({ files, label, t, changes = false }: {
 export const MessageLine = memo(function MessageLine({
   cols,
   compact,
+  dense = false,
   detailsMode = 'collapsed',
   detailsModeCommandOverride = false,
   isStreaming = false,
@@ -100,7 +101,7 @@ export const MessageLine = memo(function MessageLine({
   const [systemOpen, setSystemOpen] = useState(false)
 
   if (msg.kind === 'episodes') {
-    return <EpisodeMessage cols={cols} compact={compact} msg={msg} t={t} />
+    return <EpisodeMessage cols={cols} compact={compact} dense={dense} msg={msg} t={t} />
   }
 
   if (msg.kind === 'artifacts' && msg.artifacts) {
@@ -288,6 +289,10 @@ export const MessageLine = memo(function MessageLine({
 interface MessageLineProps {
   cols: number
   compact?: boolean
+  /** Trace-box rendering: no breathing rows between segments. The margins that
+   *  read as pacing in the main transcript are blank lines a fixed-height box
+   *  cannot afford (see `fitTraceTail`, whose estimate must agree). */
+  dense?: boolean
   detailsMode?: DetailsMode
   detailsModeCommandOverride?: boolean
   isStreaming?: boolean
