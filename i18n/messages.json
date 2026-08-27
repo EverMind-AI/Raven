@@ -543,6 +543,10 @@
       "en": "{n} failed",
       "zh": "失败 {n}"
     },
+    "gui.deleg.dag_stopped": {
+      "en": "{n} stopped",
+      "zh": "已停止 {n}"
+    },
     "gui.deleg.dag_skip": {
       "en": "{n} skipped",
       "zh": "跳过 {n}"

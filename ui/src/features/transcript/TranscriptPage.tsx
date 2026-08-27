@@ -667,18 +667,23 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
     /* Before any node has started there is no graph clock yet, so this falls
        back to the call's -- which is the right answer for exactly that window. */
     : (c.done ? (c.ms ? store.durText(c.ms) : '') : '…')
-  const tally = { ok: 0, bad: 0, skip: 0, run: 0 }
+  const tally = { ok: 0, bad: 0, stop: 0, skip: 0, run: 0 }
   nodes.forEach((n) => {
     const d = store.DOT_OF[n.status]
     if (d === 'ok') tally.ok += 1
     else if (d === 'bad') tally.bad += 1
+    else if (d === 'stop') tally.stop += 1
     else if (d === 'skip') tally.skip += 1
     else if (d === 'run') tally.run += 1
   })
   const bits: string[] = []
-  if (c.done && (tally.ok || tally.bad || tally.skip)) {
+  if (c.done && (tally.ok || tally.bad || tally.stop || tally.skip)) {
     bits.push(t('gui.deleg.dag_done', { ok: String(tally.ok) }))
     if (tally.bad) bits.push(t('gui.deleg.dag_bad', { n: String(tally.bad) }))
+    /* Its own word: `dag_bad` reads "failed" in both locales, and a node that was
+       stopped did not fail. Between the failures and the skips, which is where it
+       sits on the runner's own scale too. */
+    if (tally.stop) bits.push(t('gui.deleg.dag_stopped', { n: String(tally.stop) }))
     if (tally.skip) bits.push(t('gui.deleg.dag_skip', { n: String(tally.skip) }))
   }
   const extra = bits.join(' · ')

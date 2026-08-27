@@ -957,6 +957,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .daggraph .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
 .daggraph .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
 .daggraph .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
+/* Stopped, not failed and not skipped: the failure colour says it did not
+   succeed, the dash says nobody let it finish. Drawn at all is the point -- with
+   no rule the box was identical to an untouched one, so a stopped graph read as
+   a graph still waiting. */
+.daggraph .nd[data-st="cancelled"] rect { stroke: var(--clay); stroke-dasharray: 3 3; }
+.daggraph .nd[data-st="cancelled"] { opacity: .7; }
 .daggraph .nd[data-st="skipped"] rect,
 .daggraph .nd[data-st="interrupted"] rect { stroke-dasharray: 3 3; }
 .daggraph .nd[data-st="skipped"], .daggraph .nd[data-st="interrupted"] { opacity: .55; }
@@ -964,6 +970,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .daggraph .mk.wait { stroke: var(--faint); stroke-width: 1.3; }
 .daggraph .mk.ok { stroke: var(--moss); }
 .daggraph .mk.bad { stroke: var(--clay); }
+/* Stopped: the failure colour says it did not succeed, and unlike `.bad` the
+   glyph is a square rather than a cross -- stopped is not gone wrong. */
+.daggraph .mk.stop { stroke: var(--clay); }
 .daggraph .mk.skip { stroke: var(--faint); }
 /* An edge out of a node that has not finished is drawn faint: what has actually
    flowed through the graph is what a reader is looking for. */
