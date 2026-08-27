@@ -178,9 +178,10 @@ _NODE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "One line telling the user what this node is asked to do, written before its "
-                "prompt. Around 200 characters at most. It is this node's row in the run, read "
-                "by someone watching the graph."
+                "A short title for this step, written before its prompt -- the length of a "
+                "chat title, under ten words, not a sentence and not a summary of the "
+                "prompt. It is this node's row in the run, read by someone watching the "
+                "graph, so name the step and leave the detail to the prompt."
             ),
         },
         "prompt_template": {
@@ -621,9 +622,9 @@ class SubAgentDagTool(Tool):
                     "type": "string",
                     "minLength": 1,
                     "description": (
-                        "One line telling the user what this whole graph is for, written before "
-                        "the nodes. Around 200 characters at most. Summarise the goal, not a list "
-                        "of the nodes."
+                        "A short title for the whole graph, written before the nodes -- the "
+                        "length of a chat title, under ten words, not a sentence and not a "
+                        "summary. Name the goal, not the nodes."
                     ),
                 },
                 "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."},
