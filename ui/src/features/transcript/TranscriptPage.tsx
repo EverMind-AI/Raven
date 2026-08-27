@@ -339,7 +339,17 @@ const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepD
         {err ? <span className="err">{err}</span> : null}
         {!c.done ? <span className="cvslot" /> : withDtl ? <Chev /> : null}
       </div>
-      {withDtl ? <Dtl c={c} open={c.open} /> : null}
+      {/* Built on opening, not merely hidden when shut. `hidden` spares the
+          layout and the paint but not the nodes, and a shut detail is up to
+          120 diff rows or a whole command's output -- for a resumed session,
+          the same again for every call it ever made. Nothing outside this
+          island reads a shut body, and `display: none` was never findable by
+          the browser's own search nor part of a selection, so there is no
+          reader this takes anything from. The same rule holds for the work
+          list and the fold body below, which are the two that carry this one.
+          Bounded bodies (a delegation's four labelled cells, a dag card) stay
+          eager: they do not grow with the conversation. */}
+      {withDtl && c.open ? <Dtl c={c} open={c.open} /> : null}
     </>
   )
 })
@@ -709,7 +719,7 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
           ) : null}
         </div>
         <div className="wkin" hidden={wkinHidden}>
-          {seg.calls.map((c) => <CallRow key={c.id} lane={lane} seg={seg} c={c} />)}
+          {wkinHidden ? null : seg.calls.map((c) => <CallRow key={c.id} lane={lane} seg={seg} c={c} />)}
         </div>
       </div>
     </div>
@@ -1123,8 +1133,11 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
+      {/* Every turn of a resumed conversation arrives shut, so this is where
+          the weight was: a forty-turn session built 7361 nodes of which 6400
+          sat in shut fold bodies. */}
       <div className="tfb" hidden={!seg.open}>
-        {seg.steps.map((s) => <StepView key={s.id} lane={lane} seg={s} />)}
+        {seg.open ? seg.steps.map((s) => <StepView key={s.id} lane={lane} seg={s} />) : null}
       </div>
     </div>
   )
