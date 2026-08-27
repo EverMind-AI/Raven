@@ -1004,33 +1004,60 @@ const ArtMini = memo(function ArtMini({ name, head }: { name: string; head: stri
   return <span className="pic doc"><span className="amini"><span className="raw">{text}</span></span></span>
 })
 
-const DeliveryShot = memo(function DeliveryShot({ row, missing }: {
-  row: DeliveryRow; missing: () => void
+const DeliveryShot = memo(function DeliveryShot({ row, broken }: {
+  row: DeliveryRow; broken: () => void
 }): ReactElement {
   const [ready, setReady] = useState(false)
   return (
     <span className={'pic shot' + (ready ? '' : ' skel')}>
       <img src={row.downloadPath} alt="" loading="lazy" decoding="async"
-        onLoad={() => setReady(true)} onError={missing} />
+        onLoad={() => setReady(true)} onError={broken} />
       {ready ? null : <span className="sk" />}
     </span>
   )
 })
 
+/* The two answers that mean the deliverable itself is not there. */
+const GONE = new Set([404, 410])
+
+/* An <img> that failed says nothing about why -- a refused question, a file the
+   browser cannot decode and a file that is really gone all arrive as the same
+   event -- so the status is asked for. No answer at all is not an answer about
+   the file either. The workspace's `probeDeliveryMissing` draws the same line
+   for the same reason. */
+const askIfGone = (url: string): Promise<boolean> =>
+  fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+    .then((res) => !res.ok && GONE.has(res.status))
+    .catch(() => false)
+
 const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
   row: DeliveryRow; preview: ArtifactRow | null; single: boolean
 }): ReactElement {
   const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
+  const [shot, setShot] = useState<'draw' | 'broken'>('draw')
   const url = row.downloadPath
   useEffect(() => {
     let alive = true
+    setShot('draw')
     if (row.missing) {
       setState('missing')
       return () => { alive = false }
     }
     setState('probe')
+    /* Only "there is no such file" says the file is gone. Every other refusal
+       is about the asking, not about the deliverable: the gateway answers 401
+       to a page whose session another instance took over -- cookies ignore the
+       port, so a second `raven serve` claims the same jar entry -- and a file
+       the agent wrote seconds ago was then drawn as lost while it sat on disk.
+       404 is the route missing entirely; 410 is the store saying the token is
+       really gone. The rest leaves the tile alone, and opening it reports what
+       actually happened. `loadFileText` and `probeDeliveryMissing` already
+       draw this line; this is the one place that did not. */
     fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-      .then((res) => { if (alive) setState(res.ok ? 'ready' : 'missing') })
+      .then((res) => {
+        if (!alive) return
+        setState(res.ok || !GONE.has(res.status) ? 'ready' : 'missing')
+      })
       .catch(() => { if (alive) setState('missing') })
     return () => { alive = false }
   }, [row.missing, url])
@@ -1049,8 +1076,14 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
     <span className="pic none skel"><span className="sk" /></span>
   ) : state === 'missing' ? (
     fallback
-  ) : kind === 'img' || kind === 'svg' ? (
-    <DeliveryShot row={row} missing={() => setState('missing')} />
+  ) : (kind === 'img' || kind === 'svg') && shot === 'draw' ? (
+    /* A picture that will not load falls back to the document face rather than
+       to "lost": until the status says otherwise the file is there, and it is
+       still openable. */
+    <DeliveryShot row={row} broken={() => {
+      setShot('broken')
+      void askIfGone(url).then((gone) => { if (gone) setState('missing') })
+    }} />
   ) : preview?.head ? <ArtMini name={row.name} head={preview.head} />
     : fetched ? <ArtMini name={row.name} head={fetched} /> : (
       fallback
