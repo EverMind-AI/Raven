@@ -354,6 +354,42 @@ def material_section(staged: list[tuple[str, Path]], mats: Path) -> str:
     )
 
 
+def sweep_stale_renders() -> None:
+    """Remove rendered configs whose launcher is gone.
+
+    Each file is named for the pid of the launcher that wrote it, and that
+    launcher outlives the run it starts, so a live pid is the one thing that
+    says "some run still holds this". Liveness rather than age: a deck run's
+    own default deadline is three hours, and the acp entry declares the same,
+    so any age short enough to be useful would take a config out from under a
+    session that is merely long. `raven-code` and `raven-research` sweep the
+    same file name in the same directory on the same rule.
+
+    The pre-pid `.config.rendered.json` is left alone, and the glob does not
+    reach it (the pattern needs a second `.` after the prefix). It is tempting
+    to remove: it holds every secret the launcher merged in and nothing writes
+    it any more. But it carries no liveness signal, and a server started before
+    this change pinned that exact path -- the runtime resolves its config once
+    per session -- so deleting it would drop such a server back to the shipped
+    defaults mid-run, with nothing said. That is the same failure the pid rule
+    above exists to avoid, and "nothing writes it any more" is a fact about this
+    launcher, not about who is still reading it. Retiring it needs a liveness
+    signal that does not exist for one fixed name shared by every past run, so
+    it is left for an operator to remove. It stays gitignored under both names.
+
+    Failures are ignored per file: this is hygiene running ahead of a run, and
+    it must never be what stops one.
+    """
+    for stale in STATE_ROOT.glob(".config.rendered.*.json"):
+        try:
+            pid = int(stale.name.split(".")[3])
+            os.kill(pid, 0)
+        except (IndexError, ValueError, ProcessLookupError):
+            stale.unlink(missing_ok=True)
+        except (PermissionError, OSError):
+            continue
+
+
 def render_config(source: Path) -> Path:
     """`config.json` plus its secrets, written where the runtime may read it.
 
@@ -440,12 +476,26 @@ def render_config(source: Path) -> Path:
         log(f"[run] window: {shipped_window} from config; {MODEL_CATALOG} has no entry for {model or '(no model)'}")
 
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    rendered = STATE_ROOT / ".config.rendered.json"
+    sweep_stale_renders()
+    # Named for this launcher's pid, not a fixed name. The manager lets the main
+    # agent spawn one sub-agent twice concurrently (`max_concurrent` is 8), so
+    # two deck runs overlap, and on a fixed name the second run's `O_TRUNC`
+    # empties the file the first run's child was started on. The child reads the
+    # config at startup and derives its whole data directory from that path, so
+    # the window lands on exactly the failure this function's docstring exists
+    # to prevent: a config that cannot answer, reported as a generic error with
+    # nothing naming the credential. `--acp` widens the window from the length
+    # of a write to the length of a session: `serve_acp` renders one and `execv`s
+    # into the server, which then holds this path for as long as it serves -- up
+    # to the 10800s `subagent.json` declares. That exec is also why the sweep at
+    # the top of this function is the only cleanup either mode has: nothing runs
+    # after it to remove anything.
+    rendered = STATE_ROOT / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    # The mode argument applies only on create, and this launcher never removes
-    # the file, so a second run reopens whatever the first one left. `O_TRUNC`
-    # has already emptied it here, which makes this the one moment the mode can
-    # be fixed with no key on disk -- the window that writing first and calling
+    # The mode argument applies only on create, and a pid can be reused, so a
+    # second launcher may reopen a file some earlier one left. `O_TRUNC` has
+    # already emptied it here, which makes this the one moment the mode can be
+    # fixed with no key on disk -- the window that writing first and calling
     # `chmod` second left open with every key already in the file.
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:

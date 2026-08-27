@@ -9,6 +9,8 @@ and a declared file that cannot be copied still stops the run.
 """
 
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -176,3 +178,99 @@ def test_the_prompt_lists_every_staged_file_and_its_grounding_rule(mod, tmp_path
     assert "/abs/report.pdf" in section
     assert "report.pdf" in section
     assert f"Use only files under {mats}" in section
+
+
+def _config_source(tmp_path: Path) -> Path:
+    """A minimal shipped `config.json`, the one input `render_config` reads."""
+    source = tmp_path / "config.json"
+    source.write_text(
+        json.dumps({"providers": {"custom": {"apiBase": "https://x.invalid/v1"}}}),
+        encoding="utf-8",
+    )
+    return source
+
+
+class TestRenderedConfigLifetime:
+    """The rendered config is one file per launcher, swept on liveness.
+
+    It holds every secret this folder merged in, at mode 600, and the child
+    derives its whole data directory from the path, so both halves of that --
+    who may write it and when it may be removed -- are load-bearing. The
+    manager lets one sub-agent be spawned twice concurrently, which is what
+    rules out the fixed name this used to have.
+    """
+
+    def test_the_rendered_file_is_private_and_named_after_this_pid(
+        self, mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PPT_API_KEY", "k-llm")
+
+        rendered = mod.render_config(_config_source(tmp_path))
+
+        assert rendered.parent == mod.STATE_ROOT
+        assert rendered.name == f".config.rendered.{os.getpid()}.json"
+        assert (rendered.stat().st_mode & 0o777) == 0o600
+
+    def test_a_second_concurrent_run_does_not_empty_the_first_ones_config(
+        self, mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression this file name exists for.
+
+        `os.getppid()` stands in for the other launcher because the pid has to
+        be one the sweep finds alive; a made-up number would be swept as dead
+        and the test would pass for the wrong reason.
+        """
+        monkeypatch.setenv("PPT_API_KEY", "k-llm")
+        source = _config_source(tmp_path)
+        first = mod.render_config(source)
+
+        monkeypatch.setattr(mod.os, "getpid", os.getppid)
+        second = mod.render_config(source)
+
+        assert first != second
+        assert first.exists(), "the concurrent run removed the file the first run is using"
+        held = json.loads(first.read_text(encoding="utf-8"))
+        assert held["providers"]["custom"]["apiKey"] == "k-llm"
+
+    def test_sweep_removes_only_files_whose_pid_is_gone(self, mod) -> None:
+        state = mod.STATE_ROOT
+        state.mkdir(parents=True)
+        dead = state / f".config.rendered.{2**22 + 12345}.json"
+        alive = state / f".config.rendered.{os.getpid()}.json"
+        junk = state / ".config.rendered.notapid.json"
+        for path in (dead, alive, junk):
+            path.write_text("{}", encoding="utf-8")
+
+        mod.sweep_stale_renders()
+
+        assert not dead.exists()
+        assert not junk.exists()
+        assert alive.exists()
+
+    def test_the_pre_pid_fixed_name_config_is_left_alone(self, mod) -> None:
+        """Not removed, though it holds keys nothing writes any more.
+
+        One fixed name shared by every past run carries no liveness signal, and
+        a server started before the rename pinned that exact path. Deleting it
+        would drop that server back to the shipped defaults on its next session
+        with nothing said -- the failure the pid rule exists to avoid, so the
+        same rule forbids guessing here.
+        """
+        state = mod.STATE_ROOT
+        state.mkdir(parents=True)
+        legacy = state / ".config.rendered.json"
+        legacy.write_text('{"providers": {"custom": {"apiKey": "k-llm"}}}', encoding="utf-8")
+
+        mod.sweep_stale_renders()
+
+        assert legacy.exists(), "a live pre-upgrade server may still be reading this path"
+
+    def test_nothing_else_in_the_state_root_is_touched(self, mod) -> None:
+        state = mod.STATE_ROOT
+        state.mkdir(parents=True)
+        keep = state / "config.json"
+        keep.write_text("{}", encoding="utf-8")
+
+        mod.sweep_stale_renders()
+
+        assert keep.exists()
