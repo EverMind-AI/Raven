@@ -22,10 +22,17 @@ import type { DagNode, DagRun, DagLayout } from './types'
    Widened again when the name became the node's summary rather than its id. A
    summary is a sentence -- "research the current hot topics and pick two" --
    and the 65px the label had left over from a 136px box cut every one of them
-   to four characters, which says less than the id it replaced. */
-export const GAP_X = 282
+   to four characters, which says less than the id it replaced.
+
+   Then narrowed by 52px, because a box wide enough to hold a whole summary is
+   the wrong thing to optimise for: the summary is one line of a sentence
+   either way, the box that tries to hold it reads as a slab rather than as a
+   node, and the tail it buys is the least informative part of the line. What
+   the graph is for is its shape. The full text is one hover away in the title,
+   and one click away in the node panel. */
+export const GAP_X = 230
 export const GAP_Y = 60
-export const W = 236
+export const W = 184
 export const H = 44
 export const PAD = 10
 
@@ -44,7 +51,7 @@ export const SHEET: Dims = { W, H, GAP_X, GAP_Y, PAD }
    A second set of constants rather than a scale factor: the box holds text at a
    fixed size, so what has to change is how much room the text gets, not how big
    everything is. */
-export const CARD: Dims = { W: 212, H: 38, GAP_X: 246, GAP_Y: 50, PAD: 10 }
+export const CARD: Dims = { W: 160, H: 38, GAP_X: 194, GAP_Y: 50, PAD: 10 }
 
 /* Depth by longest path, which is what puts a node in the column after the last
    thing it waits for. Memoised, and guarded against a cycle it should never

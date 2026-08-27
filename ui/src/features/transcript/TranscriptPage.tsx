@@ -663,7 +663,7 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
       <div className="dtl dlg dagc" hidden={!c.open}>
         <div className="bd">
           <div className="dgr">{grid}</div>
-          {drawn ? <DagGraph active={c.open} dims={dag.CARD} nodes={c.nodes} now={Date.now()}
+          {drawn ? <DagGraph dims={dag.CARD} nodes={c.nodes} now={Date.now()}
             surface="card" selectedId={selId} stopPropagation
             onPick={(n) => store.pickDagNode(lane, c, n.id)} /> : null}
           {sel ? <DagNodePanel lane={lane} c={c} n={sel} /> : null}

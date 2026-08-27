@@ -4,11 +4,9 @@
  * implementation.
  */
 
-import { useLayoutEffect, useRef, useState } from 'react'
-
 import { t } from '../../shell/bridge'
 import { MARKS, depths, layout, took } from './graph'
-import { fitLabels } from './labels'
+import { trimShared } from './labels'
 
 import type { DagNode, NodeStatus } from './types'
 import type { Dims } from './graph'
@@ -17,7 +15,6 @@ import type { JSX } from 'react'
 export type DagSurface = 'card' | 'sheet'
 
 interface DagGraphProps {
-  active?: boolean
   dims: Dims
   nodes: DagNode[]
   now: number
@@ -25,11 +22,6 @@ interface DagGraphProps {
   selectedId?: string | null
   stopPropagation?: boolean
   surface: DagSurface
-}
-
-interface FittedLabels {
-  key: string
-  values: Map<string, string>
 }
 
 const CARD_LAYERS = 5
@@ -102,7 +94,6 @@ function Edges({ dims, nodes, at }: {
 }
 
 export function DagGraph({
-  active = true,
   dims,
   nodes,
   now,
@@ -114,32 +105,16 @@ export function DagGraph({
   const visible = surface === 'card' ? visibleLayers(nodes) : { hiddenLayers: 0, nodes }
   const shown = visible.nodes
   const { at, width, height } = layout(shown, dims)
-  const refs = useRef(new Map<string, SVGTextElement>())
-  const [fitted, setFitted] = useState<FittedLabels | null>(null)
   const card = surface === 'card'
   const markX = card ? 16 : 17
   const labelX = card ? 29 : 31
-  const idY = card ? 17 : 19
-  const metaY = card ? 28 : 32
-  const clockY = card ? 28 : 19
-  const labelRoom = dims.W - labelX - (card ? 9 : 40)
-  const fitKey = JSON.stringify([dims.W, surface, shown.map(nodeLabel)])
-  const fit = fitted?.key === fitKey ? fitted.values : null
-
-  useLayoutEffect(() => {
-    if (!active || fit || !shown.length) return
-    const els = shown.map((n) => refs.current.get(n.id)).filter(Boolean) as SVGTextElement[]
-    if (els.length !== shown.length) return
-    const first = els[0]
-    if (!first || typeof first.getComputedTextLength !== 'function') return
-    const raw = shown.map(nodeLabel)
-    const values = fitLabels(raw, labelRoom, (label, i) => {
-      const el = els[i] as SVGTextElement
-      el.textContent = label
-      return el.getComputedTextLength()
-    })
-    setFitted({ key: fitKey, values: new Map(shown.map((n, i) => [n.id, values[i] as string])) })
-  }, [active, fit, fitKey, labelRoom, shown])
+  const pad = card ? 9 : 11
+  /* The room the text has, which is the box minus the mark beside it. It is
+     given to the label as a width and the box cuts what does not fit; the
+     number below is read for one thing only, whether these labels are long
+     enough to be worth stripping a shared namespace from. */
+  const room = Math.max(0, dims.W - labelX - pad)
+  const labels = trimShared(shown.map(nodeLabel), room, card ? 11 : 12)
 
   const held = new Map<string, number>()
   nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1) })
@@ -151,7 +126,7 @@ export function DagGraph({
         : null}
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
         <Edges dims={dims} nodes={shown} at={at} />
-        {shown.map((n) => {
+        {shown.map((n, i) => {
           const p = at.get(n.id)
           if (!p) return null
           const handle = n.instance && (held.get(n.instance) || 0) > 1 ? ' @' + n.instance : ''
@@ -169,14 +144,23 @@ export function DagGraph({
               }}>
               <rect width={dims.W} height={dims.H} rx={9} />
               <Mark status={n.status} x={markX} y={dims.H / 2} />
-              <text x={labelX} y={idY} className={n.node_summary ? 'id prose' : 'id'} ref={(el) => {
-                if (el) refs.current.set(n.id, el)
-                else refs.current.delete(n.id)
-              }}>{fit?.get(n.id) ?? nodeLabel(n)}</text>
-              <text x={labelX} y={metaY} className="ag">{n.subagent + handle}</text>
-              <text x={dims.W - (card ? 9 : 11)} y={clockY} textAnchor="end" className="tm">
-                {card && n.status === 'running' ? '' : took(n, now)}
-              </text>
+              {/* Laid out as HTML inside the box rather than as SVG text beside
+                  it: a line that is longer than its node then ends where the
+                  node ends, at whatever width the box is and whenever the font
+                  finally arrives, instead of at a length something measured
+                  once and wrote down. */}
+              <foreignObject x={labelX} y={0} width={room} height={dims.H}>
+                <div className="lbl">
+                  <div className="ln">
+                    <span className={n.node_summary ? 'id prose' : 'id'}>{labels[i]}</span>
+                    {card ? null : <span className="tm">{took(n, now)}</span>}
+                  </div>
+                  <div className="ln">
+                    <span className="ag">{n.subagent + handle}</span>
+                    {card ? <span className="tm">{n.status === 'running' ? '' : took(n, now)}</span> : null}
+                  </div>
+                </div>
+              </foreignObject>
               {/* Both, because the box shows one of them truncated: the summary is
                   what the step is for, the id is what everything else keys on. */}
               <title>{[n.node_summary, n.id, n.subagent + (n.instance ? ' @' + n.instance : '')]
