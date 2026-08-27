@@ -123,6 +123,11 @@ export function layout(nodes: DagNode[], dims: Dims = SHEET): DagLayout {
 export const MARKS: Record<string, { d: string; cls: string }> = {
   completed: { d: 'M-5 0l3.6 3.8 6.4 -7.6', cls: 'ok' },
   failed: { d: 'M-4 -4l8 8M4 -4l-8 8', cls: 'bad' },
+  /* A square, which is the stop glyph everywhere else. Its own entry and not the
+     skipped dash: a word missing here falls through to the pending circle in
+     `Mark`, so a cancelled node wore a "still waiting" marker inside a stopped
+     border -- two signals saying opposite things. */
+  cancelled: { d: 'M-3.4 -3.4h6.8v6.8h-6.8z', cls: 'stop' },
   skipped: { d: 'M-4.5 0h9', cls: 'skip' },
   interrupted: { d: 'M-4.5 0h9', cls: 'skip' },
 }

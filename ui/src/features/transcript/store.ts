@@ -246,9 +246,23 @@ export function stamp(when: number | string | Date): string {
 export const dagRunIdFrom = (res: unknown): string | null =>
   (/^DAG\s+(?:run\s+)?(\S+?)[:\s]/m.exec(String(res || '')) || [])[1] || null
 
+/* Every word `DagNodeStatus` can carry, and one more the reconciler writes.
+
+   A word missing here is not a node drawn plainly -- it is a node the tally
+   counts as none of its four cases, so it leaves the line entirely. `cancelled`
+   was missing, and a graph of three stopped after one finished read "1 done":
+   the same sentence a graph of one produces.
+
+   `cancelled` gets its own value rather than joining either neighbour. Not
+   `skipped`: those are different facts -- a skipped node was never going to run,
+   a cancelled one was running and was stopped. And not `bad` either, which is
+   what this first tried: the tally renders `bad` through `gui.deleg.dag_bad`,
+   which reads "failed" in both locales, so a stopped node came out labelled as
+   one that went wrong. The runner keeps the two apart on purpose
+   (docs/plans/2026-08-17-acp-cancel-and-node-status.md); the line has to as well. */
 export const DOT_OF: Record<string, string> = {
   pending: '', running: 'run', completed: 'ok',
-  failed: 'bad', skipped: 'skip', interrupted: 'bad',
+  failed: 'bad', cancelled: 'stop', skipped: 'skip', interrupted: 'bad',
 }
 
 /* A graph node that has stopped, whatever it stopped as. `pending` and

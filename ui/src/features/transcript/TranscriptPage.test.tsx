@@ -2749,6 +2749,69 @@ describe('transcript island, delegated calls', () => {
     expect(marked[0]!.querySelector('.id')!.textContent).toBe('brief')
   })
 
+  it('counts a cancelled node, and does not count it as done', () => {
+    /* `cancelled` is one of the six the wire sends (`DagNodeStatus`), and it was
+       the one `DOT_OF` had no entry for. A node stopped by the user therefore
+       matched none of the tally's four branches: it vanished from the line
+       entirely, so a graph of three that was stopped after one finished read
+       "1 done" -- indistinguishable from a graph of one. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r9', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r9', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r9', node: 'brief', status: 'cancelled' })
+      h.done(true, 'stopped', 40)
+      st.seal()
+    })
+    const state = ([...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement).textContent || ''
+    expect(state).toContain('gui.deleg.dag_done {"ok":"1"}')
+    /* Its own word, not the failures'. `dag_bad` reads "failed" / "失败" in both
+       locales, and the runner keeps `cancelled` distinct from `failed` on purpose
+       -- one was stopped, the other went wrong. Counting it as bad traded a node
+       that vanished for a node that lies. */
+    expect(state).toContain('gui.deleg.dag_stopped {"n":"1"}')
+    expect(state).not.toContain('gui.deleg.dag_bad')
+  })
+
+  it('draws a cancelled node differently from one that finished', () => {
+    /* The status reaches the DOM either way -- `data-st` is written from the raw
+       word -- but with no rule for `cancelled` the box was styled exactly like an
+       untouched one, so a stopped graph looked like a graph still waiting. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r10', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'brief', status: 'cancelled' })
+      st.seal()
+    })
+    const card = openDagCard()
+    const sts = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st)
+    expect(sts).toContain('cancelled')
+    /* The MARKER, not just the box. `Mark` reads `MARKS[status]` and falls back to
+       the pending circle for a word it does not know, so styling the border alone
+       put a "still waiting" glyph inside a stopped-looking box -- two signals
+       saying opposite things. Asserted on what was rendered rather than on the
+       stylesheet text, which cannot see that. */
+    const marks = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => {
+      const m = n.querySelector('.mk')
+      return m ? `${m.tagName.toLowerCase()}:${m.getAttribute('class')}` : 'none'
+    })
+    /* The cancelled one wears the stop glyph; the untouched one still wears the
+       pending circle, which is what makes this an assertion about telling them
+       apart rather than about the graph as a whole. */
+    expect(marks).toEqual(['circle:mk wait', 'path:mk stop'])
+    /* And the stylesheet has rules for both, which is what the classes are for.
+       The CSS gate cannot see an absent selector, so the assertion is here. */
+    const css = readFileSync('src/styles/page.css', 'utf8') as string
+    expect(css).toMatch(/\.nd\[data-st="cancelled"\]/)
+    expect(css).toMatch(/\.mk\.stop/)
+  })
+
   it('keeps the failure reason on a run the nodes cannot explain', () => {
     /* `run_subagent_dag` can raise mid-run (a backend write failing, say) after
        some nodes have already completed. `okOf` calls a dag result bad only when
