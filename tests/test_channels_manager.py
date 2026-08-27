@@ -248,3 +248,99 @@ def test_missing_dependency_channels_reports_only_enabled_import_failures(monkey
     )
 
     assert missing_dependency_channels(config) == ["telegram"]
+
+
+# ── start_one / stop_one (a channel enabled while the gateway runs) ────
+
+
+def _hot(monkeypatch, specs, launch_config, disk_config):
+    """A manager launched with ``launch_config`` while config on disk now says
+    ``disk_config`` -- the shape a hot start actually happens in: the switch was
+    written by another process after this gateway booted."""
+    mgr = _manager(monkeypatch, specs, launch_config)
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: disk_config)
+    return mgr
+
+
+@pytest.mark.asyncio
+async def test_start_one_builds_a_channel_enabled_after_launch(monkeypatch):
+    """The whole point: the flag was written by the page's own process, so the
+    section has to be re-read from disk. Reading self.config would find the
+    channel still off and refuse to start it."""
+    started = []
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_FakeChannel)},
+        _config({"fake": SimpleNamespace(enabled=False, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    assert mgr.enabled_channels == []
+    mgr.on_started = started.append
+
+    retired: list[str] = []
+
+    async def note(name: str) -> None:
+        retired.append(name)
+
+    mgr.on_stopped = note
+
+    assert await mgr.start_one("fake") == "started"
+    assert mgr.enabled_channels == ["fake"]
+    # The outlet hook fires with the new channel: without it the channel
+    # receives and every reply to it is dropped by the hub.
+    assert started == [mgr.channels["fake"]]
+    assert mgr.channels["fake"].transcription_api_key == "gk"
+    assert await mgr.stop_one("fake") == "stopped"
+    assert mgr.enabled_channels == []
+    # And the outlet is retired with it. The hub's worker is resident and holds
+    # the adapter it started with, so a stop that left the outlet registered
+    # meant the next start received on the new adapter and replied through the
+    # stopped one.
+    assert retired == ["fake"]
+
+
+@pytest.mark.asyncio
+async def test_start_one_answers_rather_than_raising_for_every_refusal(monkeypatch):
+    """Each of these is a state the caller draws. An empty allowFrom is fatal at
+    start-up (SystemExit); a live gateway must answer instead of dying."""
+
+    def no_sdk(config):
+        raise ImportError("No module named 'telegram'")
+
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_FakeChannel), "telegram": _spec(no_sdk)},
+        _config({"fake": SimpleNamespace(enabled=False, allow_from=["*"])}),
+        _config(
+            {
+                "fake": SimpleNamespace(enabled=False, allow_from=["*"]),
+                "telegram": SimpleNamespace(enabled=True, allow_from=["*"]),
+                "deny": SimpleNamespace(enabled=True, allow_from=[]),
+            }
+        ),
+    )
+    assert await mgr.start_one("fake") == "disabled"
+    assert await mgr.start_one("nope") == "unknown"
+    assert await mgr.start_one("telegram") == "missing_dep"
+    monkeypatch.setattr(
+        "raven.channels.registry.discover_specs",
+        lambda: {"deny": _spec(_FakeChannel)},
+    )
+    assert await mgr.start_one("deny") == "deny_all"
+    assert mgr.enabled_channels == []
+    assert await mgr.stop_one("fake") == "absent"
+
+
+@pytest.mark.asyncio
+async def test_start_one_is_idempotent(monkeypatch):
+    """The page writes the flag and asks to start on every apply, including one
+    that only corrected a credential."""
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_FakeChannel)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    first = mgr.channels["fake"]
+    assert await mgr.start_one("fake") == "already"
+    assert mgr.channels["fake"] is first

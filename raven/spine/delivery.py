@@ -79,6 +79,35 @@ class _StreamClose:
     conversation_id: str
 
 
+async def _drain_dead(queue: "asyncio.Queue[Deliverable | _StreamClose]") -> None:
+    """Empty a queue nobody will consume again, and account for every item.
+
+    Marking each item done is what releases a caller already inside
+    `wait_idle`: it holds this queue object, and its `join()` is the one thing
+    dropping the queue from the table cannot reach.
+
+    Draining once is not enough. A producer suspended in `put` on a full queue
+    is woken by `get_nowait`, but it only *runs* when the loop next gets control,
+    so a single pass declares the queue empty and the resumed producer then adds
+    an item to it -- unfinished, on a queue whose worker is already cancelled,
+    and `join()` never returns. So: drain, yield, and keep going until the queue
+    has stayed empty across two yields. It terminates because each non-empty
+    pass consumes at least one item, no new producer can arrive (the outlet is
+    gone before the first await, so `_enqueue` drops rather than queueing), and
+    each suspended one is woken at most once.
+    """
+    quiet = 0
+    while quiet < 2:
+        if queue.empty():
+            quiet += 1
+        else:
+            quiet = 0
+            while not queue.empty():
+                queue.get_nowait()
+                queue.task_done()
+        await asyncio.sleep(0)
+
+
 class DeliveryHub:
     """Routes each deliverable into its source channel's bounded queue, where a
     per-outlet serial worker delivers it (retrying a raising send with backoff).
@@ -101,10 +130,48 @@ class DeliveryHub:
         self._open_streams: dict[str, str] = {}
 
     def register(self, outlet: Outlet) -> None:
-        # Register-once, at startup: a running worker captures its outlet when it
-        # starts, so re-registering a different outlet for a live channel does not
-        # hot-swap it.
+        # Register-once: a running worker captures its outlet when it starts, so
+        # re-registering a different outlet for a live channel does not hot-swap
+        # it. A channel whose adapter is replaced must be retired first --
+        # `retire` is what makes the next register take.
         self._outlets[outlet.name] = outlet
+
+    async def retire(self, channel: str) -> None:
+        """Drop a channel's outlet, its worker and its queue.
+
+        The counterpart to register-once. A channel that has delivered even once
+        has a resident worker holding the outlet it started with, so a later
+        register only replaced the table entry: the new adapter received while
+        every reply went out through the stopped one. Retiring means the next
+        register is bound by a fresh worker.
+
+        Queued events are dropped rather than delivered -- the adapter they were
+        addressed to is going away. They are marked done first, so a caller
+        already blocked in `wait_idle` is released instead of waiting on a queue
+        nobody will consume again.
+        """
+        # Everything this channel has, taken out of the tables before the first
+        # await -- the outlet first. `_enqueue` reads the outlet, then installs a
+        # worker, with no await in between, so it either ran entirely before this
+        # line (and its worker is popped below) or arrives after it and drops on
+        # the missing outlet. Awaiting the cancelled worker while the outlet was
+        # still visible left a window in which a concurrent dispatch installed a
+        # *new* resident worker on the old queue: retire dropped the queue
+        # without noticing it, and every later reply went onto a queue that
+        # worker was not reading.
+        self._outlets.pop(channel, None)
+        worker = self._workers.pop(channel, None)
+        queue = self._queues.pop(channel, None)
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        if queue is not None:
+            await _drain_dead(queue)
+        # Stream routes into a retired channel are dead ends; a close marker for
+        # one would be enqueued onto a queue with no worker.
+        for conversation_id, routed in list(self._stream_channel.items()):
+            if routed == channel:
+                del self._stream_channel[conversation_id]
 
     async def dispatch(self, out: Deliverable) -> None:
         await self._enqueue(out)

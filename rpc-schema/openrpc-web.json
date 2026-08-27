@@ -765,6 +765,43 @@
       }
     },
     {
+      "name": "raven.channels.start",
+      "summary": "Start or stop one channel's adapter now, without a gateway restart.",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "False stops the adapter; anything else starts it."
+        }
+      ],
+      "result": {
+        "name": "raven.channels.start.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "description": "started | already | stopped | absent | disabled | deny_all | missing_dep | unknown | no_manager.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
       "name": "raven.channels.rebind",
       "params": [
         {

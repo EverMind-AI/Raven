@@ -1086,6 +1086,26 @@ class ThirdPartyCliSubagentConfig(Base):
     automatic backstop instead.
     """
 
+    switch_only: bool = False
+    """Marks a row that exists only to hold a "no" for a discovered folder.
+
+    Such a row is a stub, not a definition: name, kind, the flag, and an empty
+    ``command``. It declares no launcher because it defines nothing -- the folder
+    still defines the agent, and
+    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
+    the flag from here. Nothing in it comes from the manifest, so nothing in it
+    can go stale when the folder is upgraded.
+
+    That shape is what makes the switch survive an older raven, which accepts the
+    row, ignores this field and writes the list back without it: ``command`` is a
+    field every version keeps, so an empty one still says "stub" afterwards. This
+    marker is the direct answer where it survives; the empty command is the
+    answer where it does not.
+
+    False on every row anybody else writes -- an ``install.py`` entry, a hand
+    edit -- which keeps their meaning exactly as it was.
+    """
+
     owns: str | None = None
     """What kind of work this agent owns, as one clause completing "``<name>``
     ...". Rendered into the identity prompt's Delegation section so the model is
@@ -1350,6 +1370,26 @@ class ThirdPartyAcpSubagentConfig(Base):
     handshake instead. Accepting both would make every one of them a second
     source of truth, and the first time a declaration disagreed with the
     handshake nothing in the code would know which to believe.
+    """
+
+    switch_only: bool = False
+    """Marks a row that exists only to hold a "no" for a discovered folder.
+
+    Such a row is a stub, not a definition: name, kind, the flag, and an empty
+    ``command``. It declares no launcher because it defines nothing -- the folder
+    still defines the agent, and
+    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
+    the flag from here. Nothing in it comes from the manifest, so nothing in it
+    can go stale when the folder is upgraded.
+
+    That shape is what makes the switch survive an older raven, which accepts the
+    row, ignores this field and writes the list back without it: ``command`` is a
+    field every version keeps, so an empty one still says "stub" afterwards. This
+    marker is the direct answer where it survives; the empty command is the
+    answer where it does not.
+
+    False on every row anybody else writes -- an ``install.py`` entry, a hand
+    edit -- which keeps their meaning exactly as it was.
     """
 
     owns: str | None = None

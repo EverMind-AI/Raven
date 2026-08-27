@@ -428,6 +428,52 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"updated": True, "name": target["name"]}
 
 
+def _is_switch_row(stored: dict, discovered: dict) -> bool:
+    """Does this stored row carry nothing but the switch?
+
+    Three ways of telling, because a row has to survive being rewritten by a
+    raven that does not know every field in it:
+
+    * ``switchOnly`` says so outright, and is what this build writes.
+    * An empty ``command`` says so structurally: the row declares no launcher,
+      so it is not a definition of anything. ``command`` is a field every
+      version knows, so it comes back unchanged from an older rewrite -- and it
+      says nothing about the folder, so a manifest that has moved on cannot
+      make the row stop looking like a switch.
+    * Being the discovered entry with nothing but its flag changed comes to the
+      same thing, and covers a row written before either of the above.
+    """
+    if stored.get("switchOnly") or stored.get("switch_only"):
+        return True
+    # `"command" in stored`, not a falsy read of it: an openai row has no
+    # command field at all, and reading one as empty made every one of them look
+    # like a switch for a folder -- which dropped it from the roster.
+    if "command" in stored and not str(stored["command"] or "").strip():
+        return True
+    drop = {"enabled", "switchOnly", "switch_only"}
+    return {k: v for k, v in stored.items() if k not in drop} == {k: v for k, v in discovered.items() if k not in drop}
+
+
+def _discovered_entry(name: str) -> dict | None:
+    """One discovered row as a config entry, or ``None`` if nothing is named that.
+
+    Dumped by alias, which is the form ``get_agents`` hands back and
+    ``set_agents`` validates -- the two must be the same shape or a materialized
+    row would fail the write that stores it.
+
+    The command it carries is already resolved to this machine's paths, exactly
+    as each folder's ``install.py`` resolves it: a stored row is a command line,
+    and ``merge_vendored_seeds`` has its own guard (``_launcher_is_gone``) for a
+    stored path a later upgrade moved.
+    """
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows
+
+    for row in discover_vendored_rows():
+        if row.name == name:
+            return row.model_dump(by_alias=True)
+    return None
+
+
 async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Set `enabled` on one entry - the flag the roster filter reads."""
     name = params.get("name")
@@ -452,9 +498,49 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 data={"field": "enabled", "name": name},
             )
     target = next((e for e in entries if e.get("name") == name), None)
-    if target is None:
+    discovered = _discovered_entry(str(name or ""))
+    if target is None and discovered is None:
         raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
-    target["enabled"] = enabled
+    # A discovered folder's switch is asymmetric, and deliberately so.
+    #
+    # Off writes a row, because there is nowhere else for a "no" to live -- one
+    # list, one ``enabled`` field, rather than a second switch in the shipped
+    # manifest, which is package content and not a user's decision.
+    #
+    # On *removes* the row instead of writing ``enabled: true``, because for
+    # these rows no row is the answer: the folder governs. A stored row saying
+    # true would outlive its folder and override a later readiness failure --
+    # putting a name that cannot start back on the dispatch roster.
+    #
+    # Which row may be dropped is asked two ways, because neither holds alone:
+    # the marker the off direction writes survives a manifest that has moved on,
+    # where a comparison stops recognising the row; and the comparison survives a
+    # raven old enough not to know the field, which drops it silently on the next
+    # rewrite of this list. A row that is neither marked nor a copy of the folder
+    # is somebody's real override -- an ``install.py`` entry, a hand edit -- and
+    # is left where it is.
+    if discovered is not None and enabled and (target is None or _is_switch_row(target, discovered)):
+        entries = [e for e in entries if e.get("name") != name]
+    elif target is None:
+        # Name, kind and the flag. Not a copy of the folder's entry: a copy is a
+        # definition, and a definition of a vendored agent outlives the manifest
+        # it was taken from -- which is how the row came back, after a downgrade
+        # had dropped its marker, looking like somebody's override of a folder
+        # that had moved on. This row declares no launcher because it defines
+        # nothing; the folder still defines the agent, and the merge reads only
+        # the flag from here.
+        entries.append(
+            {"name": name, "kind": discovered.get("kind", "cli"), "enabled": enabled, "command": "", "switchOnly": True}
+        )
+    elif enabled and discovered is None and "command" in target and not str(target["command"] or "").strip():
+        # Asked to enable a row that names no launcher and no folder: there is
+        # nothing to start, so the switch answers what is true rather than
+        # writing a yes the roster would have to overrule. This is a switch stub
+        # whose marker an older rewrite dropped and whose folder has since gone.
+        target["enabled"] = False
+        enabled = False
+    else:
+        target["enabled"] = enabled
     try:
         set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:

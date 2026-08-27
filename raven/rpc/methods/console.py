@@ -951,6 +951,24 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
                 disable_channel(name)
     except Exception as e:
         raise ConfigValidationError(str(e)) from None
+    # The switch is config; the adapter is the gateway's. Writing the flag used
+    # to be the whole of "connect", so a channel turned on here did nothing at
+    # all until the next launch -- for a scan-login entrance that meant no QR
+    # could ever appear, and the page said "reopen Raven App" instead of
+    # signing anyone in. Ask the gateway to start (or stop) it now.
+    if enabled is not None:
+        from raven.channels.live_probe import channel_start, reset_cache
+
+        try:
+            await channel_start(name, enabled=enabled)
+        except Exception:
+            # Nobody answered, or the gateway refused: the config write stands
+            # and the next launch honours it, which is what the page already
+            # says while an adapter is not up.
+            pass
+        # The liveness cache is three seconds old at most, but the poll right
+        # after this write is exactly the one that should see the new adapter.
+        reset_cache()
     return {"applied": True}
 
 

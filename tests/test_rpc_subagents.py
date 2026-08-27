@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -401,6 +402,394 @@ async def test_toggle_flips_enabled(config_path: Path) -> None:
     assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
     assert entry["enabled"] is True
+
+
+async def test_toggling_a_discovered_folder_writes_it_into_the_registry(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A discovered row has no config entry, so the switch has nowhere to live.
+
+    It gets one: the same list, the same ``enabled`` field every other agent's
+    switch is written to. Before this, the one verb the page offers for these
+    rows answered "no configured sub-agent named ...".
+    """
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [discovered],
+    )
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": False}) == {"enabled": False}
+
+    stored = next(e for e in _stored(config_path) if e["name"] == "Raven-Probe")
+    assert stored["enabled"] is False
+    # And it is a switch, not a definition: no launcher copied out of the
+    # manifest, because a copy outlives the manifest it was taken from. The
+    # folder still defines the agent; this row only says "not this one".
+    assert stored["command"] == ""
+    assert stored["switchOnly"] is True
+
+
+async def test_switching_a_discovered_folder_back_on_drops_its_switch_row(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On removes the row rather than storing ``enabled: true``.
+
+    For a discovered folder, no row IS the answer: the folder governs, and a
+    stored row wins whole over the discovered one. A row saying true would
+    outlive its folder and override a later readiness failure, which is a name
+    that cannot start back on the dispatch roster.
+    """
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [discovered],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    assert any(e["name"] == "Raven-Probe" for e in _stored(config_path))
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_switching_a_discovered_folder_on_with_no_row_writes_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing to remove and nothing to write: the folder already says yes, or
+    says no through its readiness, and either way that is the answer."""
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [discovered],
+    )
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_switching_on_keeps_a_row_nobody_marked_as_a_switch(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored row that the switch did not write -- an ``install.py`` entry, a
+    hand edit -- is somebody's real override, and the switch may not delete it.
+
+    Provenance decides, not a comparison with the discovered entry: a manifest
+    that has moved on leaves a switch row differing in fields nobody chose.
+    """
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.update_subagents import set_agents
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [discovered],
+    )
+    # What install.py writes: a complete entry, and no switch marker on it.
+    set_agents(
+        [
+            *_stored(config_path),
+            {"name": "Raven-Probe", "kind": "cli", "command": "/opt/mine/run.py", "enabled": False},
+        ],
+        config_path=config_path,
+    )
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+
+    rows = [e for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+    assert len(rows) == 1
+    assert rows[0]["enabled"] is True
+    assert rows[0]["command"] == "/opt/mine/run.py"
+
+
+async def test_a_drifted_switch_row_cannot_override_the_folder_it_names(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switch a folder off at v1, upgrade the folder to v2, and the stored copy
+    no longer matches what was discovered.
+
+    Two things hold it. The row carries provenance, so switching back on still
+    drops it; and while it is stored, the merge reads only its flag, so v2's own
+    fields are what the roster sees.
+    """
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    launcher = config_path.parent / "run.py"
+    launcher.write_text("")
+    v1 = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command=f"{sys.executable} {launcher}", description="v1", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [v1],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+
+    # The folder upgrades: a new description, and it is not ready this time.
+    v2 = v1.model_copy(update={"description": "v2", "enabled": False})
+    stored = [ThirdPartyCliSubagentConfig.model_validate(e) for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+    merged = merge_vendored_seeds(stored, [v2])
+    assert [(r.name, r.description, r.enabled) for r in merged] == [("Raven-Probe", "v2", False)]
+
+    # And the switch still knows the row is its own, drift or no drift.
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [v2],
+    )
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_a_switch_row_that_lost_its_marker_is_still_only_a_flag(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raven too old to know the marker accepts the row, drops the field, and
+    persists it without one on its next rewrite of this list -- so provenance
+    cannot be the only thing holding the switch apart from a real override.
+
+    A row that is the discovered entry with nothing but its flag changed carries
+    no information beyond that flag whoever wrote it, so it is read as a switch
+    too: the merge takes only the flag, and switching the folder back on removes
+    the row.
+    """
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.update_subagents import set_agents
+
+    launcher = config_path.parent / "run.py"
+    launcher.write_text("")
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command=f"{sys.executable} {launcher}", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [discovered],
+    )
+    # What the downgrade leaves behind: the copy, no marker, and `enabled: true`
+    # -- which is what an older raven's own switch wrote into the row. The flag
+    # has to be true for this to test anything: with the copy off, an override
+    # and an overlay both answer "disabled" and the assertion cannot fail.
+    set_agents(
+        [
+            *_stored(config_path),
+            {
+                "name": "Raven-Probe",
+                "kind": "cli",
+                "command": f"{sys.executable} {launcher}",
+                "enabled": True,
+            },
+        ],
+        config_path=config_path,
+    )
+    stored = [ThirdPartyCliSubagentConfig.model_validate(e) for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+    assert stored and stored[0].switch_only is False, "the row under test must carry no marker"
+
+    # The folder stops being ready. An override would carry its own true through;
+    # a switch may only take a row out, never put an unstartable one back.
+    not_ready = discovered.model_copy(update={"enabled": False})
+    merged = merge_vendored_seeds(stored, [not_ready])
+    assert [(r.name, r.enabled) for r in merged] == [("Raven-Probe", False)]
+
+    # And the switch still knows the row for what it is, marker or no marker.
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_a_switch_row_survives_an_older_rewrite_and_a_folder_upgrade(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape a rollback actually has. A bundled folder travels with the raven
+    that ships it, so going back a version and forward again drops the row's
+    marker (an older build ignores the field and rewrites the list without it)
+    *and* moves the manifest on. A row that had copied the manifest then looks
+    exactly like somebody's override of a folder that has changed.
+
+    The switch row declares no launcher, which is a field every version keeps and
+    which says nothing about the folder, so neither half of that can disguise it.
+    """
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.update_subagents import set_agents
+
+    launcher = config_path.parent / "run.py"
+    launcher.write_text("")
+    v1 = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command=f"{sys.executable} {launcher}", description="v1", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [v1],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+
+    # The older build's rewrite: every field it knows, and the marker gone. Its
+    # own switch also wrote `enabled: true` before the upgrade.
+    kept = [e for e in _stored(config_path) if e["name"] != "Raven-Probe"]
+    set_agents(
+        [*kept, {"name": "Raven-Probe", "kind": "cli", "command": "", "enabled": True}],
+        config_path=config_path,
+    )
+    stored = [ThirdPartyCliSubagentConfig.model_validate(e) for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+    assert stored and stored[0].switch_only is False, "the row under test must carry no marker"
+
+    # And the folder upgrades: new description, and not ready this time.
+    v2 = v1.model_copy(update={"description": "v2", "enabled": False})
+    merged = merge_vendored_seeds(stored, [v2])
+    assert [(r.name, r.description, r.enabled) for r in merged] == [("Raven-Probe", "v2", False)]
+
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [v2],
+    )
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_an_openai_row_is_not_mistaken_for_a_switch(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An openai agent declares no command at all. Reading that as an empty one
+    made every such row look like a switch for a folder, and the merge dropped
+    it: the fixture roster lost `Researcher` entirely."""
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyOpenAISubagentConfig
+
+    row = ThirdPartyOpenAISubagentConfig(
+        name="Researcher", kind="openai", base_url="https://api.example/v1", model="m", enabled=True
+    )
+    assert not hasattr(row, "command")
+
+    assert [r.name for r in merge_vendored_seeds([row], [])] == ["Researcher"]
+
+
+async def test_an_orphaned_stub_can_never_be_an_agent(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The last way round: an older rewrite takes the marker off a switch stub,
+    and then the folder it named goes. Nothing left says "switch", and the row
+    names no launcher -- so it must not be dispatchable, and asking to enable it
+    must not write a yes the roster would have to overrule.
+    """
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.config.update_subagents import set_agents
+
+    orphan = {"name": "Raven-Probe", "kind": "cli", "command": "", "enabled": True}
+    set_agents(
+        [*[e for e in _stored(config_path) if e["name"] != "Raven-Probe"], orphan],
+        config_path=config_path,
+    )
+    stored = [ThirdPartyCliSubagentConfig.model_validate(e) for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+    assert stored and stored[0].switch_only is False and stored[0].enabled is True
+
+    # Carried through, because deleting a row nobody asked to delete is not the
+    # merge's business -- but never enabled, because there is nothing to run.
+    merged = merge_vendored_seeds(stored, [])
+    assert [(r.name, r.enabled) for r in merged] == [("Raven-Probe", False)]
+
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [],
+    )
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": False}
+    row = next(e for e in _stored(config_path) if e["name"] == "Raven-Probe")
+    assert row["enabled"] is False
+
+
+async def test_an_empty_command_alone_is_not_a_switch(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An acp row is allowed to carry an empty command, and one may exist for a
+    name no folder has anything to do with. Reading that as a switch dropped a
+    configured agent from the roster."""
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    row = ThirdPartyAcpSubagentConfig.model_validate({"name": "startup", "kind": "acp", "command": ""})
+
+    # Nothing discovered under that name: the row is the only thing there is.
+    assert [r.name for r in merge_vendored_seeds([row], [])] == ["startup"]
+
+
+async def test_a_switch_row_for_a_folder_that_is_gone_drops_out(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing discovered under that name means the switch is a switch for
+    nothing: it leaves the roster rather than standing in as an agent."""
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    launcher = config_path.parent / "run.py"
+    launcher.write_text("")
+    row = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command=f"{sys.executable} {launcher}", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [row],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    stored = [ThirdPartyCliSubagentConfig.model_validate(e) for e in _stored(config_path) if e["name"] == "Raven-Probe"]
+
+    assert merge_vendored_seeds(stored, []) == []
+
+
+async def test_a_folder_switched_on_still_obeys_its_own_readiness(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Driven through the merge that decides the roster.
+
+    A stored ``enabled: true`` for a discovered folder wins whole over the
+    discovered row, so it overrode a later readiness failure and put a name that
+    cannot start back where the dispatching model reads. With the switch row
+    dropped instead, the folder's verdict is the only one there is.
+    """
+    import sys
+
+    from raven.agent.subagent.vendored_agents import merge_vendored_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    # A command whose absolute tokens all exist. With a made-up path the merge
+    # skips the stored row as a stale launcher and the assertion below holds
+    # whatever the switch wrote -- an assertion that cannot fail.
+    launcher = config_path.parent / "run.py"
+    launcher.write_text("")
+    ready = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command=f"{sys.executable} {launcher}", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda root=None: [ready],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    await subagents_toggle({"name": "Raven-Probe", "enabled": True})
+
+    # The venv breaks, or the launcher goes: discovery reports the row disabled.
+    not_ready = ready.model_copy(update={"enabled": False})
+    stored = [
+        ThirdPartyCliSubagentConfig.model_validate(e)
+        for e in _stored(config_path)
+        if e.get("kind", "cli") == "cli" and e.get("name") == "Raven-Probe"
+    ]
+    merged = merge_vendored_seeds(stored, [not_ready])
+
+    assert [(row.name, row.enabled) for row in merged] == [("Raven-Probe", False)]
+
+
+async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:
+    """The materializing branch must not turn an unknown name into a success."""
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_toggle({"name": "Nobody", "enabled": True})
 
 
 async def test_remove_deletes_the_entry(config_path: Path) -> None:

@@ -98,6 +98,22 @@ async def channel_qr(name: str) -> dict[str, Any] | None:
     return await _ask(endpoint[0], endpoint[1], "raven.channels.qr", {"name": name})
 
 
+async def channel_start(name: str, *, enabled: bool = True) -> str | None:
+    """Ask the gateway to start (or stop) one channel's adapter now.
+
+    Answers the gateway's outcome word, or None when no gateway answered --
+    which is not a failure to report as one: with nothing running there is no
+    adapter to start, and the config write the caller just made is what the
+    next launch reads.
+    """
+    endpoint = _endpoint()
+    if endpoint is None:
+        return None
+    result = await _ask(endpoint[0], endpoint[1], "raven.channels.start", {"name": name, "enabled": enabled})
+    outcome = (result or {}).get("outcome")
+    return str(outcome) if outcome else None
+
+
 def reset_cache() -> None:
     """Drop the cached liveness. For tests, and for a caller that just changed
     a channel and wants the next read to be fresh."""
@@ -105,4 +121,4 @@ def reset_cache() -> None:
     _cache = None
 
 
-__all__ = ["channel_liveness", "channel_qr", "reset_cache"]
+__all__ = ["channel_liveness", "channel_qr", "channel_start", "reset_cache"]

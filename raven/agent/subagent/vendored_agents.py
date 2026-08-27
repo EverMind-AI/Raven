@@ -462,6 +462,55 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
         name = getattr(cfg, "name", None)
         if not name:
             continue
+        marked = bool(getattr(cfg, "switch_only", False))
+        # `hasattr`, not a falsy read: an openai row declares no command at all,
+        # and reading one as empty made every one of them look like a switch for
+        # a folder -- which dropped it from the roster.
+        no_launcher = hasattr(cfg, "command") and not str(getattr(cfg, "command", "") or "").strip()
+        discovered = by_name.get(name)
+        # An empty command means "switch" only for a name the scan just produced.
+        # On its own it means nothing: an acp row is allowed to carry one, and
+        # reading that as a switch dropped a configured agent that no folder had
+        # anything to do with. The marker still stands alone, because only this
+        # switch writes it.
+        if no_launcher and discovered is None and not marked:
+            # A row that names no launcher and no folder. It cannot start
+            # anything, whoever wrote it and whatever its flag says, so it is
+            # carried through disabled rather than dropped: deleting a row nobody
+            # asked to delete is not this function's business, and advertising an
+            # agent with nothing to run is not either. This is where a switch
+            # stub ends up once an older rewrite has taken its marker off and the
+            # folder it named has gone. A stub that still has its marker is
+            # provably a switch for a folder that is not there, and drops out
+            # below instead.
+            if name not in by_name:
+                order.append(name)
+            by_name[name] = _with_enabled(cfg, False)
+            continue
+        if marked or (discovered is not None and (no_launcher or _same_but_enabled(cfg, discovered))):
+            # A row that carries nothing but the switch. Three ways of telling,
+            # because a row has to survive being rewritten by a raven that does
+            # not know every field in it: the marker says so outright; an empty
+            # ``command`` says so structurally, in a field every version keeps
+            # and that says nothing about the folder; and being the discovered
+            # entry with only its flag changed comes to the same thing, for a row
+            # written before either.
+            #
+            # The empty command is what closes the downgrade: a bundled folder
+            # travels with the raven that ships it, so a rollback and a
+            # re-upgrade drift the manifest at the same time as they drop the
+            # marker, and a row that copied the manifest then looked exactly like
+            # somebody's override of a folder that had moved on.
+            #
+            # Only the flag is read, and only to take the row out: readiness and
+            # the manifest still have to agree, which is what ``and`` says below.
+            # A marked switch for a folder that is gone is a switch for nothing.
+            if discovered is None:
+                logger.info("Dropping the stored switch for {!r}: nothing discovered under that name", name)
+                continue
+            if not getattr(cfg, "enabled", True):
+                by_name[name] = _with_enabled(discovered, False)
+            continue
         if name in by_name and _launcher_is_gone(cfg):
             logger.info(
                 "Stored sub-agent {!r} points at a launcher that no longer exists; using the discovered one",
@@ -490,6 +539,31 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
         by_name[name] = cfg
 
     return [by_name[name] for name in order]
+
+
+def _same_but_enabled(cfg: Any, discovered: Any) -> bool:
+    """Is ``cfg`` the discovered row with nothing but its flag changed?
+
+    Then it carries no information beyond that flag, whoever wrote it, and may
+    be read as a switch. ``enabled`` and the provenance marker are both excluded
+    -- they are the two fields the switch owns.
+    """
+    dump = getattr(cfg, "model_dump", None)
+    other = getattr(discovered, "model_dump", None)
+    if dump is None or other is None:
+        return False
+    drop = {"enabled", "switch_only"}
+    return {k: v for k, v in dump().items() if k not in drop} == {k: v for k, v in other().items() if k not in drop}
+
+
+def _with_enabled(row: Any, enabled: bool) -> Any:
+    """``row`` with its ``enabled`` set. Pydantic rows are copied, not mutated:
+    the discovered list is built once per scan and shared with its other
+    readers."""
+    copy = getattr(row, "model_copy", None)
+    if copy is not None:
+        return copy(update={"enabled": enabled})
+    return row
 
 
 def _fill_owns(cfg: Any, discovered: Any) -> Any:
