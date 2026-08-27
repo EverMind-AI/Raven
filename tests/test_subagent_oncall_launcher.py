@@ -99,3 +99,74 @@ def test_an_overdue_wake_is_reported_as_overdue(launcher, tmp_path: Path) -> Non
 
     assert len(wakes) == 1
     assert "overdue" in wakes[0]
+
+
+# ---- the rendered config's two lifetimes (per-pid for acp, fixed for cli) ----
+
+
+@pytest.fixture
+def rooted(launcher, tmp_path: Path, monkeypatch):
+    """The launcher with STATE_ROOT pointed at tmp_path and a stub credential.
+
+    `render_config` refuses to write a config it knows starts a child that
+    cannot answer, so it exits when no key is reachable -- correct, and it made
+    these two cases pass on a developer box (which has one) and fail in CI
+    (which does not). The key is stubbed rather than the check bypassed: what
+    these assert is the file's NAME and lifetime, and a real merge is the path
+    that produces it.
+    """
+    monkeypatch.setattr(launcher, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "RENDERED_CONFIG", tmp_path / "config.json")
+    monkeypatch.setenv("ONCALL_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setattr(launcher, "HOST_CONFIG", tmp_path / "no-host-config.json")
+    return launcher
+
+
+def _source(tmp_path: Path) -> Path:
+    src = tmp_path / "source.json"
+    src.write_text(json.dumps({"agents": {"defaults": {}}}), encoding="utf-8")
+    return src
+
+
+def test_the_cli_render_keeps_the_fixed_name(rooted, tmp_path: Path) -> None:
+    """The fixed name is the CLI path's live contract: the resident wake shell
+    re-reads exactly that path between runs. Not legacy, and never renamed."""
+    out = rooted.render_config(_source(tmp_path))
+    assert out == tmp_path / "config.json"
+    assert out.is_file()
+
+
+def test_an_acp_render_is_its_own_file_and_leaves_the_fixed_name_alone(rooted, tmp_path: Path) -> None:
+    """Two windows mean two servers on one STATE_ROOT. Each renders its own
+    per-pid copy, so one exit's unlink can no longer pull the config out from
+    under the other -- the failure that dropped a running server onto shipped
+    defaults, silently."""
+    import os
+
+    fixed = tmp_path / "config.json"
+    fixed.write_text("{}", encoding="utf-8")
+    dest = tmp_path / f"config.acp.{os.getpid()}.json"
+    out = rooted.render_config(_source(tmp_path), dest=dest)
+    assert out == dest and out.is_file()
+    assert fixed.read_text(encoding="utf-8") == "{}"  # untouched
+
+
+def test_the_sweep_takes_dead_pids_and_leaves_live_ones_and_the_fixed_name(rooted, tmp_path: Path) -> None:
+    """Liveness, not age -- a server serves as long as its sessions do. And the
+    glob must never reach `config.json`: deleting that strands a cli-hosted
+    campaign, the exact opposite mistake of the one the sweep cleans up after."""
+    import os
+
+    live = tmp_path / f"config.acp.{os.getpid()}.json"  # this test's own pid: alive
+    dead = tmp_path / "config.acp.999999999.json"  # beyond pid_max everywhere
+    junk = tmp_path / "config.acp.notapid.json"  # unparseable -> treated as dead
+    fixed = tmp_path / "config.json"  # the cli contract
+    for f in (live, dead, junk, fixed):
+        f.write_text("{}", encoding="utf-8")
+
+    rooted.sweep_stale_acp_renders()
+
+    assert live.is_file(), "a live server's config was swept"
+    assert not dead.exists(), "a dead launcher's config survived the sweep"
+    assert not junk.exists(), "an unparseable pid should read as dead"
+    assert fixed.is_file(), "the sweep reached the cli path's fixed name"

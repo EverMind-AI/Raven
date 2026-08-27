@@ -195,7 +195,7 @@ def inherit_llm(config: dict, host: dict) -> str:
     return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
-def render_config(source: Path) -> Path:
+def render_config(source: Path, dest: Path | None = None) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in.
 
     Two properties fix the location and the lifetime, and getting either wrong
@@ -217,14 +217,21 @@ def render_config(source: Path) -> Path:
       design, and it re-reads the file on every wake -- so deleting it at the
       end of a run would strand the whole campaign.
 
-      Under acp hosting `serve_acp` deletes it when the child ends, and there is
-      nothing left to strand: that path never starts the detached shell. Its
-      child owns the cron service in-process, and the host's connection pool
-      keeps that child alive across runs -- a finished prompt detaches its sink
-      without closing the session or releasing the connection -- so a wake
-      scheduled in one turn fires inside the same server, with no file for a
-      third process to re-read. What the delete does prevent is a
-      credential-bearing config outliving the process that needed it.
+      Under acp hosting `serve_acp` renders its OWN copy, named for this
+      launcher's pid, and deletes that copy when the child ends. Per-pid because
+      acp servers are not sequential: every TUI window's pool launches one, all
+      on the same STATE_ROOT, and on one fixed name the first clean exit's
+      unlink pulled the config out from under whichever server was still
+      running -- whose `load_config` reads the file on every schema rebuild and
+      silently boots on shipped defaults when it is gone (no key, oncall gate
+      off). Same disease `a4bd394a` fixed for raven-ppt; `raven-code` and
+      `raven-research` already name theirs by pid. The parent directory is
+      unchanged, so the data directory every consumer derives from the config
+      path stays the same one the cli hosting uses.
+
+      The fixed name stays what it is: the CLI path's live contract, not a
+      legacy file -- the resident wake shell re-reads exactly that path between
+      runs, which is why the sweep below must never be able to reach it.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = host_config()
@@ -259,12 +266,13 @@ def render_config(source: Path) -> Path:
     if workspace := defaults.get("workspace"):
         defaults["workspace"] = str((STATE_ROOT / workspace).resolve())
 
+    dest = dest or RENDERED_CONFIG
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     # Create it unreadable to anyone else before a single secret byte is in it.
-    fd = os.open(RENDERED_CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         json.dump(config, stream, indent=2, ensure_ascii=False)
-    return RENDERED_CONFIG
+    return dest
 
 
 _EXIT_TIMEOUT = 124
@@ -613,6 +621,36 @@ def build_task(task: str, *, config: Path, resuming: bool) -> str:
     )
 
 
+def sweep_stale_acp_renders() -> None:
+    """Remove acp-rendered configs whose launcher is gone.
+
+    Each is named for the pid of the launcher that wrote it, and that launcher
+    lives exactly as long as the server it starts -- so a live pid is the one
+    thing that says "some server still holds this". Liveness rather than age,
+    for raven-ppt's reason: a server serves for as long as its sessions do, and
+    any age short enough to be useful would take a config out from under one
+    that is merely long-lived. `raven-code`, `raven-research` and `raven-ppt`
+    sweep on the same rule.
+
+    The glob cannot reach the fixed `config.json`: that name has no `.acp.<pid>`
+    infix, and it is not legacy here but the CLI path's live contract -- the
+    resident wake shell re-reads it between runs. Deleting it would strand a
+    cli-hosted campaign, which is the exact opposite mistake of the one this
+    sweep exists to clean up after.
+
+    Failures are ignored per file: this is hygiene running ahead of a serve,
+    and it must never be what stops one.
+    """
+    for stale in STATE_ROOT.glob("config.acp.*.json"):
+        try:
+            pid = int(stale.name.split(".")[2])
+            os.kill(pid, 0)
+        except (IndexError, ValueError, ProcessLookupError):
+            stale.unlink(missing_ok=True)
+        except (PermissionError, OSError):
+            continue
+
+
 def serve_acp(args: argparse.Namespace) -> int:
     """Serve this install to an ACP client, over the config the launcher renders.
 
@@ -646,7 +684,11 @@ def serve_acp(args: argparse.Namespace) -> int:
     state_dir.mkdir(parents=True, exist_ok=True)
     _LOG_FILE = state_dir / "launcher.log"
 
-    config = render_config(Path(args.config).expanduser().resolve())
+    sweep_stale_acp_renders()
+    config = render_config(
+        Path(args.config).expanduser().resolve(),
+        dest=STATE_ROOT / f"config.acp.{os.getpid()}.json",
+    )
     if not config.is_file():
         raise SystemExit(f"error: no config at {config}")
     log(f"[acp] serving from {config}")
@@ -671,10 +713,13 @@ def serve_acp(args: argparse.Namespace) -> int:
             proc.wait(timeout=5)
         return 0
     finally:
-        # Deleted here, unlike the cli path, which leaves it for the resident
-        # wake shell to re-read. Nothing detached is holding it under this
-        # hosting, so what survives a clean exit is only a file with the LLM key
-        # in it. See `render_config` for the lifetime the two paths each want.
+        # Deletes this launcher's OWN per-pid copy, never the fixed name the
+        # cli path's wake shell re-reads. Before the pid naming, this unlink on
+        # a shared name was how one window's clean exit dropped another
+        # window's still-running server onto shipped defaults, silently. A
+        # SIGKILL skips this finally and leaves the file; the sweep at the next
+        # serve collects it by dead pid. See `render_config` for the lifetime
+        # the two hostings each want.
         config.unlink(missing_ok=True)
 
 
