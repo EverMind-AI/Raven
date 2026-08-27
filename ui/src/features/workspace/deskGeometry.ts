@@ -2,21 +2,26 @@
 
 import type { DeskGeometry, DeskPane } from './deskTypes'
 
-/* Bumped with the anchor: a desk stored under the old key carries the geometry
-   of the corner it used to hang off, and re-clamping it would keep the size
-   that covered the transcript. */
-export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v5'
+/* Bumped whenever the default placement or size changes. A stored geometry is
+   written on the first render, so every reader who has opened the desk once
+   already has the old numbers under the old key -- keeping the key would leave
+   the new default reaching nobody but a fresh browser. */
+export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v6'
 export const DESK_ANCHOR_GAP = 12
 export const DESK_SNAP_DISTANCE = 34
 export const DESK_MIN_SIZE = 250
 export const DESK_MAX_SIZE = 480
 export const DESK_VIEWPORT_GUTTER = 8
-/* The default is the smallest desk worth reading, and it hangs UNDER the
-   launcher against the same edge rather than beside it. Beside it, a 300px
-   panel reached back over the centred transcript column, so the palette the
-   reader opened to look something up sat on top of what they were reading. */
-export const DESK_DEFAULT_WIDTH = 250
-export const DESK_DEFAULT_HEIGHT = 260
+/* The default is the smallest desk that shows a tab's contents, not the
+   smallest one that renders -- it used to be 250x260 against a 250 minimum,
+   which left a five-file shelf scrolling: 210px of body for 265px of rows.
+   Width stays the cautious axis: the desk hangs UNDER the launcher and keeps
+   its right edge there, so widening it reaches further back across the centred
+   transcript column, which is what put the default at the minimum in the first
+   place. Anchored below rather than beside, it covers the top of that column
+   rather than the middle of it, and this much buys a tab that fits. */
+export const DESK_DEFAULT_WIDTH = 300
+export const DESK_DEFAULT_HEIGHT = 340
 
 const CHAT_MIN_FALLBACK = 430
 const FILE_PANE_INITIAL_WIDTH = 720

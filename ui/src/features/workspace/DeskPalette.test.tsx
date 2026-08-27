@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DeskPalette } from './DeskPalette'
+import { DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_GEOMETRY_KEY } from './deskGeometry'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
@@ -552,5 +553,37 @@ describe('the desk shelf', () => {
 
     expect(desk.getState().tab).toBe('deliverables')
     expect(rowNames()).toEqual(['Comparison'])
+  })
+})
+
+describe('the size the desk comes up at', () => {
+  it('opens at the default rather than the minimum', async () => {
+    await shelf()
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH}px`)
+    expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT}px`)
+  })
+
+  /* The geometry is written back on the first render, so every reader who has
+     ever opened the desk holds the old size under the old key. Reading that key
+     would hand the new default to nobody but a fresh browser. */
+  it('does not inherit a size stored under the previous key', async () => {
+    localStorage.setItem(
+      'raven.gui.desk.geometry.v5',
+      JSON.stringify({ x: 8, y: 8, w: 250, h: 250, detached: true }),
+    )
+    await shelf()
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH}px`)
+    expect(palette()?.dataset.anchored).toBe('true')
+  })
+
+  /* And a size the reader chose under the CURRENT key is still theirs. */
+  it('keeps a size stored under the current key', async () => {
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 40, w: 420, h: 400, detached: true }),
+    )
+    await shelf()
+    expect(palette()?.style.width).toBe('420px')
+    expect(palette()?.style.height).toBe('400px')
   })
 })
