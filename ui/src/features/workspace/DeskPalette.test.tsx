@@ -172,8 +172,10 @@ describe('opening and shutting the desk', () => {
     try {
       render(<DeskPalette />)
       await act(async () => {
-        desk.update({ paletteOpen: true })
+        /* The file first: opening a window stands the desk down, so the
+           palette this test is about has to be put back up after it. */
         desk.openDeskFile('/w/a.md')
+        desk.update({ paletteOpen: true })
       })
       await act(async () => { desk.toggleSolo('file:/w/a.md') })
       await act(async () => { vi.advanceTimersByTime(200) })
@@ -194,8 +196,8 @@ describe('opening and shutting the desk', () => {
   it('does not mark a tab seen behind a fullscreen pane', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'deliverables' })
       desk.openDeskFile('/w/a.md')
+      desk.update({ paletteOpen: true, tab: 'deliverables' })
     })
     await act(async () => { desk.toggleSolo('file:/w/a.md') })
 

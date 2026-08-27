@@ -66,6 +66,33 @@ function read_(): Kept {
   }
 }
 
+/* What the reader has said this run, whether or not storage kept it.
+ *
+ * `write_` swallows a refusal -- private mode, over quota -- on the reasoning
+ * that a preference which cannot be stored is one the next VISIT does without.
+ * That is still true of the next visit and was never true of this one: the
+ * answer is read back while the reader is still sitting in front of the desk
+ * (deskStore.closePane hands it back when the last window shuts, and `sync`
+ * re-reads it on every session switch), so a refused write turned a collapse
+ * they had just made into the conversation default and put the desk back in
+ * front of them.
+ *
+ * This tab's own last word therefore outranks the stored map, which also
+ * settles the case of another tab writing the same key: what this reader said
+ * here is what this page answers. Capped the same way and by the same rule as
+ * the stored map -- re-set moves a key to the end, so what falls off the front
+ * is the conversation whose answer is oldest. */
+const said = new Map<string, boolean>()
+
+function remember(key: string, open: boolean): void {
+  said.delete(key)
+  said.set(key, open)
+  for (const oldest of said.keys()) {
+    if (said.size <= CAP) break
+    said.delete(oldest)
+  }
+}
+
 function write_(all: Kept): void {
   const keys = Object.keys(all)
   if (keys.length > CAP) {
@@ -83,6 +110,8 @@ function write_(all: Kept): void {
 
 export function read(key: string | null): boolean {
   if (!key) return draft ?? false
+  const heard = said.get(key)
+  if (heard !== undefined) return heard
   const row = read_()[key]
   return row ? row.open === true : true
 }
@@ -92,6 +121,7 @@ export function write(key: string | null, open: boolean): void {
     draft = open
     return
   }
+  remember(key, open)
   const all = read_()
   all[key] = { at: Date.now(), open }
   write_(all)
@@ -112,13 +142,15 @@ export function write(key: string | null, open: boolean): void {
  * adopted the draft's answer into a forked session and into a cron run. */
 export function adopt(key: string | null): void {
   if (!key || draft === null) return
-  const all = read_()
-  if (!(key in all)) write(key, draft)
+  /* "Has an answer of its own" spans both, or a conversation whose answer
+     storage refused would be handed the draft's instead. */
+  if (!said.has(key) && !(key in read_())) write(key, draft)
   draft = null
 }
 
 export function _clearForTests(): void {
   draft = null
+  said.clear()
   try {
     localStorage.removeItem(KEY)
   } catch {
