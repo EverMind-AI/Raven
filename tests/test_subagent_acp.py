@@ -17,7 +17,9 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from loguru import logger
@@ -3324,3 +3326,43 @@ async def test_an_unpinned_entry_uses_the_caller_for_both(tmp_path: Path, monkey
 
     assert launched == [str(caller)]
     assert opened == [str(caller)]
+
+
+@pytest.mark.asyncio
+async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
+    """One stuck close must not hold the others, or the shutdown behind them.
+
+    `AcpClient.close` gathers the connection's answer tasks, and a handler that
+    ignores its cancellation blocks that gather for as long as its own request
+    runs -- which used to be however long the sub-agent's in-flight provider
+    call still had to go.
+    """
+    from raven.agent.acp import pool as pool_mod
+
+    pool = pool_mod.AcpConnectionPool()
+    released = asyncio.Event()
+    closed: list[str] = []
+
+    class _Client:
+        def __init__(self, name: str, hangs: bool) -> None:
+            self._name = name
+            self._hangs = hangs
+
+        async def close(self) -> None:
+            if self._hangs:
+                await released.wait()
+            closed.append(self._name)
+
+    for name, hangs in (("stuck", True), ("clean", False)):
+        pool._connections[name] = SimpleNamespace(client=_Client(name, hangs))
+
+    monkeypatch_timeout = 0.05
+    with patch.object(pool_mod, "_CLOSE_TIMEOUT_S", monkeypatch_timeout):
+        started = time.monotonic()
+        await pool.close_all()
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+    assert closed == ["clean"]
+    assert pool._connections == {}
+    released.set()

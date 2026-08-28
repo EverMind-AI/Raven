@@ -511,6 +511,57 @@ class TestShutdownDoesNotBlockTheUser:
         for task in list(agent._store_pipeline._workers.values()):
             task.cancel()
 
+    async def test_drain_gives_up_on_a_write_that_swallows_its_cancellation(self, tmp_path: Path) -> None:
+        """The budgeted wait is only half the drain.
+
+        What follows it cancels the leftover workers and collects them, and
+        `cancel` merely schedules that: a store suppressing `CancelledError`
+        held the collection -- and every host teardown awaiting this drain --
+        for as long as its own request ran. `_Wedged` above cannot catch this;
+        its `sleep` honours the cancellation and returns at once.
+        """
+        import asyncio
+
+        release = asyncio.Event()
+
+        class _Deaf:
+            async def store(self, session_id, messages, **kw):
+                # Deaf for the length of the drain, then releasable: a task
+                # left permanently deaf would hang this test's own runner on
+                # the way out, which is the very failure being measured.
+                while True:
+                    try:
+                        await release.wait()
+                        return True
+                    except asyncio.CancelledError:
+                        if release.is_set():
+                            raise
+                        continue
+
+        agent = _make_loop(tmp_path, backend=_Deaf())
+        agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
+        await asyncio.sleep(0.05)
+
+        # `asyncio.wait` on a task, not `wait_for` on the coroutine: without the
+        # bound this drain never returns, and `wait_for` would then hang too --
+        # it cancels what it is waiting on and awaits the result, which is the
+        # very thing that does not arrive. `wait` cancels nothing, so the
+        # assertion below can report a failure instead of costing the CI job its
+        # whole timeout.
+        drain = asyncio.create_task(agent.drain_backend_stores(timeout=0.1))
+        done, _ = await asyncio.wait({drain}, timeout=5.0)
+
+        if not done:
+            release.set()
+            await asyncio.wait({drain}, timeout=2.0)
+            drain.cancel()
+            raise AssertionError("the drain waited out a worker that never stops")
+
+        release.set()
+        workers = [t for t in agent._store_pipeline._workers.values() if not t.done()]
+        if workers:
+            await asyncio.wait(workers, timeout=2.0)
+
     async def test_drain_counts_records_still_queued_behind_a_wedged_write(self, tmp_path: Path) -> None:
         """A wedged first write parks the worker mid-attempt, so it never gets
         back to the nine records behind it in the queue. Those nine were

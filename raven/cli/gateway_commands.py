@@ -28,6 +28,7 @@ from raven.cli._helpers import (
     print_deprecated_memory_window_notice,
 )
 from raven.cli._plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
+from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.helpers import sync_workspace_templates
 
 if TYPE_CHECKING:
@@ -968,7 +969,7 @@ def register(app: typer.Typer) -> None:
                             "memory backend stop failed; continuing shutdown",
                         )
 
-        asyncio.run(run())
+        bounded_asyncio.run(run())
 
 
 __all__ = ["register"]

@@ -56,11 +56,38 @@ _REGISTRY_WRITE_TIMEOUT_S = 2.0
 # How long a steer waits for a run that is live but has not put its prompt on the
 # wire yet to publish its hook, before it is called unsupported.
 _STEER_HOOK_GRACE_S = 3.0
+# How long ``cancel_all`` waits out the tasks it just cancelled. `cancel` only
+# schedules the cancellation: a run parked in an in-flight provider call reaches
+# its `finally` when that call returns, so waiting unbounded made a Ctrl-C last
+# as long as whatever the sub-agent happened to be waiting on.
+_CANCEL_DRAIN_TIMEOUT_S = 5.0
 # ``spawn`` reports a refusal by returning its reason rather than raising, so a
 # caller that has to tell "dispatched" from "declined" has only the string. Both
 # refusals below open with this, and the spawn tool tests for it before publishing
 # anything that presumes the run exists.
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
+
+
+async def _drain_cancelled(tasks: list[asyncio.Task], what: str) -> None:
+    """Wait out already-cancelled tasks, for a bounded time, retrieving results.
+
+    ``asyncio.wait`` rather than ``gather``, because a timed-out ``gather`` would
+    cancel the tasks a second time and leave the ones still pending unretrieved;
+    the exceptions of whatever did finish are read here so a task that failed on
+    its way out does not log "Task exception was never retrieved".
+    """
+    done, pending = await asyncio.wait(tasks, timeout=_CANCEL_DRAIN_TIMEOUT_S)
+    for task in done:
+        if not task.cancelled():
+            task.exception()
+    if pending:
+        logger.warning(
+            "shutdown: {} of {} {} did not stop within {}s; leaving them to the process exit",
+            len(pending),
+            len(tasks),
+            what,
+            _CANCEL_DRAIN_TIMEOUT_S,
+        )
 
 
 async def _write_spawn_status(session_key: str | None, agent: str, handle: str, status: str) -> None:
@@ -1469,18 +1496,20 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         longer reaches it. With every automatic timeout also removed, a
         wedged CLI child would otherwise be orphaned and keep running against
         the workspace forever once the gateway exits. Returns the count
-        cancelled.
+        cancelled -- how many were asked to stop, not how many obeyed in time:
+        the wait for them is bounded, so a run that ignores its cancellation is
+        left to the process exit rather than holding the shutdown open.
         """
         tasks = [t for t in self._running_tasks.values() if not t.done()]
         for t in tasks:
             t.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await _drain_cancelled(tasks, "sub-agent runs")
         # Same for the memory pollers: at shutdown an unreaped one dies pending,
         # with its httpx client never closed and its record never written.
         records = [t for t in self._record_tasks if not t.done()]
         for t in records:
             t.cancel()
         if records:
-            await asyncio.gather(*records, return_exceptions=True)
+            await _drain_cancelled(records, "memory pollers")
         return len(tasks)

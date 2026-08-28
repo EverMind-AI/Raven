@@ -8,6 +8,7 @@ in ``test_cli_agent_commands.py``.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, sentinel
 
@@ -910,3 +911,17 @@ def test_a_pointed_home_skips_discovery_entirely(tui_launch_spies, monkeypatch, 
 
     assert r.exit_code == 0, r.output
     assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
+    """A run still going can hand the backend another write, so draining while
+    the sub-agents live is draining into a queue still being filled -- and
+    closing the adapter under such a write fails it for a reason that has
+    nothing to do with the memory service."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "tui_commands.py").read_text(encoding="utf-8")
+    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    pool = src.index("await close_pool()")
+    drain = src.index("await agent_loop.drain_backend_stores()")
+    stop = src.index("await agent_loop.backend.stop()")
+
+    assert cancel < pool < drain < stop

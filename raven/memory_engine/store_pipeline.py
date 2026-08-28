@@ -30,6 +30,11 @@ MAX_QUEUED: int = 64
 # global in-flight cap this pipeline replaced, kept at its old value.
 MAX_TOTAL_QUEUED: int = 256
 MAX_CONCURRENCY: int = 4
+# How long ``drain`` waits on workers it has already cancelled, after their own
+# budget ran out. Short because nothing is riding on it: the writes are lost
+# either way and are counted below regardless, so this only buys the tidy
+# collection of a worker that was about to stop anyway.
+_LEFTOVER_COLLECT_S: float = 1.0
 # Backoff between retries of one record. Retries are serial per session, so a
 # long tail here blocks that session's later writes -- the total must stay well
 # under a conversation's natural gap.
@@ -257,7 +262,16 @@ class StorePipeline:
         for task in leftover:
             task.cancel()
         if leftover:
-            await asyncio.gather(*leftover, return_exceptions=True)
+            # Bounded like the wait above, and for the same reason: `cancel`
+            # only schedules the cancellation, so a store that suppresses it
+            # would hold this gather -- and the host teardown awaiting this
+            # drain -- for as long as its own request runs. Collecting the
+            # results is worth a moment; waiting out a worker that will not
+            # stop is the hang this whole path is built to avoid.
+            done, _ = await asyncio.wait(leftover, timeout=_LEFTOVER_COLLECT_S)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
         # Anything still queued, plus whatever each cancelled worker had
         # already taken off its queue, was never going to be written.
         abandoned = sum(len(q) for q in self._queues.values()) + len(self._active)

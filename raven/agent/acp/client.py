@@ -48,6 +48,25 @@ _STDERR_LINE_CAP = 500
 # child. Matched to that cap so the transport can carry what the protocol allows.
 _READER_LIMIT = 8 * 1024 * 1024
 
+_TEARDOWN_DRAIN_S = 1.0
+"""How long ``close`` waits out the tasks it just cancelled.
+
+The SIGKILL has already gone out by the time this budget starts, so what is
+being waited on is only the unwind: a handler that ignores its cancellation
+(one parked on the elicitation broker) would otherwise hold the close, and the
+process exit behind it, for as long as its own request runs.
+"""
+
+_TEARDOWN_REAP_S = 1.0
+"""How long ``close`` waits to reap a child it has already SIGKILLed.
+
+Short because the reap is the one part of the teardown with nothing riding on
+it here: the signal is delivered synchronously above, and a caller that is
+exiting hands any child it did not collect to init regardless. Measured: an
+``openclaw acp`` bridge takes longer than this to be collected and is gone
+moments later anyway.
+"""
+
 _CANCEL_SETTLE_S = 5.0
 """How long a cancelled turn is given to settle with ``stopReason: cancelled``.
 
@@ -264,7 +283,15 @@ class AcpClient:
         return self._reader_task is None or not self._reader_task.done()
 
     async def close(self) -> None:
-        """Kill the whole process group and stop reading. Idempotent."""
+        """Kill the whole process group and stop reading. Idempotent.
+
+        Bounded from the inside, not by its caller: a ``close`` cancelled from
+        outside stops before releasing the subprocess transport, whose
+        ``__del__`` then runs after the loop is closed and prints
+        ``RuntimeError: Event loop is closed`` over whatever the user is looking
+        at. So both waits below give up on their own and the teardown always
+        runs to its end.
+        """
         if self._closed:
             return
         self._closed = True
@@ -284,13 +311,41 @@ class AcpClient:
         pending_tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
         pending_tasks.extend(answer_tasks)
         if pending_tasks:
-            await asyncio.gather(*pending_tasks, return_exceptions=True)
+            done, _ = await asyncio.wait(pending_tasks, timeout=_TEARDOWN_DRAIN_S)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
         if self._proc.returncode is None:
-            await self._proc.wait()
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=_TEARDOWN_REAP_S)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                logger.debug(
+                    "acp agent {!r}: not reaped within {}s of SIGKILL; abandoning the wait",
+                    self.name,
+                    _TEARDOWN_REAP_S,
+                )
+        self._release_transport()
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
         # Last, so the frames the teardown itself produced are in the file.
         if self._journal is not None:
             self._journal.close()
+
+    def _release_transport(self) -> None:
+        """Close the subprocess transport while there is still a loop to close it on.
+
+        ``asyncio.subprocess.Process`` holds its transport until the child is
+        reaped, and an unreaped one is left to ``__del__`` -- which runs at
+        interpreter shutdown, calls ``call_soon`` on a closed loop, and prints a
+        ``RuntimeError`` traceback the user can do nothing about. Closing it
+        here is the only point at which that is still a no-op.
+        """
+        transport = getattr(self._proc, "_transport", None)
+        if transport is None:
+            return
+        try:
+            transport.close()
+        except Exception as exc:  # noqa: BLE001 - teardown must not raise
+            logger.debug("acp agent {!r}: releasing the transport failed: {}", self.name, exc)
 
     async def __aenter__(self) -> "AcpClient":
         return self

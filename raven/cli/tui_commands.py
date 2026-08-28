@@ -29,6 +29,7 @@ import typer
 
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 from raven.rpc import LOCAL_CHANNEL
+from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.helpers import project_slug
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
@@ -898,25 +899,11 @@ async def _run_rpc_server_until_done(
                 await turn_teardown()
             except Exception:
                 pass
-        # Release the embedded index lock so the next process can start.
-        if agent_loop is not None and agent_loop.backend is not None:
-            try:
-                await agent_loop.drain_backend_stores()
-                await agent_loop.backend.stop()
-            except Exception:
-                from loguru import logger as _logger
-
-                _logger.exception(
-                    "tui: memory backend stop failed; continuing shutdown",
-                )
-        try:
-            from raven.browser import get_browser
-
-            await get_browser().close()
-        except Exception:
-            from loguru import logger as _logger
-
-            _logger.exception("tui: browser close failed; continuing shutdown")
+        # Sub-agents go first, and before the memory drain in particular: a run
+        # still going is a run that can hand the backend another write, so
+        # draining while they live is draining into a queue that is still being
+        # filled. Stopping them costs a signal and a bounded wait, where the
+        # drain costs its whole budget.
         try:
             from raven.agent.acp.client import begin_drain
 
@@ -937,6 +924,25 @@ async def _run_rpc_server_until_done(
             from loguru import logger as _logger
 
             _logger.exception("tui: acp pool close failed; continuing shutdown")
+        # Release the embedded index lock so the next process can start.
+        if agent_loop is not None and agent_loop.backend is not None:
+            try:
+                await agent_loop.drain_backend_stores()
+                await agent_loop.backend.stop()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception(
+                    "tui: memory backend stop failed; continuing shutdown",
+                )
+        try:
+            from raven.browser import get_browser
+
+            await get_browser().close()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: browser close failed; continuing shutdown")
         serve_task.cancel()
         try:
             await serve_task
@@ -1109,7 +1115,7 @@ def run_subprocess_with_rpc(
 
     handshake_ok = False
     try:
-        handshake_ok = asyncio.run(_main())
+        handshake_ok = bounded_asyncio.run(_main())
     finally:
         # 1) Close the accepted conn only if it was never handed to RpcServer.
         # Once handed off, the server owns it (connect_accepted_socket) and
