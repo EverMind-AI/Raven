@@ -55,14 +55,6 @@ function toJsonText(value) {
   }
 }
 
-function statOrNull(filePath) {
-  try {
-    return fs.statSync(filePath);
-  } catch {
-    return null;
-  }
-}
-
 function readJsonlFile(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return fs
@@ -104,56 +96,24 @@ function walkFiles(rootDir) {
   return result;
 }
 
-function isLogName(name, baseName) {
-  if (name === baseName) return true;
-  if (!name.startsWith(baseName.replace('.log', ''))) return false;
-  return name.endsWith('.log');
-}
-
-function shallowLogFiles(dir, baseName) {
-  const result = [];
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return result;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) continue;
-    if (!isLogName(entry.name, baseName)) continue;
-    result.push(path.join(dir, entry.name));
-  }
-  return result;
-}
-
-// A log is either the active file directly in <logs> or a rotated one under
-// <logs>/archive/<date>/, since that subtree is the only place either writer
-// renames one to -- `rotateIfNeeded` here, `TraceStore._rotate_if_needed` on the
-// Python side. Recursing all of <logs> instead descends audit-artifacts/, which
-// holds one file per captured payload and reaches hundreds of thousands of
-// entries, to find a few dozen logs.
-function statLogFiles(kind) {
-  const logsDir = getLogsDir();
-  const baseName = KIND_FILES[kind];
-  const candidates = [
-    ...shallowLogFiles(logsDir, baseName),
-    ...walkFiles(path.join(logsDir, 'archive')).filter((filePath) => isLogName(path.basename(filePath), baseName))
-  ];
-  const stamped = [];
-  for (const filePath of candidates) {
-    const stat = statOrNull(filePath);
-    if (!stat || !stat.isFile()) continue;
-    stamped.push({ path: filePath, size: stat.size, mtimeMs: stat.mtimeMs });
-  }
-  stamped.sort((a, b) => {
-    if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
-    return a.path.localeCompare(b.path);
-  });
-  return stamped;
-}
-
 function listLogFiles(kind) {
-  return statLogFiles(kind).map((entry) => entry.path);
+  const rootDir = getLogsDir();
+  const baseName = KIND_FILES[kind];
+  const files = walkFiles(rootDir).filter((filePath) => {
+    const name = path.basename(filePath);
+    if (name === baseName) return true;
+    if (!name.startsWith(baseName.replace('.log', ''))) return false;
+    return name.endsWith('.log');
+  });
+  files.sort((a, b) => {
+    const statA = fs.existsSync(a) ? fs.statSync(a) : null;
+    const statB = fs.existsSync(b) ? fs.statSync(b) : null;
+    const timeA = statA ? statA.mtimeMs : 0;
+    const timeB = statB ? statB.mtimeMs : 0;
+    if (timeA !== timeB) return timeA - timeB;
+    return a.localeCompare(b);
+  });
+  return files;
 }
 
 function readJsonl(kind) {
@@ -198,8 +158,6 @@ module.exports = {
   getArchiveDir,
   ensureDir,
   readJsonl,
-  readJsonlFile,
-  statLogFiles,
   appendJsonl,
   rotateIfNeeded,
   getDateKey

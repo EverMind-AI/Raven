@@ -16,7 +16,6 @@ export interface ThemeColors {
   completionCurrentBg: string
   completionMetaBg: string
   completionMetaCurrentBg: string
-  detailBg: string
 
   label: string
   ok: string
@@ -111,7 +110,7 @@ const BRAND: ThemeBrand = {
   prompt: '❯',
   welcome: 'Type your message or /help for commands.',
   goodbye: 'Goodbye! 🐦‍⬛',
-  tool: '●',
+  tool: '┊',
   helpHeader: '(^_^)? Commands'
 }
 
@@ -214,14 +213,10 @@ export const DARK_THEME: Theme = {
     text: '#FFF5EA',
     muted: '#858482',
     completionBg: '#000000',
-    // The two block surfaces are re-derived from the terminal ground before
-    // they reach the UI (see deriveSurfaces); these are that derivation over
-    // the canonical dark ground, which is what an unprobed terminal gets.
-    userBg: '#242424',
+    userBg: '#1c2128',
     completionCurrentBg: '#2a260c',
     completionMetaBg: '#080808',
     completionMetaCurrentBg: '#221d08',
-    detailBg: '#121212',
 
     label: '#858482',
     ok: '#3ee07a',
@@ -265,12 +260,10 @@ export const LIGHT_THEME: Theme = {
     text: '#24201a',
     muted: '#57606a',
     completionBg: '#f6f8fa',
-    // Derivation over the canonical light ground; see the dark note above.
-    userBg: '#eeeeee',
+    userBg: '#eaeef2',
     completionCurrentBg: '#fff8e7',
     completionMetaBg: '#eef1f4',
     completionMetaCurrentBg: '#ffefc2',
-    detailBg: '#f7f7f7',
 
     label: '#6e7681',
     ok: '#1f7a33',
@@ -316,7 +309,6 @@ const DARK_256_COLORS: ThemeColors = {
   completionCurrentBg: 'ansi256(234)',
   completionMetaBg: 'ansi256(232)',
   completionMetaCurrentBg: 'ansi256(234)',
-  detailBg: 'ansi256(234)',
   label: 'ansi256(102)',
   ok: 'ansi256(78)',
   error: 'ansi256(203)',
@@ -339,7 +331,6 @@ const DARK_256_COLORS: ThemeColors = {
 }
 
 const LIGHT_256_COLORS: ThemeColors = {
-  detailBg: 'ansi256(255)',
   primary: 'ansi256(136)',
   accent: 'ansi256(136)',
   border: 'ansi256(188)',
@@ -380,7 +371,6 @@ const LIGHT_256_COLORS: ThemeColors = {
 //     color), leaving it `red` like the spec's base.
 
 const DARK_16_COLORS: ThemeColors = {
-  detailBg: 'ansi:black',
   primary: 'ansi:yellowBright',
   accent: 'ansi:yellowBright',
   border: 'ansi:blackBright',
@@ -413,7 +403,6 @@ const DARK_16_COLORS: ThemeColors = {
 }
 
 const LIGHT_16_COLORS: ThemeColors = {
-  detailBg: 'ansi:white',
   primary: 'ansi:yellow',
   accent: 'ansi:yellow',
   border: 'ansi:blackBright',
@@ -606,105 +595,10 @@ export function detectLightMode(
   return lightDefaultTermPrograms.has(termProgram)
 }
 
-// ── Terminal-derived block surfaces ──────────────────────────────────
-//
-// The two filled blocks in the transcript -- the user's message and a tool
-// card -- used to be literal hex tuned against pure white and pure black
-// (#eaeef2 / #f6f8fa and #1c2128 / #161b22, all four cool GitHub greys). On a
-// terminal whose ground is not neutral they read as patches of the wrong hue
-// rather than as another layer: against a cream #f5efe3 the user block's
-// luminance step is only 1.02:1, so cold-vs-warm is the entire signal the eye
-// gets.
-//
-// So derive them from the ground instead, the way codex does (codex-rs
-// tui/src/style.rs user_message_bg): mix the ground toward black on light and
-// toward white on dark, at an alpha per scheme. On light that mix reduces to
-// `ground * (1 - alpha)` -- a proportional scale of all three channels, so the
-// derived surface keeps the terminal's hue exactly.
-//
-// Two departures from codex, both deliberate:
-//   - codex fills one surface; we fill two, so each scheme carries a second
-//     alpha at half the first. The user block stays the heavier layer.
-//   - codex draws NO background when the probe fails (its Option<bg> is None).
-//     We fall back to deriving from the scheme's canonical ground, which
-//     yields a neutral grey block -- no hue to clash -- because _can_probe()
-//     declines under tmux / screen / SSH / CI (raven/cli/_theme.py) and
-//     dropping the fill there would lose it for a large slice of real use.
-//
-// Alphas are calibrated so a pure-white or pure-black terminal reproduces the
-// old literals' luminance step (light 1.16 / 1.06), leaving hue as the only
-// thing that changes there. Dark is the exception: the old pair sat 1.30 and
-// 1.21 above black, close enough that the two block kinds read as one surface,
-// so dark takes the same halved relationship as light.
-const SURFACE_ALPHA = {
-  dark: { detail: 0.07, user: 0.14 },
-  light: { detail: 0.033, user: 0.065 }
-} as const
-
-const SCHEME_GROUND: Record<ColorScheme, string> = { dark: '#000000', light: '#ffffff' }
-const SURFACE_TOP: Record<ColorScheme, string> = { dark: '#ffffff', light: '#000000' }
-
-/** The terminal's own background as `#rrggbb`, or null when nothing has told
- *  us. Reads the same `RAVEN_TUI_BACKGROUND` slot the OSC 11 probe caches its
- *  answer into (see applyDetectedBackground), so a user who exports it by hand
- *  gets the derived surfaces too. */
-export function terminalBackground(env: NodeJS.ProcessEnv = process.env): null | string {
-  const raw = (env.RAVEN_TUI_BACKGROUND ?? '').trim().toLowerCase()
-  const hex = raw.startsWith('#') ? raw.slice(1) : raw
-
-  if (HEX_6_RE.test(hex)) {
-    return '#' + hex
-  }
-
-  if (HEX_3_RE.test(hex)) {
-    return '#' + [...hex].map(c => c + c).join('')
-  }
-
-  return null
-}
-
-export interface DerivedSurfaces {
-  detailBg: string
-  userBg: string
-}
-
-/** The two block backgrounds for a scheme, derived from `background` (default:
- *  whatever the terminal has told us) or from the scheme's canonical ground
- *  when that is unknown. */
-export function deriveSurfaces(scheme: ColorScheme, background: null | string = terminalBackground()): DerivedSurfaces {
-  const ground = background ?? SCHEME_GROUND[scheme]
-  const top = SURFACE_TOP[scheme]
-  const alpha = SURFACE_ALPHA[scheme]
-
-  return { detailBg: mix(ground, top, alpha.detail), userBg: mix(ground, top, alpha.user) }
-}
-
-/** A palette with its two block surfaces re-derived from the terminal ground.
- *  Tiers 1 and 2 are returned untouched: a derived hex has no representation
- *  there, so they keep their curated ANSI values -- the same rule skins follow
- *  in fromSkin. Returns the input by reference when nothing moved. */
-function withDerivedSurfaces(theme: Theme, scheme: ColorScheme, tier: 0 | 1 | 2 | 3): Theme {
-  if (tier === 1 || tier === 2) {
-    return theme
-  }
-
-  const { detailBg, userBg } = deriveSurfaces(scheme)
-
-  if (detailBg === theme.color.detailBg && userBg === theme.color.userBg) {
-    return theme
-  }
-
-  return { ...theme, color: { ...theme.color, detailBg, userBg } }
-}
-
 const DEFAULT_LIGHT_MODE = detectLightMode()
 const DEFAULT_SCHEME: ColorScheme = DEFAULT_LIGHT_MODE ? 'light' : 'dark'
 
-export const DEFAULT_THEME: Theme = withDerivedSurfaces(
-  resolveTheme(DEFAULT_SCHEME, activeColorTier()),
-  DEFAULT_SCHEME,
-  activeColorTier()
-)
+export const DEFAULT_THEME: Theme = resolveTheme(DEFAULT_SCHEME, activeColorTier())
 
 // Scheme detected at runtime by the OSC 11 background-color probe (see
 // applyDetectedBackground). Null until — or unless — the terminal answers the
@@ -723,10 +617,7 @@ export function currentScheme(): ColorScheme {
  *  skin applied. Used to rebuild the theme when the probe flips the scheme
  *  before any gateway skin has arrived. */
 export function resolveCurrentDefaultTheme(): Theme {
-  const scheme = currentScheme()
-  const tier = activeColorTier()
-
-  return withDerivedSurfaces(resolveTheme(scheme, tier), scheme, tier)
+  return resolveTheme(currentScheme(), activeColorTier())
 }
 
 /** Truecolor hex for the OSC 12 hardware-cursor color. OSC 12 takes an RGB
@@ -772,42 +663,29 @@ function oscColorToHex(data: string): null | string {
  * Caches the parsed color into RAVEN_TUI_BACKGROUND and re-runs
  * detectLightMode() so the existing precedence rules apply unchanged — an
  * explicit RAVEN_TUI_THEME / RAVEN_TUI_LIGHT still wins over the measured
- * background. Returns the resolved scheme, whether it differs from the scheme
- * that was in effect, and whether the block surfaces derived from the ground
- * moved (they follow the exact color, so they can change while the scheme
- * holds). The caller re-themes when either is true. Null when the reply isn't
- * a color we can parse.
+ * background. Returns the resolved scheme and whether it differs from the
+ * scheme that was in effect (so the caller knows whether to re-theme), or
+ * null when the reply isn't a color we can parse.
  */
-export function applyDetectedBackground(
-  oscData: string
-): { changed: boolean; scheme: ColorScheme; surfacesChanged: boolean } | null {
+export function applyDetectedBackground(oscData: string): { changed: boolean; scheme: ColorScheme } | null {
   const hex = oscColorToHex(oscData)
 
   if (!hex) {
     return null
   }
 
-  // Read the previous ground BEFORE caching this one — terminalBackground()
-  // reads the same env slot we are about to overwrite.
-  const surfacesChanged = hex !== terminalBackground()
-
   process.env.RAVEN_TUI_BACKGROUND = hex
   const scheme: ColorScheme = detectLightMode() ? 'light' : 'dark'
   const changed = scheme !== currentScheme()
   detectedScheme = scheme
 
-  return { changed, scheme, surfacesChanged }
+  return { changed, scheme }
 }
 
 // ── Skin → Theme ─────────────────────────────────────────────────────
 
 function skinColors(colors: Record<string, string>): ThemeColors {
-  const scheme = currentScheme()
-  const base = (scheme === 'light' ? LIGHT_THEME : DARK_THEME).color
-  // A skin dresses the app; it does not own the terminal's ground. Unless the
-  // skin names these two explicitly they follow the ground, same as an
-  // unskinned palette.
-  const surfaces = deriveSurfaces(scheme)
+  const base = (currentScheme() === 'light' ? LIGHT_THEME : DARK_THEME).color
   const c = (k: string) => colors[k]
   const hasSkinColors = Object.keys(colors).length > 0
 
@@ -831,7 +709,6 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     (hasSkinColors ? completionCurrentBg : base.completionMetaCurrentBg)
 
   return {
-    detailBg: c('ui_detail_bg') ?? surfaces.detailBg,
     primary: c('ui_primary') ?? c('banner_title') ?? base.primary,
     accent,
     border: c('ui_border') ?? c('banner_border') ?? base.border,
@@ -841,7 +718,7 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     completionCurrentBg,
     completionMetaBg,
     completionMetaCurrentBg,
-    userBg: c('ui_user_bg') ?? surfaces.userBg,
+    userBg: c('ui_user_bg') ?? base.userBg,
 
     label: c('ui_label') ?? base.label,
     ok: c('ui_ok') ?? base.ok,

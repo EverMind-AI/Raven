@@ -216,8 +216,6 @@ class CronService:
                                 channel=channel,
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
-                                direct_agent=j["payload"].get("directAgent"),
-                                direct_handle=j["payload"].get("directHandle"),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -269,8 +267,6 @@ class CronService:
                         "channel": j.payload.channel,
                         "to": j.payload.to,
                         "topicTag": j.payload.topic_tag,
-                        "directAgent": j.payload.direct_agent,
-                        "directHandle": j.payload.direct_handle,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -697,9 +693,6 @@ class CronService:
         to: str | None = None,
         delete_after_run: bool = False,
         topic_tag: str | None = None,
-        job_id: str | None = None,
-        direct_agent: str | None = None,
-        direct_handle: str | None = None,
     ) -> CronJob:
         """Add a new job, or update an existing job with the same
         (schedule, channel, to) triple — agents often re-register the
@@ -724,13 +717,6 @@ class CronService:
            recurring ``cron_expr`` AND a same-day ``at`` shot for the
            same intent (e.g. "daily 8:00 take meds" + "today 8:00 take
            meds").
-
-        ``job_id`` edits one named job rather than adding: if a job with that id
-        exists it is updated in place, otherwise the id is used for the new job.
-        A job's run history lives in its ``cron:<id>`` session, so an edit that
-        minted a fresh id would orphan it. It also skips every dedup layer
-        below, which answer "is this the same reminder as some other job" -- a
-        question an edit has already answered by naming the job it edits.
         """
         # One ``now`` snapshot for both validation and storage: the validate
         # predicate and the stored next_run must agree on "now", or a boundary
@@ -742,24 +728,6 @@ class CronService:
             # Reload under lock so we don't clobber a concurrent writer's add.
             self._store = None
             store = self._load_store()
-
-            if job_id:
-                for j in store.jobs:
-                    if j.id != job_id:
-                        continue
-                    j.name = name
-                    j.schedule = schedule
-                    j.payload.message = message
-                    j.payload.channel = channel
-                    j.payload.to = to
-                    j.payload.topic_tag = topic_tag
-                    j.delete_after_run = delete_after_run
-                    j.state.next_run_at_ms = _compute_next_run(schedule, now)
-                    j.updated_at_ms = now
-                    self._save_store()
-                    self._signal_wake()
-                    logger.info("Cron: updated job '{}' ({})", name, j.id)
-                    return j
 
             # L7: topic_tag dedup — strictest, runs first. If the new
             # request carries a topic_tag, any existing enabled job for the
@@ -877,7 +845,7 @@ class CronService:
                 return existing
 
             job = CronJob(
-                id=job_id or str(uuid.uuid4())[:8],
+                id=str(uuid.uuid4())[:8],
                 name=name,
                 enabled=True,
                 schedule=schedule,
@@ -886,8 +854,6 @@ class CronService:
                     channel=channel,
                     to=to,
                     topic_tag=topic_tag,
-                    direct_agent=direct_agent,
-                    direct_handle=direct_handle,
                 ),
                 state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
                 created_at_ms=now,

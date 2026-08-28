@@ -19,7 +19,6 @@ import websockets
 from loguru import logger
 
 from raven.channels.base import ChannelBase
-from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
 from raven.config.schema import DiscordConfig
 from raven.utils.helpers import split_message
@@ -45,7 +44,6 @@ _NEW_SESSION_CLOSE_CODES = {4007, 4009}
 
 
 class DiscordChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Discord channel over the Gateway WebSocket."""
 
     config: DiscordConfig

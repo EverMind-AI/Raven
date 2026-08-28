@@ -1,7 +1,7 @@
-"""Schema-match test: Pydantic models (raven.rpc.models) ↔ OpenRPC schema.
+"""Schema-match test: Pydantic models (raven.tui_rpc.models) ↔ OpenRPC schema.
 
 This test is the CI guardrail that catches drift between the single source of
-truth (``rpc-schema/openrpc.json``) and the Python-side Pydantic models.
+truth (``ui-tui/rpc-schema/openrpc.json``) and the Python-side Pydantic models.
 
 Strategy
 --------
@@ -15,11 +15,7 @@ For each method declared in the schema:
     field-level invariants.
 
 We deliberately do NOT compare every nested key (titles, descriptions, Pydantic
-"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Nullability is
-therefore NOT checked here: both sides are stripped of their null branch before
-the diff, so a nullable Pydantic field over a non-nullable schema one passes.
-Pin that per method against real handler output instead -- see
-``test_every_set_mode_answer_satisfies_the_published_result_schema``.  Instead we
+"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Instead we
 *normalize* both sides to a canonical ``{name → field_descriptor}`` shape and
 diff those.  This gives a readable assertion message on drift while staying
 robust to Pydantic's stylistic choices.
@@ -38,9 +34,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from raven.rpc.models import METHOD_MODELS
+from raven.tui_rpc.models import METHOD_MODELS
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "ui-tui" / "rpc-schema" / "openrpc.json"
 
 
 # ---------------------------------------------------------------------------
@@ -110,17 +106,9 @@ def _normalize_oas_type(
         return expanded
     out: dict[str, Any] = {}
     if "type" in node:
+        # OpenRPC declares JsonValue as a multi-typed primitive node; collapse.
         if isinstance(node["type"], list):
-            # Two shapes share this spelling. ``[T, "null"]`` is a nullable T --
-            # the schema's way of writing what Pydantic emits as
-            # ``anyOf: [T, null]`` and ``_strip_null_anyof`` reduces to T, so
-            # reduce it the same way or the two sides can never agree. Anything
-            # wider is JsonValue's multi-typed primitive node; collapse that.
-            non_null = [t for t in node["type"] if t != "null"]
-            if len(non_null) == 1:
-                out["type"] = non_null[0]
-            else:
-                out["any"] = True
+            out["any"] = True
         else:
             out["type"] = node["type"]
     if "enum" in node:
@@ -304,6 +292,11 @@ def test_method_set_matches(methods_by_name: dict[str, dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def method_names(methods_by_name: dict[str, dict[str, Any]]) -> list[str]:
+    return sorted(methods_by_name.keys())
+
+
 def _check_params_drift(method_name: str, method: dict[str, Any], schema: dict[str, Any]) -> None:
     params_model, _ = METHOD_MODELS[method_name]
     oas = _oas_params_to_canonical(method, schema)
@@ -364,7 +357,7 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     """
     from pydantic import TypeAdapter
 
-    from raven.rpc.models import TurnEvent
+    from raven.tui_rpc.models import TurnEvent
 
     oas = schema["components"]["schemas"]["TurnEvent"]
     assert oas.get("discriminator", {}).get("propertyName") == "type"
@@ -381,46 +374,6 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     oas_normal = {k: v.split("/")[-1] for k, v in oas_mapping.items()}
     pyd_normal = {k: v.split("/")[-1] for k, v in pyd_mapping.items()}
     assert oas_normal == pyd_normal, f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
-
-
-def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:
-    """Every variant's payload must declare the same fields on both sides.
-
-    The union test above compares only the *set of variants*, which is why a
-    field added to one side alone survived it: ``tool.complete`` gained
-    ``file_change`` at the emit site and in the Pydantic model with no schema
-    entry, and nothing failed. That is not a cosmetic drift -- both sides declare
-    ``additionalProperties: false`` / ``extra="forbid"``, so a consumer
-    validating against the schema rejects the *whole event*, not just the
-    unknown field, and a client loses the tool result entirely.
-
-    Compares names only. Types are left to the per-method sweep: an event payload
-    reuses the same component schemas, and a name mismatch is the failure this
-    contract actually suffers.
-    """
-    from pydantic import TypeAdapter
-
-    from raven.rpc.models import TurnEvent
-
-    components = schema["components"]["schemas"]
-    oas_mapping = components["TurnEvent"]["discriminator"]["mapping"]
-    pyd = TypeAdapter(TurnEvent).json_schema()
-    pyd_defs = pyd["$defs"]
-
-    def properties(node: dict[str, Any], defs: dict[str, Any]) -> set[str]:
-        payload = node["properties"].get("payload", {})
-        if "$ref" in payload:
-            payload = defs[payload["$ref"].split("/")[-1]]
-        return set(payload.get("properties", {}))
-
-    drift: dict[str, tuple[list[str], list[str]]] = {}
-    for literal, ref in pyd["discriminator"]["mapping"].items():
-        pyd_fields = properties(pyd_defs[ref.split("/")[-1]], pyd_defs)
-        oas_fields = properties(components[oas_mapping[literal].split("/")[-1]], components)
-        if pyd_fields != oas_fields:
-            drift[literal] = (sorted(pyd_fields - oas_fields), sorted(oas_fields - pyd_fields))
-
-    assert not drift, "payload field drift (pydantic-only, schema-only): " + repr(drift)
 
 
 # Parametrized full-suite sweep — one test instance per method.  This is the
@@ -473,8 +426,6 @@ EXPECTED_ERROR_CODES = {
     -32013: "cli_command_failed",
     -32014: "cli_command_timeout",
     -32015: "not_dispatch_compatible",
-    -32017: "subagent_not_found",
-    -32018: "session_title_too_long",
 }
 
 

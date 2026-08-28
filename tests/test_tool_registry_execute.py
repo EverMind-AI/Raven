@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
+from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers.base import RunMeta, TruncationInfo
@@ -27,14 +27,12 @@ class _Split(Tool):
         display_text: str | None,
         *,
         retryable: bool = True,
-        blocks_call: bool = False,
-        continuation: Continuation = Continuation.CONTINUE,
+        abort_action: bool = False,
     ) -> None:
         self._model_text = model_text
         self._display_text = display_text
         self._retryable = retryable
-        self._blocks_call = blocks_call
-        self._continuation = continuation
+        self._abort_action = abort_action
 
     @property
     def name(self) -> str:
@@ -53,8 +51,7 @@ class _Split(Tool):
             model_text=self._model_text,
             display_text=self._display_text,
             retryable=self._retryable,
-            blocks_call=self._blocks_call,
-            continuation=self._continuation,
+            abort_action=self._abort_action,
         )
 
 
@@ -125,8 +122,7 @@ async def test_non_retryable_error_omits_hint_and_preserves_abort_signal():
             "Error: denied by safety policy",
             None,
             retryable=False,
-            blocks_call=True,
-            continuation=Continuation.ABORT_TURN,
+            abort_action=True,
         )
     )
 
@@ -134,8 +130,7 @@ async def test_non_retryable_error_omits_hint_and_preserves_abort_signal():
 
     assert "try a different approach" not in result
     assert result.retryable is False  # type: ignore[attr-defined]
-    assert result.blocks_call is True  # type: ignore[attr-defined]
-    assert result.continuation is Continuation.ABORT_TURN  # type: ignore[attr-defined]
+    assert result.abort_action is True  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -145,29 +140,7 @@ async def test_missing_tool_still_returns_a_plain_string():
     result = await reg.execute("nope", {})
 
     assert isinstance(result, str)
-    assert "not available" in result
-
-
-@pytest.mark.asyncio
-async def test_a_miss_names_both_readings_and_lists_nothing():
-    """The registry cannot tell a hallucinated name from one unloaded mid-turn.
-
-    Both happen: a turn's prompt is assembled while an MCP server's tools
-    exist, and the server can go away before the model calls one. Saying only
-    "not found" accused the model of guessing, which is wrong half the time and
-    was the whole reason an earlier revision tracked tombstones to say
-    otherwise. Listing the catalog was worse -- 1470 tokens for a 210-tool
-    deploy, repeating schemas the request already carries, kept in history for
-    the rest of the run.
-    """
-    reg = _registry(_Plain())
-
-    result = await reg.execute("nope", {})
-
-    assert "may have been unloaded" in result
-    assert "the name may be wrong" in result
-    assert _Plain().name not in result
-    assert "try a different approach" not in result
+    assert "not found" in result
 
 
 def test_tool_output_is_a_str_subclass():
@@ -212,59 +185,6 @@ class _NeedsPath(Tool):
         return "written"
 
 
-class TestUnparsableArguments:
-    """A call whose arguments were not JSON must be told so.
-
-    The loop parks the raw text under ``_raw_arguments`` and flags the call with
-    ``run_meta.arguments_repaired`` when ``json.loads`` fails; the refusal reads
-    the flag and quotes the parked text back.
-
-    Falling through to schema validation instead would report it as "missing
-    required path" -- and a caller told it forgot a field it did send re-sends
-    the same malformed JSON forever. One observed session burned eighteen tool
-    calls in this loop and the model ended up reasoning about
-    ``_raw_arguments``, an internal key it only ever saw because we invented it.
-    """
-
-    @pytest.mark.asyncio
-    async def test_the_error_names_the_parse_failure_not_a_missing_field(self):
-        reg = _registry(_NeedsPath())
-
-        result = await reg.execute(
-            "write_file",
-            {"_raw_arguments": '{"path": "a.py", "content": "x'},
-            run_meta=RunMeta(arguments_repaired=True),
-        )
-
-        assert "not valid JSON" in result
-        assert "missing required" not in result
-        # The raw text comes back so the caller can see what it actually sent.
-        assert '{"path": "a.py"' in result
-        # And the internal key never appears in what the caller is asked to fix.
-        assert "_raw_arguments" not in result
-
-    @pytest.mark.asyncio
-    async def test_a_genuinely_missing_field_still_reports_as_missing(self):
-        reg = _registry(_NeedsPath())
-
-        result = await reg.execute("write_file", {"path": "a.py"})
-
-        assert "missing required content" in result
-
-    @pytest.mark.asyncio
-    async def test_a_long_argument_blob_is_capped(self):
-        reg = _registry(_NeedsPath())
-
-        result = await reg.execute(
-            "write_file",
-            {"_raw_arguments": "x" * 5000},
-            run_meta=RunMeta(arguments_repaired=True),
-        )
-
-        assert result.endswith("...")
-        assert len(result) < 1000
-
-
 @pytest.mark.asyncio
 async def test_truncated_arguments_reported_as_truncation() -> None:
     """A cut-off call names the real cause instead of the missing field.
@@ -286,10 +206,6 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
     assert "[truncated]" in out
     assert "4096-token output limit" in out
     assert "missing required" not in out
-    # flag_truncation reaches its verdict from arguments_repaired and adds
-    # truncation to that same run_meta, so this pairing is the ordinary streamed
-    # cut -- the parked text has to come back on this path as well.
-    assert '{"content": "def foo(' in out
     # The generic hint would still point at "try a different approach", which is
     # the advice that produced the retry loop.
     assert "different approach" not in out

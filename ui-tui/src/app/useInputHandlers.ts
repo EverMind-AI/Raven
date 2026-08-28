@@ -16,21 +16,11 @@ import type {
 } from '../gatewayTypes.js'
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
-import { openAgentsOverlay } from '../components/agentsOverlay.js'
-import { ESC_CLEAR_WINDOW_MS, TYPING_IDLE_MS } from '../config/timing.js'
+import { TYPING_IDLE_MS } from '../config/timing.js'
 import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
-import {
-  armEscape,
-  cycleTarget,
-  disarmEscape,
-  enterDirect,
-  getDirectChat,
-  leaveDirect,
-  orderedTargets
-} from './directChatStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
@@ -82,33 +72,6 @@ export function decideCtrlC(state: CtrlCState): CtrlCAction {
   return state.hasPendingInput ? 'clear-input' : 'quit'
 }
 
-export type EscapeAction = 'arm-clear' | 'clear-input' | 'ignore'
-
-export interface EscapeState {
-  /** A previous Esc armed the clear and its window is still open. */
-  escClearArmed: boolean
-  /** The composer holds text, or a wrapped line is buffered. */
-  hasPendingInput: boolean
-}
-
-/**
- * Which rung of the plain-Esc ladder a keypress lands on, once the higher
- * meanings of Esc (voice chord, queue edit, selection, direct mode) have all
- * declined it.
- *
- * - `arm-clear`: first Esc over a typed line. Only arms, so the hint can offer
- *   the clear before a single stray Esc discards what the user wrote.
- * - `clear-input`: second Esc inside the window. Drops the line.
- * - `ignore`: nothing to clear.
- */
-export function decideEscape(state: EscapeState): EscapeAction {
-  if (!state.hasPendingInput) {
-    return 'ignore'
-  }
-
-  return state.escClearArmed ? 'clear-input' : 'arm-clear'
-}
-
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
   starting: boolean,
@@ -137,7 +100,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   const isBlocked = useStore($isBlocked)
   const pagerPageSize = Math.max(5, (terminal.stdout?.rows ?? 24) - 6)
   const scrollIdleTimer = useRef<null | ReturnType<typeof setTimeout>>(null)
-  const escClearTimer = useRef<null | ReturnType<typeof setTimeout>>(null)
 
   // Wheel accel ported from claude-code: inter-event timing drives step size,
   // direction flips reset. wheelStep (WHEEL_SCROLL_STEP) is the base; final
@@ -146,31 +108,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   const precisionWheelRef = useRef(initPrecisionWheel())
 
-  useEffect(
-    () => () => {
-      clearTimeout(scrollIdleTimer.current ?? undefined)
-      clearTimeout(escClearTimer.current ?? undefined)
-    },
-    []
-  )
-
-  const disarmEscClear = () => {
-    clearTimeout(escClearTimer.current ?? undefined)
-    escClearTimer.current = null
-
-    if (getUiState().escClearArmed) {
-      patchUiState({ escClearArmed: false })
-    }
-  }
-
-  const armEscClear = () => {
-    clearTimeout(escClearTimer.current ?? undefined)
-    escClearTimer.current = setTimeout(() => {
-      escClearTimer.current = null
-      patchUiState({ escClearArmed: false })
-    }, ESC_CLEAR_WINDOW_MS)
-    patchUiState({ escClearArmed: true })
-  }
+  useEffect(() => () => clearTimeout(scrollIdleTimer.current ?? undefined), [])
 
   const scrollTranscript = (delta: number) => {
     if (getUiState().busy) {
@@ -324,7 +262,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     gateway
-      .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid }, { quiet: true })
+      .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid })
       .then(r => applyVoiceRecordResponse(r, starting, voice, actions.sys))
       .catch((e: Error) => {
         // Revert optimistic UI on failure.
@@ -338,12 +276,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   useInput((ch, key) => {
     const live = getUiState()
-
-    // The window closes on anything but another Esc, so the clear can only ever
-    // land on a press the user made with the hint in front of them.
-    if (live.escClearArmed && !key.escape) {
-      disarmEscClear()
-    }
 
     if (isBlocked) {
       // When approval/clarify/confirm overlays are active, their own useInput
@@ -500,56 +432,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       return clearSelection()
     }
 
-    // Direct mode: Esc returns to the main agent, in flight or not. One meaning,
-    // no branch -- there is no way to abort a sub-agent mid-turn, so a
-    // conditional Esc could only mean "I thought I was leaving and it cancelled
-    // the run". Placed after selection / queue-edit / voice, which keep their
-    // existing priority, and before the cancel-turn path below.
-    if (key.escape && getDirectChat().active !== null) {
-      return leaveDirect()
-    }
-
-    if (key.escape) {
-      const action = decideEscape({
-        escClearArmed: live.escClearArmed,
-        hasPendingInput: Boolean(cState.input || cState.inputBuf.length)
-      })
-
-      if (action === 'clear-input') {
-        disarmEscClear()
-
-        return cActions.clearIn()
-      }
-
-      if (action === 'arm-clear') {
-        return armEscClear()
-      }
-    }
-
-    // The agents overlay, from anywhere: the status bar's ⚡ HUD advertises
-    // this chord. Ctrl+T is free of the composer's line-editing chords and of
-    // tmux's default prefix (Ctrl+B), which never reaches the app.
-    if (isCtrl(key, ch, 't')) {
-      return openAgentsOverlay()
-    }
-
-    // Cycle the direct-chat target. Left/Right are otherwise the input
-    // cursor's, so these are the Ctrl chords, and only while another target
-    // exists to land on.
-    if (key.ctrl && (key.leftArrow || key.rightArrow)) {
-      const direct = getDirectChat()
-      // Every resumable instance, not just the rows the strip has room to
-      // draw: keyboard reach must not depend on how tall or wide the terminal
-      // happens to be.
-      const targets = orderedTargets(direct.instances, direct.active)
-
-      if (targets.length > 1) {
-        const next = cycleTarget(targets, direct.active, key.rightArrow ? 1 : -1)
-
-        return next === null ? leaveDirect() : enterDirect(next.agent, next.handle)
-      }
-    }
-
     if (key.upArrow && !cState.inputBuf.length) {
       const inputSel = getInputSelection()
       const cursor = inputSel && inputSel.start === inputSel.end ? inputSel.start : null
@@ -615,16 +497,12 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
       switch (action) {
         case 'force-reset':
-          disarmEscape(getDirectChat().active)
+          patchUiState({ escapeArmed: false })
           chat!.forceReset()
 
           return
         case 'cancel-turn':
-          // Armed against the lane on screen, which is the lane `cancel` below
-          // addresses. A global arm let a switch carry it to another view, where
-          // the next Ctrl+C took this branch's `force-reset` sibling and stopped
-          // nothing server-side.
-          armEscape(getDirectChat().active)
+          patchUiState({ escapeArmed: true })
           chat!.cancel().catch((err: Error) => actions.sys(`cancel failed: ${err.message}`))
 
           return

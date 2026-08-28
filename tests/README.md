@@ -18,20 +18,6 @@ uv run pytest tests/test_cli_doctor_commands.py
 uv run pytest -m "not real_llm"
 ```
 
-The suite runs on four workers by default (`-n 4` in `addopts`), which takes it
-from about ten minutes to two. Two things that costs you, both undone by `-n0`
-on the command line:
-
-```bash
-uv run pytest -n0 --pdb tests/test_cli_doctor_commands.py
-```
-
-- **`--pdb` refuses to start** under the workers: `--pdb is incompatible with
-  distributing tests`. There is no debugger to attach to, since the test runs in
-  a child process.
-- **Output is no longer in file order.** Reading a run top to bottom, or
-  comparing two runs line by line, wants `-n0` as well.
-
 Tests should avoid live network calls by default. When a test needs external
 services or a real model, guard it behind an explicit marker or environment
 variable so CI and local contributors get deterministic results.

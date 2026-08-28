@@ -45,24 +45,17 @@ export const resetDelegationState = () => $delegationState.set(buildState())
 
 export const $overlaySectionsOpen = atom<Record<string, boolean>>({})
 
-/** Whether one section is open, by key.
- *
- * The key must identify the section AND what it belongs to. Keying it on the
- * displayed title made every node in a spawn tree share one bit per section
- * name, and a title that changes when a run finishes (`Transcript / live` ->
- * `Transcript`) swapped the state out from under the reader at exactly the
- * moment they were watching for the result. */
-export const toggleOverlaySection = (key: string, defaultOpen: boolean) => {
+export const toggleOverlaySection = (title: string, defaultOpen: boolean) => {
   const state = $overlaySectionsOpen.get()
-  const current = key in state ? state[key]! : defaultOpen
+  const current = title in state ? state[title]! : defaultOpen
 
-  $overlaySectionsOpen.set({ ...state, [key]: !current })
+  $overlaySectionsOpen.set({ ...state, [title]: !current })
 }
 
-export const getOverlaySectionOpen = (key: string, defaultOpen: boolean): boolean => {
+export const getOverlaySectionOpen = (title: string, defaultOpen: boolean): boolean => {
   const state = $overlaySectionsOpen.get()
 
-  return key in state ? state[key]! : defaultOpen
+  return title in state ? state[title]! : defaultOpen
 }
 
 /** Merge a raw RPC response into the store.  Tolerant of partial/omitted fields. */

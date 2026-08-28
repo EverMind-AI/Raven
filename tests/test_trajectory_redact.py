@@ -463,11 +463,11 @@ def test_end_to_end_report_with_real_tracer(tmp_path, monkeypatch):
     monkeypatch.setattr("raven.trajectory.bundle._default_workspace", lambda: tmp_path / "ws")
     _spans._store = None
     try:
-        aid = trace.begin_attempt("cli:e2e")
-        with trace.span("session.turn", session_key="cli:e2e"):
+        # A single turn is addressed by its trace id (attempt id = trace id).
+        with trace.span("session.turn", session_key="cli:e2e") as root:
             with trace.span("tool.call") as s:
                 s.artifact("tool.output", {"stdout": f"auth={fake_env_key} cfg={fake_config_key}"})
-        trace.end_attempt("cli:e2e")
+        aid = root.trace_id
 
         out = tmp_path / "report.tar.gz"
         result = CliRunner().invoke(trajectory_app, ["report", aid, "--yes", "--out", str(out)])

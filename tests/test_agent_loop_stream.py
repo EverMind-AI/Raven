@@ -8,12 +8,9 @@ AgentLoop and instead bind the helper to a minimal stand-in.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
@@ -43,15 +40,8 @@ class _FakeProvider:
 
 
 def _bind_helper(provider: _FakeProvider):
-    """Bind ``_llm_call_stream`` to a SimpleNamespace stand-in for ``self``.
-
-    The stand-in carries every attribute the helper reads; the reconnect budget
-    is taken from the real class so these tests assert the shipped behavior.
-    """
-    fake_self = SimpleNamespace(
-        provider=provider,
-        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
-    )
+    """Bind ``_llm_call_stream`` to a SimpleNamespace stand-in for ``self``."""
+    fake_self = SimpleNamespace(provider=provider)
     return AgentLoop._llm_call_stream.__get__(fake_self)
 
 
@@ -270,18 +260,6 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
     assert seen == ["partial"]
 
 
-class _ApiError(Exception):
-    """Stand-in for ``litellm.APIError``: a 500 the classifier calls retryable."""
-
-    status_code = 500
-
-
-class _BadRequestError(Exception):
-    """Stand-in for a 400: the classifier calls it fatal (no retry, no fallback)."""
-
-    status_code = 400
-
-
 async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     """A non-streaming provider's chat() error, replayed through the base
     fallback as a single terminal delta with finish_reason='error', must not
@@ -298,6 +276,7 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
+
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
@@ -314,152 +293,6 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     assert response.content == "Azure OpenAI API Error 404: deployment not found"
     assert response.finish_reason == "error"
     assert response.error_classification is classification
-
-
-async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
-    """Reconnecting a stream that already emitted deltas would duplicate them in
-    the caller's UI, so a partially-streamed failure is not retried — it
-    propagates, which is what makes the turn fail (N-TURNFAILED)."""
-
-    class _FailAfterContent:
-        classify_error = LLMProvider.classify_error
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat_stream(self, **_kwargs: Any):
-            self.calls += 1
-            yield StreamDelta(content="partial")
-            raise _ApiError("APIError: OpenrouterException - Server disconnected")
-
-    provider = _FailAfterContent()
-    call = _bind_helper(provider)
-    seen: list[str] = []
-
-    async def on_delta(text: str) -> None:
-        seen.append(text)
-
-    with pytest.raises(_ApiError):
-        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
-
-    assert provider.calls == 1  # retryable, but deltas already reached the caller
-    assert seen == ["partial"]
-
-
-async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
-    """A retryable failure before the first delta is safe to reconnect: no output
-    reached the caller, so the second attempt is indistinguishable from the first."""
-
-    class _FailFirstConnect:
-        classify_error = LLMProvider.classify_error
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat_stream(self, **_kwargs: Any):
-            self.calls += 1
-            if self.calls == 1:
-                raise _ApiError("APIError: OpenrouterException - Server disconnected")
-                yield  # pragma: no cover - makes this an async generator
-            yield StreamDelta(content="recovered")
-
-    provider = _FailFirstConnect()
-    call = _bind_helper(provider)
-    seen: list[str] = []
-
-    async def on_delta(text: str) -> None:
-        seen.append(text)
-
-    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
-
-    assert provider.calls == 2
-    # The reconnected stream carried no terminal reason either, and none is
-    # invented now; what this states is that the reconnect happened.
-    assert response.finish_reason == "unknown"
-    assert response.content == "recovered"
-    assert seen == ["recovered"]
-
-
-async def test_llm_call_stream_does_not_reconnect_a_fatal_error() -> None:
-    """A non-retryable failure (400) is raised at once — a reconnect would just
-    reproduce it."""
-
-    class _FailFatally:
-        classify_error = LLMProvider.classify_error
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat_stream(self, **_kwargs: Any):
-            self.calls += 1
-            raise _BadRequestError("invalid request")
-            yield  # pragma: no cover - makes this an async generator
-
-    provider = _FailFatally()
-    call = _bind_helper(provider)
-
-    async def on_delta(_text: str) -> None:
-        return None
-
-    with pytest.raises(_BadRequestError):
-        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
-
-    assert provider.calls == 1
-
-
-async def test_llm_call_stream_surfaces_errors_from_a_provider_without_a_classifier() -> None:
-    """A duck-typed provider need not implement classify_error. Consulting it
-    unguarded would replace the real failure with an AttributeError raised from
-    inside the handler."""
-
-    class _NoClassifier:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat_stream(self, **_kwargs: Any):
-            self.calls += 1
-            raise _ApiError("APIError: OpenrouterException - Server disconnected")
-            yield  # pragma: no cover - makes this an async generator
-
-    provider = _NoClassifier()
-    call = _bind_helper(provider)
-
-    async def on_delta(_text: str) -> None:
-        return None
-
-    with pytest.raises(_ApiError):
-        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
-
-    assert provider.calls == 1  # unclassifiable -> fatal, no reconnect
-
-
-async def test_llm_call_stream_timeout_does_not_reconnect() -> None:
-    """The per-chunk idle cap already waited the full timeout, so a stalled stream
-    ends the call rather than doubling the stall with a reconnect."""
-
-    class _StallProvider:
-        classify_error = LLMProvider.classify_error
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def chat_stream(self, **_kwargs: Any):
-            self.calls += 1
-            raise TimeoutError
-            yield  # pragma: no cover - makes this an async generator
-
-    provider = _StallProvider()
-    call = _bind_helper(provider)
-
-    async def on_delta(_text: str) -> None:
-        return None
-
-    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
-
-    assert provider.calls == 1
-    assert response.finish_reason == "error"
-    assert response.error_classification is not None
-    assert response.error_classification.category == "network"
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
@@ -751,84 +584,3 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     )
 
     assert response.tool_calls[0].run_meta is not None
-
-
-# ---------------------------------------------------------------------------
-# reasoning_ms -- how long the call spent thinking
-#
-# Measured here because this is the only layer that watches the deltas arrive.
-# A browser clock cannot stand in for it: it lives only as long as the page that
-# saw the stream, so a reload or a session switch has nothing left to read.
-# ---------------------------------------------------------------------------
-
-_GAP_S = 0.12
-
-
-class _PacedProvider:
-    """Yields chunks, sleeping ``_GAP_S`` wherever the script says ``None``."""
-
-    def __init__(self, script: list[StreamDelta | None]) -> None:
-        self._script = script
-
-    async def chat_stream(self, **kwargs: Any):
-        for step in self._script:
-            if step is None:
-                await asyncio.sleep(_GAP_S)
-                continue
-            yield step
-
-    def emits_unparsed_reasoning(self) -> bool:
-        return False
-
-
-async def test_the_thinking_clock_runs_to_the_first_answer_token() -> None:
-    """It measures the thought, and stops when prose takes over -- the work that
-    follows the thought is not thinking time."""
-    response = await _bind_helper(
-        _PacedProvider(
-            [
-                StreamDelta(content=None, reasoning_content="let me"),
-                None,
-                StreamDelta(content="Hello"),
-                None,
-                None,
-                StreamDelta(content=" world"),
-            ]
-        )
-    )(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
-
-    assert response.reasoning_ms is not None
-    assert response.reasoning_ms >= _GAP_S * 1000 / 2
-    assert response.reasoning_ms < _GAP_S * 1000 * 2, "the clock kept running past the first token"
-
-
-async def test_the_thinking_clock_stops_at_the_first_tool_call() -> None:
-    """A call is the other thing that ends a thought."""
-    response = await _bind_helper(
-        _PacedProvider(
-            [
-                StreamDelta(content=None, reasoning_content="I need the file"),
-                None,
-                StreamDelta(
-                    content=None,
-                    tool_call_delta={
-                        "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "read_file", "arguments": "{}"}}]
-                    },
-                ),
-                None,
-                None,
-            ]
-        )
-    )(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
-
-    assert response.reasoning_ms is not None
-    assert _GAP_S * 1000 / 2 <= response.reasoning_ms < _GAP_S * 1000 * 2
-
-
-async def test_a_call_that_never_thought_reports_no_thinking_time() -> None:
-    """None is "not measured", which a reader must not draw as a zero."""
-    response = await _bind_helper(_FakeProvider([StreamDelta(content="hi")]))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.reasoning_ms is None

@@ -30,7 +30,7 @@ import { patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { AppLayout } from '../components/appLayout.js'
 import { DEFAULT_VOICE_RECORD_KEY } from '../lib/platform.js'
-import { TerminalScreen } from './support/terminalScreen.js'
+import { stripAnsi } from '../lib/text.js'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -48,20 +48,23 @@ const actions: AppLayoutActions = {
   clearSelection: () => {},
   deleteSessionWithFallback: async () => false,
   onModelSelect: () => {},
-  resumeById: () => {}
+  resumeById: () => {},
+  setStickyPrompt: () => {}
 }
 
 const status: AppLayoutStatusProps = {
   cwdLabel: '~/repo',
   goodVibesTick: 0,
   sessionStartedAt: null,
+  showStickyPrompt: false,
   statusColor: 'green',
+  stickyPrompt: '',
   turnStartedAt: null,
   voiceLabel: ''
 }
 
-const makeComposer = (completions: CompletionItem[], cols = 80): AppLayoutComposerProps => ({
-  cols,
+const makeComposer = (completions: CompletionItem[]): AppLayoutComposerProps => ({
+  cols: 80,
   compIdx: 0,
   completions,
   empty: completions.length === 0,
@@ -78,9 +81,9 @@ const makeComposer = (completions: CompletionItem[], cols = 80): AppLayoutCompos
 
 const gwServices = { gw: {}, rpc: async () => null } as unknown as GatewayServices
 
-const makeProps = (completions: CompletionItem[], cols = 80): AppLayoutProps => ({
+const makeProps = (completions: CompletionItem[]): AppLayoutProps => ({
   actions,
-  composer: makeComposer(completions, cols),
+  composer: makeComposer(completions),
   mouseTracking: false,
   progress: { showProgressArea: false },
   status,
@@ -99,9 +102,9 @@ const makeProps = (completions: CompletionItem[], cols = 80): AppLayoutProps => 
   }
 })
 
-const App = ({ cols = 80, completions = [] }: { cols?: number; completions?: CompletionItem[] }) => (
+const App = ({ completions = [] }: { completions?: CompletionItem[] }) => (
   <GatewayProvider value={gwServices}>
-    <AppLayout {...makeProps(completions, cols)} />
+    <AppLayout {...makeProps(completions)} />
   </GatewayProvider>
 )
 
@@ -120,13 +123,13 @@ const renderFrame = async (
   const stdout = new PassThrough()
   const stdin = new PassThrough()
   const stderr = new PassThrough()
-  const screen = new TerminalScreen(80, 24)
+  let output = ''
 
   Object.assign(stdout, { columns: 80, isTTY: true, rows: 24 })
   Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
   Object.assign(stderr, { isTTY: true })
   stdout.on('data', chunk => {
-    screen.write(chunk.toString())
+    output += chunk.toString()
   })
 
   const instance = renderSync(<App completions={completions} />, {
@@ -137,11 +140,10 @@ const renderFrame = async (
   })
 
   await delay(40)
-  const frame = screen.text()
   instance.unmount()
   instance.cleanup()
 
-  return frame
+  return stripAnsi(output)
 }
 
 const PAGER_LINES = Array.from({ length: 8 }, (_, i) => `PAGERLINE_${i}`)
@@ -173,82 +175,5 @@ describe('floating overlays with statusBar position', () => {
 
     expect(frame).toContain('COMPLETION_0')
     expect(frame).toContain('COMPLETION_5')
-  })
-
-  it('clears a closed pager from the physical terminal screen', async () => {
-    resetUiState()
-    resetOverlayState()
-    patchUiState({ statusBar: 'bottom' })
-    openPager()
-
-    const stdout = new PassThrough()
-    const stdin = new PassThrough()
-    const stderr = new PassThrough()
-    const screen = new TerminalScreen(80, 24)
-
-    Object.assign(stdout, { columns: 80, isTTY: true, rows: 24 })
-    Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
-    Object.assign(stderr, { isTTY: true })
-    stdout.on('data', chunk => screen.write(chunk.toString()))
-
-    const instance = renderSync(<App />, {
-      patchConsole: false,
-      stderr: stderr as NodeJS.WriteStream,
-      stdin: stdin as NodeJS.ReadStream,
-      stdout: stdout as NodeJS.WriteStream
-    })
-
-    try {
-      await delay(40)
-      expect(screen.text()).toContain('PAGERLINE_7')
-
-      patchOverlayState({ pager: null })
-      await delay(50)
-
-      expect(screen.text()).not.toContain('PAGERLINE_0')
-      expect(screen.text()).not.toContain('PAGERLINE_7')
-      expect(screen.text()).toContain('~/repo')
-    } finally {
-      instance.unmount()
-      instance.cleanup()
-    }
-  })
-
-  it('clears stale wide-frame cells after a terminal resize', async () => {
-    const stdout = new PassThrough()
-    const stdin = new PassThrough()
-    const stderr = new PassThrough()
-    const screen = new TerminalScreen(80, 24)
-
-    Object.assign(stdout, { columns: 80, isTTY: true, rows: 24 })
-    Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
-    Object.assign(stderr, { isTTY: true })
-    stdout.on('data', chunk => screen.write(chunk.toString()))
-
-    const wideCompletions: CompletionItem[] = [{ display: 'WIDE_TAIL', meta: 'old', text: '/wide' }]
-
-    const instance = renderSync(<App completions={wideCompletions} />, {
-      patchConsole: false,
-      stderr: stderr as NodeJS.WriteStream,
-      stdin: stdin as NodeJS.ReadStream,
-      stdout: stdout as NodeJS.WriteStream
-    })
-
-    try {
-      await delay(30)
-      expect(screen.text()).toContain('WIDE_TAIL')
-
-      Object.assign(stdout, { columns: 36, rows: 12 })
-      screen.resize(36, 12)
-      stdout.emit('resize')
-      instance.rerender(<App cols={36} />)
-      await delay(50)
-
-      expect(screen.text()).toContain('~/repo')
-      expect(screen.text()).not.toContain('WIDE_TAIL')
-    } finally {
-      instance.unmount()
-      instance.cleanup()
-    }
   })
 })

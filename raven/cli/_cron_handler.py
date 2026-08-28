@@ -113,7 +113,7 @@ def make_on_cron_job(
     spine ``submit`` as a CRON-origin turn.
 
     ``submit`` (required) is the spine entry (build_gateway / build_repl /
-    build_rpc_spine scheduler). The turn's source is the job's creation-time
+    build_tui scheduler). The turn's source is the job's creation-time
     binding ``(payload.channel, payload.to)`` — the single delivery target.
     The hub routes the reply to that channel's outlet; there is no
     trigger-time resolution, forwarding, or broadcast.
@@ -173,67 +173,21 @@ def make_on_cron_job(
             "context."
         )
 
-        channel = job.payload.channel or default_channel
-        chat_id = job.payload.to or "direct"
-        source = Source(
-            channel=channel,
-            chat_id=chat_id,
-            sender_id="cron",
-            chat_type=ChatType.DM,
+        # The creation-time binding is the one delivery target: submitting
+        # with it as the source lets the hub deliver the turn reply to that
+        # channel's outlet. run_turn sets the cron-context guard itself (in
+        # the lane task), keyed on origin=CRON.
+        req = TurnRequest(
+            origin=Origin.CRON,
+            source=Source(
+                channel=job.payload.channel or default_channel,
+                chat_id=job.payload.to or "direct",
+                sender_id="cron",
+                chat_type=ChatType.DM,
+            ),
+            text=reminder_note,
+            conversation=f"cron:{job.id}",
         )
-
-        # A wake that names a sub-agent instance is that instance's turn, not a
-        # reminder for the main agent. Both branches deliver to the same outlet;
-        # what differs is who answers.
-        #
-        # The reminder shape above wraps the message and hands it to the MAIN
-        # agent, whose reply is what the surface then shows. That is right for
-        # "remind me to take my meds" and wrong for an on-call wake: the message
-        # is addressed to the agent holding the campaign ("call ops_tune_status
-        # on this ledger, then decide"), and the main agent has no ops tools, so
-        # the best it can do is paraphrase. Measured 2026-08-25 on a campaign
-        # hosted through /new-instance: round 1 reached the operator (it was the
-        # direct turn that started the campaign) and every later round did not,
-        # because the only thing firing them was a headless shell whose child
-        # process wrote to a pipe nobody read.
-        #
-        # Sent as a direct turn instead, the round runs in the instance that owns
-        # the campaign and its own words land in that instance's pane -- the same
-        # path a typed message takes, so the reply, the record and the instance
-        # log all happen by the ordinary mechanism rather than a second one.
-        target = (
-            getattr(job.payload, "direct_agent", None) or "",
-            getattr(job.payload, "direct_handle", None) or "",
-        )
-        if all(target):
-            from raven.spine import direct_lane
-
-            # Derived, not hardcoded: the lane hangs off whatever session this
-            # job's (channel, to) binds to, which is the same session key the
-            # main-agent lane for this outlet uses. ``RpcOutlet`` maps it back
-            # via ``session_of``, so the client's one subscription receives it.
-            conversation = direct_lane(f"{channel}:{chat_id}", *target)
-            req = TurnRequest(
-                origin=Origin.CRON,
-                source=source,
-                # The wake message verbatim. The instance is the addressee, and
-                # a wake turn's message is the whole of what it gets.
-                text=job.payload.message,
-                conversation=conversation,
-                direct_target=target,
-            )
-        else:
-            # The creation-time binding is the one delivery target: submitting
-            # with it as the source lets the hub deliver the turn reply to that
-            # channel's outlet. run_turn sets the cron-context guard itself (in
-            # the lane task), keyed on origin=CRON.
-            conversation = f"cron:{job.id}"
-            req = TurnRequest(
-                origin=Origin.CRON,
-                source=source,
-                text=reminder_note,
-                conversation=conversation,
-            )
         try:
             await submit(req).result()
         except Exception as exc:
@@ -242,9 +196,8 @@ def make_on_cron_job(
             raise
         # Read the reply back (for the system event) from the gateway runner's
         # capture, stored before result() resolved, and pop it so the
-        # long-running map does not accumulate. Keyed on the conversation the
-        # request actually used -- a direct wake runs on the instance's lane.
-        response: str | None = readback_texts.pop(conversation, None) if readback_texts is not None else None
+        # long-running map does not accumulate.
+        response: str | None = readback_texts.pop(f"cron:{job.id}", None) if readback_texts is not None else None
 
         # Anti-runaway: count this successful recurring fire. Best-effort —
         # a store I/O failure must not turn a delivered reminder into an

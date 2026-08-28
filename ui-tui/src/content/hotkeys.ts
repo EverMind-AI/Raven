@@ -22,7 +22,6 @@ export const HOTKEYS: [string, string][] = [
   [action + '+L', 'redraw / repaint'],
   [paste + '+V / /paste', 'paste text; /paste attaches clipboard image'],
   ['Tab', 'apply completion'],
-  ['Ctrl+T', 'open the agents overlay (live sub-agents and dag nodes)'],
   ['↑/↓', 'completions / queue edit / history'],
   ['Ctrl+X', 'delete the queued message you’re editing (Esc cancels edit)'],
   [action + '+A/E', 'home / end of line'],

@@ -1,4 +1,0 @@
-interface:
-  display_name: "图标与符号设计"
-  short_description: "设计、校准并验证 UI、公共、品牌、状态与动效图标及符号系统"
-  default_prompt: "使用 $design-icons-and-symbols 设计或审查可辨识、光学校准、家族一致并适配真实媒介的图标或符号资产。"

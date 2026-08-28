@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -158,13 +157,7 @@ class TestSpawnPreflight:
         """A /health 200 proves the LLM client was built, so do not second-guess it."""
         _write_llm_section(everos_toml, api_key="")
         waits: list[int] = []
-        # _speaks_our_api is stubbed too: a healthy address is also probed for the
-        # API prefix, and leaving that unstubbed makes the outcome depend on
-        # whether the developer's machine happens to have EverOS on this port.
-        with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=True),
-        ):
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=True):
             await ensure_everos_server("http://localhost:18791", on_wait=lambda: waits.append(1))
 
         assert waits == [], "narrated a wait that never happened"
@@ -312,7 +305,7 @@ class TestStoppingWhatWeStarted:
         monkeypatch.setattr(_os, "kill", lambda *_a: None)
         monkeypatch.setattr("raven.plugin.memory.everos._server.time.sleep", lambda _s: None)
 
-        assert stop_recorded_server(_data_dir, timeout=0.05) is StopOutcome.STILL_DRAINING
+        assert stop_recorded_server(_data_dir, timeout=1.0) is StopOutcome.STILL_DRAINING
         assert (_data_dir / "everos-server.pid").exists(), "forgot a server that is still up"
 
     def test_an_undeliverable_signal_is_its_own_answer(self, _data_dir, monkeypatch) -> None:
@@ -398,25 +391,7 @@ class TestThePrimitivesAgainstTheRealOS:
 
         assert _is_everos_server(os.getpid()) is False
 
-    @pytest.mark.skipif(
-        shutil.which("ps") is None,
-        reason="no ps on PATH: _is_everos_server cannot read a command line without it",
-    )
-    def test_ps_recognises_a_process_whose_command_line_says_everos(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The marker is found even though it sits past the 80th column.
-
-        ``COLUMNS`` is pinned rather than inherited, and that is the whole test.
-        ``ps`` truncates to it, the marker sits at the end of the command line
-        behind an absolute interpreter path, and so whether this passed used to
-        depend on how deep the checkout was: green in a clone at
-        ``~/Raven``, red in a git worktree, whose extra
-        ``.claude/worktrees/<name>/`` pushed the marker past column 80. A test
-        that a deeper directory can turn red was testing the path, not the code.
-
-        The command line is padded so the marker is past column 80 wherever the
-        suite runs. The bug is in `_is_everos_server`, which reads a real `ps`,
-        so it cannot be asserted against a stub.
-        """
+    def test_ps_recognises_a_process_whose_command_line_says_everos(self) -> None:
         import subprocess
         import sys
 
@@ -430,15 +405,7 @@ class TestThePrimitivesAgainstTheRealOS:
         # simple command execs it directly, replacing its own command line and
         # dropping the marker -- which made this pass alone and fail in a full
         # run. A python interpreter never rewrites its argv, so the marker stays.
-        monkeypatch.setenv("COLUMNS", "80")
-        # Padded so the marker is past column 80 on any machine, rather than only
-        # where the interpreter path happens to be long enough. Pinning COLUMNS
-        # without this would leave the case vacuous in a shallow clone -- which is
-        # the failure this test is being rewritten out of, in the other direction.
-        padding = "p" * 120
-        proc = subprocess.Popen(
-            [sys.executable, "-c", f"import time; time.sleep(5)  # {padding} everos server start --root /x"]
-        )
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)  # everos server start --root /x"])
         try:
             assert _is_everos_server(proc.pid) is True
         finally:
@@ -620,31 +587,11 @@ class TestEnsureEverosServer:
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=True),
+        with patch(
+            "raven.plugin.memory.everos._server._probe_health",
+            return_value=True,
         ):
             await ensure_everos_server("http://localhost:18791")
-
-    @pytest.mark.asyncio
-    async def test_a_live_server_that_cannot_serve_our_api_is_refused(self) -> None:
-        """Health is not a handshake.
-
-        An older EverOS answers /health perfectly and 404s every call the client
-        makes afterwards. Adopting it is what made that failure silent -- a
-        store failure is swallowed per turn, so the pairing ran for days looking
-        healthy while nothing was written and nothing recalled.
-        """
-        with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=False),
-            patch("raven.plugin.memory.everos._server._start_server_if_unlocked") as start,
-        ):
-            with pytest.raises(RuntimeError, match="too old for this raven"):
-                await ensure_everos_server("http://localhost:18791")
-        # Refused, not worked around: starting a second one on the same port
-        # would only fail to bind.
-        start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_auto_start_on_connection_error(self, tmp_path, everos_toml) -> None:
@@ -654,7 +601,7 @@ class TestEnsureEverosServer:
         def probe_side_effect(*_args, **_kwargs):
             nonlocal call_count
             call_count += 1
-            return call_count >= 2
+            return call_count >= 3
 
         with (
             patch(
@@ -695,7 +642,7 @@ class TestEnsureEverosServer:
             ),
             pytest.raises(RuntimeError, match="is still starting"),
         ):
-            await ensure_everos_server("http://localhost:18791", timeout=0.05)
+            await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
     def test_port_extraction(self) -> None:
         from raven.plugin.memory.everos._server import _extract_port
@@ -1024,7 +971,7 @@ class TestStoppingWhatTheLockNamed:
         monkeypatch.setattr(_server, "_is_everos_server", lambda _p: True)
         monkeypatch.setattr(_server.time, "sleep", lambda _s: None)
 
-        assert _server.stop_pid(4242, timeout=0.05) is _server.StopOutcome.STILL_DRAINING
+        assert _server.stop_pid(4242, timeout=1.0) is _server.StopOutcome.STILL_DRAINING
 
 
 class TestAnUnwritableRootFailsAsAStartFailure:
@@ -1038,7 +985,6 @@ class TestAnUnwritableRootFailsAsAStartFailure:
     situation the user can act on: fix the permissions and run it again.
     """
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o555 does not block root")
     def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
         from raven.plugin.memory.everos import _server
 

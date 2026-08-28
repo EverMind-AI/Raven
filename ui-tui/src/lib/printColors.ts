@@ -10,7 +10,6 @@ import { colorize } from '@hermes/ink'
 import type { Theme, ThemeColors } from '../theme.js'
 
 import { ravenLogo } from '../banner.js'
-import { terminalBackground } from '../theme.js'
 
 const TIER_NAMES: Record<number, string> = {
   0: 'none',
@@ -31,7 +30,6 @@ export function renderColorSwatches(theme: Theme, tier: 0 | 1 | 2 | 3): string {
 
   const lines: string[] = []
   lines.push(`Raven TUI palette — tier ${tier} (${TIER_NAMES[tier] ?? 'unknown'})`)
-  lines.push(`  userBg / detailBg derived from ${groundLabel()}`)
   lines.push('')
 
   for (const role of roles) {
@@ -45,17 +43,6 @@ export function renderColorSwatches(theme: Theme, tier: 0 | 1 | 2 | 3): string {
   lines.push('Force a tier to compare:  raven tui --color <truecolor|256|16|none> --print-colors')
 
   return lines.join('\n') + '\n'
-}
-
-// This diagnostic exits before the app mounts, so the OSC 11 probe that
-// normally measures the ground has not run. Name what the two block surfaces
-// were actually derived from, and how to feed the real one in.
-function groundLabel(): string {
-  const bg = terminalBackground()
-
-  return bg
-    ? `terminal background ${bg}`
-    : 'the canonical ground (export RAVEN_TUI_BACKGROUND=#rrggbb to preview your own)'
 }
 
 /**
@@ -79,7 +66,7 @@ export function renderColorPreview(theme: Theme, tier: 0 | 1 | 2 | 3): string {
   }
 
   section('Prompt & input')
-  out.push('  ' + fg(theme.brand.prompt, c.prompt) + ' ' + fg('ask me something…', c.muted))
+  out.push('  ' + fg('❯', c.prompt) + ' ' + fg('ask me something…', c.muted))
   out.push('  ' + fg('$', c.shellDollar) + ' ' + fg('git status', c.text))
 
   section('Text roles')

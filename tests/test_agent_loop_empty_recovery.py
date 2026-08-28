@@ -13,14 +13,11 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.recovery import (
-    POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
@@ -28,8 +25,7 @@ from raven.agent.loop.recovery import (
     has_thinking,
     limits_from_defaults,
 )
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -417,87 +413,3 @@ def test_a_mismatched_pair_is_not_treated_as_a_block() -> None:
 def test_one_end_namespaced_is_still_one_block() -> None:
     """A backend that stamps only one end still wrote a single block."""
     assert AgentLoop._strip_think("<mm:think>weighing</think>the answer") == "the answer"
-
-
-# --------------------------------------------------------------------------- #
-# the transport verdict must not pre-empt this recovery                        #
-# --------------------------------------------------------------------------- #
-#
-# The loop breaks the turn on `finish_reason == "error"` *before*
-# `classify_empty_response` runs, so anything that reports an empty response as
-# an error takes every mode in this file out of service. The tests above stub
-# `chat` directly and so never reach the provider's response exit, which is
-# where such a verdict is reached -- these go through it on purpose.
-
-
-class _SilentAfterToolProvider(LiteLLMProvider):
-    """Calls a tool, comes back with nothing, and answers once nudged.
-
-    The shape `recovery.py` documents as the common weak-model dud: honest
-    usage, no text. Built through the real `_parse_response` so a verdict at
-    that exit is in the path.
-    """
-
-    def __init__(self) -> None:
-        with (
-            patch("raven.providers.litellm_provider.litellm"),
-            patch.object(LiteLLMProvider, "_setup_env"),
-        ):
-            super().__init__(api_key="sk-test", provider_name="openrouter")
-        self.calls = 0
-        self.nudged = False
-
-    def get_default_model(self) -> str:
-        return "stub"
-
-    async def chat(self, messages, tools=None, model=None, **kw):
-        self.calls += 1
-        if self.calls == 1:
-            return LLMResponse(
-                content="",
-                finish_reason="tool_calls",
-                tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
-                usage={"prompt_tokens": 900, "total_tokens": 910},
-            )
-        if any(m.get("content") == POST_TOOL_NUDGE for m in messages):
-            self.nudged = True
-            return LLMResponse(content="here are the files", finish_reason="stop")
-        # Empty, and billed truthfully: a model that said nothing, not a
-        # request that never arrived.
-        return self._parse_response(
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content=None, tool_calls=None, reasoning_content=None),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=SimpleNamespace(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
-            ),
-            sent_chars=12000,
-        )
-
-
-@pytest.mark.asyncio
-async def test_a_silent_model_after_a_tool_still_reaches_the_nudge(workspace):
-    """Honest usage means the loop keeps ownership of the silence.
-
-    Reported as an error instead, this turn would end on the spot -- and the
-    error would claim a transport failure, which for this response is simply
-    untrue.
-    """
-    provider = _SilentAfterToolProvider()
-    agent = _make_agent(workspace, provider)
-
-    out = await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="list the files",
-        ),
-        session_key="s1",
-    )
-
-    assert out is not None
-    assert provider.nudged is True, "the nudge never happened; the empty turn was taken as an error"
-    assert out[0] == "here are the files"

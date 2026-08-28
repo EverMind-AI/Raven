@@ -7,10 +7,7 @@ query-conditioned recall hits. Two contributing sources, one owner.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
-
-from loguru import logger
 
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
@@ -20,19 +17,11 @@ if TYPE_CHECKING:
     from raven.memory_engine.backend import MemoryBackend
     from raven.memory_engine.consolidate.consolidator import MemoryStore
 
-# The turn's own bound on recall. The backend plugin carries a stricter one so
-# its circuit breaker fires first; this is the floor under any third-party
-# MemoryBackend, which the Protocol does not oblige to have a timeout at all.
-_RECALL_BUDGET_S: float = 5.0
-
 
 class MemorySegmentBuilder:
     name = "memory"
     order = 3
     needs_prefix = False
-    # Host memory is picked per message and EverOS recall is a query against
-    # it, so this segment answers to the user's latest words.
-    stable = False
 
     def __init__(
         self,
@@ -47,10 +36,9 @@ class MemorySegmentBuilder:
         self._memory_top_k = memory_top_k
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
-        # Host direct-read (sync) and EverOS recall (async I/O). The recall is
-        # bounded and degrades to no hits: memory enhances an answer, it does
-        # not gate one, and an outage must not hold the turn before the model
-        # call.
+        # Host direct-read (sync) and EverOS recall (async I/O) — the
+        # recall propagates on hard failure so a backend outage surfaces
+        # at AgentLoop rather than silently dropping memory.
         host = self._memory_store.get_memory_context(current_message=ctx.current_message)
         recall_hits = await self._recall(ctx.current_message)
         recall_bullets = render.render_recalled_memory(recall_hits)
@@ -65,26 +53,10 @@ class MemorySegmentBuilder:
     async def _recall(self, query: str) -> list[Any]:
         if self._backend is None:
             return []
-        try:
-            hits = await asyncio.wait_for(
-                self._backend.recall(
-                    query=query,
-                    user_id=self._user_id,
-                    top_k=self._memory_top_k,
-                ),
-                timeout=_RECALL_BUDGET_S,
+        return list(
+            await self._backend.recall(
+                query=query,
+                user_id=self._user_id,
+                top_k=self._memory_top_k,
             )
-        except TimeoutError:
-            logger.warning(
-                "memory recall exceeded its {}s turn budget; continuing this turn without recalled memory",
-                _RECALL_BUDGET_S,
-            )
-            return []
-        except Exception as e:
-            logger.warning(
-                "memory recall failed ({}: {}); continuing this turn without recalled memory",
-                type(e).__name__,
-                e,
-            )
-            return []
-        return list(hits)
+        )

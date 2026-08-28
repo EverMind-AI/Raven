@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,17 +35,6 @@ class LockInfo:
     pid: int
     started_at: float
     config_path: str
-    # Where this gateway answers RPC, published after the server binds. Carried
-    # here rather than in config because it is a runtime fact, not a setting:
-    # the port may be ephemeral and the token is minted per boot, so writing
-    # either into config.json would leave a stale secret behind on every exit.
-    web_host: str = ""
-    web_port: int = 0
-    web_token: str = ""
-
-    @property
-    def web_url(self) -> str:
-        return f"ws://{self.web_host}:{self.web_port}/ws" if self.web_host and self.web_port else ""
 
 
 def _lock_path() -> Path:
@@ -61,41 +49,9 @@ def _read_payload(path: Path) -> LockInfo:
             pid=int(data.get("pid", -1)),
             started_at=float(data.get("started_at", 0.0)),
             config_path=str(data.get("config_path", "")),
-            web_host=str(data.get("web_host", "")),
-            web_port=int(data.get("web_port", 0)),
-            web_token=str(data.get("web_token", "")),
         )
     except (OSError, ValueError, TypeError):
         return LockInfo(pid=-1, started_at=0.0, config_path="")
-
-
-def publish_web_endpoint(host: str, port: int, token: str) -> None:
-    """Record where this gateway answers RPC, for local clients to find.
-
-    Called after the server binds, so the port is the one it actually got. The
-    payload carries a credential, and ``O_CREAT``'s mode applies only to a file
-    the open itself creates -- ``acquire()`` already made this one -- so the
-    open descriptor is narrowed to owner-only before the token is written,
-    never after it. The anchor beside it still carries the lock; this file
-    stays readable by its owner only.
-    """
-    payload = _lock_path()
-    try:
-        data = json.loads(payload.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = {}
-    data.update({"web_host": host, "web_port": int(port), "web_token": token})
-    body = json.dumps(data).encode("utf-8")
-    fd = os.open(payload, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with suppress(OSError):  # a filesystem without POSIX modes
-            if hasattr(os, "fchmod"):
-                os.fchmod(fd, 0o600)
-            else:  # Windows has no fchmod
-                payload.chmod(0o600)
-        os.write(fd, body)
-    finally:
-        os.close(fd)
 
 
 def acquire(now: float):
@@ -117,20 +73,16 @@ def acquire(now: float):
         info = _read_payload(payload)
         fd.close()
         raise GatewayAlreadyRunningError(info)
-    body = json.dumps(
-        {
-            "pid": os.getpid(),
-            "started_at": now,
-            "config_path": str(get_config_path()),
-        }
-    ).encode("utf-8")
-    # This file later receives the web token, so it is born owner-only
-    # rather than trusting the umask.
-    pfd = os.open(payload, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(pfd, body)
-    finally:
-        os.close(pfd)
+    payload.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "started_at": now,
+                "config_path": str(get_config_path()),
+            }
+        ),
+        encoding="utf-8",
+    )
     return fd
 
 
@@ -154,4 +106,4 @@ def read_status(now: float) -> LockInfo | None:
             return _read_payload(payload)
 
 
-__all__ = ["acquire", "read_status", "publish_web_endpoint", "GatewayAlreadyRunningError", "LockInfo"]
+__all__ = ["acquire", "read_status", "GatewayAlreadyRunningError", "LockInfo"]

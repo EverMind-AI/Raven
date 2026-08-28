@@ -69,21 +69,6 @@ describe('typing burst reaching the composer', () => {
     }
   })
 
-  it('does not type the letter of a Ctrl chord it does not bind', async () => {
-    const h = mount()
-
-    try {
-      // Ctrl+T (0x14) opens the agents overlay; the composer used to insert
-      // its "t" as well, one per press.
-      await h.type('\x14')
-      await h.type('a')
-
-      expect(h.changes).toEqual(['a'])
-    } finally {
-      h.unmount()
-    }
-  })
-
   it('accepts a coalesced run of wide characters', async () => {
     const h = mount()
 

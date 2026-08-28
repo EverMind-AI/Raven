@@ -278,30 +278,6 @@ async def test_status_updates_connected(tmp_path, monkeypatch):
     assert ch._connected is False
 
 
-async def test_qr_message_sets_pending_qr_and_pairing_clears_it(tmp_path, monkeypatch):
-    """The bridge's qr message is what the web UI renders, and pairing has to
-    retract it -- a stale code would keep being served after login."""
-    ch = _make_channel(monkeypatch, tmp_path)
-    assert ch.pending_qr is None
-    assert ch.connected is False
-
-    await ch._handle_bridge_message(json.dumps({"type": "qr", "qr": "2@abc"}))
-    assert ch.pending_qr == "2@abc"
-    # Still unpaired while the code waits to be scanned.
-    assert ch.connected is False
-
-    await ch._handle_bridge_message(json.dumps({"type": "status", "status": "connected"}))
-    assert ch.pending_qr is None
-    assert ch.connected is True
-
-
-async def test_qr_message_accepts_the_code_field(tmp_path, monkeypatch):
-    """Older bridge builds spell the payload `code` rather than `qr`."""
-    ch = _make_channel(monkeypatch, tmp_path)
-    await ch._handle_bridge_message(json.dumps({"type": "qr", "code": "2@xyz"}))
-    assert ch.pending_qr == "2@xyz"
-
-
 async def test_invalid_json_is_ignored(tmp_path, monkeypatch):
     ch = _make_channel(monkeypatch, tmp_path)
     ch.intake.publish = AsyncMock()

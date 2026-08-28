@@ -236,62 +236,6 @@ def test_on_built_exception_is_swallowed_and_does_not_break_the_build() -> None:
     assert asyncio.run(lp.chat([])) == "chat"
 
 
-def test_on_built_setter_does_not_wait_for_a_build_in_flight() -> None:
-    """``_built`` holds its lock for the whole litellm import. Wiring the
-    callback runs on ``AgentLoop``'s construction path -- the startup path --
-    so queueing behind that lock hands back the seconds prewarm just moved off
-    it, and the deferral buys nothing."""
-    entered = threading.Event()
-    release = threading.Event()
-
-    def factory() -> _FakeProvider:
-        entered.set()
-        release.wait(timeout=5.0)
-        return _FakeProvider()
-
-    lp = LazyProvider(factory, "cfg-model", GenerationSettings())
-    lp.prewarm()
-    assert entered.wait(timeout=2.0), "prewarm never reached the factory"
-
-    started = time.perf_counter()
-    lp.on_built = lambda: None
-    elapsed = time.perf_counter() - started
-
-    release.set()
-    assert elapsed < 0.5, f"the setter waited {elapsed:.2f}s on the in-flight build"
-
-
-def test_on_built_fires_exactly_once_when_wired_during_a_build_in_flight() -> None:
-    """The two ends of that race -- the build finishing and the callback being
-    wired -- must agree on one fire between them, whichever lands second."""
-    entered = threading.Event()
-    release = threading.Event()
-    fired = threading.Event()
-    calls: list = []
-
-    def factory() -> _FakeProvider:
-        entered.set()
-        release.wait(timeout=5.0)
-        return _FakeProvider()
-
-    def on_built() -> None:
-        calls.append("fired")
-        fired.set()
-
-    lp = LazyProvider(factory, "cfg-model", GenerationSettings())
-    lp.prewarm()
-    assert entered.wait(timeout=2.0), "prewarm never reached the factory"
-
-    lp.on_built = on_built
-    assert calls == []  # nothing built yet, so nothing to correct yet
-
-    release.set()
-    assert fired.wait(timeout=2.0), "on_built never fired after the build finished"
-    asyncio.run(lp.chat([]))  # memoized provider: no second build, no second fire
-
-    assert calls == ["fired"]
-
-
 def test_on_built_fires_from_the_prewarm_thread_not_the_caller() -> None:
     fired = threading.Event()
     seen: dict[str, threading.Thread] = {}

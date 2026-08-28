@@ -1,4 +1,0 @@
-interface:
-  display_name: "品牌识别设计"
-  short_description: "设计、扩展或审查可长期复用的品牌识别与架构系统"
-  default_prompt: "使用 $design-brand-identities 设计、扩展或审查可长期复用的品牌识别，并按真实媒介交付可编辑资产与验证证据。"

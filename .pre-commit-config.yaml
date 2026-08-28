@@ -9,34 +9,20 @@ repos:
     hooks:
       - id: ruff
         args: [--fix]
-        # Vendored sub-agent builds. Repeated from pyproject's extend-exclude
-        # because this hook passes explicit paths, which that setting does not
-        # override; the two cover `make lint` and the commit path respectively.
-        exclude: '^subagents/'
       - id: ruff-format
-        # Adopted code: lint it, but do not restyle it. See per-file-ignores in
-        # pyproject.toml.
-        exclude: '^subagents/'
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        # Vendored sub-agent builds are byte copies of an upstream commit
-        # (subagents/TREE_HASHES); restyling them breaks that contract.
-        exclude: '^subagents/'
       - id: end-of-file-fixer
-        exclude: '^subagents/'
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
         args: [--maxkb=1024]
       - id: check-merge-conflict
       - id: detect-private-key
-        # The match is a bare header line with no key body, written as a
-        # fixture for the agent's own secret redaction. The vendored sub-agent
-        # builds carry the same file under their own names.
-        exclude: ^(tests/test_runtime_checkpoint_deep\.py|subagents/[^/]+/[^/]+/tests/test_runtime_checkpoint.*\.py)$
+        exclude: ^tests/test_runtime_checkpoint_deep\.py$
 
   - repo: local
     hooks:
@@ -45,30 +31,6 @@ repos:
         entry: env PYTHONPATH=. python3 scripts/check_commit_file.py
         language: system
         stages: [commit-msg]
-
-      - id: vendored-subagents
-        name: vendored subagent checkouts unchanged
-        entry: python3 scripts/check_vendored_subagents.py
-        language: system
-        pass_filenames: false
-        files: '^subagents/'
-
-      # Not gated on a path list: this reads both the forks and the trunk, and the
-      # set it reads is the registry inside the script, which no `files:` pattern
-      # here can follow. It parses six files and returns in well under a second.
-      - id: vendored-invariants
-        name: vendored subagents carry this trunk's fixes
-        entry: python3 scripts/check_vendored_invariants.py
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      - id: ui-rpc-contract
-        name: ui rpc contract in sync
-        entry: bash -c '[ -d ui/node_modules ] || exit 0; npm run gen:check --prefix ui'
-        language: system
-        pass_filenames: false
-        files: '^rpc-schema/openrpc\.json$'
 
       - id: eslint-ui-tui
         name: eslint (ui-tui)

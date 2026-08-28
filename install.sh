@@ -13,7 +13,6 @@
 #   1. uv            (Python toolchain + package manager)
 #   2. Node.js >= 22 (TUI runtime; installed privately if the system lacks it)
 #   3. raven         (installed as a global uv tool -> ~/.local/bin/raven)
-#   4. sub-agents    (local source only; the published artifacts carry no tree)
 #
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
@@ -22,11 +21,6 @@ set -eu
 MIN_NODE_MAJOR=22
 RAVEN_HOME="${RAVEN_HOME:-${HOME:?HOME is required, or set RAVEN_HOME explicitly}/.raven}"
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
-# Set by install_raven when it installed from a source checkout, and read by
-# install_subagents. Empty after a wheel install, which is the whole gate: the
-# wheel and the sdist ship `raven/` only, so there is no sub-agent tree to build
-# unless this is a clone.
-RAVEN_SRC_DIR=""
 
 # --- pretty output ---------------------------------------------------------
 info()  { printf '\033[1;34m>\033[0m %s\n' "$1"; }
@@ -154,70 +148,6 @@ ensure_node() {
   # so no PATH change is needed for `raven tui` to find it.
 }
 
-# --- 2b. build the web assets a source checkout does not carry -------------
-# `ui-tui/dist/entry.js` (the TUI bundle) and `ui/dist/index.html` (the page
-# `raven web` serves) are both gitignored build artifacts. A release wheel
-# carries them; an editable install of a checkout gets neither, so without this
-# a clone install has no TUI and no page. Both must exist before first run.
-build_web_assets() {
-  src="$1"
-  need_tui=0
-  need_page=0
-  [ -f "$src/ui-tui/dist/entry.js" ] || need_tui=1
-  [ -f "$src/ui/dist/index.html" ] || need_page=1
-  [ "$need_tui" = 1 ] || [ "$need_page" = 1 ] || return 0
-
-  # One probe for both builds. ensure_node may have provisioned a private
-  # runtime that never reaches PATH, so look there before giving up.
-  node_bin="$(command -v node || true)"
-  [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
-  node_dir=""
-  blocker=""
-  if [ -z "$node_bin" ] || [ ! -x "$node_bin" ]; then
-    blocker="No usable node found"
-  elif ! PATH="$(dirname "$node_bin"):$PATH" command -v npm >/dev/null 2>&1; then
-    # npm ships alongside node, but verify explicitly before relying on it.
-    blocker="Found node but not npm"
-  else
-    node_dir="$(dirname "$node_bin")"
-  fi
-
-  if [ "$need_tui" = 1 ]; then
-    if [ -n "$blocker" ]; then
-      warn "$blocker; skipping TUI build; raven tui may not work"
-    else
-      info "Building the TUI bundle (ui-tui/dist/entry.js)..."
-      ( cd "$src/ui-tui" && PATH="$node_dir:$PATH" npm ci && PATH="$node_dir:$PATH" npm run build )
-    fi
-  fi
-
-  if [ "$need_page" = 1 ]; then
-    if [ -n "$blocker" ]; then
-      warn "$blocker; skipping the served-page build; raven web will not start"
-    else
-      info "Building the served page (ui/dist/index.html)..."
-      # Warned rather than propagated, unlike the bundle above: bare `raven`
-      # opens the TUI, so a machine that cannot build the page still gets the
-      # surface this script exists to deliver.
-      build_page "$src" "$node_dir" \
-        || warn "The served page did not build (see above); raven web will not start"
-    fi
-  fi
-}
-
-# Vite emits ui/.modern/modern.iife.js, then ui/build.py inlines it with the
-# page sources and the shared i18n catalogue into the single-file dist.
-#
-# Kept to one `&&` chain on purpose: `set -e` does not apply inside a function
-# whose caller guards it with `||`, so a second statement would run even after
-# npm ci had failed. Python comes from uv, which is already a hard requirement
-# here, rather than from a bare `python3` -- on a machine without the Command
-# Line Tools that name is a stub macOS answers with an install prompt.
-build_page() {
-  ( cd "$1/ui" && PATH="$2:$PATH" npm ci && PATH="$2:$PATH" npm run build ) \
-    && uv run --no-project python "$1/ui/build.py"
-}
-
 # --- 3. install raven ------------------------------------------------------
 # True when $1 holds a raven source checkout (its own pyproject, not a dep's).
 is_raven_source() {
@@ -245,9 +175,25 @@ install_raven() {
     is_raven_source "$script_dir" || script_dir=""
   fi
   if [ -n "$script_dir" ]; then
-    RAVEN_SRC_DIR="$script_dir"
     info "Local raven source detected; editable install: $script_dir"
-    build_web_assets "$script_dir"
+    # The TUI bundle must exist before first run. In a dev checkout it isn't
+    # committed, so build it now if Node is available.
+    if [ ! -f "$script_dir/ui-tui/dist/entry.js" ]; then
+      node_bin="$(command -v node || true)"
+      [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
+      if [ -n "$node_bin" ] && [ -x "$node_bin" ]; then
+        node_dir="$(dirname "$node_bin")"
+        # npm ships alongside node, but verify explicitly before relying on it.
+        if PATH="$node_dir:$PATH" command -v npm >/dev/null 2>&1; then
+          info "Building the TUI bundle (ui-tui/dist/entry.js)..."
+          ( cd "$script_dir/ui-tui" && PATH="$node_dir:$PATH" npm ci && PATH="$node_dir:$PATH" npm run build )
+        else
+          warn "Found node but not npm; skipping TUI build; raven tui may not work"
+        fi
+      else
+        warn "No usable node found; skipping TUI build; raven tui may not work"
+      fi
+    fi
     # Pin to the locked dependency set so an install matches what we test.
     constraints="$(mktemp)"
     uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
@@ -334,38 +280,6 @@ install_raven() {
   ok "raven installed"
 }
 
-# --- 4. install the sub-agents --------------------------------------------
-# Set by install_subagents so main's closing block can say what still needs a
-# key without re-deriving it.
-SUBAGENTS_RAN=0
-
-install_subagents() {
-  [ -n "$RAVEN_SRC_DIR" ] || return 0
-  installer="$RAVEN_SRC_DIR/subagents/install.sh"
-  [ -f "$installer" ] || return 0
-
-  # Warn and skip, never die: a machine that cannot build the sub-agents still
-  # gets a working raven, which is what this script is for.
-  if ! have bash; then
-    warn "No bash found; skipping the sub-agents (their installer needs it). Run subagents/install.sh later."
-    return 0
-  fi
-  if ! have python3; then
-    warn "No python3 found; skipping the sub-agents (their installer needs it). Run subagents/install.sh later."
-    return 0
-  fi
-
-  info "Building the sub-agents (one venv each; first run takes a few minutes)..."
-  # Reported, not propagated: a machine that cannot build them still gets a
-  # working raven, and the sub-installer already said which folder failed.
-  if bash "$installer"; then
-    ok "sub-agents built"
-  else
-    warn "Some sub-agents did not build (see above); raven itself is installed."
-  fi
-  SUBAGENTS_RAN=1
-}
-
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
@@ -380,7 +294,6 @@ main() {
   ensure_uv
   ensure_node
   install_raven
-  install_subagents
 
   printf '\n'
   if [ "$had_config" = 1 ]; then
@@ -390,10 +303,6 @@ main() {
   else
     ok "All set! Open a new terminal (or source your shell profile), then run:"
     printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
-  fi
-  if [ "$SUBAGENTS_RAN" = 1 ]; then
-    printf '  sub-agents: the run above only built them. \033[1mraven\033[0m asks about each one during\n'
-    printf '  setup and registers the ones you take up.\n\n'
   fi
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""

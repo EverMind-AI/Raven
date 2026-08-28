@@ -357,7 +357,7 @@ def test_rpc_handshake_timeout_helper_real(tmp_path, monkeypatch):
     from raven.cli import tui_commands
 
     # Override default handshake timeout for fast test
-    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 1.0)
 
     # Child that just sleeps without writing anything.
     exit_code = tui_commands.run_subprocess_with_rpc(
@@ -403,15 +403,14 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     registered by the production path. Future additions to the umbrella
     automatically extend this test.
     """
-    from raven.rpc.dispatcher import Dispatcher
-    from raven.rpc.methods import (
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods import (
         register_aligned_methods,
         register_aligned_methods_except_system,
     )
-    from raven.rpc.methods.system import (
+    from raven.tui_rpc.methods.system import (
         system_hello,
         system_ping,
-        system_upgrade,
         system_version,
     )
 
@@ -419,13 +418,10 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     register_aligned_methods(umbrella)
     umbrella_methods = set(umbrella.methods())
 
-    # Mirrors the hand-expanded system.* block in tui_commands.py — keep the two
-    # in step when either gains a method.
     production = Dispatcher()
     production.register("system.hello", system_hello)
     production.register("system.ping", system_ping)
     production.register("system.version", system_version)
-    production.register("system.upgrade", system_upgrade)
     register_aligned_methods_except_system(production)
     production_methods = set(production.methods())
 
@@ -448,9 +444,9 @@ def test_confirm_registered_when_broker_present():
     (mirrors the emitter/turn gate). Without a broker neither the umbrella nor
     the production path registers it, so the drift test above stays balanced.
     """
-    from raven.rpc.confirm_broker import ConfirmBroker
-    from raven.rpc.dispatcher import Dispatcher
-    from raven.rpc.methods import register_aligned_methods_except_system
+    from raven.tui_rpc.confirm_broker import ConfirmBroker
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods import register_aligned_methods_except_system
 
     async def _send(_frame):
         return None
@@ -519,7 +515,7 @@ def test_rpc_socket_handshake_timeout_when_child_never_connects(tmp_path, monkey
     handshake deadline, parent must return exit code 3."""
     from raven.cli import tui_commands
 
-    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 1.0)
 
     # `sleep` ignores the RAVEN_RPC_SOCKET env var — pure timeout path.
     exit_code = tui_commands.run_subprocess_with_rpc(

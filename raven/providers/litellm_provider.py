@@ -16,7 +16,6 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
-    ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
@@ -26,6 +25,7 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.litellm_setup import import_litellm
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.registry import (
     canonical_provider_name,
@@ -33,13 +33,6 @@ from raven.providers.registry import (
     find_by_model,
     find_by_name,
     find_gateway,
-)
-from raven.providers.tool_names import normalized_tool_name
-from raven.providers.transport_failure import (
-    flag_transport_failure,
-    native_finish_reason,
-    prompt_chars,
-    transport_failure_message,
 )
 from raven.providers.wire import wire_model
 
@@ -109,42 +102,6 @@ def session_affinity_headers() -> dict[str, str]:
     header, so a stable value per provider instance keeps prefix-cache hits warm.
     """
     return {"x-session-affinity": uuid.uuid4().hex}
-
-
-def _cache_tokens(usage: Any) -> tuple[int, int]:
-    """Cache read and write counts, out of whichever shape this response used.
-
-    LiteLLM normalises these across providers into more than one shape depending
-    on where the response came from:
-      - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
-      - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
-      - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
-      - OpenRouter:        usage.prompt_tokens_details.cached_tokens
-                           usage.prompt_tokens_details.cache_write_tokens
-
-    Shared by both response paths because only one of them used to do it. A
-    streamed response carries the OpenRouter shape, and the accounting above it
-    -- ``AgentLoop._build_usage_snapshot``, ``tracing.usage.normalize``, the
-    telemetry the UsageTracker writes -- reads only the Anthropic names. So a
-    streamed turn reported no cache activity at all and priced every cached
-    token as fresh: a warm turn measured at 7,383 read and 1,079 written came
-    out as 8,479 fresh, $0.008499 against an actual $0.002124. Wrong by 4x, on
-    the path the TUI, the served page and the streaming channels all take.
-    """
-    details = getattr(usage, "prompt_tokens_details", None)
-    read = (
-        getattr(usage, "cache_read_input_tokens", None)
-        or getattr(usage, "_cache_read_input_tokens", None)
-        or (getattr(details, "cached_tokens", None) if details else None)
-        or 0
-    )
-    write = (
-        getattr(usage, "cache_creation_input_tokens", None)
-        or getattr(usage, "_cache_creation_input_tokens", None)
-        or (getattr(details, "cache_write_tokens", None) if details else None)
-        or 0
-    )
-    return int(read), int(write)
 
 
 class LiteLLMProvider(LLMProvider):
@@ -320,10 +277,6 @@ class LiteLLMProvider(LLMProvider):
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
         return spec is not None and (spec.is_local or spec.name == "custom")
 
-    def supports_prompt_caching(self, model: str) -> bool:
-        """See ``LLMProvider.supports_prompt_caching``."""
-        return self._supports_cache_control(model)
-
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
 
@@ -349,38 +302,16 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies of messages and tools with cache_control injected.
-
-        Two breakpoints land on the system message when it declares a stable
-        prefix (``prompt_cache.STABLE_PREFIX_KEY``), one when it does not.
-
-        The second one is the one that survives a turn. A breakpoint keys its
-        cache on every block up to and including itself, and the tail of this
-        message -- the memory recall, the skill router's hits, the Curator's
-        working state -- is rebuilt from whatever the user just said. So the
-        end-of-message breakpoint, the only one there used to be, changes key on
-        every new turn and re-bills the identity and bootstrap text in front of
-        it that never changed at all. Splitting at the boundary gives that head
-        a key of its own.
-
-        The end-of-message one is kept beside it rather than moved, because it
-        is what holds the whole message across the iterations *within* a turn:
-        the assembler builds this message once per turn and the tool loop only
-        appends after it.
-        """
+        """Return copies of messages and tools with cache_control injected."""
         new_messages = []
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg["content"]
-                blocks = prompt_cache.split_stable_prefix(content, int(msg.get(prompt_cache.STABLE_PREFIX_KEY) or 0))
-                if blocks is not None:
-                    blocks[0] = {**blocks[0], "cache_control": prompt_cache.cache_control()}
-                    new_content = blocks
-                elif isinstance(content, str):
-                    new_content = [{"type": "text", "text": content}]
+                if isinstance(content, str):
+                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
                 else:
                     new_content = list(content)
-                new_content[-1] = {**new_content[-1], "cache_control": prompt_cache.cache_control()}
+                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
@@ -388,7 +319,7 @@ class LiteLLMProvider(LLMProvider):
         new_tools = tools
         if tools:
             new_tools = list(tools)
-            new_tools[-1] = {**new_tools[-1], "cache_control": prompt_cache.cache_control()}
+            new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
 
         return new_messages, new_tools
 
@@ -495,11 +426,7 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            # Asked of this request, not of the process. A strategy that placed
-            # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
-            # here without a strategy in front of it and still wants its own.
-            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
+            if not self.disable_auto_cache_control:
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -553,7 +480,7 @@ class LiteLLMProvider(LLMProvider):
 
         try:
             response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
-            return self._parse_response(response, sent_chars=prompt_chars(messages))
+            return self._parse_response(response)
         except Exception as e:
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
@@ -604,11 +531,7 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            # Asked of this request, not of the process. A strategy that placed
-            # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
-            # here without a strategy in front of it and still wants its own.
-            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
+            if not self.disable_auto_cache_control:
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -782,11 +705,6 @@ class LiteLLMProvider(LLMProvider):
                         "completion_tokens": getattr(usage, "completion_tokens", None),
                         "total_tokens": getattr(usage, "total_tokens", None),
                     }
-                cache_read, cache_write = _cache_tokens(usage)
-                if cache_read:
-                    usage_dict["cache_read_input_tokens"] = cache_read
-                if cache_write:
-                    usage_dict["cache_creation_input_tokens"] = cache_write
 
             if (
                 content is None
@@ -807,13 +725,8 @@ class LiteLLMProvider(LLMProvider):
         except (AttributeError, IndexError):
             return None
 
-    def _parse_response(self, response: Any, *, sent_chars: int | None = None) -> LLMResponse:
-        """Parse LiteLLM response into our standard format.
-
-        ``sent_chars`` is how much prompt went up, passed so the transport
-        verdict below has something to compare the accounting against. Optional
-        because the verdict's decisive evidence does not need it.
-        """
+    def _parse_response(self, response: Any) -> LLMResponse:
+        """Parse LiteLLM response into our standard format."""
         choice = response.choices[0]
         message = choice.message
         content = message.content
@@ -859,7 +772,7 @@ class LiteLLMProvider(LLMProvider):
             tool_calls.append(
                 ToolCallRequest(
                     id=_short_tool_id(),
-                    name=normalized_tool_name(tc.function.name),
+                    name=tc.function.name,
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
@@ -874,7 +787,26 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
-            cache_read, cache_write = _cache_tokens(response.usage)
+            # Cache token extraction. LiteLLM normalizes these across providers
+            # in different shapes depending on where the response came from:
+            #   - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
+            #   - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
+            #   - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
+            #   - OpenRouter:        usage.prompt_tokens_details.cached_tokens
+            #                        usage.prompt_tokens_details.cache_write_tokens
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            cache_read = (
+                getattr(response.usage, "cache_read_input_tokens", None)
+                or getattr(response.usage, "_cache_read_input_tokens", None)
+                or (getattr(details, "cached_tokens", None) if details else None)
+                or 0
+            )
+            cache_write = (
+                getattr(response.usage, "cache_creation_input_tokens", None)
+                or getattr(response.usage, "_cache_creation_input_tokens", None)
+                or (getattr(details, "cache_write_tokens", None) if details else None)
+                or 0
+            )
             if cache_read:
                 usage["cache_read_input_tokens"] = int(cache_read)
             if cache_write:
@@ -886,42 +818,6 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
-
-        # Asked here rather than by the caller: this is the response exit, and
-        # by the time the ladder in `base.py` reads `finish_reason` the only
-        # thing standing between an upstream-reported failure and being
-        # delivered as an answer is this verdict. Both gates there
-        # (`!= "error"`) then work unchanged.
-        evidence = flag_transport_failure(
-            # The upstream's own word, not the `or "stop"` default below: a
-            # provider that sent no finish reason never said this call ended
-            # normally, so there is nothing here to disbelieve.
-            finish_reason=finish_reason,
-            content=content,
-            reasoning=reasoning_content,
-            tool_calls=tool_calls,
-            # Read off the first choice even though the merge above can adopt a
-            # later choice's reason: it only does so for a choice that carried
-            # tool calls, and a delivered call already stops this verdict.
-            native_finish_reason=native_finish_reason(choice),
-            usage=usage,
-            sent_chars=sent_chars,
-        )
-        if evidence:
-            logger.warning("upstream reported a failed call as a normal end: {}", evidence)
-            return LLMResponse(
-                content=transport_failure_message(evidence),
-                finish_reason="error",
-                usage=usage,
-                error_classification=ErrorClassification(
-                    category="upstream_transport_failure",
-                    # Retried before anything else is tried: the control
-                    # experiment healed on a retry that landed on another
-                    # backend, and there is no partial work to repeat.
-                    retryable=True,
-                    should_fallback=True,
-                ),
-            )
 
         return LLMResponse(
             content=content,

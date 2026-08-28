@@ -14,7 +14,6 @@ import {
   LIVE_RENDER_MAX_LINES,
   THINKING_COT_MAX
 } from '../config/limits.js'
-import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 
 const ESC = String.fromCharCode(27)
@@ -87,122 +86,6 @@ export const clipToWidth = (raw: string, width: number) => {
   return `${out}…`
 }
 
-// The mirror of `clipToWidth`: keep the *end* of a string inside a display-cell
-// budget. A live tail grows at the right, so the row has to shed cells from the
-// left to stay on one line -- slicing by character instead would cut a CJK tail
-// to half the columns it was given.
-export const clipToWidthFromEnd = (raw: string, width: number) => {
-  const one = raw.replace(WS_RE, ' ').trim()
-
-  if (width <= 0) {
-    return ''
-  }
-
-  if (stringWidth(one) <= width) {
-    return one
-  }
-
-  const chars = [...one]
-  let out = ''
-  let w = 0
-
-  for (let i = chars.length - 1; i >= 0; i--) {
-    const ch = chars[i]!
-    const cw = stringWidth(ch)
-
-    if (w + cw > width - 1) {
-      break
-    }
-
-    out = ch + out
-    w += cw
-  }
-
-  // The cut often lands on a space, and `… bbbb` spends a cell saying nothing.
-  return `…${out.replace(/^ /, '')}`
-}
-
-const headCells = (chars: readonly string[], budget: number) => {
-  let out = ''
-  let w = 0
-
-  for (const ch of chars) {
-    const cw = stringWidth(ch)
-
-    if (w + cw > budget) {
-      break
-    }
-
-    out += ch
-    w += cw
-  }
-
-  return out
-}
-
-const tailCells = (chars: readonly string[], budget: number) => {
-  let out = ''
-  let w = 0
-
-  for (let i = chars.length - 1; i >= 0; i--) {
-    const cw = stringWidth(chars[i]!)
-
-    if (w + cw > budget) {
-      break
-    }
-
-    out = chars[i]! + out
-    w += cw
-  }
-
-  return out
-}
-
-// Keep both ends of an identifier inside a display-cell budget. A generated id
-// is recognisable by its head and its tail and by nothing in between: clipping
-// from the right leaves two runs of the same session looking identical for
-// twenty cells, which is worse than showing less of each.
-export const elideMiddle = (raw: string, width: number) => {
-  const one = raw.trim()
-
-  if (width <= 1 || stringWidth(one) <= width) {
-    return one
-  }
-
-  const chars = [...one]
-  const keep = width - 1
-  const head = Math.ceil(keep / 2)
-
-  return `${headCells(chars, head)}\u2026${tailCells(chars, keep - head)}`
-}
-
-// Pad to a display-cell width, clipping anything that overruns it. Used for the
-// row columns a reader scans down: `padEnd` counts code points, so one CJK name
-// in the column knocks every row below it out of alignment.
-export const padToWidth = (raw: string, width: number) => {
-  const clipped = stringWidth(raw) > width ? clipToWidth(raw, width) : raw
-
-  return clipped + ' '.repeat(Math.max(0, width - stringWidth(clipped)))
-}
-
-export const TOOL_RESULT_PREVIEW_CHARS = 200
-
-// A tool's inline result preview. Cutting on a raw character budget alone split
-// the last line mid-token ("updat" for "updated", a table header whose body
-// never arrives), so drop that partial line instead. A preview that is one long
-// line has nowhere to break and still gets the ellipsis treatment.
-export const toolResultPreview = (raw: string, max = TOOL_RESULT_PREVIEW_CHARS) => {
-  const text = raw.trimEnd()
-
-  if (text.length <= max) {
-    return text
-  }
-
-  const lastBreak = text.slice(0, max).lastIndexOf('\n')
-
-  return lastBreak > 0 ? text.slice(0, lastBreak) : compactPreview(text, max)
-}
-
 // Like compactPreview but keeps the tail — for live-streaming text (reasoning)
 // where the most recent tokens matter, so the view follows the stream instead
 // of freezing on the first `max` chars.
@@ -238,20 +121,8 @@ export const pasteTokenLabel = (text: string, lineCount: number) => {
     : `[[ ${preview} [${fmtK(lineCount)} lines] ]]`
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
 const THINKING_STATUS_RE = new RegExp(`^(?:${VERBS.join('|')})\\.{0,3}$`, 'i')
-// The status ticker renders one FACES glyph immediately followed by one VERBS
-// word (appChrome's FaceTicker), so that pair -- not "any run of non-letters"
-// -- is the leak's signature. Matching the faces literally keeps every
-// quantifier bounded: the earlier `[^A-Za-z\n]+` stand-in for a face matches a
-// whole line of non-Latin text, which is quadratic to backtrack and swallowed
-// the prose in front of any verb-like word. A bare verb alone on a line is
-// THINKING_STATUS_RE's job, not this one's.
-const THINKING_STATUS_CHUNK_RE = new RegExp(
-  `(?:${FACES.map(escapeRe).join('|')})[ \\t]*(?:${VERBS.join('|')})\\.{0,3}[ \\t]*`,
-  'giu'
-)
+const THINKING_STATUS_CHUNK_RE = new RegExp(`[^A-Za-z\n]+\\s*(?:${VERBS.join('|')})\\.{0,3}\\s*`, 'giu')
 
 export const cleanThinkingText = (reasoning: string) =>
   reasoning
@@ -263,18 +134,10 @@ export const cleanThinkingText = (reasoning: string) =>
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
-// `max` bounds the one-line `truncated` preview only; `full` renders the cleaned
-// text whole and its caller bounds what reaches the screen.
 export const thinkingPreview = (reasoning: string, mode: ThinkingMode, max: number = THINKING_COT_MAX) => {
-  // Ahead of the clean, not after it: a collapsed section shows nothing, and
-  // this runs on every streamed reasoning update.
-  if (mode === 'collapsed') {
-    return ''
-  }
-
   const raw = cleanThinkingText(reasoning)
 
-  return !raw ? '' : mode === 'full' ? raw : compactPreview(raw.replace(WS_RE, ' '), max)
+  return !raw || mode === 'collapsed' ? '' : mode === 'full' ? raw : compactPreview(raw.replace(WS_RE, ' '), max)
 }
 
 export const boundedLiveRenderText = (

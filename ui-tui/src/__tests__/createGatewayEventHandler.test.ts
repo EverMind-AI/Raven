@@ -821,21 +821,4 @@ describe('createGatewayEventHandler', () => {
       vi.useRealTimers()
     }
   })
-
-  it('does not treat an exception status as terminal, so a later start overwrites it', () => {
-    const appended: Msg[] = []
-    const onEvent = createGatewayEventHandler(buildCtx(appended))
-
-    onEvent({ payload: { goal: 'g', subagent_id: 's1', task_index: 0 }, type: 'subagent.spawn_requested' } as any)
-    onEvent({
-      payload: { goal: 'g', status: 'exception', subagent_id: 's1', task_index: 0 },
-      type: 'subagent.complete'
-    } as any)
-
-    expect(getTurnState().subagents.find(s => s.id === 's1')?.status).toBe('exception')
-
-    onEvent({ payload: { goal: 'g', subagent_id: 's1', task_index: 0 }, type: 'subagent.start' } as any)
-
-    expect(getTurnState().subagents.find(s => s.id === 's1')?.status).toBe('running')
-  })
 })

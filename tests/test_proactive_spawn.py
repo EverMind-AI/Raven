@@ -85,7 +85,7 @@ async def test_dispatch_happy_path(spawner, mock_subagent_mgr):
     assert kwargs["origin_channel"] == "cli"
     assert kwargs["origin_chat_id"] == "direct"
     assert kwargs["session_key"] == "cli:direct"
-    assert "sentinel" in kwargs["task_summary"]
+    assert "sentinel" in kwargs["label"]
 
 
 @pytest.mark.asyncio

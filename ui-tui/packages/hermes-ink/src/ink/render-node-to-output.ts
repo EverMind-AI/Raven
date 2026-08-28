@@ -722,7 +722,6 @@ function renderNodeToOutput(
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
         const prevInnerHeight = node.scrollViewportHeight ?? innerHeight
-        const viewportChanged = prevInnerHeight !== innerHeight
         node.scrollHeight = scrollHeight
         node.scrollViewportHeight = innerHeight
         // Absolute screen-buffer row where the scrollable area (inside
@@ -869,11 +868,7 @@ function renderNodeToOutput(
           scrollDrainNode = node
         }
 
-        if (
-          (node.scrollTop ?? 0) !== scrollTopBeforeFollow ||
-          node.stickyScroll !== stickyBeforeFollow ||
-          viewportChanged
-        ) {
+        if ((node.scrollTop ?? 0) !== scrollTopBeforeFollow || node.stickyScroll !== stickyBeforeFollow) {
           node.notifyScrollChange?.()
         }
 

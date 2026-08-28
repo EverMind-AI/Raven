@@ -3,52 +3,22 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type {
-  DagGetResult,
-  SubagentCall,
-  SubagentListResult,
-  TranscriptDelegated,
-  TranscriptNotice
-} from '../rpc/index.js'
 import type { Msg, SessionInfo } from '../types.js'
-import type { DagRunState } from './dagRun.js'
-import type { FoldRow } from './episodeFold.js'
 
 import { LONG_MSG } from '../config/limits.js'
-import { t } from '../i18n/index.js'
-import { fmtK } from '../lib/text.js'
-import { foldDagSnapshot } from './dagRun.js'
-import { clampToolPreview, foldRowsIntoEpisodes } from './episodeFold.js'
-import { spawnRunFromListRow } from './spawnRun.js'
-import { addUnique, artifactMessage, changedFile, deliveryFiles } from './turnArtifacts.js'
-
-/** Structurally `GatewayRpc`, restated so a test can pass a plain function. */
-type Rpc = <T extends object>(
-  method: string,
-  params?: Record<string, unknown>,
-  opts?: { quiet?: boolean }
-) => Promise<null | T>
+import { buildToolTrailLine, fmtK } from '../lib/text.js'
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
-/**
- * Whether the transcript shows the user has already driven this session: a
- * typed prompt (`role: 'user'`, which `!cmd` also lands as) or the echo of a
- * slash command. Plain system rows are startup notices, not the user's doing,
- * so they do not count.
- */
-const userHasActed = (rows: Msg[]): boolean => rows.some(m => m.role === 'user' || m.kind === 'slash')
-
-/**
- * Drops the intro banner once the session is under way. It is a first-paint
- * affordance -- it tells an empty transcript what this session is -- and after
- * the first command it only costs scrollback the conversation wants back.
- *
- * View-only: `historyItems` keeps the intro row, so /export, session save and
- * the `session.info` patch that fills it in all still see it.
- */
-export const withoutSpentIntro = (rows: Msg[]): Msg[] =>
-  userHasActed(rows) ? rows.filter(m => m.kind !== 'intro') : rows
+// The intro row is the opening cover -- wordmark plus session panel, 35 rows of
+// it -- and it stays in `historyItems` because the late `session.info` event
+// patches itself onto that row. Only the chat view drops it, and only once a
+// turn has happened: startup notices and slash output are not a conversation,
+// so a box that warns about its credentials on boot still gets its cover.
+export const hideIntroAfterFirstTurn = (items: Msg[]): Msg[] =>
+  items[0]?.kind === 'intro' && items.some(msg => msg.role === 'assistant' || msg.role === 'user')
+    ? items.slice(1)
+    : items
 
 export const imageTokenMeta = (info?: ImageMeta | null) => {
   const { width, height, token_estimate: t } = info ?? {}
@@ -77,344 +47,41 @@ export const userDisplay = (text: string) => {
   return `${prefix || '(message)'} [long message]`
 }
 
-/**
- * The i18n key for a delegated run's re-entry line, live or replayed -- the
- * one place that maps `TranscriptDelegated.status` to wording, so a status
- * this union grows lands the right sentence in both `chatStream` and here
- * instead of falling through to a two-way ternary's leftover branch.
- */
-export const deliveredMessageKey = (status: TranscriptDelegated['status']): string => {
-  if (status === 'error') {
-    return 'gui.deleg.delivered_err'
-  }
-  if (status === 'exception') {
-    return 'gui.deleg.delivered_exception'
-  }
-  return 'gui.deleg.delivered'
-}
-
-/**
- * The line a runtime notice draws, live or replayed -- the one place that maps
- * a notice to wording, for the same reason `deliveredMessageKey` is one: the
- * live stream and a resumed transcript must not word the same event
- * differently. The kind picks the sentence, so it follows the reader's locale;
- * the detail is the blocking tool's own first line, shown verbatim under it.
- *
- * Empty for a notice with no kind, which is what a caller checks to decide
- * there is no line to draw at all.
- */
-export const noticeLine = (notice?: null | TranscriptNotice): string => {
-  const kind = typeof notice?.kind === 'string' ? notice.kind.trim() : ''
-
-  if (!kind) {
-    return ''
-  }
-
-  const said = t(`gui.notice.${kind}`, kind)
-  const detail = typeof notice?.detail === 'string' ? notice.detail.trim() : ''
-
-  return detail ? `${said}\n${detail}` : said
-}
-
-/**
- * Rows as the transcript draws them, with each closed turn's artifact shelf
- * folded in at the boundary that closed it.
- *
- * A turn is opened by a user row (typed, or one the runtime opened -- see
- * `origin`), so those rows and the end of the list are the only turn boundaries
- * there are. The shape of an assistant row is NOT one: a row that carries text
- * and no tool call is what an agent looks like between two steps as often as at
- * the end of a turn, and reading it as a boundary published a partial shelf
- * mid-turn and reset the tally the rest of the turn was still filling.
- *
- * `openTurn` says these rows end inside a turn that has not closed -- a live
- * read, or a tail slice of one -- and withholds the trailing shelf. It is what
- * keeps a delegated run reading like the main agent, whose own shelf is
- * appended once, on `message.complete` (see `chatStream.appendArtifacts`);
- * mid-turn it shows none. Earlier turns in the same rows still get theirs.
- */
-export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean } = {}): Msg[] => {
+export const toTranscriptMessages = (rows: unknown): Msg[] => {
   if (!Array.isArray(rows)) {
     return []
   }
 
-  const folded: FoldRow[] = []
-  let artifacts = { changes: [], deliveries: [] } as NonNullable<Msg['artifacts']>
-  const flushArtifacts = () => {
-    const message = artifactMessage(artifacts)
-
-    if (message) {
-      folded.push({ passthrough: message, role: 'system', text: '' })
-    }
-
-    artifacts = { changes: [], deliveries: [] }
-  }
+  const out: Msg[] = []
+  let pending: string[] = []
 
   for (const row of rows) {
     if (!row || typeof row !== 'object') {
       continue
     }
 
-    const {
-      context,
-      delegated,
-      duration_ms: durationMs,
-      metadata,
-      name,
-      notice,
-      origin,
-      reasoning_content: reasoning,
-      reasoning_ms: reasoningMs,
-      role,
-      text,
-      tool_call_id: toolCallId,
-      tool_calls: toolCalls
-    } = row as TranscriptRow
-
-    if (role === 'user' && origin) {
-      flushArtifacts()
-      /* A turn the runtime opened, not a person typing. Its text is internal
-         prose, so it is replaced rather than shown: the same line the live
-         trail prints when a delegated result rejoins the conversation, which is
-         also the row this replay was missing -- it arrives on an event, and an
-         event is not in the transcript. Only a subagent delivery carries
-         `delegated`; a cron/sentinel/heartbeat-opened turn falls back to the
-         older, label-less line rather than fabricating one. */
-      if (delegated) {
-        const key = deliveredMessageKey(delegated.status)
-
-        folded.push({ role: 'system', text: `↩ ${delegated.label} — ${t(key, key)}` })
-      } else {
-        folded.push({ role: 'system', text: `${origin} ${t('gui.deleg.delivered', 'delivered')}` })
-      }
-
-      continue
-    }
+    const { context, name, role, text } = row as TranscriptRow
 
     if (role === 'tool') {
-      deliveryFiles(metadata).forEach(file => addUnique(artifacts.deliveries, file))
-      folded.push({
-        role: 'tool',
-        text: clampToolPreview(typeof text === 'string' ? text : ''),
-        ...(durationMs != null ? { durationMs } : {}),
-        ...(toolCallId ? { toolCallId } : {}),
-        // Carried along so the core can stand up an episode on its own when no
-        // announcing call claims this row -- see `foldRowsIntoEpisodes`.
-        ...(name ? { name, summary: (context ?? '').trim() } : {})
-      })
+      pending.push(buildToolTrailLine(name ?? 'tool', context ?? ''))
 
       continue
     }
 
-    if (role !== 'assistant' && role !== 'user' && role !== 'system') {
+    if (typeof text !== 'string' || !text.trim()) {
       continue
     }
 
-    const calls = (toolCalls ?? [])
-      .filter((call): call is Required<TranscriptToolCallRow> => Boolean(call?.id && call.name))
-      .map(call => ({ arguments: call.arguments ?? '', id: call.id, name: call.name }))
-
-    // Ahead of the skip below: a row that carries only a file-changing call
-    // still contributes that file to the shelf, which is what main's own
-    // empty-text branch did before the skip existed.
     if (role === 'assistant') {
-      for (const call of toolCalls ?? []) {
-        let args: unknown = {}
-
-        try {
-          args = JSON.parse(call.arguments || '{}')
-        } catch {
-          args = {}
-        }
-
-        const change = changedFile(call.name ?? '', args)
-
-        if (change) {
-          addUnique(artifacts.changes, change)
-        }
-      }
-    }
-
-    // An assistant entry that carries a notice had its text written by the
-    // runtime, not the model -- `_save_turn` renames the stored key for exactly
-    // that reason. So the notice is drawn in the text's place and in the
-    // reader's language, as a system row: that closes the turn it belongs to
-    // (see `foldRowsIntoEpisodes`), which lands it where the live path commits
-    // it too -- after the turn's steps, before the artifact shelf.
-    const runtimeNotice = role === 'assistant' ? noticeLine(notice) : ''
-
-    if (runtimeNotice) {
-      if (calls.length || reasoning) {
-        folded.push({
-          role,
-          text: '',
-          ...(calls.length ? { calls } : {}),
-          ...(reasoning ? { reasoning } : {}),
-          ...(reasoningMs != null ? { reasoningMs } : {})
-        })
-      }
-
-      folded.push({ role: 'system', text: runtimeNotice })
-
-      continue
-    }
-
-    // The backend joins only `type=="text"` blocks, so an image-only message
-    // arrives with empty text -- skip it, but only when nothing else on the row
-    // is worth a line; tool_calls or reasoning make it a real row regardless.
-    // Skipped without flushing, so an empty row cannot split a turn's shelf.
-    if (!(typeof text === 'string' && text.trim()) && !calls.length && !reasoning) {
-      continue
-    }
-
-    if (role !== 'assistant') {
-      flushArtifacts()
-    }
-
-    folded.push({
-      role,
-      text: typeof text === 'string' ? text : '',
-      ...(calls.length ? { calls } : {}),
-      ...(reasoning ? { reasoning } : {}),
-      ...(reasoningMs != null ? { reasoningMs } : {})
-    })
-  }
-
-  if (!opts.openTurn) {
-    flushArtifacts()
-  }
-
-  return foldRowsIntoEpisodes(folded)
-}
-
-/**
- * Attach each resumed DAG call's graph, read back off disk.
- *
- * Done before the transcript is set rather than while rendering it, so drawing
- * stays a pure function of state: a fetch hung off the render would fire again
- * on every re-render and reorder against the reader's own clicks.
- *
- * A run whose directory is gone attaches nothing. The row then reads as it did
- * before graphs existed, which is the honest rendering of "the outputs were
- * deleted" -- an empty frame would claim the run had no nodes.
- */
-export const hydrateDagRuns = async (rows: unknown, msgs: Msg[], rpc: Rpc, sessionId: string): Promise<Msg[]> => {
-  if (!Array.isArray(rows)) {
-    return msgs
-  }
-
-  const byCall = new Map<string, string>()
-
-  for (const row of rows) {
-    const { dag_run_id: runId, tool_call_id: callId } = (row ?? {}) as TranscriptRow
-
-    if (runId && callId) {
-      byCall.set(callId, runId)
+      out.push({ role, text, ...(pending.length && { tools: pending }) })
+      pending = []
+    } else if (role === 'user' || role === 'system') {
+      out.push({ role, text })
+      pending = []
     }
   }
 
-  if (!byCall.size) {
-    return msgs
-  }
-
-  const runs = new Map<string, DagRunState>()
-
-  await Promise.all(
-    [...new Set(byCall.values())].map(async runId => {
-      try {
-        // `quiet` is required, not cosmetic: without it a deleted run dir's
-        // error would print into the transcript, which is exactly what a
-        // resumed session must not surface for an ordinary missing run.
-        const result = await rpc<DagGetResult>('dag.get', { run_id: runId, session_key: sessionId }, { quiet: true })
-
-        if (result?.run) {
-          runs.set(runId, foldDagSnapshot(null, result.run))
-        }
-      } catch {
-        // Reported nowhere on purpose: a missing run dir is an ordinary state
-        // for an old session, not an error the reader has to acknowledge.
-      }
-    })
-  )
-
-  for (const msg of msgs) {
-    for (const episode of msg.episodes ?? []) {
-      for (const tool of episode.tools) {
-        const run = runs.get(byCall.get(tool.id) ?? '')
-
-        if (run) {
-          tool.dag = run
-        }
-      }
-    }
-  }
-
-  return msgs
-}
-
-/**
- * Attach each resumed spawn call's run, rebuilt from the session's own
- * delegation records.
- *
- * Same discipline as `hydrateDagRuns` above: done before the transcript is set,
- * so drawing stays a pure function of state. One `subagent.list` read serves
- * every call -- a row carries the run's label, status and clocks, and its id is
- * the record `subagent.context` reads for the trace.
- *
- * A call whose record is gone attaches nothing. The row then reads as it did
- * before spawn panels existed, which is the honest rendering of "the history
- * was pruned".
- */
-export const hydrateSpawnRuns = async (rows: unknown, msgs: Msg[], rpc: Rpc, sessionId: string): Promise<Msg[]> => {
-  if (!Array.isArray(rows)) {
-    return msgs
-  }
-
-  const byCall = new Map<string, string>()
-
-  for (const row of rows) {
-    const { spawn_task_id: taskId, tool_call_id: callId } = (row ?? {}) as TranscriptRow
-
-    if (taskId && callId) {
-      byCall.set(callId, taskId)
-    }
-  }
-
-  if (byCall.size === 0) {
-    return msgs
-  }
-
-  let listed: SubagentCall[] = []
-
-  try {
-    // `quiet` for the same reason as the dag hydrate: a pruned history dir must
-    // not print an error into the transcript a resume is trying to draw.
-    const result = await rpc<SubagentListResult>('subagent.list', { session_id: sessionId }, { quiet: true })
-
-    listed = result?.items ?? []
-  } catch {
-    // Reported nowhere on purpose: pruned delegation records are an ordinary
-    // state for an old session, not an error the reader has to acknowledge.
-  }
-
-  if (listed.length === 0) {
-    return msgs
-  }
-
-  for (const msg of msgs) {
-    for (const episode of msg.episodes ?? []) {
-      for (const tool of episode.tools) {
-        const taskId = byCall.get(tool.id)
-        const run = taskId ? spawnRunFromListRow(taskId, tool.id, listed) : null
-
-        if (run) {
-          tool.spawn = run
-        }
-      }
-    }
-  }
-
-  return msgs
+  return out
 }
 
 export const fmtDuration = (ms: number) => {
@@ -432,32 +99,9 @@ interface ImageMeta {
   width?: number
 }
 
-interface TranscriptToolCallRow {
-  arguments?: string
-  id?: string
-  name?: string
-}
-
 interface TranscriptRow {
   context?: string
-  /** Set on a `run_subagent_dag` tool row; the run it started, for `hydrateDagRuns`. */
-  dag_run_id?: string
-  /** Set on a `spawn` tool row; the run's task id, for `hydrateSpawnRuns`. */
-  spawn_task_id?: string
-  /** See `TranscriptMessage.delegated`: set when a delegated run's result opened the turn. */
-  delegated?: TranscriptDelegated
-  duration_ms?: number
   name?: string
-  metadata?: Record<string, unknown>
-  /** See `TranscriptMessage.notice`: runtime prose on an assistant entry, which
-   *  replaces the entry's own text rather than accompanying it. */
-  notice?: TranscriptNotice
-  /** See `GatewayTranscriptMessage.origin`: set when the runtime opened the turn. */
-  origin?: string
-  reasoning_content?: string
-  reasoning_ms?: number
   role?: string
   text?: string
-  tool_call_id?: string
-  tool_calls?: TranscriptToolCallRow[]
 }

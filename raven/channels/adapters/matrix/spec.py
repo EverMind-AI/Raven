@@ -15,5 +15,5 @@ def _make(config):
 SPEC = ChannelSpec(
     display_name="Matrix",
     factory=_make,
-    capabilities=Capabilities(file_attachments=True),
+    capabilities=Capabilities(),
 )

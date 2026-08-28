@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 ZERO_SHA = "0" * 40
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -51,26 +51,6 @@ BLOCKED_ASSET_EXTENSIONS = {
     ".wmv",
     ".wav",
 }
-
-# The asset ban targets report assets and standalone web artifacts. A product
-# frontend legitimately carries its own entry HTML and icon SVGs as source, so
-# these trees are exempt from the extension list. The size limit still applies.
-APP_SOURCE_PREFIXES = (
-    "bridge/",
-    # "ui/" is not a prefix of "ui-tui/" -- the slash ends it -- so each entry
-    # matches its own tree and nothing else.
-    "ui/",
-    "ui-tui/",
-)
-ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
-RAVEN_DESIGN_SKILL_PREFIX = (
-    "subagents",
-    "raven-design",
-    "Raven-Design",
-    "raven",
-    "memory_engine",
-    "skills",
-)
 
 
 @dataclass(frozen=True)
@@ -144,27 +124,13 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if not path or path in seen:
             continue
         seen.add(path)
-        if path.startswith(APP_SOURCE_PREFIXES):
-            continue
         candidate = root / path
         if not candidate.is_file():
             continue
         extension = candidate.suffix.lower()
-        if extension in BLOCKED_ASSET_EXTENSIONS and not _is_allowed_skill_reference_image(path, extension):
+        if extension in BLOCKED_ASSET_EXTENSIONS:
             violations.append(BlockedAssetViolation(path=path, extension=extension))
     return violations
-
-
-def _is_allowed_skill_reference_image(path: str, extension: str) -> bool:
-    parts = PurePosixPath(path).parts
-    prefix_length = len(RAVEN_DESIGN_SKILL_PREFIX)
-    return (
-        extension in ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS
-        and ".." not in parts
-        and len(parts) >= prefix_length + 3
-        and parts[:prefix_length] == RAVEN_DESIGN_SKILL_PREFIX
-        and parts[prefix_length + 1] == "references"
-    )
 
 
 def changed_paths(revision_range: str) -> list[str]:
