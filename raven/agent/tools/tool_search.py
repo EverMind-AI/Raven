@@ -21,6 +21,14 @@ function-calling.
 Two visibility tiers per turn (see :class:`ToolSearchStrategy`):
   - always-visible: a core set + the meta-tools (full schema every turn);
   - cataloged:      everything else — searchable, schema withheld until asked.
+
+``tool_call`` outlives that feature switch. Progressive disclosure is one reason
+a tool's schema may be absent from a request; ``ToolRegistry.hide_from_schema``
+is another, and it applies at every catalog size. A schema-hidden tool is
+dispatchable — ``ToolRegistry.execute`` never consults the schema — but a model
+can only reach it by naming it, and ``tool_call`` is the only place it can. So
+the host registers ``tool_call`` unconditionally and gates only ``tool_search``
+and the fold on ``tools.tool_search.enabled``.
 """
 
 from __future__ import annotations
@@ -63,8 +71,10 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
 )
 
 TOOL_CALL_NAME: str = "tool_call"
-# The meta-tools: always registered when the feature is on, never cataloged.
-META_TOOL_NAMES: frozenset[str] = frozenset({"tool_search", TOOL_CALL_NAME})
+TOOL_SEARCH_NAME: str = "tool_search"
+# The meta-tools. Never cataloged; ``tool_call`` is registered whether or not
+# the fold is on, ``tool_search`` only when it is (see ``ToolSearchStrategy``).
+META_TOOL_NAMES: frozenset[str] = frozenset({TOOL_SEARCH_NAME, TOOL_CALL_NAME})
 
 
 class _Target(NamedTuple):
@@ -205,7 +215,10 @@ class ToolSearchController:
           ``search`` filters by channel too. It reads as a statement of where
           the truth lives, not an instruction to search again: a model that
           searched, called what it found, and lost the tool in between would
-          otherwise be sent round the same loop.
+          otherwise be sent round the same loop. It is appended only where
+          ``tool_search`` is actually registered: ``tool_call`` ships without it
+          wherever the fold is off, and naming a tool that is not there is the
+          same broken promise this whole route exists to close.
         """
         if not isinstance(name, str):
             return _Target(None, "Error: 'name' must be a string naming a tool.")
@@ -213,8 +226,25 @@ class ToolSearchController:
             return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
         tool = self._registry.get(name)
         if tool is None or not self._registry.offers(tool):
-            return _Target(None, absent_tool_error(name, tail=" -- tool_search lists what is currently loaded"))
+            tail = " -- tool_search lists what is currently loaded" if self._search_visible() else ""
+            return _Target(None, absent_tool_error(name, tail=tail))
         return _Target(tool, None)
+
+    def _search_visible(self) -> bool:
+        """Whether ``tool_search`` reaches the model's tool list this turn.
+
+        The old shape of :meth:`tool_call_available`, kept but moved to the
+        meta-tool it is actually true of. ``tool_search`` is registered only
+        where the fold is configured on, withheld by the same off switch as
+        anything else, and dropped from the request again below the threshold --
+        so a pointer at it is dishonest in three separate states, not one.
+        """
+        if TOOL_SEARCH_NAME not in self._registry.tool_names:
+            return False
+        if TOOL_SEARCH_NAME in self._registry.withheld_names():
+            return False
+        catalog = sum(1 for t in self._registry.get_definitions() if t["function"]["name"] not in META_TOOL_NAMES)
+        return catalog > self.compaction_threshold
 
     def tool_call_available(self) -> bool:
         """Whether ``tool_call`` is in the model's per-turn tool list right now.
@@ -222,16 +252,17 @@ class ToolSearchController:
         The predicate behind the DAG acceptance text's advertisement of the
         schema-hidden control tools: it must agree with what
         :class:`ToolSearchStrategy` actually ships, or the text promises a
-        route that does not exist. Both read the threshold from here, and both
-        test the same two things -- the meta-tool is registered and not
-        withheld, and the catalog sits above the fold.
+        route that does not exist.
+
+        The catalog size is deliberately not part of this any more. ``tool_call``
+        is the only way a model can name a tool that is not in the schema, so it
+        rides in every request and the fold keeps it at any catalog size -- which
+        leaves only the two things an operator can still take away: the off
+        switch, and a host that never registered it.
         """
         if TOOL_CALL_NAME not in self._registry.tool_names:
             return False
-        if TOOL_CALL_NAME in self._registry.withheld_names():
-            return False
-        catalog = sum(1 for t in self._registry.get_definitions() if t["function"]["name"] not in META_TOOL_NAMES)
-        return catalog > self.compaction_threshold
+        return TOOL_CALL_NAME not in self._registry.withheld_names()
 
     def target_is_blocking(self, name: Any) -> bool:
         """Whether the tool ``tool_call`` would forward to is a blocking interaction.
@@ -319,9 +350,11 @@ class ToolCallTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Invoke a tool found via tool_search by name, passing its arguments. "
-            "If the arguments don't fit the tool's schema the registry returns a "
-            "validation error describing the fix; adjust and call again."
+            "Invoke a tool by name that is not in your tool list, passing its "
+            "arguments -- one found via tool_search, or one that another tool's "
+            "result told you to call. If the arguments don't fit the tool's schema "
+            "the registry returns a validation error describing the fix; adjust "
+            "and call again."
         )
 
     @property
@@ -331,7 +364,7 @@ class ToolCallTool(Tool):
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Exact tool name from a tool_search result.",
+                    "description": "Exact tool name, from a tool_search result or from a tool result that named it.",
                 },
                 "arguments": {
                     "type": "object",
@@ -354,10 +387,15 @@ class ToolCallTool(Tool):
 class ToolSearchStrategy(TokenStrategy):
     """``before_llm_call`` hook that compacts the tool list for large catalogs.
 
-    At or below ``compaction_threshold`` tools it passes through unchanged (and
-    drops the meta-tools, so small setups are byte-for-byte as before). Above
-    it, only the always-visible core + meta-tools keep their schema in the
-    request; the rest stay reachable via ``tool_search`` / ``tool_call``.
+    At or below ``compaction_threshold`` tools it passes through unchanged apart
+    from dropping ``tool_search``, which has nothing to find while every schema
+    is already in the request. Above it, only the always-visible core +
+    meta-tools keep their schema; the rest stay reachable via ``tool_search`` /
+    ``tool_call``.
+
+    ``tool_call`` survives both branches. It is not only the fold's dispatcher:
+    it is the sole route by which a model can name a schema-hidden tool, and
+    those exist independently of whether this deploy folds anything.
     """
 
     def __init__(self, controller: ToolSearchController, *, compaction_threshold: int | None = None) -> None:
@@ -383,7 +421,7 @@ class ToolSearchStrategy(TokenStrategy):
         self._ctrl.refresh()
         catalog_size = sum(1 for t in tools if t["function"]["name"] not in META_TOOL_NAMES)
         if catalog_size <= self._compaction_threshold:
-            out = [t for t in tools if t["function"]["name"] not in META_TOOL_NAMES]
+            out = [t for t in tools if t["function"]["name"] != TOOL_SEARCH_NAME]
             return messages, out, model
         present = {t["function"]["name"] for t in tools}
         if not META_TOOL_NAMES <= present:

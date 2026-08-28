@@ -85,17 +85,32 @@ def test_strategy_registered_first(workspace) -> None:
     assert "marker" in names
 
 
-def test_disabled_registers_nothing(workspace) -> None:
+def test_disabled_registers_no_search_but_keeps_tool_call(workspace) -> None:
+    # tool_call is not part of the feature switch: it is the only route by which
+    # a model can name a schema-hidden tool (the DAG controls), and those exist
+    # whether or not this deploy folds its catalog.
     loop = _make_loop(workspace, ToolSearchConfig(enabled=False))
-    for name in ("tool_search", "tool_call"):
-        assert not loop.tools.has(name)
+    assert not loop.tools.has("tool_search")
     assert loop.strategies.get("tool_search") is None
+    assert loop.tools.has("tool_call")
 
 
-def test_none_config_registers_nothing(workspace) -> None:
+def test_none_config_registers_no_search_but_keeps_tool_call(workspace) -> None:
     loop = _make_loop(workspace, None)
     assert not loop.tools.has("tool_search")
     assert loop.strategies.get("tool_search") is None
+    assert loop.tools.has("tool_call")
+
+
+def test_dag_controls_are_reachable_without_progressive_disclosure(workspace) -> None:
+    # The bug this pair of assertions pins: cancel_dag / dag_status /
+    # resolve_dag_node are hidden from the schema and advertised in
+    # run_subagent_dag's own result text, so an unreachable tool_call left the
+    # advertisement pointing at nothing and a suspended node timing out.
+    loop = _make_loop(workspace, ToolSearchConfig(enabled=False))
+    hidden = loop.tools.schema_hidden_names()
+    assert {"cancel_dag", "dag_status", "resolve_dag_node"} <= hidden
+    assert loop.dag_control_reachable()
 
 
 @pytest.mark.asyncio
@@ -112,3 +127,23 @@ async def test_enabled_loop_keeps_interaction_primitives_visible(workspace) -> N
     assert {"read_file", "message", "ask_user", "spawn"} <= names, "primitives must stay visible"
     assert {"tool_search", "tool_call"} <= names, "meta-tools must stay visible"
     assert "web_search" not in names, "cataloged domain tools are withheld above threshold"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_does_not_name_tool_search_when_it_is_absent(workspace) -> None:
+    # The refusal text used to point at tool_search unconditionally, which is the
+    # same broken promise -- a route named in a result that this deploy does not
+    # ship -- that leaving tool_call behind the feature switch created.
+    loop = _make_loop(workspace, ToolSearchConfig(enabled=False))
+    out = await loop.tools.execute("tool_call", {"name": "no_such_tool"})
+    assert "tool_search" not in out
+
+    # Enabled is not enough: below the threshold the strategy drops tool_search
+    # from the request too, so the pointer is only honest above the fold.
+    unfolded = _make_loop(workspace, ToolSearchConfig(enabled=True, compaction_threshold=500))
+    out = await unfolded.tools.execute("tool_call", {"name": "no_such_tool"})
+    assert "tool_search" not in out
+
+    folded = _make_loop(workspace, ToolSearchConfig(enabled=True, compaction_threshold=5))
+    out = await folded.tools.execute("tool_call", {"name": "no_such_tool"})
+    assert "tool_search lists what is currently loaded" in out
