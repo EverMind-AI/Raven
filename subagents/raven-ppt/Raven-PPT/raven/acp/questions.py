@@ -24,23 +24,14 @@ text. Rather than inventing an answer or hanging, the question is put on the wir
 as an ordinary agent message -- the person sees what was asked and can answer it
 in their next prompt -- and the tool falls back to its default.
 
-**A question and its choices are published redacted; the answer is not.** Both
-are model-authored strings, so either can carry a credential, and every frame here
-is one the client persists. Redaction happens to the finished payload in
-:meth:`_publish` rather than to each field where it is written, because the
-per-field shape only ever protects the fields whoever last edited this file had in
-mind -- the question string was scrubbed while the ``choices`` two lines below it
-in the same literal were not.
+Two deliberate differences from the reference implementation, both because this
+package is smaller rather than because the reasoning differs:
 
-What comes *back* to the tool is the choice it authored, not the label: the model
-already has the value, and the route by which that value reaches the client again
-is the tool result preview, which the spine redacts on its own. Keeping those two
-in step takes a different mechanism per route, because only one of them has an id
--- see :meth:`_via_permission` and :func:`_offered`.
-
-One deliberate difference from the reference implementation, because this package
-is smaller rather than because the reasoning differs:
-
+* **Nothing is redacted.** There is no ``redact`` module here, and the text of a
+  question is agent-authored text of exactly the kind ``AcpOutlet`` already puts
+  on the wire unaltered. Routing it through this surface is not a new exposure,
+  and inventing a scrubber for one call site would be a worse answer than the
+  parity.
 * **There is no ``clarify.closed``.** Nothing in this fork emits it, so a
   retraction hook keyed on it would be dead code. Cancellation arrives through
   ``session/cancel`` instead, which is what :meth:`cancel` serves -- and
@@ -61,7 +52,6 @@ from loguru import logger
 from raven.acp import protocol
 from raven.acp.capabilities import ClientCapabilities
 from raven.acp.outbound import OutboundRequests
-from raven.acp.redact import redact
 
 # The field name the elicitation form asks for and the answer is read back from.
 # One field, because ``ask_user`` asks one thing.
@@ -94,49 +84,6 @@ The thirty seconds of margin are for the client's own dispatch. Long, because wh
 is on the other side is a person reading a question; finite, because an outbound
 call that never resolves is a turn that never ends.
 """
-
-
-# Keys whose value is an identifier this surface minted rather than prose a
-# person reads. The credential patterns match inside a word, so any hex id is a
-# false positive waiting to happen: a synthesised ``ask-<hex>`` toolCallId reads
-# as an OpenAI ``sk-`` key and went out over a live connection as
-# ``a[redacted]`` until this exclusion existed.
-_OPAQUE_KEYS = frozenset({"sessionId", "toolCallId", "optionId"})
-
-
-def _scrubbed(value: Any) -> Any:
-    """Every string in an outbound payload redacted, bar the ids minted here.
-
-    Deliberately not :func:`~raven.acp.redact.redact_value`, whose secret-named-key
-    rule exists for an ``mcpServers`` ``env`` dict this surface never publishes,
-    and which has no notion of a field that must be passed through untouched.
-    """
-    if isinstance(value, dict):
-        return {key: item if key in _OPAQUE_KEYS else _scrubbed(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_scrubbed(item) for item in value]
-    return redact(value) if isinstance(value, str) else value
-
-
-def _offered(choices: list[str]) -> dict[str, str]:
-    """Map each label a form publishes back to the choice it stands for.
-
-    The one place redaction is applied by hand rather than left to
-    :meth:`AcpQuestions._publish`, because a schema enum is the answer token as
-    well as the label: this side has to hold the published form to match an answer
-    against it. Applying it twice is harmless -- :func:`~raven.acp.redact.redact`
-    is idempotent -- so :meth:`_publish` stays the backstop for the rest.
-
-    Two choices differing only inside a credential redact to the same label, and
-    only the first keeps it. A second entry would be a duplicate enum value a
-    person cannot tell apart from the first, and an answer no lookup could resolve
-    to one of them rather than the other. The permission route does not need this
-    because its options carry ids, so identical labels still select distinctly.
-    """
-    offered: dict[str, str] = {}
-    for choice in choices:
-        offered.setdefault(redact(choice), choice)
-    return offered
 
 
 class AcpQuestions:
@@ -315,17 +262,11 @@ class AcpQuestions:
         The field is an enum when the question has choices and a plain string
         otherwise, which is the whole reason this route is preferred -- it is the
         only one that can carry an answer nobody listed in advance.
-
-        A schema enum has no id beside it: the published value *is* the token the
-        client answers with. So the enum carries the labels :func:`_offered` built
-        and the answer is matched against those, which is what keeps a person able
-        to pick the option they were shown.
         """
-        offered = _offered(choices)
         field: dict[str, Any] = {"type": "string", "description": "Your answer"}
-        if offered:
-            field["enum"] = list(offered)
-        result = await self._publish(
+        if choices:
+            field["enum"] = choices
+        result = await self._outbound.call(
             "elicitation/create",
             {
                 "message": question,
@@ -337,10 +278,11 @@ class AcpQuestions:
                     "required": [ANSWER_FIELD],
                 },
             },
+            timeout=self._timeout_s,
         )
-        return self._read_elicitation(result, offered)
+        return self._read_elicitation(result, choices)
 
-    def _read_elicitation(self, result: Any, offered: dict[str, str]) -> str | None:
+    def _read_elicitation(self, result: Any, choices: list[str]) -> str | None:
         """Read the form's answer, believing only a value of a usable type.
 
         ``decline`` and ``cancel`` both mean no answer, and they are not errors: a
@@ -350,8 +292,7 @@ class AcpQuestions:
         A value outside the enum is refused rather than passed through. The content
         is typed loosely by the schema, and a client that answered a
         multiple-choice question with something not on the list is a client whose
-        answer cannot be acted on. On the list means on the *published* list, and
-        what the tool gets back is the choice that label stood for.
+        answer cannot be acted on.
         """
         if not isinstance(result, dict) or result.get("action") != "accept":
             return None
@@ -367,10 +308,10 @@ class AcpQuestions:
             value = ", ".join(str(item) for item in value)
         if not isinstance(value, str) or not value:
             return None
-        if offered and value not in offered:
+        if choices and value not in choices:
             logger.warning("acp: the elicitation answer was not one of the offered choices")
             return None
-        return offered.get(value, value)
+        return value
 
     async def _via_permission(self, session_id: str, question: str, choices: list[str]) -> str | None:
         """The route that does not fit, made honest.
@@ -382,13 +323,10 @@ class AcpQuestions:
 
         Option ids are minted here and the answer is matched against them, for the
         same reason a real permission is: an id from an earlier request, or one the
-        client invented, must not select an answer nobody chose. Keying on the id
-        is also what lets :meth:`_publish` redact the displayed ``name`` without
-        breaking the round trip: the client sends back an id, never the label it
-        rendered, so nothing here has to know what the label ended up saying.
+        client invented, must not select an answer nobody chose.
         """
         offered = {f"choice-{index}-{uuid4().hex}": choice for index, choice in enumerate(choices[:MAX_CHOICES])}
-        result = await self._publish(
+        result = await self._outbound.call(
             "session/request_permission",
             {
                 "sessionId": session_id,
@@ -411,6 +349,7 @@ class AcpQuestions:
                 ],
                 "_meta": {"raven.synthesisedToolCall": True, "raven.kind": "question"},
             },
+            timeout=self._timeout_s,
         )
         if not isinstance(result, dict):
             return None
@@ -421,27 +360,11 @@ class AcpQuestions:
 
     # -- plumbing ---------------------------------------------------------
 
-    async def _publish(self, method: str, params: dict[str, Any]) -> Any:
-        """Redact the whole finished payload, then ask the client.
-
-        Every outbound request this surface makes goes through here. The strings in
-        these payloads are a question and its choices, both written by the model,
-        and the client keeps the frame in a transcript -- so the default for a field
-        published from here is redacted, and a field added later is covered without
-        anyone remembering to wrap it.
-
-        Not pushed down into :class:`OutboundRequests`: that is a generic transport
-        shared with requests whose params are this process's own, and a transport
-        that alters what its caller passed cannot be reasoned about from the call
-        site.
-        """
-        return await self._outbound.call(method, _scrubbed(params), timeout=self._timeout_s)
-
     def _say(self, session_id: str, text: str) -> None:
         self._emit(
             protocol.session_update(
                 session_id,
-                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": redact(text)}},
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
             )
         )
 

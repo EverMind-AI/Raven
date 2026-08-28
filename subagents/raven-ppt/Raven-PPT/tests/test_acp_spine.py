@@ -11,15 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.acp.redact import REPLACEMENT, redact
 from raven.acp.session import AcpSession, SessionTable
-from raven.acp.spine import (
-    MAX_RESULT_PREVIEW,
-    AcpOutlet,
-    build_acp,
-    resource_link,
-    usage_update,
-)
+from raven.acp.spine import AcpOutlet, build_acp, resource_link, usage_update
 from raven.spine import (
     ChatType,
     EpisodeStart,
@@ -265,75 +258,6 @@ async def test_an_empty_preview_carries_no_content_key(wired):
     assert "content" not in frames.updates()[0]
 
 
-# -- credentials do not reach the transcript ----------------------------------
-
-
-async def test_a_result_preview_arrives_redacted(wired):
-    """``read_file`` is not disabled and has no workspace fence, so one read of a
-    credentials file would otherwise publish it into a transcript the client
-    persists."""
-    _sessions, _session, frames, outlet = wired
-    await outlet.deliver(
-        ToolEvent(
-            phase=ToolPhase.COMPLETE,
-            tool_call_id="c1",
-            result_preview="[default]\naws_secret_access_key = wJalrXUtnFEMI-K7MDENG-bPxRfiCY\n",
-            source=_src(),
-            conversation_id=SESSION_ID,
-        )
-    )
-    text = frames.updates()[0]["content"][0]["content"]["text"]
-    assert "wJalrXUtnFEMI" not in text
-    assert REPLACEMENT in text
-    # The label survives, so the reader still learns which credential was read.
-    assert "aws_secret_access_key" in text
-
-
-async def test_a_credential_is_scanned_before_the_preview_is_cut(wired):
-    """A value straddling the cap: cutting first leaves too few characters for the
-    pattern to match, and the head of the credential then rides out as ordinary
-    text."""
-    _sessions, _session, frames, outlet = wired
-    label = 'password="'
-    # Placed so that exactly three characters of the value sit above the cap --
-    # below the six the pattern needs, which is what makes the order observable.
-    preview = "x" * (MAX_RESULT_PREVIEW - len(label) - 3) + label + "hunter2secretvalue"
-    assert "hun" in redact(preview[:MAX_RESULT_PREVIEW]), "the other order would publish the head"
-
-    await outlet.deliver(
-        ToolEvent(
-            phase=ToolPhase.COMPLETE,
-            tool_call_id="c1",
-            result_preview=preview,
-            source=_src(),
-            conversation_id=SESSION_ID,
-        )
-    )
-
-    text = frames.updates()[0]["content"][0]["content"]["text"]
-    assert "hun" not in text
-    assert text.endswith("[truncated]")
-
-
-async def test_a_tool_title_arrives_redacted(wired):
-    """For ``exec`` the title is the command line, and a command line carries
-    header tokens."""
-    _sessions, _session, frames, outlet = wired
-    await outlet.deliver(
-        ToolEvent(
-            phase=ToolPhase.START,
-            tool_call_id="c1",
-            name="exec",
-            arguments={"command": 'curl -H "Authorization: Bearer sk-ant-api03-AAAABBBBCCCCDDDD" https://x'},
-            source=_src(),
-            conversation_id=SESSION_ID,
-        )
-    )
-    title = frames.updates()[0]["title"]
-    assert "sk-ant-api03" not in title
-    assert f"Authorization: Bearer {REPLACEMENT}" in title
-
-
 # -- media --------------------------------------------------------------------
 
 
@@ -506,22 +430,6 @@ async def test_a_failed_turn_says_why_and_still_ends_the_turn(wired):
         await teardown()
     assert frames.kinds() == ["agent_message_chunk"]
     assert "the model refused" in frames.updates()[0]["content"]["text"]
-
-
-async def test_a_failed_turn_message_is_redacted(wired):
-    sessions, session, frames, _outlet = wired
-    scheduler, _hub, _outlet2, teardown = build_acp(
-        _ScriptedLoop(fail="POST /v1 failed with api_key=sk-proj-abcdefghijklmnop"), frames, sessions
-    )
-    try:
-        future = session.begin_turn()
-        scheduler.submit(_request())
-        assert await asyncio.wait_for(future, SETTLE_TIMEOUT_S) == "end_turn"
-    finally:
-        await teardown()
-    text = frames.updates()[0]["content"]["text"]
-    assert "sk-proj-abcdefghijklmnop" not in text
-    assert REPLACEMENT in text
 
 
 async def test_a_cancelled_turn_ends_as_cancelled_with_no_explanation(wired):

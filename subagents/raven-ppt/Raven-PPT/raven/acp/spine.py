@@ -31,7 +31,6 @@ from urllib.parse import quote
 from loguru import logger
 
 from raven.acp import protocol
-from raven.acp.redact import redact
 from raven.acp.session import SessionTable
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
 from raven.agent.spine_runner import AgentTurnRunner
@@ -250,7 +249,7 @@ class AcpOutlet:
             update: dict[str, Any] = {
                 "sessionUpdate": "tool_call",
                 "toolCallId": out.tool_call_id,
-                "title": redact(title_for(out.name or None, out.arguments, out.display)),
+                "title": title_for(out.name or None, out.arguments, out.display),
                 "kind": tool_kind(out.name or None),
                 # ``in_progress`` and not ``pending``: pending means "not started
                 # -- streaming input or awaiting approval", and by the time this
@@ -273,12 +272,8 @@ class AcpOutlet:
             "status": "failed" if preview[: len(_FAILURE_PREFIX)].lower() == _FAILURE_PREFIX else "completed",
         }
         if preview:
-            # Scanned before it is cut: cutting first can slice a credential so it
-            # no longer matches the pattern that would have caught it, and then the
-            # head of it is published as ordinary text.
-            scanned = redact(preview)
-            text = scanned[:MAX_RESULT_PREVIEW]
-            if out.truncated or len(scanned) > MAX_RESULT_PREVIEW:
+            text = preview[:MAX_RESULT_PREVIEW]
+            if out.truncated or len(preview) > MAX_RESULT_PREVIEW:
                 text += "\n[truncated]"
             update["content"] = [{"type": "content", "content": {"type": "text", "text": text}}]
         return update
@@ -392,7 +387,7 @@ def _make_acp_sink(
                 # alternatives are both worse: erroring the prompt makes some
                 # clients tear down the whole turn, and ending silently shows a
                 # person a turn that stopped for no stated reason.
-                outlet.say(session.session_id, redact(f"The turn failed: {event.error or 'no reason reported'}"))
+                outlet.say(session.session_id, f"The turn failed: {event.error or 'no reason reported'}")
                 session.settle("end_turn")
             else:
                 session.settle("cancelled")

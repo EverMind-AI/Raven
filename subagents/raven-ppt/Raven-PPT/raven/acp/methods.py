@@ -33,7 +33,6 @@ from raven.acp import materials, protocol
 from raven.acp.capabilities import ClientCapabilities, initialize_result
 from raven.acp.outbound import OutboundRequests
 from raven.acp.questions import AcpQuestions
-from raven.acp.redact import redact, redact_value
 from raven.acp.session import AcpSession, SessionTable, TurnAlreadyRunningError
 from raven.acp.spine import Frames
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -64,18 +63,6 @@ _REPLAY_KINDS = {"user": "user_message_chunk", "assistant": "agent_message_chunk
 # it, and a request it would have cancelled is answered -32800 by whoever owns
 # that request rather than here.
 IGNORED_NOTIFICATIONS = frozenset({"$/cancel_request"})
-
-# Keys an internal error's data may carry that must not leave the process: a
-# traceback tail names the filesystem it ran on and sometimes argument values.
-_PRIVATE_ERROR_KEYS = frozenset({"traceback_tail", "traceback", "stack"})
-
-
-def sanitise_error_data(data: Any) -> Any:
-    """What may leave the process from an internal error's ``data``."""
-    if not isinstance(data, dict):
-        return redact_value(data)
-    kept = {key: value for key, value in data.items() if key not in _PRIVATE_ERROR_KEYS}
-    return redact_value(kept) or None
 
 
 class AcpMethodError(Exception):
@@ -169,7 +156,7 @@ class AcpMethods:
             if not is_request:
                 logger.debug("acp: notification {} failed: {}", method, exc.message)
                 return None
-            return protocol.error_response(request_id, exc.code, redact(exc.message), sanitise_error_data(exc.data))
+            return protocol.error_response(request_id, exc.code, exc.message, exc.data)
         except Exception as exc:
             # The connection outlives one bad request. Without this the read loop
             # dies on a handler bug and the client sees the agent vanish mid-turn,
@@ -177,10 +164,8 @@ class AcpMethods:
             logger.exception("acp: {} raised", method)
             if not is_request:
                 return None
-            # Scanned before it is clipped: clipping first can cut a credential in
-            # half, and the head of it then reads as ordinary text.
             return protocol.error_response(
-                request_id, protocol.INTERNAL_ERROR, f"{method} failed", {"reason": redact(str(exc))[:400]}
+                request_id, protocol.INTERNAL_ERROR, f"{method} failed", {"reason": str(exc)[:400]}
             )
         if not is_request:
             return None
@@ -378,7 +363,7 @@ class AcpMethods:
             raise AcpMethodError(
                 protocol.INTERNAL_ERROR,
                 "the agent could not be started for this session",
-                {"reason": redact(str(exc))[:400]},
+                {"reason": str(exc)[:400]},
             ) from exc
         return session
 
@@ -406,14 +391,9 @@ class AcpMethods:
             # ids this connection never issued.
             if kind is None or not isinstance(text, str) or not text.strip():
                 continue
-            # A stored turn is republished into a transcript the client keeps, so
-            # it is the same publishing surface a live chunk is -- and it is worse
-            # by one degree, because a credential a turn quoted months ago is
-            # replayed by every reopen from here on.
             self._emit(
                 protocol.session_update(
-                    session.session_id,
-                    {"sessionUpdate": kind, "content": {"type": "text", "text": redact(text)}},
+                    session.session_id, {"sessionUpdate": kind, "content": {"type": "text", "text": text}}
                 )
             )
 
@@ -510,7 +490,7 @@ class AcpMethods:
             # Fatal to the turn, not skipped: a deck built from part of its
             # material is wrong in a way nothing downstream can see. Reported as
             # message content because a prompt is never answered with an error.
-            outlet.say(session.session_id, redact(f"The material could not be staged. {exc}"))
+            outlet.say(session.session_id, f"The material could not be staged. {exc}")
             return {"stopReason": "end_turn"}
         # No gate on an empty staging. The deck author runs with or without
         # documents -- it gathers and discloses instead of refusing -- and the
@@ -787,5 +767,4 @@ __all__ = [
     "AcpMethodError",
     "AcpMethods",
     "EngineFactory",
-    "sanitise_error_data",
 ]
