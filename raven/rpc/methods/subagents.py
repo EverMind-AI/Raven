@@ -7,8 +7,8 @@ let the two surfaces disagree about what "installed" means or which fields a
 write is allowed to touch.
 
 The install group is computed here rather than in the client because a client
-that computes it is how the rule drifts: `ui-webui`'s catalog carries a copy of
-its own, and a third in the TUI would be one more. For `kind == "acp"` the rule
+that computes it is how the rule drifts: a second copy in the TUI, or in the
+page, would be one more place for it to go stale. For `kind == "acp"` the rule
 is whether the executable is on the login shell's PATH, which is the same
 question `ui/`'s agent rows gate on (`probe_status === "missing"`).
 """

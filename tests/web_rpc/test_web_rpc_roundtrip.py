@@ -1,4 +1,4 @@
-"""End-to-end round-trip for the web-app WebSocket RPC channel (ui-webui P1).
+"""End-to-end round-trip for the web-app WebSocket RPC channel.
 
 Starts the real :class:`WebSocketRpcServer`, connects an aiohttp WS client, and
 drives the full path that ``build_web`` + the gateway wiring stand up:
