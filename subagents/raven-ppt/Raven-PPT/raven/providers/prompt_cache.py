@@ -30,6 +30,14 @@ from loguru import logger
 
 CACHE_CONTROL: dict[str, str] = {"type": "ephemeral"}
 
+MAX_BREAKPOINTS = 4
+"""How many ``cache_control`` blocks one request may carry.
+
+Anthropic's limit, and a request that exceeds it is rejected outright rather
+than served with the extras ignored -- so a placement that spends them has to
+count.
+"""
+
 #: The vendor whose API defines this field. A model reaches it directly or
 #: through a gateway; either way it is the one that reads the breakpoints.
 _DIALECT_OWNER = "anthropic"

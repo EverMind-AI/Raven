@@ -19,9 +19,11 @@ deck whose text is known to sit near the top.
 from __future__ import annotations
 
 import html
+import math
 import re
 import shutil
 import tempfile
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -121,6 +123,90 @@ def to_pngs(
             "without one the deck can be built and exported but not looked at"
         )
     return _poppler_pngs(binary, source, destination, int(dpi), pages, timeout_s)
+
+
+def page_pixels(size: PageSize, dpi: int) -> tuple[int, int]:
+    """The pixel size a page of `size` comes out as at `dpi`.
+
+    Both backends round the same way -- ceil on each axis, independently -- and
+    that was measured rather than derived: PDFium and `pdftoppm` agree exactly on
+    a 959.976x540pt deck page and on a fractional 300.5x200.25pt one at 72, 100,
+    144, 150 and 201dpi.
+    """
+    scale = int(dpi) / 72
+    return math.ceil(size.width_pt * scale), math.ceil(size.height_pt * scale)
+
+
+def is_page_render(size: PageSize, pixels: tuple[int, int]) -> bool:
+    """Whether `pixels` is what a page of `size` comes out as at some resolution.
+
+    The resolution a PNG was written at is not recorded in the file -- PDFium
+    writes no `pHYs` chunk -- so what there is to check against is the page size
+    the PDF records, and the question is whether any dpi `to_pngs` accepts maps
+    that page onto exactly these pixels. The same page at 72dpi and at 144 both
+    answer yes, because both are true renders of it; an image of another shape, a
+    thumbnail, or a 1x1 placeholder answers no at every resolution in range.
+    """
+    return any(page_pixels(size, dpi) == pixels for dpi in range(1, MAX_DPI + 1))
+
+
+def page_number(png: Path) -> int | None:
+    """The 1-based page a rasterised file's name carries, or None when it has none."""
+    match = _PDFTOPPM_PAGE.search(Path(png).name)
+    return int(match.group(1)) if match else None
+
+
+def unusable_pages(sizes: Mapping[int, PageSize], pngs: Iterable[Path]) -> dict[int, str]:
+    """Which of these page images did not come out, and what is wrong with each.
+
+    A sanity pass to run before anything measures a page image, because a blank or
+    mis-sized PNG has none of what the measurements look for: every one of them
+    passes, and a page that never rendered is reported as a page measured clean.
+
+    Keyed by page number, in page order, empty when every image is usable. Pages
+    `sizes` does not name are skipped -- a review directory outlives the deck in
+    it, and an image left behind by a longer build is not this deck's page.
+
+    Nearly-flat pages are deliberately not in here: telling "one colour and a
+    stray pixel" from "a page with very little on it" needs a share of the
+    histogram to call flat, and that number has not been derived from anything.
+    A page of exactly one colour needs no such number.
+    """
+    verdicts: dict[int, str] = {}
+    for png in pngs:
+        number = page_number(png)
+        if number is None or number not in sizes:
+            continue
+        reason = _unusable(Path(png), sizes[number])
+        if reason is not None:
+            verdicts[number] = reason
+    return dict(sorted(verdicts.items()))
+
+
+def _unusable(png: Path, size: PageSize) -> str | None:
+    if not png.is_file():
+        return "no file was written for it"
+    if png.stat().st_size == 0:
+        return "the file written for it is empty"
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - Pillow ships with the ppt extra
+        return None
+    try:
+        with Image.open(png) as opened:
+            opened.load()
+            pixels = (opened.width, opened.height)
+            colours = opened.convert("RGB").getcolors(maxcolors=2)
+    except Exception:  # noqa: BLE001 - Pillow raises its own type per cause
+        return "the file written for it cannot be read as an image"
+    if not is_page_render(size, pixels):
+        return (
+            f"it came out {pixels[0]}x{pixels[1]}px, which is not a "
+            f"{size.width_pt:g}x{size.height_pt:g}pt page at any resolution"
+        )
+    if colours is not None and len(colours) == 1:
+        return "it came out a single flat colour"
+    return None
 
 
 def word_boxes(

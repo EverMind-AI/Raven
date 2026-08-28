@@ -122,3 +122,94 @@ def test_a_shape_with_no_geometry_has_no_box(tmp_path: Path) -> None:
     assert page_box(inherited[0]) is None
     assert shape_rect_emu(inherited[0]).area == 0
     del tmp_path
+
+
+def _table_slide(rows: int, columns: int, *, at=(1.0, 1.0), size=(6.0, 3.0)):
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_table(
+        rows, columns, Inches(at[0]), Inches(at[1]), Inches(size[0]), Inches(size[1])
+    )
+    return presentation, slide, frame
+
+
+def test_a_table_cell_reports_the_rectangle_it_covers() -> None:
+    """A cell is not a shape, so nothing walking `iter_shapes` can ask where it is."""
+    from raven.ppt.services.measure.geometry import cell_boxes
+
+    _presentation, slide, frame = _table_slide(2, 3, at=(1.0, 1.0), size=(6.0, 2.0))
+    table = frame.table
+    for down in range(2):
+        for across in range(3):
+            table.cell(down, across).text = f"r{down}c{across}"
+
+    boxes = {cell.text: box for cell, box in cell_boxes(slide)}
+
+    assert len(boxes) == 6
+    # Columns are equal thirds of 6in and rows halves of 2in, in points.
+    first = boxes["r0c0"]
+    assert (round(first.x0), round(first.y0)) == (72, 72)
+    assert round(first.width) == 144 and round(first.height) == 72
+    last = boxes["r1c2"]
+    assert (round(last.x1), round(last.y1)) == (round(7.0 * 72), round(3.0 * 72))
+
+
+def test_an_empty_cell_is_not_one_of_them() -> None:
+    from raven.ppt.services.measure.geometry import cell_boxes
+
+    _presentation, slide, frame = _table_slide(2, 2)
+    frame.table.cell(0, 0).text = "held"
+
+    assert [cell.text for cell, _box in cell_boxes(slide)] == ["held"]
+
+
+def test_a_merged_cell_is_reported_once_over_the_span_it_covers() -> None:
+    """From the origin, over the whole span: a band welded across three columns is one
+    rectangle, and reading the origin's own column would say it is a third as wide.
+
+    A spanned cell keeps a text frame of its own that a file can carry copy in -- the
+    merge hides it and the render never draws it -- so it is skipped by what it is and
+    not by being empty.
+    """
+    from raven.ppt.services.measure.geometry import cell_boxes
+
+    _presentation, slide, frame = _table_slide(2, 3, at=(0.0, 0.0), size=(6.0, 2.0))
+    table = frame.table
+    table.cell(0, 0).merge(table.cell(0, 2))
+    table.cell(0, 0).text = "one band"
+    table.cell(1, 0).text = "under it"
+    table.cell(0, 1).text_frame.text = "hidden by the merge"
+    assert table.cell(0, 1).is_spanned
+
+    boxes = {cell.text_frame.text: box for cell, box in cell_boxes(slide)}
+
+    assert sorted(boxes) == ["one band", "under it"]
+    assert round(boxes["one band"].width) == round(6.0 * 72), "the band spans all three columns"
+    assert round(boxes["under it"].width) == round(2.0 * 72)
+
+
+def test_a_table_inside_a_group_lands_where_the_group_puts_it() -> None:
+    """The boundaries are fractions of the frame's own rectangle rather than a running
+    sum of the declared widths, so the group's scale is carried without applying it
+    twice."""
+    from raven.ppt.services.measure.geometry import cell_boxes
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    frame = slide.shapes.add_table(1, 2, Inches(0), Inches(0), Inches(8), Inches(2))
+    frame.table.cell(0, 0).text = "left"
+    frame.table.cell(0, 1).text = "right"
+    # python-pptx cannot add a table to a group, so the element is moved the way a
+    # designer's template already carries one.
+    group._element.append(frame._element)
+    _transform(group, at=(2.0, 1.0), size=(4.0, 1.0), child_at=(0.0, 0.0), child_size=(8.0, 2.0))
+
+    boxes = {cell.text: box for cell, box in cell_boxes(slide)}
+
+    # The group halves the table, so each 4in column comes out 2in wide at x=2in.
+    assert round(boxes["left"].x0) == round(2.0 * 72)
+    assert round(boxes["left"].width) == round(2.0 * 72)
+    assert round(boxes["right"].x0) == round(4.0 * 72)

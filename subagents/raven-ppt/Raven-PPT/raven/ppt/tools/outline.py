@@ -30,7 +30,6 @@ from raven.agent.tools.base import Tool
 from raven.ppt.contracts import (
     Outline,
     PagePlan,
-    PlannedTable,
     Project,
     brief_path,
     load_brief,
@@ -119,33 +118,6 @@ class PptOutlineTool(Tool):
                                     "what carries the claim: a figure, a table, a chart you draw, a single "
                                     "number, a diagram, or prose when it genuinely is prose"
                                 ),
-                            },
-                            "table_plan": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "description": (
-                                    "optional information shape for a table-led page: columns, complete "
-                                    "cell rows and the reading cue. This plans a table's information, not "
-                                    "a native PowerPoint table or physical coordinates"
-                                ),
-                                "properties": {
-                                    "columns": {"type": "array", "items": {"type": "string"}},
-                                    # One shape, not two. `rows` began as row labels -- a string a row --
-                                    # and grew into complete cell rows with the string form left in beside
-                                    # it, so one plan could mix `["cost", "4.2"]` rows with `"cost"` rows
-                                    # and nothing could tell a plan that meant one label from a plan that
-                                    # lost its cells. `PlannedTable` decides that shape; this asks for it.
-                                    "rows": {
-                                        "type": "array",
-                                        "items": {"type": "array", "items": {"type": "string"}},
-                                        "description": (
-                                            "one array a row, its cells in the same order as `columns`, so "
-                                            "a row is a row of the grid rather than a label with holes "
-                                            "under the other columns"
-                                        ),
-                                    },
-                                    "reading": {"type": "string"},
-                                },
                             },
                             "layout": {
                                 "type": "string",
@@ -351,7 +323,6 @@ class PptOutlineTool(Tool):
             findings.append(budget)
         findings.extend(_thin(deck, brief))
         findings.extend(_thin_pages(outline, state))
-        findings.extend(_table_room(outline))
         findings.extend(_unswept_citations(deck, state))
         findings.extend(_invented_layouts(outline))
         findings.extend(_layout_spread(outline, declared))
@@ -375,21 +346,11 @@ class PptOutlineTool(Tool):
         unprototyped = [page.page for page in outline.pages if page.prototype is None] if state.template else []
         return _return.done(
             blocking=blocking,
-            asks=_asks(errands, blocking, bool(state.figures), unprototyped, outline),
+            asks=_asks(
+                errands, blocking, bool(state.figures), unprototyped, outline, _content_examples(state, unprototyped)
+            ),
             **payload,
         )
-
-
-def _table_plan(value: dict[str, Any]) -> dict[str, object]:
-    """Keep table structure useful while ignoring physical layout instructions.
-
-    Through `PlannedTable`, so that what is stored is the shape every reader reads.
-    While this kept its own copy of that normalisation it let both row forms through
-    untouched, which is how a plan mixing them reached the builder. The schema refuses
-    a bare string now, and a replan reply is not schema-checked at all, so one arriving
-    by that road becomes a one-cell row rather than a row of another type.
-    """
-    return PlannedTable.of(value).as_dict()
 
 
 def _said_by_page(reply: str) -> dict[int, tuple[str, ...]]:
@@ -449,7 +410,6 @@ def _plan(entry: dict[str, Any]) -> PagePlan:
         page=int(entry.get("page", 0)),
         claim=str(entry.get("claim", "")).strip(),
         carries=str(entry.get("carries") or "").strip(),
-        table_plan=_table_plan(entry["table_plan"]) if isinstance(entry.get("table_plan"), dict) else None,
         layout=str(entry.get("layout") or "").strip(),
         figures=tuple(str(figure) for figure in entry.get("figures") or ()),
         says=tuple(str(said) for said in entry.get("says") or () if str(said).strip()),
@@ -526,11 +486,6 @@ def _stated_chars(deck: Project) -> int | None:
         return None
 
 
-def _table_led(page: PagePlan) -> bool:
-    carries = page.carries.casefold()
-    return any(term in carries for term in ("table", "matrix", "表格", "矩阵", "对照", "定价", "选型表"))
-
-
 def _thin_pages(outline: Outline, state: Any) -> list:
     """Pages whose whole plan is one line, said while a page is still cheap to merge.
 
@@ -566,24 +521,8 @@ def _thin_pages(outline: Outline, state: Any) -> list:
 
     findings = []
     for page in outline.pages:
-        if _table_led(page) and not page.table_plan:
-            findings.append(
-                Finding(
-                    kind="thin_page",
-                    severity=Severity.WARNING,
-                    page=page.page,
-                    message=(
-                        f"page {page.page} is table-led but has no `table_plan`, so the builder sees prose "
-                        "instead of columns and complete cell rows. Record columns, rows[][] and the reading "
-                        "cue before layout; the table will be drawn from text boxes and rules, not as an "
-                        "Office table"
-                    ),
-                    detail={"table_plan": False, "carries": page.carries},
-                )
-            )
         if (
-            page.table_plan
-            or page.figures
+            page.figures
             or page.needs.strip()
             or (page.prototype in structural and page.prototype is not None)
         ):
@@ -626,94 +565,6 @@ _CELL_PADDING_IN = 0.2
 # a body row `(size + 10) / 72`.
 _HEADER_LEADING_PT = 12
 _BODY_LEADING_PT = 10
-
-
-def _table_room(outline: Outline) -> list:
-    """Table plans no page can hold, said before a page is drawn for one.
-
-    A plan for a thirty-row, twelve-column table used to pass this stage untouched and
-    meet reality a whole build later as a `wide_table` reading on the drawn result.
-    What this stage can honestly say is whether a page has the room for the grid the
-    plan describes, and it can say it with the arithmetic the built deck is already
-    measured by rather than a second rule of its own.
-
-    That arithmetic is `measure.content._squeezed_columns`, which calls a column
-    squeezed when its widest cell needs more than COLUMN_SQUEEZE times the width the
-    column has. `ppt_layout` sizes columns in proportion to what they hold, so out of
-    a total width W a column gets `W * needs_i / sum(needs)` -- and putting that into
-    the squeeze test cancels `needs_i` off both sides, leaving `sum(needs) > W *
-    COLUMN_SQUEEZE`. One comparison over the whole plan, holding for every allocation
-    the helper can make, and the same test rather than a new one. The tolerance is
-    still what it is there: a cell wrapping to a second line is ordinary, and the line
-    sits where a cell has lost most of that second line's room.
-
-    Measured at the type floor, which is the smallest the deck may set a cell, so a
-    plan that does not fit here does not fit at any size the deck is allowed to use.
-    Rows are the same question on the other axis and take no tolerance: a row cannot
-    wrap into less height than one line at the floor, so the count times the row
-    height is a lower bound on what the grid takes rather than an estimate of it.
-
-    No cap on either count, deliberately. `MAX_TABLE_COLUMNS` was 8 and was deleted
-    for counting the wrong thing -- twelve columns of figures fit this canvas and five
-    columns of phrases do not, and only a measurement tells those apart. A warning,
-    like everything else measured here: which way to answer it is the author's.
-    """
-    from raven.ppt.contracts import Finding, Severity
-    from raven.ppt.services.measure import BODY_FLOOR_PT, COLUMN_SQUEEZE, DEFAULT_MEASURER
-
-    floor = int(BODY_FLOOR_PT)
-    carried = SAFE_WIDTH_IN * COLUMN_SQUEEZE
-    findings = []
-    for page in outline.pages:
-        planned = PlannedTable.of(page.table_plan)
-        if not planned.width:
-            continue
-        needed = [0.0] * planned.width
-        for line in (planned.columns, *planned.rows):
-            for index, cell in enumerate(line):
-                needed[index] = max(needed[index], DEFAULT_MEASURER.width(cell, floor) / 72.0 + _CELL_PADDING_IN)
-        wide = sum(needed)
-        header = (floor + _HEADER_LEADING_PT) / 72 if planned.columns else 0.0
-        tall = header + len(planned.rows) * (floor + _BODY_LEADING_PT) / 72
-        # A remedy per axis rather than one for both: a plan too tall is not answered
-        # by dropping columns, and a tool that says so is a tool the author argues with.
-        said = []
-        if wide > carried:
-            said.append(
-                f"the widest cell in each of its {planned.width} columns wants {wide:.1f}in between them, more "
-                f"than the {carried:.1f}in that {SAFE_WIDTH_IN:.1f}in of page carries with every cell wrapped "
-                f"onto a second line, so drop the columns the claim does not rest on or say it as a chart"
-            )
-        if tall > SAFE_HEIGHT_IN:
-            said.append(
-                f"its {len(planned.rows)} rows stand {tall:.1f}in tall against the {SAFE_HEIGHT_IN:.1f}in a "
-                f"page has between its margins, so plan the rows the claim rests on and carry the rest onto a "
-                f"second page"
-            )
-        if not said:
-            continue
-        findings.append(
-            Finding(
-                kind="table_plan",
-                severity=Severity.WARNING,
-                page=page.page,
-                message=(
-                    f"page {page.page} plans a table no page can hold: {'; and '.join(said)}. Measured at the "
-                    f"{floor}pt floor the deck may not set type below, so shrinking the type is not one of the "
-                    "answers -- and settling it here costs an edit where settling it after the program is "
-                    "written costs a rebuild"
-                ),
-                detail={
-                    "columns": planned.width,
-                    "rows": len(planned.rows),
-                    "width_in": round(wide, 2),
-                    "width_room_in": round(carried, 2),
-                    "height_in": round(tall, 2),
-                    "height_room_in": round(SAFE_HEIGHT_IN, 2),
-                },
-            )
-        )
-    return findings
 
 
 def _thin(deck: Project, brief: Any) -> list:
@@ -834,6 +685,40 @@ STRUCTURAL_SHARE = 0.25
 SAME_PROTOTYPE_IS_STRUCTURAL = 3
 # Under this share of pages carrying something to look at, the deck is a document
 # read aloud. The same number the built deck is measured against.
+
+
+def _content_examples(state: Any, unprototyped: list[int]) -> str:
+    """The template's content examples, each with what it holds, or "".
+
+    Named because the ask that asks for one could not be acted on without them. It
+    listed the pages that had no prototype and then said to pick the nearest example,
+    leaving the author to work out from the renders which pages those were -- and a
+    measured 19-page run left all sixteen content pages free after reading that ask
+    twice. The numbers are in the menu this file already opens for `_house_pages`, so
+    naming them costs nothing and turns the ask into a choice from a list.
+
+    Shape counts rather than a description: what a page holds is a fact the menu
+    carries, and any word for what it *is* would be this file guessing at a design.
+    """
+    if state.template is None or not unprototyped:
+        return ""
+    from raven.ppt.services.template.menu import menu
+
+    said = []
+    for entry in menu(state.template.source):
+        if entry.role:
+            continue  # a structural page; `_house_pages` owns those
+        held = [
+            f"{entry.text_blocks} text blocks" if entry.text_blocks else "",
+            f"{entry.pictures} picture(s)" if entry.pictures else "",
+            f"{entry.tables} table(s)" if entry.tables else "",
+            f"{entry.shapes} drawn shape(s)" if entry.shapes else "",
+        ]
+        note = " (clone only)" if entry.clone_only else ""
+        said.append(f"page {entry.number}: {', '.join(part for part in held if part)}{note}")
+    if not said:
+        return ""
+    return "This template's content examples are " + "; ".join(said) + ". "
 
 
 def _house_pages(outline: Outline, state: Any) -> list:
@@ -1152,9 +1037,10 @@ def _references(outline: Outline) -> str:
     a plan that has just been recorded is the first moment anything knows which.
 
     Named, not summarised, and not a checklist: a page carrying none of these needs
-    none of them opened. Only the table pages can be pointed at with certainty --
-    `table_plan` is structured, while `carries` is a sentence in the deck's own
-    language and matching words in it would be guessing.
+    none of them opened. Which page carries what is not knowable here -- `carries` is
+    a sentence in the deck's own language -- so the files are named and the author
+    picks; the outline no longer records a table's shape, so it cannot say which page
+    will draw one.
     """
     lines = [
         "the detail behind the vocabulary is in `deck/build/references/`, written there on every "
@@ -1176,12 +1062,6 @@ def _references(outline: Outline) -> str:
             "a registry of page structures and of modifier layers that stack, and more than one modifier on "
             "a page is the ordinary case. Reading it is what the `layout` ids are from"
         )
-    tabled = [page.page for page in outline.pages if page.table_plan]
-    if tabled:
-        lines.append(
-            f"page(s) {', '.join(str(number) for number in tabled)} carry a table plan, so "
-            "`deck/build/references/tables.md` is one this deck already needs"
-        )
     return " -- ".join(lines)
 
 
@@ -1191,6 +1071,7 @@ def _asks(
     has_figures: bool,
     unprototyped: list[int] | None = None,
     outline: Outline | None = None,
+    examples: str = "",
 ) -> list[str]:
     asks: list[str] = []
     if blocking:
@@ -1198,10 +1079,12 @@ def _asks(
         return asks
     if unprototyped:
         asks.append(
-            f"pages {', '.join(str(number) for number in unprototyped)} have no template prototype. This "
-            "deck has a template, so pick the nearest editable content example for each page with ppt_template. "
-            "Keep a page free only when no example can carry its information shape after editing, and record "
-            "that concrete mismatch in `needs`"
+            f"pages {', '.join(str(number) for number in unprototyped)} have no template prototype. "
+            + examples
+            + "This deck has a template, so pick the nearest content example for each of those pages and set "
+            "`prototype` on it -- `ppt_template(pages=[n])` reads one back as the code that draws it, which is "
+            "how you tell whether it carries the page's information shape. Keep a page free only when none of "
+            "them can after editing, and say which one you looked at and what it could not hold"
         )
     if errands:
         asks.append(

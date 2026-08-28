@@ -64,6 +64,11 @@ SCRIPT_AUTHOR = Profile(
         # the first moment anything knows which picture is missing.
         StageSpec(name="plan", tool="ppt_outline"),
         StageSpec(name="build", tool="ppt_build"),
+        # A second reader on the built pages, on an empty context. Optional because
+        # a deck is delivered by building it and this changes no file -- and because
+        # a required stage is one `available()` refuses the route without, which a
+        # reading nobody has to take should not be.
+        StageSpec(name="review", tool="ppt_review", required=False),
         StageSpec(name="publish", tool=None),
     ),
     # The one route that hands the model a whole program. It has no ceiling and

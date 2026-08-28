@@ -22,7 +22,6 @@ from raven.ppt.contracts.intake import (
 from raven.ppt.contracts.outline import (
     Outline,
     PagePlan,
-    PlannedTable,
     load_outline,
     outline_path,
     write_outline,
@@ -47,7 +46,6 @@ __all__ = [
     "PageSpec",
     "Outline",
     "PagePlan",
-    "PlannedTable",
     "Profile",
     "Project",
     "Question",

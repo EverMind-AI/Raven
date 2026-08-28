@@ -36,7 +36,7 @@ from __future__ import annotations
 import difflib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from importlib.resources import files
 from types import MappingProxyType
@@ -71,6 +71,42 @@ class IconDataError(RuntimeError):
     """The packaged icon data is missing, unparsable or malformed."""
 
 
+def icon_miss_hint(name: str, candidates: Sequence[str], total: int) -> str:
+    """What to say after an icon name that is not in the set.
+
+    One text for both sides of the fence. The author's script raises this from its
+    own copy of the resolver in the build directory and the service raises it here,
+    and the same miss reading two different ways is how one of them goes stale.
+
+    Candidates are named as candidates and not as the answer: the search ranks by
+    name, then by the upstream keywords, then by spelling, so its last resort is a
+    string that looks like what was typed and means nothing like it -- `trophy` came
+    back as `typography`, on a set that does hold `award`. And the miss names the
+    search, because that is where the author is standing when it needs it: one live
+    run spent two build rounds guessing icon names, with `find_icons` named four
+    times in the skill it had loaded and never once called.
+
+    And it names the file, because that is the lookup that costs nothing. Every name
+    is a key in `icons.json`, written into the build directory on every build, so a
+    shell answers "is this a name" without a build round -- while this raise ends the
+    script, leaving every page after it unwritten. A second run guessed `wave-sine`
+    and spent a round on it with that file already on disk beside the script.
+    """
+    if candidates:
+        return (
+            "; nearest: " + ", ".join(candidates) + f". Ranked by name, then by the upstream keywords, "
+            f"then by spelling -- one that means nothing like {name!r} is a spelling match and not an "
+            "answer. This raise ended the script, so the pages after it went unwritten. Every name is a "
+            "key in deck/build/icons.json -- grep it from a shell to check a name for nothing -- and "
+            "find_icons searches meanings ('deadline' finds calendar_due), or read "
+            "deck/build/references/icons.md"
+        )
+    return (
+        "; nothing close -- find_icons takes a meaning rather than a name, so try two or three words "
+        f"for the thing itself; all {total} names are in ICON_NAMES and deck/build/references/icons.md"
+    )
+
+
 class UnknownIconError(LookupError):
     """A name is not in the set, with the nearest candidates attached.
 
@@ -82,12 +118,7 @@ class UnknownIconError(LookupError):
     def __init__(self, name: str, candidates: list[str], total: int):
         self.name = name
         self.candidates = candidates
-        hint = (
-            f"; closest: {', '.join(candidates)}"
-            if candidates
-            else f"; nothing close -- all {total} names are in ICON_NAMES"
-        )
-        super().__init__(f"unknown icon {name!r}{hint}")
+        super().__init__(f"unknown icon {name!r}{icon_miss_hint(name, candidates, total)}")
 
 
 def _validate_paths(name: str, raw: object) -> tuple[IconPath, ...]:

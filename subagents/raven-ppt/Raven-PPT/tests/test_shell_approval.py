@@ -120,9 +120,75 @@ def test_matcher_failure_is_fail_closed(policy: ShellCommandPolicy) -> None:
     assert policy.evaluate("echo harmless") is CommandDecision.HARD_DENY
 
 
-@pytest.mark.parametrize("command", ["echo 'unterminated", "echo trailing\\"])
-def test_shell_parse_failure_is_fail_closed(policy: ShellCommandPolicy, command: str) -> None:
-    assert policy.evaluate(command) is CommandDecision.HARD_DENY
+@pytest.mark.parametrize("command", ["echo 'unterminated", "echo trailing\\", "echo it's fine"])
+def test_a_command_shlex_cannot_read_is_still_classified(
+    policy: ShellCommandPolicy, command: str
+) -> None:
+    """This used to deny outright, and the denial was the expensive half.
+
+    `shlex` raises "No closing quotation" for any command whose quotes do not
+    balance as shell words -- which an English contraction inside a heredoc or a
+    comment does -- so `echo it's fine` was refused. Three measured runs died on
+    it: two with eighteen of twenty pages unwritten, and one that spent 43
+    minutes and 7.15M tokens before a `python3 - <<EOF` whose comment read
+    "labels don't collide" was blocked, answered "no alternative method will be
+    attempted", and stopped.
+
+    Classifying it is safe because `_bare_segments` removes the quote and escape
+    characters before splitting, which can only join what the shell would have
+    joined and never separates a token -- see the two tests below for both
+    halves of that claim.
+    """
+    assert policy.evaluate(command) is CommandDecision.ALLOW
+
+
+def test_the_fallback_resolves_the_concatenation_a_whitespace_split_would_miss(
+    policy: ShellCommandPolicy,
+) -> None:
+    """The reason quotes are stripped rather than treated as separators.
+
+    `"r""m"` is one word to the shell and two to a naive split, so a fallback
+    that merely split on whitespace would let a disguised delete through -- which
+    is a weaker gate than the one being replaced, and the whole point is that
+    this one is not.
+
+    Every case here has to reach the fallback, which means its quotes must not
+    balance -- `"r""m" -rf /` on its own balances, `shlex` reads it, and the test
+    would pass while proving nothing about the fallback at all. The trailing
+    apostrophe is what sends each of these down the other path.
+    """
+    for command in ('"r""m" unlink /tmp/it\'s', "r'm' -rf /tmp/it\'s", 'unl"i"nk /tmp/it\'s'):
+        assert policy.evaluate(command) is not CommandDecision.ALLOW, command
+
+
+def test_the_fallback_errs_towards_classifying_too_much(policy: ShellCommandPolicy) -> None:
+    """Boundaries come off the raw characters, so a separator inside a quote splits too.
+
+    Only where the fallback is actually taken: `echo "; unlink x"` balances its
+    quotes, so `shlex` reads it as one argument and the leading token is `echo`.
+    Leave one quote open and the same text is classified from the bare split,
+    where `unlink` leads a segment and the command goes for approval although it
+    only prints that text. Over-classification costs an approval;
+    under-classification costs the gate.
+
+    `unlink` rather than `rm -rf`, because this fixture's deny patterns match the
+    latter in the raw string and would answer before any segmentation runs.
+    """
+    assert policy.evaluate('echo "; unlink x"') is CommandDecision.ALLOW, "shlex reads this one"
+    assert policy.evaluate('echo "; unlink x') is CommandDecision.REQUIRE_APPROVAL
+
+
+def test_a_faulty_matcher_still_denies(policy: ShellCommandPolicy) -> None:
+    """Unchanged, and the distinction the change rests on: text this module cannot
+    lex is a fact about the text, while a matcher that raises is a bug in the gate
+    itself and there is nothing to fall back to."""
+
+    def broken(command: str) -> bool:
+        raise RuntimeError("broken")
+
+    policy.register_approval_matcher("broken", broken)
+
+    assert policy.evaluate("echo harmless") is CommandDecision.HARD_DENY
 
 
 class _RecordingExecutor(SandboxExecutor):

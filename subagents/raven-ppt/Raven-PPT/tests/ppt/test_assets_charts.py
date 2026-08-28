@@ -606,6 +606,35 @@ def test_every_palette_cuts_a_stack_that_is_monotone_and_survives_a_projector(ch
             assert ratio >= 3.0 - 1e-9, f"{theme_id} paints a part at {ratio:.1f}:1 on its own page"
 
 
+def test_a_column_is_a_reading_and_not_a_slab_when_there_are_only_two(charts, slide, theme) -> None:
+    """Measured on a delivered page: two categories beside a table, in a box 4.6in
+    wide, drew a pair of bars 1.43in across and 2.1in tall. Nothing about the numbers
+    is in that width -- the length is the reading -- and the paint is what made the
+    page look both crowded and empty at once.
+
+    The cap only bites where a slot is wider than a bar has any reason to be, so the
+    five-and-more-category charts the corpus is mostly made of do not move.
+    """
+    def widths(count, box):
+        drawn_on = slide.shapes
+        before = len(drawn_on._spTree)
+        charts.column(slide, box, theme, [(f"c{i}", 10 - i) for i in range(count)])
+        found = []
+        for shape in list(drawn_on)[max(0, before - 1):]:
+            where = _rect(shape)
+            if where is not None and where[3] - where[1] > 0.2:
+                found.append(round(where[2] - where[0], 3))
+        return found
+
+    two = widths(2, charts.Box(7.4, 1.3, 12.0, 4.0))
+    assert two, "the columns were not drawn"
+    assert max(two) == pytest.approx(charts.BAR_MAX), f"two columns came out {max(two)}in wide"
+
+    six = widths(6, charts.Box(0.7, 4.4, 6.7, 6.9))
+    slot = 6.0 / 6
+    assert max(six) == pytest.approx(slot * charts.BAR_SHARE), "the cap moved a chart that was already under it"
+
+
 def test_a_waterfall_paints_by_role_and_keeps_its_falls_on_the_page(charts, slide, theme) -> None:
     """Taking `chart_series` by position gave the opening, the rise and the closing
     the same deep navy and the one fall a lavender at 2.3:1 -- and the fall was what
@@ -1415,12 +1444,15 @@ def test_two_readings_on_a_schedule_s_axis_are_never_printed_on_each_other(chart
 # recorded here so the test does not depend on which fonts a container has.
 # `Cambria` has no metric-compatible stand-in installed and lands on DejaVu
 # Serif; `Arial` lands on Liberation Sans, which was drawn to Arial's widths.
-_TWELVE_M_IN = {"Cambria": 0.4464, "Arial": 0.3782}
+_TWELVE_M_IN = {"Century Schoolbook": 0.3998, "Arial": 0.3782}
 # `write` keeps 0.04in of margin on each side before a character is set.
 _WRITE_MARGINS = 0.08
 
 
-@pytest.mark.parametrize(("theme_id", "face"), [("warm-paper", "Cambria"), ("ink-graphite", "Arial")])
+# The bundled themes all name one face now, so the second case is the face a theme
+# derived from a user's own template takes -- the other face the product still sets
+# type in, and the reason this test is still a comparison rather than one number.
+@pytest.mark.parametrize(("theme_id", "face"), [("warm-paper", "Century Schoolbook"), ("ink-graphite", "Arial")])
 def test_a_value_label_gets_a_box_the_face_it_is_set_in_actually_fits(charts, slide, theme_id, face) -> None:
     """ "12M" came back as "12" over "M" in every Cambria theme, and nothing saw it.
 
@@ -1440,8 +1472,8 @@ def test_a_value_label_gets_a_box_the_face_it_is_set_in_actually_fits(charts, sl
     """
     from raven.ppt.services.assets.script_helpers import theme_catalog
 
-    theme = theme_catalog()[theme_id]
-    assert theme["font_family"] == face
+    theme = dict(theme_catalog()[theme_id])
+    theme["font_family"] = face
     charts.horizontal_bar(
         slide,
         _box(charts),
@@ -1629,7 +1661,10 @@ def test_the_room_a_chart_asks_for_is_its_data_and_not_a_constant(charts, theme)
     assert ten.w > 9.0, f"ten sector names ask for {ten.w:.2f}in"
     quadrant = charts.Box(0.0, 0.0, 5.81, 2.27)
     assert not charts.whether_a_chart_fits(charts.column, quadrant, theme, _TEN_SECTORS)
-    assert charts.whether_a_chart_fits(charts.horizontal_bar, quadrant, theme, _TEN_SECTORS[:8])
+    # Nine and not eight, and the difference is the face: rows share the box's height,
+    # so nine of them are set smaller than eight and the narrower type is what fits the
+    # names. The count is the theme's answer, not a property of the chart.
+    assert charts.whether_a_chart_fits(charts.horizontal_bar, quadrant, theme, _TEN_SECTORS[:9])
 
 
 def test_asking_a_chart_what_it_will_do_draws_nothing_and_answers_what_it_then_does(charts, theme) -> None:
@@ -1842,6 +1877,23 @@ def test_what_a_chart_hands_back_is_still_the_plot_it_always_was(charts, slide, 
     assert drawn.inset(0.1).w == pytest.approx(drawn.w - 0.2)
 
 
+def test_a_chart_s_plot_reads_back_as_box_as_well(charts, slide, theme) -> None:
+    """The two `Drawn` types answer the same question under two names.
+
+    A chart's *is* its plot box; `ppt_layout`'s is a shape carrying one under `.box`.
+    An author who has written `picture_fit(...).box` writes `line(...).box` next, and
+    it cost a live build a whole round -- `print("p11 chart", drawn.box, ...)` on the
+    line after the chart was drawn, `AttributeError` before the deck existed.
+    """
+    box = _box(charts, y1=5.0)
+    drawn = charts.line(slide, box, theme, ["2010", "2012"], [("top-5", [28.2, 15.3])], unit="%")
+
+    assert isinstance(drawn.box, charts.Box)
+    assert tuple(drawn.box) == (drawn.x0, drawn.y0, drawn.x1, drawn.y1)
+    # And it is a reading, not a second rectangle: asking twice gives the same one.
+    assert tuple(drawn.box) == tuple(drawn.box)
+
+
 def test_a_chart_that_refuses_a_box_has_not_touched_the_slide(charts, theme) -> None:
     """Refusing is only safe to catch if it left nothing behind.
 
@@ -2035,7 +2087,10 @@ def test_a_dot_plot_takes_the_rows_a_grouped_plot_has_to_refuse(charts, slide, t
     table: a bar wants a slot deep enough to still be a bar, so a grouped plot in
     half a page refuses twelve of them, and a mark wants one line of type.
     """
-    half = charts.Box(0.72, 1.0, 7.72, 5.8)
+    # 7.38in and not 7.00: the rows share the box's height, so a box this tall sets its
+    # names at a size whose width the box then has to carry, and the deck's face is
+    # wider than the one this box was first written against.
+    half = charts.Box(0.72, 1.0, 8.10, 5.8)
     series = {
         "Mem0": [92, 88, 54, 66, 61, 94, 48, 90, 71, 86, 95, 44],
         "EverOS": [61, 52, 93, 89, 87, 43, 91, 22, 84, 49, 58, 79],

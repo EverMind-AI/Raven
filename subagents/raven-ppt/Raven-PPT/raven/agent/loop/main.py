@@ -789,6 +789,7 @@ class AgentLoop:
             composer_model=getattr(config, "composer_model", "") or None,
             render_dpi=getattr(config, "render_dpi", 144),
             render_concurrency=getattr(config, "render_concurrency", 2),
+            views_per_call=getattr(config, "views_per_call", 3),
             deck_name=getattr(config, "deck_name", "deck.pptx"),
             web_proxy=self.web_proxy,
         ):
