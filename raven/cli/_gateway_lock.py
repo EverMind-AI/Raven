@@ -73,8 +73,11 @@ def publish_web_endpoint(host: str, port: int, token: str) -> None:
     """Record where this gateway answers RPC, for local clients to find.
 
     Called after the server binds, so the port is the one it actually got. The
-    payload now carries a credential, so it is written 0600 -- the anchor beside
-    it still carries the lock, and this file stays readable by its owner only.
+    payload carries a credential, and ``O_CREAT``'s mode applies only to a file
+    the open itself creates -- ``acquire()`` already made this one -- so the
+    open descriptor is narrowed to owner-only before the token is written,
+    never after it. The anchor beside it still carries the lock; this file
+    stays readable by its owner only.
     """
     payload = _lock_path()
     try:
@@ -82,9 +85,17 @@ def publish_web_endpoint(host: str, port: int, token: str) -> None:
     except (OSError, ValueError):
         data = {}
     data.update({"web_host": host, "web_port": int(port), "web_token": token})
-    payload.write_text(json.dumps(data), encoding="utf-8")
-    with suppress(OSError):  # a filesystem without POSIX modes
-        payload.chmod(0o600)
+    body = json.dumps(data).encode("utf-8")
+    fd = os.open(payload, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with suppress(OSError):  # a filesystem without POSIX modes
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            else:  # Windows has no fchmod
+                payload.chmod(0o600)
+        os.write(fd, body)
+    finally:
+        os.close(fd)
 
 
 def acquire(now: float):
@@ -106,16 +117,20 @@ def acquire(now: float):
         info = _read_payload(payload)
         fd.close()
         raise GatewayAlreadyRunningError(info)
-    payload.write_text(
-        json.dumps(
-            {
-                "pid": os.getpid(),
-                "started_at": now,
-                "config_path": str(get_config_path()),
-            }
-        ),
-        encoding="utf-8",
-    )
+    body = json.dumps(
+        {
+            "pid": os.getpid(),
+            "started_at": now,
+            "config_path": str(get_config_path()),
+        }
+    ).encode("utf-8")
+    # This file later receives the web token, so it is born owner-only
+    # rather than trusting the umask.
+    pfd = os.open(payload, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(pfd, body)
+    finally:
+        os.close(pfd)
     return fd
 
 

@@ -134,7 +134,9 @@ class QQChannel(ChannelBase):
         elif not url.startswith(("http://", "https://")):
             url = f"https://{url}"
         try:
-            resp = await self._http.get(url)
+            resp = await self._fetch_attachment(url)
+            if resp is None:
+                return _Fetched(None, "blocked")
             resp.raise_for_status()
             # Inside the try: a write failure (full disk, unwritable media dir)
             # must degrade to the same "download failed" label as a fetch
@@ -143,6 +145,19 @@ class QQChannel(ChannelBase):
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as e:
             logger.warning("QQ attachment download failed ({}): {}", url, e)
             return _Fetched(None, "download failed")
+
+    async def _fetch_attachment(self, url: str) -> "httpx.Response | None":
+        """Fetch an attachment URL through the guarded fetch.
+
+        The URL arrives in an inbound message event, so it is the sender's to
+        choose, and ``allow_from`` defaults to everyone: without a check the
+        gateway would GET whatever address a message named and hand the body to
+        the agent -- a read primitive against anything the host can reach.
+        """
+        from raven.security.network import guarded_fetch
+
+        assert self._http is not None  # noqa: S101 - the caller checked
+        return await guarded_fetch(self._http, url, what="QQ attachment")
 
     async def _on_message(self, data: "C2CMessage | GroupMessage", is_group: bool = False) -> None:
         try:
