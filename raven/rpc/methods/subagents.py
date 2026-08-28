@@ -185,7 +185,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # answer "what can the model dispatch to", so a view assembled from a
     # different subset of the sources is a view that disagrees with the runtime.
     # It did: the vendored rows were on the table and absent here, which reads as
-    # "the four agents did not install" on the one screen built to tell you they
+    # "the agents did not install" on the one screen built to tell you they
     # had.
     vendored = discover_vendored_rows()
     vendored_names = {getattr(c, "name", "") for c in vendored}

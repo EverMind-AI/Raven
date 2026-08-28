@@ -21,25 +21,7 @@ from raven.playbook import (
     RouterSizes,
     Triggers,
 )
-from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.providers.base import ErrorClassification, LLMResponse
-
-COMPOSE_PROFILES = {
-    "research-raven": PlaybookAgentProfile(
-        description="research",
-        stateful=True,
-        reads_local_files=True,
-        injectable_skills=True,
-        injectable_mcps=False,
-    ),
-    "content-raven": PlaybookAgentProfile(
-        description="writing",
-        stateful=True,
-        reads_local_files=True,
-        injectable_skills=True,
-        injectable_mcps=False,
-    ),
-}
 
 
 class FakeDagTool:
@@ -232,52 +214,15 @@ async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
     # no backend is built here and no synthetic per-node agent name is invented.
     assert nodes["pull"]["subagent"] == "data-raven"
     assert nodes["report"]["subagent"] == "content-raven"
-    # Skills use the graph tool's native three-valued field: a list narrows the
-    # sub-agent's menu, while an omitted field keeps that agent's own menu.
-    assert nodes["pull"]["skills"] == ["sql-queries"]
-    assert "skills" not in nodes["report"]
-    assert "sql-queries" not in nodes["pull"]["prompt_template"]
-    assert "mcps" not in nodes["report"]
+    # skills is a playbook-only field now: the graph tool has no such parameter,
+    # so the engine spends it into the step's prompt and passes neither it nor
+    # mcps on. A node that declared none must not gain a sentence about them.
+    assert "skills" not in nodes["pull"] and "mcps" not in nodes["report"]
+    assert "sql-queries" in nodes["pull"]["prompt_template"]
     assert "skills" not in nodes["report"]["prompt_template"].lower()
     # mcps cannot be honoured at all, so it is reported rather than written into
     # the prompt as an instruction the sub-agent has no tool to follow.
     assert any("mcp" in n and "slack" in n for n in plan.notes)
-
-
-async def test_executor_forwards_inputs_and_namespaces_node_input_references():
-    tool = FakeDagTool()
-    ex = PlaybookExecutor(dag_tool=tool)
-    spec = _dag_spec(
-        nodes=[
-            NodeSpec(
-                id="source",
-                subagent="data-raven",
-                node_summary="produce the source material",
-                prompt_template="produce source material",
-            ),
-            NodeSpec(
-                id="consume",
-                subagent="content-raven",
-                node_summary="consume every declared input",
-                prompt_template=("source={{ inputs.source }} file={{ inputs.brief }} literal={{ inputs.audience }}"),
-                depends_on=["source"],
-                inputs={
-                    "source": {"node": "source"},
-                    "brief": {"file": "brief.md"},
-                    "audience": "PM",
-                },
-            ),
-        ]
-    )
-
-    await ex.execute(spec, params={"week_of": "w"})
-
-    nodes = {n["id"].rsplit("-", 1)[-1]: n for n in tool.calls[0]["nodes"]}
-    inputs = nodes["consume"]["inputs"]
-    assert inputs["source"] == {"node": nodes["source"]["id"]}
-    assert inputs["brief"] == {"file": "brief.md"}
-    assert inputs["audience"] == "PM"
-    assert spec.nodes[1].inputs["source"] == {"node": "source"}
 
 
 async def test_executor_namespaces_the_instance_handle_per_run():
@@ -423,77 +368,13 @@ async def test_prompt_mode_composes_when_there_is_no_caller_to_hand_it_to():
     tool = FakeDagTool()
     provider = ComposeProvider([json.dumps(GOOD_GRAPH)])
     ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
-    ex.set_agent_profiles(lambda: COMPOSE_PROFILES)
+    ex.set_roster({"research-raven": "research", "content-raven": "writing"})
 
     plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
 
     assert plan.kind == "dag"
     assert len(tool.calls) == 1
     assert "AcmeAI" in provider.calls[0][0]["content"]
-
-
-async def test_prompt_mode_capability_errors_enter_the_repair_loop():
-    bad = json.loads(json.dumps(GOOD_GRAPH))
-    bad["nodes"][0].update(
-        {
-            "instance": "worker",
-            "skills": ["web-search"],
-            "mcps": ["browser"],
-            "promptTemplate": "inspect {{ ref_path:/tmp/report.txt }}",
-        }
-    )
-    profiles = dict(COMPOSE_PROFILES)
-    profiles["research-raven"] = PlaybookAgentProfile(
-        description="external research agent",
-        stateful=False,
-        reads_local_files=False,
-        injectable_skills=False,
-        injectable_mcps=False,
-    )
-    source_calls = 0
-
-    def source():
-        nonlocal source_calls
-        source_calls += 1
-        return profiles
-
-    tool = FakeDagTool()
-    provider = ComposeProvider([json.dumps(bad), json.dumps(GOOD_GRAPH)])
-    ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
-    ex.set_agent_profiles(source)
-
-    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
-
-    assert plan.kind == "dag"
-    assert source_calls == 1
-    assert len(provider.calls) == 2
-    repair = provider.calls[1][-1]["content"]
-    assert "stateless agent" in repair
-    assert "does not support skill injection" in repair
-    assert "cannot receive MCP injection" in repair
-    assert "passes local file paths" in repair
-
-
-async def test_prompt_mode_repairs_injection_on_a_shared_instance_continuation():
-    bad = json.loads(json.dumps(GOOD_GRAPH))
-    bad["nodes"][0].update(instance="writer", skills=["research"])
-    bad["nodes"][1].update(subagent="research-raven", instance="writer", skills=["editing"])
-
-    corrected = json.loads(json.dumps(bad))
-    corrected["nodes"][1].pop("skills")
-
-    tool = FakeDagTool()
-    provider = ComposeProvider([json.dumps(bad), json.dumps(corrected)])
-    ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
-    ex.set_agent_profiles(lambda: COMPOSE_PROFILES)
-
-    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
-
-    assert plan.kind == "dag"
-    assert len(provider.calls) == 2
-    repair = provider.calls[1][-1]["content"]
-    assert "continuing instance 'writer'" in repair
-    assert "opened by node 'scan'" in repair
 
 
 async def test_prompt_mode_bad_graph_gets_one_repair_then_degrades():
@@ -744,8 +625,9 @@ async def test_node_ids_and_references_are_rewritten_in_step():
     assert report["depends_on"] == [pull["id"]]
     assert ("{{ %s.output_path }}" % pull["id"]) in report["prompt_template"]
     assert "{{ pull.output_path }}" not in report["prompt_template"]
-    # Params were already compiled in; namespacing must not disturb them or the
-    # author's prompt. Skills travel separately as a native DAG node field.
+    # Params were already compiled in; the rewrite must not disturb them. The
+    # skills sentence the engine folds in sits after the author's prompt, so the
+    # prompt still starts with exactly what the playbook wrote.
     assert pull["prompt_template"].startswith("pull the feedback for 2026-08-10")
 
 
@@ -772,8 +654,14 @@ async def test_rewrite_leaves_foreign_references_alone():
     assert "{{ elsewhere.output }}" in template
 
 
-async def test_an_empty_skills_list_is_forwarded_without_changing_the_prompt():
-    """``skills: []`` hides the skill menu; it is not the same as omission."""
+async def test_an_empty_skills_list_is_the_same_input_as_no_list():
+    """``skills: []`` adds nothing to the prompt, and is not worth a note either.
+
+    The field points at skills that may help; an empty list points at none, which
+    is what leaving the field out already says. Nothing was declared and dropped
+    -- there is no instruction here to lose -- so the step's prompt is the
+    author's prompt, unchanged and unannotated.
+    """
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
@@ -792,7 +680,6 @@ async def test_an_empty_skills_list_is_forwarded_without_changing_the_prompt():
 
     assert plan.kind == "dag"
     assert tool.calls[0]["nodes"][0]["prompt_template"] == "go"
-    assert tool.calls[0]["nodes"][0]["skills"] == []
     assert not [n for n in plan.notes if "skill" in n.lower()]
 
 

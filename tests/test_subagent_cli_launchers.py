@@ -1,6 +1,6 @@
 """Terminal states of the CLI-shaped sub-agent launchers (`subagents/*/run.py`).
 
-Three of the four launchers answer one question per process and report the
+Three of the launchers answer one question per process and report the
 outcome as an exit code plus a line on stdout -- the only two channels the host
 reads (`raven/agent/subagent/backends/cli_agent.py`). This file pins what those
 two carry, because until now a run the launcher had killed and a run the agent

@@ -106,7 +106,7 @@ class CustomBuildHook(BuildHookInterface):
     def _include_vendored_subagents(self, build_data: dict, version: str) -> None:
         """Map each committed file of ``subagents/`` into ``raven/subagents``.
 
-        A wheel that carries the tree is what puts the four agents on a machine
+        A wheel that carries the tree is what puts the agents on a machine
         that installed raven from a release: ``subagents_root()`` finds the
         packaged copy and ``_install_packaged_tree()`` copies it out to the raven
         home, where an upgrade cannot take the built venvs with it. Without it,

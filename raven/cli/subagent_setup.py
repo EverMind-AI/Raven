@@ -24,7 +24,7 @@ host's `agents.defaults.model` along with its credentials, so the folder stops
 running the one it was tuned for. A key of its own is the only way to keep it,
 which is why the recommended model leads the menu.
 
-All four folders are tuned for models served through OpenRouter, so a host that
+Every folder is tuned for models served through OpenRouter, so a host that
 already has an OpenRouter key needs no second copy of it: the step reuses that
 one and asks nothing. The reuse is keyed on `providers.openrouter` specifically -
 a key sitting in `custom` belongs to whatever private gateway that section points
@@ -136,7 +136,7 @@ def host_model() -> str:
 def discover(root: Path) -> list[SubagentFolder]:
     """Every folder shipping both a manifest and an installer, name-sorted.
 
-    Discovery rather than a hard-coded three, so adding a folder is adding a
+    Discovery rather than a hard-coded list, so adding a folder is adding a
     folder.
     """
     folders: list[SubagentFolder] = []
@@ -330,7 +330,7 @@ def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[s
     Asked rather than done, and asked rather than only mentioned. Only mentioning
     it -- which is what this used to do -- leaves the agent on the table and out
     of the roster indefinitely, because the reader has to find a shell, find the
-    tree, and come back; most never do, and the four agents read as broken rather
+    tree, and come back; most never do, and the agents read as broken rather
     than as unbuilt. Doing it silently is the other failure: ``uv sync`` on a raven
     checkout is a minutes-long download, and a first-run wizard that stalls with
     no explanation is worse than one that asks.
@@ -408,8 +408,8 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     What is left is the part that needs a person. Both answers are things no
     default can supply: minutes of downloads, and whose credit the agent spends.
 
-    Non-interactive skips the whole step, so an unattended install leaves four
-    folders discovered-and-disabled rather than four half-configured agents.
+    Non-interactive skips the whole step, so an unattended install leaves every
+    folder discovered-and-disabled rather than half-configured.
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE

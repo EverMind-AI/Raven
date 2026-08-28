@@ -55,7 +55,7 @@ _CASES = yaml.safe_load(
 
 def _make_generator():
     from raven.agent.subagent.registry import AgentRegistry
-    from raven.playbook import PlaybookGenerator, StaticInventory, agent_profiles_from_registry
+    from raven.playbook import PlaybookGenerator, StaticInventory
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(api_key=OPENROUTER_KEY, default_model=MODEL, provider_name="openrouter")
@@ -67,7 +67,7 @@ def _make_generator():
     return PlaybookGenerator(
         provider,
         skill_router=None,  # candidates not needed for decision-level checks
-        agent_profiles=lambda: agent_profiles_from_registry(registry),
+        agent_roster=registry.descriptions(),
         inventory=StaticInventory(mcp=[], tools=[]),
         model=MODEL,
     )

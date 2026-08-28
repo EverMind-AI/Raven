@@ -1,6 +1,6 @@
 """Agent rows discovered from the ``subagents/`` tree.
 
-Four raven builds ship beside this one under ``subagents/`` -- separate forks at
+Several raven builds ship beside this one under ``subagents/`` -- separate forks at
 separate versions, each with its own checkout, venv and credential -- and each
 carries a ``subagent.json`` describing how to invoke it. This module turns that
 tree into table rows so a raven that *has* the tree offers them without anyone
@@ -8,7 +8,7 @@ registering them by hand.
 
 Discovery, deliberately, rather than a hard-coded list: adding a folder is then
 adding a folder, which is the same reason :func:`raven.cli.subagent_setup.discover`
-scans instead of naming three. And discovery only -- nothing here writes config.
+scans instead of naming them. And discovery only -- nothing here writes config.
 A row is materialized from the manifest on every start, so a folder whose
 manifest changes (a new command template after an upgrade) is picked up without a
 stored copy of the old one to contradict it.
@@ -82,8 +82,8 @@ def subagents_root() -> Path | None:
     - **under the raven home** (``$RAVEN_HOME`` or ``~/.raven/subagents``) -- an
       installed tree. First because it is the only writable one that survives an
       upgrade: each folder's venv lives inside its own checkout, so a tree under
-      site-packages loses every venv when the wheel is replaced, and all four
-      agents would silently drop out of the roster after each update until
+      site-packages loses every venv when the wheel is replaced, and every
+      agent would silently drop out of the roster after each update until
       something rebuilt them;
     - **beside the package** -- an editable install or a plain checkout leaves
       ``raven/__init__.py`` inside the clone, so the tree is two levels up;
@@ -112,8 +112,8 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
 
     The reason this exists at all: each folder's venv is built *inside* its own
     checkout, and a wheel install is replaced wholesale on every upgrade -- so a
-    tree left under site-packages loses all four venvs each time, and the four
-    agents drop out of the roster until something spends minutes rebuilding them.
+    tree left under site-packages loses every venv each time, and the agents
+    drop out of the roster until something spends minutes rebuilding them.
     Copied out once, the venvs sit in a directory no upgrade touches.
 
     Version-stamped rather than content-compared, and the stamp is what makes
@@ -146,7 +146,7 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
         # The tree's own files, `install.sh` above all: it builds a folder's venv,
         # it knows each folder's optional-dependency extra, and it lives at the root
         # rather than inside any folder. Copying only the folders produced a tree
-        # that listed four agents and could build none -- the page offered Install
+        # that listed every agent and could build none -- the page offered Install
         # and the call answered "no install.sh", which reached the reader as a bare
         # "subagent not found".
         #
@@ -167,10 +167,11 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
 def checkout_of(folder: Path) -> Path | None:
     """The folder's raven checkout: its one subdirectory that is a python project.
 
-    Discovered rather than named - the four folders spell it four ways already
-    (``Raven-main``, ``Raven-Oncall``, ``Raven-X``, ``Raven-PPT``) and a fifth is
-    free to spell it a fifth. ``subagents/install.sh`` finds it the same way, and
-    disagreeing with it would mean two answers to one question.
+    Discovered rather than named - the folders that ship spell it a different way
+    each (``Raven-main``, ``Raven-Design``, ``Raven-Oncall``, ``Raven-X``,
+    ``Raven-PPT``) and the next one is free to spell it its own.
+    ``subagents/install.sh`` finds it the same way, and disagreeing with it would
+    mean two answers to one question.
     """
     found = [project.parent for project in folder.glob("*/pyproject.toml")]
     return found[0] if len(found) == 1 else None
@@ -263,7 +264,7 @@ def credential_ready(folder: Path, var: str) -> bool:
     Its own key, or the host's to inherit. Both are checked because the launcher
     checks both, in that order -- gating on the folder's own key alone would
     disable every row on a perfectly configured machine, which is the normal
-    case: none of the four folders ships a key and none needs one.
+    case: no folder ships a key and none needs one.
     """
     return api_key_present(folder, var) or host_can_lend_a_key()
 
@@ -616,8 +617,8 @@ def _launcher_is_gone(cfg: Any) -> bool:
     ``install.py`` bakes an absolute path into the row it writes, so a row written
     against a tree under site-packages keeps naming that path after an upgrade has
     replaced the wheel and the tree has been installed out to the raven home. The
-    stored row otherwise wins, which would turn "upgrade" into "all four agents
-    fail at dispatch with a file-not-found".
+    stored row otherwise wins, which would turn "upgrade" into "every agent
+    fails at dispatch with a file-not-found".
 
     Read off the command's own tokens rather than any recorded provenance: a row
     is a command line, and whether the files it names exist is the only question

@@ -30,6 +30,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+VENDOR_ROOT = REPO / "subagents"
+
+
+def vendored_folders() -> list[str]:
+    """Every fork on disk: a directory here carrying a ``subagent.json``.
+
+    Read from the tree rather than listed here, because a list is what the
+    ``raven-design`` gap was: the folder shipped, every invariant here named the
+    other four, and a fork nobody had written down was reported as holding
+    everything while being checked for nothing.
+
+    The manifest is required, unlike ``check_vendored_subagents.py``'s scan,
+    which hashes any directory it finds. That script guards whatever sits in the
+    tree; this one asks which agents the host can dispatch to, and a directory
+    declaring no manifest is neither -- it is what a half-finished checkout or a
+    stray build directory looks like, and demanding trunk fixes of it would fail
+    the run on a folder no install ever offers.
+    """
+    return sorted(
+        p.name
+        for p in VENDOR_ROOT.iterdir()
+        if p.is_dir() and not p.name.startswith(".") and (p / "subagent.json").is_file()
+    )
 
 
 @dataclass(frozen=True)
@@ -81,6 +104,10 @@ INVARIANTS: tuple[GuardedRegistration, ...] = (
             "raven-code": (
                 "subagents/raven-code/Raven-main/raven/agent/loop/main.py",
                 "subagents/raven-code/Raven-main/raven/agent/subagent/manager.py",
+            ),
+            "raven-design": (
+                "subagents/raven-design/Raven-Design/raven/agent/loop/main.py",
+                "subagents/raven-design/Raven-Design/raven/agent/subagent/manager.py",
             ),
             "raven-oncall": (
                 "subagents/raven-oncall/Raven-Oncall/raven/agent/loop/main.py",
@@ -223,9 +250,37 @@ def _check(path: Path, inv: GuardedRegistration) -> str | None:
     return f"{rel}: {inv.tool} registered outside a test of {inv.describe_guard()} ({where})"
 
 
+def unchecked_forks(inv: GuardedRegistration) -> list[str]:
+    """Folders on disk this invariant does not name in :attr:`forks`.
+
+    An invariant otherwise covers whichever forks its author remembered, and the
+    omission is invisible: a fork absent from ``forks`` produces no target, no
+    target produces no failure, and the run reports every fork holding the fix.
+    ``raven-design`` sat outside the one invariant here for exactly that reason.
+
+    Membership in ``forks`` is the whole question, exemption included: ``exempt``
+    names a fork whose paths are listed and deliberately not checked, which is
+    what ``test_an_exemption_carries_a_reason`` enforces and what lets a reader
+    see which files the waiver covers. Reading exemption as an alternative to
+    listing would let a bare name in ``exempt`` satisfy this while failing that
+    test -- two guards disagreeing about one registry.
+
+    Consulted by :func:`main`, so the executable gate is what fails. Reporting
+    this only from the test suite left ``make check-vendored-invariants`` and the
+    invariant half of ``make lint`` exiting 0 on the exact omission this is meant
+    to catch -- a false green on the one command a contributor runs.
+
+    Reported rather than silently checked, because whether a fork should hold a
+    given fix is a judgement, and guessing it is not this function's job.
+    """
+    return [f for f in vendored_folders() if f not in inv.forks]
+
+
 def main(argv: list[str]) -> int:
+    unnamed: list[str] = []
     failures: list[str] = []
     for inv in INVARIANTS:
+        unnamed += [f"[{inv.id}] {fork}" for fork in unchecked_forks(inv)]
         targets = [("trunk", inv.trunk)]
         targets += [(f, p) for f, p in sorted(inv.forks.items()) if f not in inv.exempt]
         for name, paths in targets:
@@ -234,22 +289,36 @@ def main(argv: list[str]) -> int:
                 if problem:
                     failures.append(f"[{inv.id}] {name}: {problem}")
 
-    if not failures:
+    if not unnamed and not failures:
         return 0
 
-    print("Vendored subagents are behind this trunk:", file=sys.stderr)
-    for failure in failures:
-        print(f"  {failure}", file=sys.stderr)
-    print(
-        "\nEach line above is a fix this trunk carries and that fork does not. Apply it\n"
-        "inside the fork -- minimally, in the fork's own idiom, never by copying this\n"
-        "trunk's file over it -- then record the tree in the same commit:\n"
-        "  python3 scripts/check_vendored_subagents.py --update\n"
-        "If the fix is wrong for that fork, add it to that invariant's `exempt` with the\n"
-        "reason. A trunk failure means the trunk itself moved: fix the trunk, or rewrite\n"
-        "the invariant to describe where the guarantee lives now.",
-        file=sys.stderr,
-    )
+    if unnamed:
+        print("Vendored forks no invariant names:", file=sys.stderr)
+        for line in unnamed:
+            print(f"  {line}", file=sys.stderr)
+        print(
+            "\nEach line is a folder shipping under `subagents/` that the named invariant\n"
+            "does not list, so it is checked for nothing while the run reports every fork\n"
+            "as holding the fix. Add its paths to that invariant -- or, if the fix is wrong\n"
+            "for that fork, add them and name it in `exempt` with the reason, so the waiver\n"
+            "still says which files it covers.",
+            file=sys.stderr,
+        )
+
+    if failures:
+        print("Vendored subagents are behind this trunk:", file=sys.stderr)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr)
+        print(
+            "\nEach line above is a fix this trunk carries and that fork does not. Apply it\n"
+            "inside the fork -- minimally, in the fork's own idiom, never by copying this\n"
+            "trunk's file over it -- then record the tree in the same commit:\n"
+            "  python3 scripts/check_vendored_subagents.py --update\n"
+            "If the fix is wrong for that fork, add it to that invariant's `exempt` with the\n"
+            "reason. A trunk failure means the trunk itself moved: fix the trunk, or rewrite\n"
+            "the invariant to describe where the guarantee lives now.",
+            file=sys.stderr,
+        )
     return 1
 
 

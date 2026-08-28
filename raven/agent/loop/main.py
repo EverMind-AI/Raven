@@ -1452,20 +1452,17 @@ class AgentLoop:
             adjudicate=self._adjudicate_node,
             verdict_config=self.subagent_dag_config,
         )
-        from raven.playbook import (
-            PlaybookGenerator,
-            RouterSizes,
-            agent_profiles_from_registry,
-            live_inventory,
-        )
+        from raven.playbook import PlaybookGenerator, RouterSizes, live_inventory
 
         executor = PlaybookExecutor(
             dag_tool=dag_tool,
             provider=self.provider,
             compose_model=cfg.model,
         )
-        # Both Playbook model calls use the live, capability-aware agent view.
-        executor.set_agent_profiles(lambda: agent_profiles_from_registry(self.subagents.registry))
+        # The agent table, not a private pool: what the generator casts nodes
+        # against has to be what the graph can then dispatch to.
+        roster = self.subagents.registry.descriptions()
+        executor.set_roster(roster)
         store = PlaybookStore(user_layer)
         # Kept for the create_playbook tool: creation shares the library and
         # generator with the funnel, so both entries write the same place.
@@ -1473,7 +1470,7 @@ class AgentLoop:
         self._playbook_generator = PlaybookGenerator(
             self.provider,
             None,
-            lambda: agent_profiles_from_registry(self.subagents.registry),
+            roster,
             # A real inventory: with the empty one this used to pass,
             # ``check_assets`` judged every skill and mcp server a draft named to be
             # unknown, so a good draft came back annotated as missing everything.
