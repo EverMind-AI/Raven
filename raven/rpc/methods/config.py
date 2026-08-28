@@ -148,6 +148,22 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
 # defaults without mutating ``_DEFAULTS`` directly.
 CONFIG_WRITABLE_KEYS: tuple[str, ...] = tuple(_VALIDATORS.keys())
 
+# Where each wire key's value lives on disk. The two were the same string, and
+# that is how ``agent.temperature`` came to write a top-level ``agent`` key:
+# the root config model is ``extra='forbid'``, so the write reported success
+# and the next start refused to load -- a setting that bricked the install it
+# was meant to tune. The value the runtime actually reads sits at
+# ``agents.defaults.temperature`` (resolving_provider reads it) and was never
+# being touched. The wire key is the client's contract and is frozen; only the
+# right-hand side is this module's business.
+_STORAGE_PATHS: dict[str, str] = {
+    "agent.thinking_budget": "agents.defaults.thinking_budget",
+    "agent.temperature": "agents.defaults.temperature",
+    "tui.theme": "tui.theme",
+    "tui.show_token_usage": "tui.show_token_usage",
+    "language": "language",
+}
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers
@@ -155,7 +171,18 @@ CONFIG_WRITABLE_KEYS: tuple[str, ...] = tuple(_VALIDATORS.keys())
 
 
 def _config_path() -> Path:
-    return Path.home() / _CONFIG_DIR_NAME / _CONFIG_FILENAME
+    """The config file this surface reads and writes.
+
+    Asked of the loader rather than rebuilt from ``Path.home()``: the loader is
+    where ``--config`` and ``RAVEN_HOME`` are honoured, and building the path
+    here ignored both -- so on a non-default home every ``config.set`` wrote
+    into the default installation's file, which nothing running was reading.
+    It also matters for the load-back check in :func:`_save_config`, which has
+    to verify the same file it just wrote.
+    """
+    from raven.config.loader import get_config_path
+
+    return get_config_path()
 
 
 def _load_config() -> dict[str, Any]:
@@ -176,9 +203,38 @@ def _load_config() -> dict[str, Any]:
 
 
 def _save_config(payload: dict[str, Any]) -> None:
+    """Write the config, then prove the result still starts -- or put it back.
+
+    A write here decides whether the next launch works at all: the root model
+    is ``extra='forbid'``, so one key in the wrong place turns a successful
+    ``config.set`` into an install that refuses to boot, with nothing to point
+    at but a validation error at startup. Per-value validators cannot catch
+    that -- the value was fine, the placement was not.
+
+    So the check is the real one: load the file back through the same
+    ``load_config`` the startup path calls, and on failure restore exactly
+    what was there (or remove a file we created) and refuse. That way a bad
+    key path costs the caller an error message instead of costing the user
+    their working install, and it holds for whatever the whitelist grows next
+    rather than only for the two keys known to have been wrong.
+    """
+    from raven.config.loader import load_config
+
     path = _config_path()
+    previous = path.read_bytes() if path.exists() else None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    try:
+        load_config(path)
+    except Exception as exc:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+        raise ConfigValidationError(
+            f"refusing this write: the config would no longer load ({exc}). Nothing was changed.",
+            data={"reason": str(exc)},
+        ) from exc
 
 
 def _get_nested(payload: dict[str, Any], dotted_key: str) -> Any | None:
@@ -231,7 +287,7 @@ async def config_get(params: dict) -> dict:
         if key not in _VALIDATORS:
             # Unknown / non-whitelisted key — silently omit per spec.
             continue
-        value = _get_nested(payload, key)
+        value = _get_nested(payload, _STORAGE_PATHS[key])
         out[key] = value if value is not None else _DEFAULTS[key]
     return {"config": out}
 
@@ -280,9 +336,10 @@ async def config_set(
 
     validated = _VALIDATORS[key](raw_value)
 
+    path = _STORAGE_PATHS[key]
     payload = _load_config()
-    previous = _get_nested(payload, key)
-    _set_nested(payload, key, validated)
+    previous = _get_nested(payload, path)
+    _set_nested(payload, path, validated)
     _save_config(payload)
 
     return {"applied": True, "previous": previous}

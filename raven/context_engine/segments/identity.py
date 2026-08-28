@@ -13,8 +13,6 @@ class IdentitySegmentBuilder:
     name = "identity"
     order = 1
     needs_prefix = False
-    # SOUL.md and the identity header: the same text on every turn.
-    stable = True
 
     def __init__(
         self,

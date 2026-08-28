@@ -3205,17 +3205,16 @@ class AgentLoop:
 
             tool_defs = self.tools.get_definitions()
 
-            # Nothing to switch off here any more. When CacheOptimizer runs it
-            # stamps the request it marked, and the provider reads that stamp on
-            # the way out, so the two cannot both place breakpoints on the same
-            # request -- including on a pool-built provider a session switched
-            # onto mid-conversation, which is what this block was added for.
-            #
-            # The switch it used to set lived on the provider *object* and was
-            # never unset, so every later consumer of that object -- the Curator,
-            # a subagent, Sentinel, the session titler -- kept sending with no
-            # breakpoints at all. That was named as known residue when this block
-            # landed; asking the request instead is what retires it.
+            # When CacheOptimizer runs, it owns the breakpoints, so the sending
+            # provider's own automatic marking must be off. Applied here, to the
+            # provider the running turn's binding resolved, rather than at the
+            # construction site: a session switched mid-conversation runs on a
+            # pool-built provider the construction site never saw, which would
+            # otherwise keep auto-marking on top of the strategy's budget.
+            if self.strategies.get("cache_optimizer") is not None:
+                call_provider = self.provider
+                if hasattr(call_provider, "disable_auto_cache_control"):
+                    call_provider.disable_auto_cache_control = True
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).

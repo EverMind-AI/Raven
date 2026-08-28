@@ -601,8 +601,10 @@ def register(app: typer.Typer) -> None:
                 web_host = web_cfg.host if web_cfg.enabled else "127.0.0.1"
                 web_port = web_cfg.port if web_cfg.enabled else await pick_port(web_cfg.port)
                 # Never unauthenticated: the server only checks a token when
-                # one is set, and this port can drive the agent.
-                web_token = (web_cfg.auth_token or None) if web_cfg.enabled else secrets.token_urlsafe(24)
+                # one is set, and this port can drive the agent. Minting one
+                # when none is configured costs a legitimate client nothing --
+                # publish_web_endpoint below is where local clients read it.
+                web_token = web_cfg.auth_token or secrets.token_urlsafe(24)
 
                 web_readback_texts: dict[str, str] = {}
                 web_server = WebSocketRpcServer(

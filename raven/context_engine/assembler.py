@@ -36,53 +36,10 @@ from raven.context_engine.base import (
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import render
 from raven.memory_engine.base import AssembledContext, TokenBudget
-from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
     from raven.context_engine.curator import TurnContext
     from raven.providers.base import LLMProvider
-
-
-_SEG_SEP = "\n\n---\n\n"
-
-
-def _stable_prefix_chars(parts: list[tuple[int, str, bool]], *, tail_follows: bool = False) -> int:
-    """Characters of the system prefix that read the same on the next turn.
-
-    Only the unbroken run of stable segments at the *start* counts. A prompt
-    cache keys on everything up to its breakpoint, so the first volatile segment
-    ends the run: a stable segment behind it would be cached under a key that
-    changes every turn, paying the write and never reading it back.
-
-    The separator that follows the run is counted in, so the boundary falls
-    between two segments rather than inside the join.
-
-    ``tail_follows`` says something is appended after these parts -- phase B,
-    which is the Curator. It decides the case where the run *is* every phase-A
-    part. On its own that boundary would sit at the end of the message and cache
-    nothing the end-of-message breakpoint does not, so it is not declared. With
-    volatile text appended after it, it is the only breakpoint in the message
-    that survives a turn, and declining to declare it gave up the whole point of
-    measuring this: identity and bootstrap present, memory and both skill
-    segments contributing nothing, Curator appending -- a reachable
-    configuration, and one where the assembled message went out as
-    ``IDENTITY<sep>CURATOR`` with no key at all.
-
-    A stable phase-B builder would extend the head further; none exists, and
-    treating phase B as volatile only caches less than it could, never wrongly.
-    """
-    run = 0
-    for _, text, stable in parts:
-        if not stable:
-            break
-        run += 1
-    if run == 0:
-        return 0
-    if run < len(parts):
-        return len(_SEG_SEP.join(text for _, text, _ in parts[:run])) + len(_SEG_SEP)
-    if tail_follows:
-        return len(_SEG_SEP.join(text for _, text, _ in parts)) + len(_SEG_SEP)
-    return 0
 
 
 class ContextAssembler(ContextEngine):
@@ -149,15 +106,15 @@ class ContextAssembler(ContextEngine):
         # ── Phase A — independent segment builders, concurrent ──────
         a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a])
         meta: dict[str, Any] = {}
-        prefix_parts: list[tuple[int, str, bool]] = []
+        prefix_parts: list[tuple[int, str]] = []
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None:
                 continue
             meta |= seg.meta
             if seg.text:
-                prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
+                prefix_parts.append((builder.order, seg.text))
         prefix_parts.sort(key=lambda t: t[0])
-        system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
+        system_prefix = "\n\n---\n\n".join(text for _, text in prefix_parts)
 
         if self._scent is not None:
             scent = await self._scent.build(ctx.current_message, ctx.session_messages)
@@ -195,16 +152,7 @@ class ContextAssembler(ContextEngine):
         for _, text in seg6_parts:
             system = system + "\n\n---\n\n" + text
 
-        # Measured now, not after phase A: whether the stable run reaches the end
-        # of the message depends on whether phase B appended anything to it.
-        stable_chars = _stable_prefix_chars(prefix_parts, tail_follows=bool(seg6_parts))
-
-        system_msg: dict[str, Any] = {"role": "system", "content": system}
-        if stable_chars:
-            # Phase B only ever appends, so the boundary measured over the phase-A
-            # parts still points at the same character of the finished message.
-            system_msg[STABLE_PREFIX_KEY] = stable_chars
-        messages = [system_msg, *_coalesce_assistant(history), user_msg]
+        messages = [{"role": "system", "content": system}, *_coalesce_assistant(history), user_msg]
         return AssembledContext(
             messages=messages,
             metadata=meta | {"engine": self.name},

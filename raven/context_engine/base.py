@@ -118,29 +118,11 @@ class SegmentBuilder(Protocol):
     ``needs_prefix`` routes the builder to phase B (it reads
     ``ctx.prefix``); the default ``False`` keeps a builder in the
     phase-A parallel batch.
-
-    ``stable`` says this segment's text does not depend on what the user just
-    said, so it reads the same on the next turn as on this one.
-
-    Per conversation, not per process. The identity segment interpolates the
-    turn's bound workdir and the resolved model id, so two chats in one gateway
-    process hold two different heads and two cache entries -- which is correct,
-    they are different prompts. Read as "stable process-wide" this flag looks
-    wrong; it is not, and nothing a segment could declare would collapse two
-    genuinely different prompts into one cached prefix. The assembler
-    uses it to tell the provider how much of the system message may carry a
-    prompt-cache breakpoint of its own; only the unbroken run of stable builders
-    at the *start* counts, because a cache key covers everything in front of it,
-    so one volatile segment ends the run for every stable segment behind it.
-    The default ``False`` is the safe answer: a segment wrongly called stable
-    would have its neighbours cached under a key that changes anyway, which
-    costs the write and returns nothing.
     """
 
     name: str
     order: int
     needs_prefix: bool
-    stable: bool
 
     async def build(self, ctx: AssemblyContext) -> "Segment | None":
         """Return this turn's :class:`Segment`, or ``None`` to contribute nothing."""

@@ -54,8 +54,6 @@ class CuratorSegmentBuilder:
     name = "curator"
     order = 6
     needs_prefix = True
-    # Working state the Curator recomputes for the turn it is in.
-    stable = False
 
     def __init__(
         self,

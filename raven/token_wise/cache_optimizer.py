@@ -10,24 +10,14 @@ v2 strategy (informed by head-to-head benchmarking against Hermes Agent's
 When tools are present (common agent scenario):
     1. Tools list end — tool schemas rarely change; caching them saves the
        full schema re-send cost every call.
-    2. The system message — on its **stable head** when it declares one
-       (``prompt_cache.STABLE_PREFIX_KEY``), on its tail otherwise. The head is
-       the only mark in this whole set that survives a turn: the rest of that
-       message is the memory recall, the router's hits and the Curator's working
-       state, all derived from what the user just said, and a cache covers
-       everything in front of its breakpoint.
+    2. System prompt tail — SOUL + USER + MEMORY + built-ins is stable.
     3. ``messages[-2]`` — rolling tail; covers the intra-turn tool-chain
        prefix so each iteration only pays fresh for the newest result.
     4. ``messages[-1]`` — rolling tail; written as cache this call, read as
        cache next call; completes the rolling coverage.
 
-    An end-of-system mark is *not* added beside the head one. Four is the whole
-    budget, and 3 subsumes it: a cache keyed at ``messages[-2]`` already carries
-    the entire system message, for exactly the calls where that message is
-    unchanged -- the iterations within one turn. Across turns neither survives.
-
 When no tools are present (pure conversation):
-    1. The system message, same rule as above.
+    1. System prompt tail.
     2–4. Last 3 non-system messages (rolling window identical to Hermes's
          ``system_and_3`` — proven optimal for cross-turn prefix matching).
 
@@ -44,13 +34,10 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.prompt_cache import (
-    STABLE_PREFIX_KEY,
-    cache_control,
-    claim_marks,
-    split_stable_prefix,
-)
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.token_wise.base import TokenStrategy
+
+_CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
@@ -74,7 +61,7 @@ def _last_index(messages: list[dict[str, Any]], *, role: str) -> int | None:
 
 
 def _mark_cache(block: dict[str, Any]) -> dict[str, Any]:
-    return {**block, "cache_control": cache_control()}
+    return {**block, "cache_control": _CACHE_CONTROL}
 
 
 def _mark_message_tail(msg: dict[str, Any]) -> dict[str, Any]:
@@ -86,7 +73,7 @@ def _mark_message_tail(msg: dict[str, Any]) -> dict[str, Any]:
     """
     content = msg.get("content")
     if isinstance(content, str):
-        new_content = [{"type": "text", "text": content, "cache_control": cache_control()}]
+        new_content = [{"type": "text", "text": content, "cache_control": _CACHE_CONTROL}]
     elif isinstance(content, list) and content:
         new_content = list(content)
         last = new_content[-1]
@@ -153,25 +140,10 @@ class CacheOptimizer(TokenStrategy):
             new_tools[-1] = _mark_cache(new_tools[-1])
             budget -= 1
 
-        # ── bp2: the system message ──
-        # On its stable head when it declares one, on its tail when it does not.
-        #
-        # Not both: four is the whole budget and the two rolling marks below are
-        # worth more than an end-of-message one, which they subsume. A cache
-        # covers everything in front of its breakpoint, so a mark on `msg[-2]`
-        # already carries the entire system message with it -- for the calls
-        # inside one turn, where the message does not change. Across turns
-        # neither of them survives; only the head does, which is the one placed
-        # here.
+        # ── bp2: system prompt tail ──
         sys_idx = _last_index(new_messages, role="system")
         if sys_idx is not None and budget > 0:
-            sys_msg = new_messages[sys_idx]
-            blocks = split_stable_prefix(sys_msg.get("content"), int(sys_msg.get(STABLE_PREFIX_KEY) or 0))
-            if blocks is not None:
-                blocks[0] = _mark_cache(blocks[0])
-                new_messages[sys_idx] = {**sys_msg, "content": blocks}
-            else:
-                new_messages[sys_idx] = _mark_message_tail(sys_msg)
+            new_messages[sys_idx] = _mark_message_tail(new_messages[sys_idx])
             marked_indices.add(sys_idx)
             budget -= 1
 
@@ -192,9 +164,4 @@ class CacheOptimizer(TokenStrategy):
 
         used = self.max_breakpoints - budget
         logger.debug("CacheOptimizer: placed {} breakpoint(s) on model={}", used, model)
-        if used:
-            # Tell the provider this request is spoken for. Only when something
-            # was actually placed: a call this strategy declined to mark is one
-            # the provider should still handle itself.
-            new_messages = claim_marks(new_messages)
         return new_messages, new_tools, model

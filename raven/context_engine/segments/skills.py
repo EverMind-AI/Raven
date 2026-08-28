@@ -56,8 +56,6 @@ class SkillsSegmentBuilder:
     name = "skills"
     order = 5
     needs_prefix = False
-    # The router's hits, queried with the current message.
-    stable = False
 
     def __init__(
         self,

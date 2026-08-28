@@ -754,3 +754,23 @@ async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):
     await ch.stop()
     await asyncio.sleep(0.02)
     assert task.cancelled() or task.done(), "a rebind outliving the channel logs a traceback"
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        ("", ""),
+        ("   ", ""),
+        ("http://evil.test", ""),
+        ("HTTP://evil.test", ""),
+        ("https://ok.test", "https://ok.test"),
+        ("HTTPS://ok.test", "HTTPS://ok.test"),
+        ("bare.test", "https://bare.test"),
+    ],
+)
+def test_a_response_cannot_move_polling_to_plaintext(given: str, expected: str) -> None:
+    """The login exchange this poll carries is what a bot token comes out of.
+    An empty answer leaves the caller on the base it already had."""
+    from raven.channels.adapters.weixin.channel import _https_redirect_target
+
+    assert _https_redirect_target(given) == expected
