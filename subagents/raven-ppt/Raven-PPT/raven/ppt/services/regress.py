@@ -175,6 +175,20 @@ def forget(project) -> None:
     blocking_path(project).unlink(missing_ok=True)
 
 
+def code_by_page(project) -> dict[int, str]:
+    """Per page, the fingerprint of the code that drew it in the last build.
+
+    The record this module already keeps, read back for callers that need page
+    identity without a build outcome in hand: `seen.blocks_of` wants the script and
+    the line spans, and only the build has those. Pages recorded without a
+    fingerprint are left out, so a caller sees "unknown" rather than "empty".
+    """
+    previous = _load(project)
+    if previous is None:
+        return {}
+    return {page: code for page, (code, _kinds) in previous.by_page.items() if code}
+
+
 def _load(project) -> _Snapshot | None:
     """The previous build's record, or None when there is nothing to compare to.
 

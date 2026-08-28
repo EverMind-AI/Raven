@@ -7,6 +7,12 @@ pages that put several regions of equal or deliberately unequal weight on one ca
 Every block here runs. They assume the setup block of the skill's §3 plus `FACE`/`HAN` for
 the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]` and
 `T["accent"]`, `FIGURES` for the figure directory, and `frame = page()`.
+A passage whose bands are measured before they are drawn ends that line as
+`frame = page().holding(*heights)`, so the room the body was given and nothing asked for
+becomes air above and below the run instead of a band of white along the page's foot (the
+skill's §6.5). Not for a run something else already spreads into the whole body:
+`card_group(..., down=True)` given the body puts the leftover between its own cards, and a
+body cut to the sum of their heights first leaves them touching.
 
 They also assume the seven picture helpers from
 [deck/build/references/layouts-primitives.md](deck/build/references/layouts-primitives.md)
@@ -300,7 +306,7 @@ notes = [("image", "上面那张是氛围", "它只负责让这一页有现场�
          ("quote", "面板里的字是结论", "颜色和图都不参与。")]
 lane = inner.rest()
 bands = [0.38 + text_size(body, lane.w, size=LABEL_PT, font=FACE).h for _, _, body in notes]
-rows = stack(lane, gutter=(lane.h - sum(bands)) / (len(notes) - 1))
+rows = stack(lane).spread(*bands)
 for (icon, head, body), tall in zip(notes, bands):
     band = rows.take(tall)
     add_icon(slide, icon, Inches(band.x0), Inches(band.y0 + 0.03), Inches(0.28), INK)

@@ -46,7 +46,7 @@ rather than nine hundred lines it does not. The family rows below name the file,
 | `P30` | the same figure twice: the whole of it, and a zoom on the part under discussion | a second copy of the same file cropped to the region, `M22` on the original, `connect` between the two. No second asset, and nothing cropped out of the evidence |
 | `P31` | a montage of figures under one band of type | one translucent band across the whole montage, the type in `background`. The band is the page's sentence and the tiles are what it is about |
 | | ***grids, rails and cards*** | passages: [deck/build/references/layouts-multiples.md](deck/build/references/layouts-multiples.md) |
-| `P11` | an equal grid of cells | `box.grid(cols, rows)` is row-major. Level the row with `card_size`, or every card is as tall as the region and two lines of copy sit in a void |
+| `P11` | an equal grid of cells | `box.grid(cols, rows)` is row-major. `card_group` per band levels its own row, or `card_size` for cells that are not cards -- otherwise every card is as tall as the region and two lines of copy sit in a void |
 | `P12` | a grid with one cell given to copy | the missing tile is what makes the grid a composition instead of a contact sheet. Do not fill every slot because there is a grid |
 | `P13` | a full-height rail down one side | the rail carries the header, so this page builds its own `Frame`. A deck may do that; what it may not do is give each page a different header |
 | `P32` | image navigation cards: a contents page whose entries are pictures | one card per section, a flat plate at the foot of each for the type (`M14`) and a short gradient above the plate to lose its edge |
@@ -82,7 +82,7 @@ these is decoration: each says something the boxes alone do not.
 | id | the layer | how |
 |---|---|---|
 | | ***type, marks and grounds*** | passages: [deck/build/references/layouts-multiples.md](deck/build/references/layouts-multiples.md) |
-| `M1` | an icon at the head of a card, a point or a row | `card(..., icon=)` owns the geometry; `add_icon` for the ones not on a card. Pick it for what the region argues, not for a noun in its title. [deck/build/references/icons.md](deck/build/references/icons.md) |
+| `M1` | an icon at the head of a card, a point or a row | `card(..., icon=)` owns the geometry and `card_group` passes it through for a whole row or column -- a helper of your own that reads the items itself is how a delivered deck dropped the icon on seven groups; `add_icon` for the ones not on a card. Pick it for what the region argues, not for a noun in its title. [deck/build/references/icons.md](deck/build/references/icons.md) |
 | `M2` | a tinted ground under a region | `plane` in `surface`, `radius=True` for a card corner -- grouping, so that a zone is visible rather than implied |
 | `M3` | `accent_soft` on the one region that carries the answer | the same `plane`, one tint up, on exactly one region of the page. Two of them and neither is the answer |
 | `M4` | a hairline under a heading or beside a number | `rule` -- 0.06in below the box it underlines and at most 1.05in long, and horizontal: a vertical divider is a narrow `plane`. Not under every title |
@@ -154,7 +154,8 @@ Every id above has one. They are grouped by family into the five files below, an
 carries its id as its own heading -- `### P37` -- so a passage is found by the id the
 `layout` field already names. All of them assume the setup block of the skill's §3 plus
 `FACE`/`HAN`, `INK`/`MUTED`/`ACCENT`, `FIGURES` and `frame = page()`; each file says so
-at its head.
+at its head, and each says where `page().holding(*heights)` goes -- a passage that measures
+its bands first cuts the body to them, rather than leaving the page's leftover at its foot.
 
 ### [deck/build/references/layouts-primitives.md](deck/build/references/layouts-primitives.md)
 

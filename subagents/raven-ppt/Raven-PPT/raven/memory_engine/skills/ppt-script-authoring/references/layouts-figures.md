@@ -7,6 +7,12 @@ of these; the registry is where you choose which.
 Every block here runs. They assume the setup block of the skill's §3 plus `FACE`/`HAN` for
 the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]` and
 `T["accent"]`, `FIGURES` for the figure directory, and `frame = page()`.
+A passage whose bands are measured before they are drawn ends that line as
+`frame = page().holding(*heights)`, so the room the body was given and nothing asked for
+becomes air above and below the run instead of a band of white along the page's foot (the
+skill's §6.5). Not for a run something else already spreads into the whole body:
+`card_group(..., down=True)` given the body puts the leftover between its own cards, and a
+body cut to the sum of their heights first leaves them touching.
 
 They also assume the seven picture helpers from
 [deck/build/references/layouts-primitives.md](deck/build/references/layouts-primitives.md)
@@ -38,7 +44,7 @@ write(slide, beside.take(0.42), "读法", size=LEAD_PT, bold=True, colour=INK, f
 beside.skip(0.10)
 lane = beside.rest()
 tall = max(card_size(lane.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
-down = stack(lane, gutter=max(GUTTER, (lane.h - 3 * tall) / 2))
+down = stack(lane).spread(*[tall] * len(notes))
 for icon, head, body in notes:
     card(slide, down.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
 ```
@@ -69,7 +75,7 @@ notes = [("trending_down", "第 4 个 epoch 后转平", "继续训练只买到 0
          ("history", "两次回落是学习率重启", "形状一致，不是数据问题。")]
 rest = down.rest()
 tall = max(card_size(rest.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
-beside = stack(rest, gutter=max(GUTTER, rest.h - 2 * tall))
+beside = stack(rest).spread(*[tall] * len(notes))
 for icon, head, body in notes:
     card(slide, beside.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
 tall = picture_size(f"{FIGURES}/fig2.png", figure, caption=caption).h

@@ -10,6 +10,12 @@ they stop. The dials themselves, the seven `mark` kinds and a full hand-drawn ta
 Every block here runs. They assume the setup block of the skill's §3 plus `FACE`/`HAN` for
 the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]` and
 `T["accent"]`, and `frame = page()`.
+A passage whose bands are measured before they are drawn ends that line as
+`frame = page().holding(*heights)`, so the room the body was given and nothing asked for
+becomes air above and below the run instead of a band of white along the page's foot (the
+skill's §6.5). Not for a run something else already spreads into the whole body:
+`card_group(..., down=True)` given the body puts the leftover between its own cards, and a
+body cut to the sum of their heights first leaves them touching.
 
 ### P14 -- A chart with its reading in a lane beside it
 

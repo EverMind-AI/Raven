@@ -7,6 +7,12 @@ in any of them: these pages are built out of type, shapes and air.
 Every block here runs. They assume the setup block of the skill's §3 plus `FACE`/`HAN` for
 the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]` and
 `T["accent"]`, and `frame = page()`.
+A passage whose bands are measured before they are drawn ends that line as
+`frame = page().holding(*heights)`, so the room the body was given and nothing asked for
+becomes air above and below the run instead of a band of white along the page's foot (the
+skill's §6.5). Not for a run something else already spreads into the whole body:
+`card_group(..., down=True)` given the body puts the leftover between its own cards, and a
+body cut to the sum of their heights first leaves them touching.
 
 ### P16 -- A timeline spine
 
@@ -86,7 +92,7 @@ notes = [("ruler", "口径", "P95，2 月 1 日至 3 月 31 日，剔除冷启�
 plane(slide, said, T, tint="surface")
 lane = said.inset(PAD)
 tall = max(card_size(lane.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
-rows = stack(lane, gutter=(lane.h - 3 * tall) / 2)
+rows = stack(lane).spread(*[tall] * len(notes))
 for icon, head, body in notes:
     card(slide, rows.take(tall), T, tint="background", icon=icon, title=head, body=body,
          font=FACE, cjk_font=HAN)
