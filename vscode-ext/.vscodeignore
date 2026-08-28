@@ -2,6 +2,6 @@ src/**
 node_modules/**
 .vscode/**
 tsconfig*.json
-vitest.config.ts
+vitest.config.*
 eslint.config.mjs
 **/*.map

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { resolveRavenCommand, type ResolutionContext } from '../ravenBin.js'
 
 const baseCtx = (overrides: Partial<ResolutionContext> = {}): ResolutionContext => ({
-  platform: 'linux',
   env: {},
   configExecutablePath: '',
   extraArgs: [],
@@ -72,6 +71,13 @@ describe('resolveRavenCommand', () => {
     expect(
       resolveRavenCommand(baseCtx({ env: { RAVEN_BIN: '~' }, exists: path => path === '/home/dev' }))?.command
     ).toBe('/home/dev')
+  })
+
+  it('expands a Windows-style ~\\ prefix against the home directory', () => {
+    const command = resolveRavenCommand(
+      baseCtx({ homeDir: 'C:\\Users\\dev', configExecutablePath: '~\\bin\\raven.exe', exists: () => true })
+    )
+    expect(command?.command).toBe('C:\\Users\\dev\\bin\\raven.exe')
   })
 
   it('appends extraArgs after the tui subcommand', () => {

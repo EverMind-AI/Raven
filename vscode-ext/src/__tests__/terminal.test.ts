@@ -82,6 +82,16 @@ describe('buildSendText', () => {
       '"C:\\Program Files\\Raven\\raven.exe" tui'
     )
   })
+
+  it('quotes posix shell metacharacters and empty args', () => {
+    const text = buildSendText({ command: '/bin/echo', args: ['a&b', 'c;d|e', 'f<g>h', ''], label: 'x' }, 'linux')
+    expect(text).toBe("/bin/echo 'a&b' 'c;d|e' 'f<g>h' ''")
+  })
+
+  it('quotes win32 cmd metacharacters and empty args', () => {
+    const text = buildSendText({ command: 'C:\\raven\\raven.exe', args: ['a&b', 'c|d', ''], label: 'x' }, 'win32')
+    expect(text).toBe('C:\\raven\\raven.exe "a&b" "c|d" ""')
+  })
 })
 
 describe('TuiTerminalManager', () => {

@@ -6,12 +6,15 @@
 import type { VscodeApi, VscodeDisposable, VscodeTerminal } from './api.js'
 import type { RavenCommand } from './ravenBin.js'
 
+const POSIX_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
+const WIN32_SAFE_ARG = /^[A-Za-z0-9_@+=:,./\\-]+$/
+
 export function buildSendText(command: RavenCommand, platform: NodeJS.Platform): string {
   const argv = [command.command, ...command.args]
   if (platform === 'win32') {
-    return argv.map(arg => (/\s/.test(arg) ? `"${arg.replaceAll('"', '""')}"` : arg)).join(' ')
+    return argv.map(arg => (WIN32_SAFE_ARG.test(arg) ? arg : `"${arg.replaceAll('"', '""')}"`)).join(' ')
   }
-  const quote = (arg: string): string => (/[\s'"$`\\]/.test(arg) ? `'${arg.replaceAll("'", `'\\''`)}'` : arg)
+  const quote = (arg: string): string => (POSIX_SAFE_ARG.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`)
   return argv.map(quote).join(' ')
 }
 
