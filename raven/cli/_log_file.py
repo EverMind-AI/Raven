@@ -1,8 +1,9 @@
 """Shared loguru→file redirection for long-lived / screen-owning CLI commands.
 
-Both ``gateway`` (foreground long-running) and ``tui`` (Ink owns the terminal)
-need loguru routed to a rotating file instead of stderr. They differ only in
-filename, whether a live stderr sink is kept, and retention — all parameters.
+``gateway`` (foreground long-running), ``tui`` (Ink owns the terminal) and
+``acp`` (fd 1 carries the protocol) all need loguru routed to a rotating file
+instead of stderr. They differ only in filename, whether a live stderr sink is
+kept, and retention — all parameters.
 
 The log directory follows :func:`get_logs_dir`, so a ``--config`` instance
 writes its logs next to its own config rather than always to ``~/.raven``.

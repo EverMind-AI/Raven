@@ -11,6 +11,8 @@ opted out.
 
 from __future__ import annotations
 
+import shlex
+from pathlib import Path
 from typing import Any
 
 from raven.agent.subagent import builtin_agents
@@ -250,3 +252,93 @@ class TestAnAcpRowCanReplaceTheSeed:
         assert merged[0].command == "custom acp"
         assert merged[0].description == "mine"
         assert merged[0].env == {"RAVEN_HOME": "/elsewhere"}
+
+    def test_a_host_on_a_named_config_hands_that_config_to_the_child(self, monkeypatch, tmp_path) -> None:
+        """``RAVEN_HOME`` cannot carry a host started with ``--config``.
+
+        That flag sets a path inside the loader and never touches the
+        environment, so the child derived its config from a home the host was not
+        using -- a different model and provider than this row promises.
+        """
+        cfg = tmp_path / "instance" / "config.json"
+        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+
+        merged = merge_builtin_seeds([self._acp()])
+
+        assert merged[0].command == f"/usr/bin/raven acp --config {cfg}"
+        assert merged[0].env["RAVEN_HOME"] == "/srv/raven"
+
+    def test_a_host_reading_its_own_homes_config_adds_no_flag(self, monkeypatch) -> None:
+        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+        monkeypatch.setattr("raven.config.loader._current_config_path", Path("/srv/raven/config.json"))
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+
+        merged = merge_builtin_seeds([self._acp()])
+
+        assert merged[0].command == "/usr/bin/raven acp"
+
+    def test_a_declared_command_is_never_given_arguments(self, monkeypatch, tmp_path) -> None:
+        """A row that brought its own command line chose it. Injecting the host's
+        config path into someone else's argv is not this function's business."""
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+        monkeypatch.setattr("raven.config.loader._current_config_path", tmp_path / "config.json")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "custom acp"}
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].command == "custom acp"
+
+    def test_a_row_that_named_its_own_home_is_left_alone(self, monkeypatch, tmp_path) -> None:
+        """An explicit ``env.RAVEN_HOME`` is the row asking for a different
+        instance. ``--config`` outranks ``RAVEN_HOME`` in the child, so appending
+        the host's would serve that row the host's model and provider under the
+        row's own name.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.delenv("RAVEN_HOME", raising=False)
+        monkeypatch.setattr("raven.config.loader._current_config_path", tmp_path / "host" / "config.json")
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "", "env": {"RAVEN_HOME": "/child-home"}}
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].command == "/usr/bin/raven acp"
+        assert merged[0].env["RAVEN_HOME"] == "/child-home"
+
+    def test_a_row_that_named_its_own_home_is_left_alone_on_a_default_host(self, monkeypatch) -> None:
+        """The same row, with the host on its own default config -- which is the
+        surprising half: the comparison used to run against the child's home, so
+        a row pointing anywhere else was overridden even by a host that had made
+        no choice at all.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.delenv("RAVEN_HOME", raising=False)
+        monkeypatch.setattr("raven.config.loader._current_config_path", None)
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "", "env": {"RAVEN_HOME": "/child-home"}}
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].command == "/usr/bin/raven acp"
+
+    def test_a_config_path_with_a_space_stays_one_argv_token(self, monkeypatch, tmp_path) -> None:
+        cfg = tmp_path / "my configs" / "config.json"
+        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+
+        merged = merge_builtin_seeds([self._acp()])
+
+        assert shlex.split(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
