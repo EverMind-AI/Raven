@@ -637,7 +637,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
-        "example": "Qwen/Qwen3-Reranker-4B",
+        "example": "qwen/qwen3-reranker-8b",
         "optional": True,
         "verify": True,
         "purpose": (
@@ -649,8 +649,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "[accent]（可选，建议配置）[/accent]",
         ),
         "recommendation": (
-            "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
-            "推荐 [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+            "Recommended: [bold]qwen/qwen3-reranker-8b[/bold]",
+            "推荐 [bold]qwen/qwen3-reranker-8b[/bold]",
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
