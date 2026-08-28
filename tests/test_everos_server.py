@@ -158,6 +158,8 @@ class TestInotifyGate:
             "pos:\t0\ninotify wd:1 ino:2 mask:80c\ninotify wd:2 ino:3 mask:80c\n",
             encoding="ascii",
         )
+        (proc / "111" / "fdinfo" / "9").symlink_to(proc / "vanished")
+        (proc / "333").symlink_to(proc / "vanished")
         (proc / "notaproc" / "fdinfo").mkdir(parents=True)
         monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
 
@@ -193,6 +195,13 @@ class TestInotifyGate:
                 raise OSError("read-only /proc/sys")
 
         monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", _RefusingCap())
+
+        assert everos_server._try_raise_inotify_limit() is None
+
+    def test_raise_limit_is_none_when_the_cap_is_unreadable(self, monkeypatch, tmp_path) -> None:
+        cap_dir = tmp_path / "maxdir"
+        cap_dir.mkdir()
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap_dir)
 
         assert everos_server._try_raise_inotify_limit() is None
 
@@ -285,7 +294,7 @@ class TestInotifyGate:
         )
         monkeypatch.setattr(
             "raven.plugin.memory.everos._server._inotify_gate",
-            lambda: "inotify fix: sudo sysctl -w fs.inotify.max_user_instances=1024",
+            MagicMock(side_effect=[None, "inotify fix: sudo sysctl -w fs.inotify.max_user_instances=1024"]),
         )
 
         with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
