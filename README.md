@@ -215,6 +215,51 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
 </div>
 
+## Repo layout
+
+The top-level packages under `raven/`, in one line each. This list is the
+canonical set of commit scopes (see `AGENTS.md`). Layer taxonomy lives in the
+architecture booklets; this section only says what each package does.
+
+| Package | What it is |
+|---|---|
+| `acp` | ACP server side: raven as an agent another host can talk to |
+| `agent` | The agent loop, its tools, and sub-agent orchestration |
+| `auth` | Authentication and authorization primitives |
+| `browser` | Browser automation and its outbound-address policy |
+| `channels` | Per-service channel adapters (telegram, discord, feishu, ...) and the channel contract |
+| `cli` | The `raven` command-line surface |
+| `config` | Config schema, loader, migrations, and update helpers |
+| `contracts` | The papers: declared shapes, two promise tiers, no machinery |
+| `context_engine` | Context assembly for a turn |
+| `core` | Assembly root: the *_stack builders and the admission door |
+| `eval_engine` | Evaluation harness |
+| `evolver` | Self-improvement loop |
+| `gateway` | Daemon plumbing: channel manager, intake, outlet, live probe, run lock |
+| `importer` | External data import |
+| `knowledge` | Knowledge base service |
+| `market` | Plugin market: catalog, trust, install, ledger |
+| `mcp` | MCP client machinery |
+| `memory_engine` | Long-term memory engine |
+| `ops` | Machine registry and on-call operations |
+| `playbook` | Playbook runtime |
+| `plugins` | Plugin discovery, manifests, registry, and bundled plugins |
+| `proactive_engine` | Cron, heartbeat, sentinel: turns raven starts itself |
+| `providers` | LLM provider pool and resolution |
+| `routing` | Model routing |
+| `rpc` | The RPC surface (TUI and tools talk here) |
+| `sandbox` | Execution sandboxing |
+| `security` | Outbound address policy and prompt-injection fences |
+| `session` | Session export and titles |
+| `skill_hub` | Skill hub client |
+| `spine` | The frozen kernel: submit, lanes, cancel, emit, delivery |
+| `templates` | Packaged data assets (no Python) |
+| `token_wise` | Token efficiency: cache optimizer, usage tracker |
+| `tracing` | Tracing and telemetry |
+| `trajectory` | Turn trajectory store and verdicts |
+| `utils` | Shared helpers, including the atomic write primitive |
+| `web_rpc` | The WebSocket RPC surface |
+
 ## Architecture
 
 ```text

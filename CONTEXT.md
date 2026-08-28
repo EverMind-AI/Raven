@@ -661,7 +661,7 @@ and injects into the main agent's system prompt so evicted facts stay present.
 
 ### Memory
 
-**EverOS** (`raven/plugin/memory/everos/`):
+**EverOS** (`raven/plugins/memory/everos/`):
 Raven's default bundled memory-backend plugin (`everos-memory`; ships enabled, works
 out of the box). Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
@@ -704,7 +704,7 @@ candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9),
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
-**PlugHub** (`plughub/`):
+**PlugHub** (`market/`, package renamed from `plughub/`; wire names and RPC group keep the `plughub` spelling):
 The plugin marketplace: a catalogue of installable integrations (`catalog.json`), and the
 transactional installer that lands one. A catalogue entry contributes pieces -- an MCP
 server, credentials, a skill -- and `install` lands them all or none. Distinct from **Skill
@@ -714,7 +714,7 @@ the RPC groups (`plughub.*` vs `skillhub.*`) are separate.
 
 **`plugin` tool** (`agent/tools/plughub.py`):
 PlugHub's agent-facing surface: `find` / `connect` / `authorize` / `list` / `remove`, over the
-same `plughub/connect.py` transaction the panel's `plug.*` RPC drives, called in-process. It
+same `market/connect.py` transaction the panel's `plug.*` RPC drives, called in-process. It
 installs catalogue entries only and accepts no credentials, so an entry that needs an API key
 is reported by field name rather than installed; an OAuth connect returns the authorization
 URL as soon as the flow mints it instead of waiting for the click, and opens no page -- the
@@ -855,19 +855,45 @@ Moving the endpoint or rotating the key does not make a base stale.
 
 ### Plugins
 
-**Plugin** (`plugin/`):
+**Plugin** (`plugins/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
 `bundled` / `enabled_by_default`). It contributes capabilities via
 `[[plugin.contributes.<kind>]]` arrays — currently `memory_backends` and `tools` — each naming
 a `factory` (`module:callable`). The host passes the user's `plugins.config["<id>"]` dict
 verbatim to the factory as `PluginContext.config`.
 
-**Plugin Registry** (`plugin/registry.py`):
+**Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting
 `enabled_by_default`), resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
+
+**Admission** (`core/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
+The declare-check-dispense pattern at a boundary: the owner declares its authored members
+(a manifest's `config_schema`, a tool's four authored members), the door checks the
+declaration once at entry, and dispenses a frozen result (an admitted config slice, a
+`ToolSpec`) that the machinery reads afterwards. An empty declaration keeps verbatim
+pass-through. Failures name the owner and the key at the door, not deep inside a turn.
+
+**Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
+A cargo declares the config keys only it consumes, next to the code that consumes them;
+storage and validation stay with the central model until the storage handover, and the
+declaration guard (`tests/test_channels_config_declaration.py`) keeps the two coherent.
+_Avoid_: "schema" alone — the central pydantic model and the cargo declaration are
+different artifacts.
+
+**Assembly Root** (`core/`):
+The package that composes a running agent out of parts: one `*_stack` builder per assembly
+concern, shared by every entrance. Entrances own transport only; the stacks own discovery,
+admission and wiring order. Distinct from the retired transitional `raven.core` context
+home (`tests/test_package_skeleton.py` keeps the old meaning dead).
+
+**Paper** (`contracts/`):
+A declared shape the layers hold each other to; papers export declared members only and
+import no machinery. Two promise tiers, stamped per module via `__tier__`: `contract`
+(frozen for every loop) and `factory_loop` (versioned with the factory loop). Enforced by
+`tests/test_contracts_two_tier_ledger.py`.
 
 ### Security & Access
 
