@@ -238,10 +238,10 @@ def test_d3_repeated_stash_latest_wins(workspace):
     must replace the former — recovery prompt should reflect *current* state,
     not stale files."""
     agent = _agent_with_checkpoint(workspace)
-    from raven.agent.loop import TurnOutcome
+    from raven.agent.loop import LoopOutcome
 
-    out1 = TurnOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
-    out2 = TurnOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
+    out1 = LoopOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
+    out2 = LoopOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
     with workdir.bind(workspace):
         agent._stash_recovery("s", out1)
         agent._stash_recovery("s", out2)

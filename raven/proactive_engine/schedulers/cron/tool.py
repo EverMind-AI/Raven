@@ -19,14 +19,25 @@ class CronTool(Tool):
 
     def __init__(self, cron_service: CronService):
         self._cron = cron_service
-        self._channel = ""
-        self._chat_id = ""
+        # Turn-local, like every other routed tool: a ContextVar, not plain
+        # attributes. With the gateway's user pool at 4, concurrent turns share
+        # this one instance -- plain attributes let turn B's set_context
+        # redirect turn A's reminder to B's conversation (reproduced before
+        # this fix; pinned by test_cron_tool_context_isolation).
+        self._route: ContextVar[tuple[str, str]] = ContextVar("cron_route", default=("", ""))
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
 
+    @property
+    def _channel(self) -> str:
+        return self._route.get()[0]
+
+    @property
+    def _chat_id(self) -> str:
+        return self._route.get()[1]
+
     def set_context(self, channel: str, chat_id: str) -> None:
-        """Set the current session context for delivery."""
-        self._channel = channel
-        self._chat_id = chat_id
+        """Set the current session context for delivery (turn-local)."""
+        self._route.set((channel, chat_id))
 
     def set_cron_context(self, active: bool):
         """Mark whether the tool is executing inside a cron job callback."""

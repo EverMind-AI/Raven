@@ -27,6 +27,8 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
+from loguru import logger
+
 from raven.context_engine.base import (
     AssembledPrefix,
     AssemblyContext,
@@ -147,11 +149,20 @@ class ContextAssembler(ContextEngine):
         )
 
         # ── Phase A — independent segment builders, concurrent ──────
-        a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a])
-        meta: dict[str, Any] = {}
+        # One failing builder degrades its segment, never the turn; the names
+        # are recorded in metadata so the loop can surface a Notice.
+        a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a], return_exceptions=True)
+        degraded: list[str] = []
+        for builder, seg in zip(self._phase_a, a_segs):
+            if isinstance(seg, Exception):
+                degraded.append(builder.name)
+                logger.opt(exception=seg).error(
+                    "segment builder {} failed; assembling without it", builder.name
+                )
+        meta: dict[str, Any] = {"degraded_segments": degraded} if degraded else {}
         prefix_parts: list[tuple[int, str, bool]] = []
         for builder, seg in zip(self._phase_a, a_segs):
-            if seg is None:
+            if seg is None or isinstance(seg, Exception):
                 continue
             meta |= seg.meta
             if seg.text:

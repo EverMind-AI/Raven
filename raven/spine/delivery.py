@@ -119,6 +119,10 @@ class DeliveryHub:
     rides is recorded synchronously on enqueue so close_stream can route to it."""
 
     def __init__(self, send_max_retries: int = _SEND_MAX_RETRIES) -> None:
+        #: Deliverables dropped after exhausting retries. A caller that needs
+        #: to know the user never saw a reply reads this; the log line alone
+        #: is invisible to code.
+        self.dropped: int = 0
         self._send_max_retries = send_max_retries
         self._outlets: dict[str, Outlet] = {}
         self._queues: dict[str, asyncio.Queue[Deliverable | _StreamClose]] = {}
@@ -259,6 +263,7 @@ class DeliveryHub:
                 return
             except Exception as exc:
                 if attempt == self._send_max_retries:
+                    self.dropped += 1
                     logger.error(
                         "delivery failed after {} retries: channel={!r} event={} reason={}",
                         self._send_max_retries,

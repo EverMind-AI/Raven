@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop import AgentLoop, TurnOutcome
+from raven.agent.loop import AgentLoop, LoopOutcome
 from raven.agent.tools.message import MessageTool
 from raven.providers.base import StreamDelta
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -232,7 +232,7 @@ async def test_ac3_silent_return_logs_final_content_when_message_tool_used(works
 
     async def fake_run_agent_loop(*args, **kwargs):
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
-        return ("hello world via message tool", [], [], TurnOutcome())
+        return ("hello world via message tool", [], [], LoopOutcome())
 
     monkeypatch.setattr(agent, "_run_agent_loop", fake_run_agent_loop)
 
@@ -264,7 +264,7 @@ async def test_ac3_no_log_when_final_content_empty(workspace, monkeypatch) -> No
 
     async def fake_run_agent_loop(*args, **kwargs):
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
-        return ("", [], [], TurnOutcome())  # empty final_content
+        return ("", [], [], LoopOutcome())  # empty final_content
 
     monkeypatch.setattr(agent, "_run_agent_loop", fake_run_agent_loop)
 

@@ -63,9 +63,9 @@ class OriginPools:
         origin alone -- a direct chat is a USER turn with its own pool."""
         if req.direct_target is not None:
             return self._direct
-        return self.for_origin(req.origin)
+        return self._for_origin(req.origin)
 
-    def for_origin(self, origin: Origin) -> asyncio.Semaphore:
+    def _for_origin(self, origin: Origin) -> asyncio.Semaphore:
         if origin is Origin.USER:
             return self._user
         if origin in _SYSTEM_ORIGINS:
@@ -243,7 +243,7 @@ class Lane:
         """
         return self.cancel_running() + self.drain_pending()
 
-    def idle_for(self, now: float) -> float | None:
+    def _idle_for(self, now: float) -> float | None:
         """Seconds since the worker drained and the lane went idle, or None while
         it is still active. The reaper reads this to reclaim long-silent lanes.
         """
@@ -278,11 +278,11 @@ class Lane:
                     # Reachable today only through asyncio.run's own cancel-all sweep
                     # at loop close, not interpreter exit as such -- every current
                     # host is a top-level asyncio.run returning straight to process
-                    # exit, so the sweep coincides with _active_turns dying with the
-                    # process. But _active_turns is a module global that outlives a
-                    # loop: a future host that ran a Scheduler inside asyncio.run and
-                    # then kept the process alive would open this door without a
-                    # restart.
+                    # exit, so the sweep coincides with any consumer-held turn state
+                    # dying with the process. But a consumer may key state in a
+                    # module global that outlives a loop: a future host that ran a
+                    # Scheduler inside asyncio.run and then kept the process alive
+                    # would open this door without a restart.
                     self._run_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await self._run_task
@@ -591,7 +591,7 @@ class Scheduler:
         """
         reaped = 0
         for conversation_id, lane in list(self._lanes.items()):
-            idle = lane.idle_for(now)
+            idle = lane._idle_for(now)
             if idle is not None and idle >= _DEFAULT_IDLE_TTL:
                 del self._lanes[conversation_id]
                 reaped += 1

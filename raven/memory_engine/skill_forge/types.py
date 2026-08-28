@@ -1,4 +1,4 @@
-"""SkillForgeRouter data types — :class:`RouterHit` + :class:`SkillSource` Protocol.
+"""SkillForgeRouter data types — :class:`RouterHit` + :class:`ForgeSkillSource` Protocol.
 
 Two design points worth highlighting:
 
@@ -9,7 +9,7 @@ Two design points worth highlighting:
   so :class:`ContextBuilder` can write it straight into the prompt
   without a second round-trip to the source.
 
-- :class:`SkillSource` is **internal**. Per the design decision
+- :class:`ForgeSkillSource` is **internal**. Per the design decision
   recorded in the change plan, sources are hardcoded (Local + Mass +
   Everos) rather than exposed as a plugin contribution point.
   ``@runtime_checkable`` lets tests assert duck-typed conformance
@@ -29,7 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class RouterHit:
-    """One ranked skill returned by a :class:`SkillSource`.
+    """One ranked skill returned by a :class:`ForgeSkillSource`.
 
     Carries everything :class:`ContextBuilder` needs to render the
     skill into the system prompt — no further registry lookup happens
@@ -77,7 +77,7 @@ class RouterHit:
 
 
 @runtime_checkable
-class SkillSource(Protocol):
+class ForgeSkillSource(Protocol):
     """One pool of skills the router can ask. Internal Protocol — the
     set of sources is fixed at compile time (Local + Mass + Everos);
     third parties extend retrieval by contributing a
@@ -120,4 +120,4 @@ class SkillSource(Protocol):
         ...
 
 
-__all__ = ["RouterHit", "SkillSource"]
+__all__ = ["RouterHit", "ForgeSkillSource"]

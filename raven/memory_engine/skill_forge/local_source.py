@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class LocalSkillSource:
-    """SkillSource adapter for the BM25 local pool.
+    """ForgeSkillSource adapter for the BM25 local pool.
 
     ``weight = 1.0`` makes Local the reference scale; Hub (0.85) is
     discounted because the remote marketplace is less likely to match
