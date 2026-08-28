@@ -40,7 +40,6 @@ def build_span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
-    attempt_id: str | None = None,
     start_time: str,
     end_time: str | None = None,
     status_code: str = "OK",
@@ -48,6 +47,12 @@ def build_span(
     attributes: dict[str, Any] | None = None,
     events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Assemble one audit.span.v1 record.
+
+    ``attempt.id`` is a reserved attribute key: caller-supplied values are
+    silently dropped (attempt grouping lives in ``attempts.json``, see
+    :mod:`raven.trajectory.store`).
+    """
     attrs: dict[str, Any] = {
         "span.type": span_type,
         "framework": FRAMEWORK,
@@ -59,13 +64,14 @@ def build_span(
         "channel": channel,
         "channel.id": channel,
         "chat_id": chat_id,
-        # Stable trajectory address: equals the trace id for a single-turn
-        # attempt; an explicit attempt groups several turns under one id.
-        "attempt.id": attempt_id or trace_id,
         "audit.schema_version": SCHEMA_VERSION,
     }
     if attributes:
         attrs.update(attributes)
+        # "attempt.id" is reserved: attempts.json is the sole source of attempt
+        # grouping, and an injected value could collide with a definition id.
+        # Legacy logs already carrying the attribute stay readable as-is.
+        attrs.pop("attempt.id", None)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "traceId": trace_id,

@@ -353,55 +353,43 @@ def test_provider_label_reports_the_normalized_route_prefix() -> None:
     assert _provider_label(None, "AnthropicProvider") == "AnthropicProvider"
 
 
-def test_attempt_id_defaults_to_trace_id(trace_dir):
-    """Without an open attempt, every turn is its own single-turn attempt."""
+def test_spans_carry_no_attempt_attribute(trace_dir):
+    """Attempt grouping lives in attempts.json, not on spans (a turn's attempt
+    id equals its trace id at read time)."""
     with trace.span("session.turn", session_key="cli:a"):
         with trace.span("llm.call"):
             pass
 
     spans = _spans_written(trace_dir)
-    trace_ids = {sp["traceId"] for sp in spans}
-    assert len(trace_ids) == 1
+    assert len({sp["traceId"] for sp in spans}) == 1
     for sp in spans:
-        assert sp["attributes"]["attempt.id"] == sp["traceId"]
+        assert "attempt.id" not in sp["attributes"]
 
 
-def test_explicit_attempt_groups_turns_under_one_id(trace_dir):
-    """begin_attempt groups several turns' spans; end_attempt restores per-turn ids."""
-    aid = trace.begin_attempt("cli:a")
-    try:
-        with trace.span("session.turn", session_key="cli:a"):
-            with trace.span("tool.call"):
-                pass
-        with trace.span("session.turn", session_key="cli:a"):
+def test_checkpoint_and_detached_spans_carry_no_attempt_attribute(trace_dir):
+    with trace.span("session.turn", session_key="cli:c") as root:
+        root.checkpoint()
+        with trace.span("skill.inject", detached=True):
             pass
-        # An unrelated session is not captured by cli:a's attempt.
-        with trace.span("session.turn", session_key="cli:b") as other:
-            assert other.attempt_id == other.trace_id
-    finally:
-        assert trace.end_attempt("cli:a") == aid
-
-    with trace.span("session.turn", session_key="cli:a") as after:
-        assert after.attempt_id == after.trace_id
 
     spans = _spans_written(trace_dir)
-    grouped = [sp for sp in spans if sp["attributes"]["attempt.id"] == aid]
-    assert len(grouped) == 3  # two turns + one tool call
-    assert len({sp["traceId"] for sp in grouped}) == 2  # across two traces
-    assert aid.startswith("att-")
+    # checkpoint + detached leaf + final root emit, all in one trace
+    assert len(spans) == 3
+    assert len({sp["traceId"] for sp in spans}) == 1
+    detached = next(sp for sp in spans if sp["name"] == "skill.inject")
+    assert detached["parentSpanId"] == root.span_id
+    assert [sp["spanId"] for sp in spans].count(root.span_id) == 2
+    for sp in spans:
+        assert "attempt.id" not in sp["attributes"]
 
 
-def test_attempt_id_survives_detached_and_checkpoint(trace_dir):
-    aid = trace.begin_attempt("cli:c")
-    try:
-        with trace.span("session.turn", session_key="cli:c") as root:
-            root.checkpoint()
-            with trace.span("skill.inject", detached=True):
-                pass
-    finally:
-        trace.end_attempt("cli:c")
-    for sp in _spans_written(trace_dir):
-        assert sp["attributes"]["attempt.id"] == aid
+def test_caller_attributes_cannot_reinject_attempt_id(trace_dir):
+    with trace.span("session.turn", {"attempt.id": "att-x"}, session_key="cli:r") as sp:
+        sp.set({"attempt.id": "att-y", "turn.input_preview": "hi"})
+
+    (span,) = _spans_written(trace_dir)
+    assert "attempt.id" not in span["attributes"]
+    assert span["attributes"]["turn.input_preview"] == "hi"
 
 
 def test_suppress_silences_only_its_own_block(trace_dir):
