@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
 from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
 from raven.playbook.prompt import COMPOSE_TOOL_NAME, build_compose_prompt, compose_tool
 from raven.playbook.types import NodeSpec, PlaybookSpec
@@ -267,23 +266,12 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
             text,
         )
 
-    def rewrite_inputs(inputs: dict[str, object]) -> dict[str, object]:
-        rewritten: dict[str, object] = {}
-        for key, value in inputs.items():
-            if isinstance(value, dict) and "node" in value:
-                target = str(value["node"])
-                rewritten[key] = {**value, "node": mapping.get(target, target)}
-            else:
-                rewritten[key] = value
-        return rewritten
-
     return [
         n.model_copy(
             update={
                 "id": mapping[n.id],
                 "depends_on": [mapping.get(d, d) for d in n.depends_on],
                 "prompt_template": rewrite_refs(n.prompt_template),
-                "inputs": rewrite_inputs(n.inputs),
                 "instance": f"{prefix}-{tag}-{n.instance}" if n.instance else None,
             }
         )
@@ -304,6 +292,32 @@ def _run_id_of(receipt: str) -> str | None:
     """
     m = _RUN_ID_IN_RECEIPT.match(receipt or "")
     return m.group(1) if m else None
+
+
+def _with_skills(node: NodeSpec) -> str:
+    """The node's prompt with its ``skills`` folded in as a suggestion.
+
+    ``skills`` is a playbook-only field: the graph tool has no such parameter,
+    so the engine spends it here and the list travels with the task description
+    the sub-agent reads. What it says is *these are relevant, prefer them* --
+    nothing narrower. It cannot mean "only these are visible" (the menu is not
+    filtered any more) and it does not mean "you must use one": which skill a
+    step actually uses was always the sub-agent's call, made against the task in
+    front of it.
+
+    An empty list is therefore the same input as no list: no skills to point at,
+    so nothing is said. It is not a dropped instruction -- under the old filter
+    ``[]`` meant "no skills at all", but a suggestion cannot forbid anything, so
+    there is nothing here to lose. Writing ``skills: []`` has no purpose either
+    way; leaving the field out is how a step with nothing to recommend reads.
+    """
+    if not node.skills:
+        return node.prompt_template
+    named = ", ".join(node.skills)
+    return (
+        f"{node.prompt_template}\n\nSkills relevant to this step: {named}. "
+        f"Prefer them where they fit -- read a skill's SKILL.md with read_file before acting on it."
+    )
 
 
 class PlaybookExecutor:
@@ -416,9 +430,8 @@ class PlaybookExecutor:
         if self._provider is None:
             return None, ["no provider wired for graph composition"]
         prompts_filled = _fill_param_refs(spec.prompts or "", values)
-        profile_source = getattr(self, "_agent_profile_source", None)
-        profiles = profile_source() if profile_source is not None else {}
-        messages = [{"role": "user", "content": build_compose_prompt(prompts_filled, profiles, list(spec.params))}]
+        roster = getattr(self, "_roster_cache", None) or {}
+        messages = [{"role": "user", "content": build_compose_prompt(prompts_filled, roster, list(spec.params))}]
         errors: list[str] = []
         for _ in range(2):
             try:
@@ -436,8 +449,7 @@ class PlaybookExecutor:
                 return None, [str(exc)]
             nodes, errors = _parse_nodes(args)
             if nodes is not None and not errors:
-                errors = validate_graph_nodes(nodes, set(), known_agents=profiles.keys() or None)
-                errors += validate_node_capabilities(nodes, profiles)
+                errors = validate_graph_nodes(nodes, set())
                 if not errors:
                     return nodes, []
             messages.append(
@@ -449,9 +461,9 @@ class PlaybookExecutor:
             )
         return None, errors or ["composition failed"]
 
-    def set_agent_profiles(self, source: AgentProfileSource) -> None:
-        """Set the live safe capability view used by prompt-mode composition."""
-        self._agent_profile_source = source
+    def set_roster(self, roster: dict[str, str]) -> None:
+        """Agent name -> description, for the composition prompt."""
+        self._roster_cache = roster
 
     async def _dispatch(self, spec: PlaybookSpec, nodes: list[NodeSpec], *, confirmed: bool = False) -> ExecutionPlan:
         """Hand the filled nodes to the DAG tool's own entry.
@@ -473,10 +485,8 @@ class PlaybookExecutor:
                     "id": run_node.id,
                     "subagent": run_node.subagent,
                     "node_summary": run_node.node_summary,
-                    "prompt_template": run_node.prompt_template,
+                    "prompt_template": _with_skills(run_node),
                     "depends_on": list(run_node.depends_on),
-                    **({"skills": list(run_node.skills)} if run_node.skills is not None else {}),
-                    **({"inputs": dict(run_node.inputs)} if run_node.inputs else {}),
                     **({"instance": run_node.instance} if run_node.instance else {}),
                 }
             )
