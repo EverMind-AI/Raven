@@ -119,15 +119,14 @@ def _inotify_usage() -> tuple[int, int] | None:
         try:
             if pid_dir.stat().st_uid != me:
                 continue
-            entries = (pid_dir / "fd").iterdir()
+            for entry in (pid_dir / "fd").iterdir():
+                try:
+                    if os.readlink(entry) == "anon_inode:inotify":
+                        used += 1
+                except OSError:
+                    continue
         except OSError:
             continue
-        for entry in entries:
-            try:
-                if os.readlink(entry) == "anon_inode:inotify":
-                    used += 1
-            except OSError:
-                continue
     return used, limit
 
 

@@ -155,6 +155,8 @@ class TestInotifyGate:
         (proc / "222" / "fd" / "5").symlink_to("anon_inode:inotify")
         (proc / "111" / "fd" / "9").symlink_to(proc / "vanished")
         (proc / "333").symlink_to(proc / "vanished")
+        (proc / "947").mkdir()
+        (proc / "947" / "fd").write_text("not a dir", encoding="ascii")
         (proc / "notaproc" / "fd").mkdir(parents=True)
         monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
 
