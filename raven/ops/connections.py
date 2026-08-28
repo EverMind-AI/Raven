@@ -121,8 +121,16 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
     rid = str(row.get("id") or "").strip()
     label = rid or "<no id>"
     out: list[Problem] = []
+    raw_id = str(row.get("id") or "")
     if not rid:
         out.append(Problem("a machine here has no id", blocking=True))
+    elif raw_id != rid:
+        # Every consumer normalises differently: `named` strips the id a DAG
+        # node asks for, `Verdict.machine` compares the row's raw one, and
+        # `shown` hands the raw one on. A padded id therefore reads as usable
+        # and is then unselectable. Refused at the row instead of taught to
+        # four readers.
+        out.append(Problem(f"{label}: id has leading or trailing whitespace", blocking=True))
     elif not _ID.match(rid):
         out.append(Problem(f"{label}: id must be lowercase letters, digits, '-' or '_'", blocking=True))
     for wrong, right in _MISSPELLED.items():
