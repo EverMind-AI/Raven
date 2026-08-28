@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.types import PlaybookSpec
 
 EMIT_TOOL_NAME = "emit_playbook"
@@ -138,13 +139,20 @@ otherwise set it to false. Never put `confirm` on an individual node.
 # nodes (dag mode)
 
 - `subagent` must come from the available-agents list below.
+- Agent capabilities are hard constraints: use `instance` only when
+  `stateful=true`; use path placeholders only when `readsLocalFiles=true`;
+  set `skills` only when `injectableSkills=true`; and set `mcps` only when
+  `injectableMcps=true`. Otherwise leave that field unset or choose a capable
+  agent.
 - `nodeSummary` is this step's title, written before the prompt: the
   length of a chat title, under ten words -- not a sentence and not a
   summary of the prompt. It is the node's row while the run happens, so
   name the step; what it must do belongs in `promptTemplate`.
 - Configuration hangs on the node, not the role: `skills`/`mcps` are what
-  this step injects; the same agent on several steps may differ per step.
-  Skills may only reference names from the candidate list.
+  this step injects. Nodes using separate sessions may differ, but when nodes
+  share an `instance`, only the node opening that session may set
+  `skills`/`mcps`; continuation nodes must omit both fields. Skills may only
+  reference names from the candidate list.
 - `promptTemplate` is the step's work order: state the criteria, the
   prohibitions and the hard format constraints so the step's job is
   unambiguous. Reference upstream output with {{ <upstreamId>.output }}
@@ -204,10 +212,27 @@ def _render_skills(candidates: list[tuple[str, str]], user_pinned: list[str]) ->
     return "\n".join(lines)
 
 
+def _render_agents(profiles: dict[str, PlaybookAgentProfile]) -> str:
+    """Render only the safe capability view, using prompt-facing camelCase."""
+    if not profiles:
+        return "(agent table unavailable)"
+    rows = {
+        name: {
+            "description": profile.description,
+            "stateful": profile.stateful,
+            "readsLocalFiles": profile.reads_local_files,
+            "injectableSkills": profile.injectable_skills,
+            "injectableMcps": profile.injectable_mcps,
+        }
+        for name, profile in profiles.items()
+    }
+    return json.dumps(rows, ensure_ascii=False, indent=2)
+
+
 def build_generation_prompt(
     user_input: str,
     *,
-    agent_roster: dict[str, str],
+    agent_profiles: dict[str, PlaybookAgentProfile],
     skill_candidates: list[tuple[str, str]],
     user_pinned_skills: list[str],
     known_mcp: list[str],
@@ -215,14 +240,13 @@ def build_generation_prompt(
 ) -> str:
     """Render the user message for one generation call.
 
-    ``agent_roster`` maps agent name -> capability description;
+    ``agent_profiles`` is the safe, runtime-effective capability view;
     ``skill_candidates`` are ``(name, one-line description)`` from the
     three-way retrieval; ``inline_skill_docs`` are ``(name, content)`` for
     skill *files* the user handed in directly.
     """
-    roster = "\n".join(f"- {name}: {desc}" for name, desc in agent_roster.items())
     parts = [
-        "# Available agents (the only valid nodes[].subagent values)\n" + roster,
+        "# Available agents (the only valid nodes[].subagent values)\n" + _render_agents(agent_profiles),
         "# Candidate skills (the only referencable names)\n" + _render_skills(skill_candidates, user_pinned_skills),
         "# Available mcp\n" + (", ".join(known_mcp) if known_mcp else "(none; leave mcps empty)"),
     ]
@@ -245,12 +269,17 @@ def build_repair_prompt(spec_json: dict[str, Any], errors: list[str]) -> str:
     )
 
 
-def build_revise_prompt(current: PlaybookSpec, user_feedback: str) -> str:
+def build_revise_prompt(
+    current: PlaybookSpec,
+    user_feedback: str,
+    agent_profiles: dict[str, PlaybookAgentProfile],
+) -> str:
     """User message for a revise round on an existing playbook."""
     return (
         "Below is an existing playbook and the user's feedback on it. Revise "
         "the playbook per the feedback and call emit_playbook again with the "
         "complete result.\n\n"
+        f"# Available agents and runtime-effective capabilities\n{_render_agents(agent_profiles)}\n\n"
         f"# Current playbook\n{json.dumps(current.model_dump(by_alias=True), ensure_ascii=False, indent=2)}\n\n"
         f"# User feedback\n{user_feedback.strip()}"
     )
@@ -315,14 +344,22 @@ def compose_tool() -> list[dict[str, Any]]:
     ]
 
 
-def build_compose_prompt(prompts_filled: str, agent_roster: dict[str, str], param_names: list[str]) -> str:
+def build_compose_prompt(
+    prompts_filled: str,
+    agent_profiles: dict[str, PlaybookAgentProfile],
+    param_names: list[str],
+) -> str:
     """The one-shot graph-composition request for a prompt-mode playbook."""
-    roster = "\n".join(f"- {name}: {desc}" for name, desc in agent_roster.items())
     return (
         "Assemble a task graph following the guidance below and submit the "
         "node list through emit_graph (camelCase fields:\n"
-        "id / subagent / nodeSummary / promptTemplate / dependsOn / inputs / instance).\n"
-        "Rules: subagent must come from the available list; every "
+        "id / subagent / nodeSummary / promptTemplate / dependsOn / skills / mcps / inputs / instance).\n"
+        "Rules: subagent must come from the available list; agent capabilities "
+        "are hard constraints: use instance only when stateful=true, path placeholders "
+        "only when readsLocalFiles=true, skills only when injectableSkills=true, and "
+        "mcps only when injectableMcps=true; when nodes share an instance, only "
+        "the node opening that session may set skills or mcps, and continuation "
+        "nodes must omit both fields; every "
         "{{ <upstreamId>.output }} reference must have that upstream in the "
         "node's dependsOn;\n"
         "nodes with no dependency between them run in parallel; the graph is "
@@ -330,6 +367,6 @@ def build_compose_prompt(prompts_filled: str, agent_roster: dict[str, str], para
         f"Params are already substituted (original param names: "
         f"{', '.join(param_names) if param_names else 'none'}); "
         "no ${params.*} may appear in promptTemplate.\n\n"
-        f"# Available agents\n{roster}\n\n"
+        f"# Available agents\n{_render_agents(agent_profiles)}\n\n"
         f"# Assembly guidance\n{prompts_filled}"
     )
