@@ -20,6 +20,8 @@ import { OnboardApp } from './features/onboard/OnboardPage'
 import * as onboard from './features/onboard/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import { KnowledgeApp } from './features/knowledge/KnowledgePage'
+import { PlaybooksApp } from './features/playbooks/PlaybooksPage'
+import * as playbooks from './features/playbooks/store'
 import * as knowledge from './features/knowledge/store'
 import * as memory from './features/memory/store'
 import { PlugApp } from './features/plugins/PluginsPage'
@@ -382,6 +384,8 @@ const memHost = document.getElementById('memBody')
 if (memHost) createRoot(memHost).render(<MemoryApp />)
 const kbHost = document.getElementById('kbBody')
 if (kbHost) createRoot(kbHost).render(<KnowledgeApp />)
+const pbHost = document.getElementById('pbBody')
+if (pbHost) createRoot(pbHost).render(<PlaybooksApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
 const deskHost = document.createElement('div')
@@ -402,6 +406,9 @@ window.RavenIslands = {
   ...(window.RavenIslands || {}),
   /* Opened from the rail, like memory: the shim in demo/ calls these. */
   knowledge: { open: knowledge.open, close: knowledge.close, redraw: knowledge.redraw },
+  /* Same three verbs as knowledge: the rail opens it, Escape closes it, a
+     language flip redraws it. */
+  playbooks: { open: playbooks.openPage, close: playbooks.closePage, redraw: playbooks.redraw },
   workspace: {
     draw: workspace.draw,
     redraw: workspace.redraw,

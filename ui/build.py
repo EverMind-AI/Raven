@@ -69,6 +69,7 @@ _DEMO_PARTS = [
     "150-chrome.js",
     "152-skills.js",
     "153-plugins.js",
+    "154-playbooks.js",
     "155-bridge.js",
     "160-boot.js",
 ]
@@ -90,6 +91,7 @@ _LIVE_PARTS = [
     "150-plugins.js",
     "160-memory.js",
     "165-knowledge.js",
+    "167-playbooks.js",
     "170-workspace.js",
     "180-attachments.js",
     "190-session-actions.js",

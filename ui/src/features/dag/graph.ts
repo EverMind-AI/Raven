@@ -36,6 +36,16 @@ export const W = 184
 export const H = 44
 export const PAD = 10
 
+/* Everything the layout reads of a node: which one it is, and what it waits
+   for. Declared structurally rather than as `DagNode` because a playbook's
+   stored graph is the same shape before any run exists -- and a second copy of
+   depth-by-longest-path is how two surfaces start disagreeing about what a
+   diamond looks like. */
+export interface Placed {
+  id: string
+  depends_on: string[]
+}
+
 export interface Dims {
   W: number
   H: number
@@ -57,8 +67,8 @@ export const CARD: Dims = { W: 160, H: 38, GAP_X: 194, GAP_Y: 50, PAD: 10 }
    thing it waits for. Memoised, and guarded against a cycle it should never
    see: the server rejects a cyclic graph before running it, but a panel that
    hangs is a worse way to find that out than a panel that draws something odd. */
-export function depths(nodes: DagNode[]): Map<string, number> {
-  const by = new Map(nodes.map((n) => [n.id, n]))
+export function depths(nodes: Placed[]): Map<string, number> {
+  const by = new Map<string, Placed>(nodes.map((n) => [n.id, n]))
   const depth = new Map<string, number>()
   const walking = new Set<string>()
   const of = (id: string): number => {
@@ -88,10 +98,10 @@ export function depths(nodes: DagNode[]): Map<string, number> {
    three and a fan-in back to one then reads as the diamond it is, instead of a
    staircase whose single nodes sit against the ceiling with their edges cutting
    diagonally down. */
-export function layout(nodes: DagNode[], dims: Dims = SHEET): DagLayout {
+export function layout(nodes: Placed[], dims: Dims = SHEET): DagLayout {
   const { W, H, GAP_X, GAP_Y, PAD } = dims
   const depth = depths(nodes)
-  const cols = new Map<number, DagNode[]>()
+  const cols = new Map<number, Placed[]>()
   nodes.forEach((n) => {
     const c = depth.get(n.id) || 0
     const col = cols.get(c)
@@ -135,7 +145,7 @@ export const MARKS: Record<string, { d: string; cls: string }> = {
 
 /* One row per layer, deepest last: what the card's own sentence counts and what
    a caller needs to know a graph is a chain rather than a fan-out. */
-export function layers(nodes: DagNode[]): number[] {
+export function layers(nodes: Placed[]): number[] {
   const depth = depths(nodes)
   const per = new Map<number, number>()
   nodes.forEach((n) => {

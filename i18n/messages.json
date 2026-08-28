@@ -2607,6 +2607,10 @@
       "en": "Knowledge",
       "zh": "知识库"
     },
+    "gui.nav.pb": {
+      "en": "Playbooks",
+      "zh": "剧本"
+    },
     "gui.kb.none": {
       "en": "No knowledge base yet.",
       "zh": "还没有知识库。"
@@ -5406,6 +5410,158 @@
     "gui.agent.migrate_body": {
       "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
+    },
+    "gui.pb.back": {
+      "en": "Playbooks",
+      "zh": "剧本"
+    },
+    "gui.pb.count": {
+      "en": "{n} stored",
+      "zh": "共 {n} 张"
+    },
+    "gui.pb.matched": {
+      "en": "{n} match",
+      "zh": "匹配 {n} 张"
+    },
+    "gui.pb.search": {
+      "en": "Search playbooks",
+      "zh": "搜索剧本"
+    },
+    "gui.pb.none": {
+      "en": "No playbooks stored yet.",
+      "zh": "还没有剧本。"
+    },
+    "gui.pb.none_match": {
+      "en": "Nothing matches that.",
+      "zh": "没有匹配的剧本。"
+    },
+    "gui.pb.disabled": {
+      "en": "off",
+      "zh": "已停用"
+    },
+    "gui.pb.unreadable": {
+      "en": "Could not read this file: {why}",
+      "zh": "这个文件读不出来：{why}"
+    },
+    "gui.pb.shape_live": {
+      "en": "composed per run",
+      "zh": "流程每次现搭"
+    },
+    "gui.pb.more_steps": {
+      "en": "+{n}",
+      "zh": "+{n}"
+    },
+    "gui.pb.reading": {
+      "en": "Reading...",
+      "zh": "正在读取…"
+    },
+    "gui.pb.lane": {
+      "en": "@{handle} one session",
+      "zh": "@{handle} 同一会话"
+    },
+    "gui.pb.n_skills": {
+      "en": "{n} skills",
+      "zh": "技能 {n}"
+    },
+    "gui.pb.n_mcps": {
+      "en": "{n} mcps",
+      "zh": "mcp {n}"
+    },
+    "gui.pb.pick_step": {
+      "en": "Pick a step to see how it is configured.",
+      "zh": "点一个步骤，看它是怎么配的。"
+    },
+    "gui.pb.blank_agent": {
+      "en": "left blank",
+      "zh": "留空"
+    },
+    "gui.pb.blank_prompt": {
+      "en": "left blank for the caller to fill",
+      "zh": "留空，由调用方填"
+    },
+    "gui.pb.unwritten": {
+      "en": "—",
+      "zh": "—"
+    },
+    "gui.pb.empty_list": {
+      "en": "[]",
+      "zh": "[]"
+    },
+    "gui.pb.no_params": {
+      "en": "no runtime inputs",
+      "zh": "没有运行时输入"
+    },
+    "gui.pb.canvas": {
+      "en": "Playbook graph - drag to pan, ctrl and scroll to zoom",
+      "zh": "剧本流程图 - 拖动平移，按住 ctrl 滚动缩放"
+    },
+    "gui.pb.zoom_in": {
+      "en": "Zoom in",
+      "zh": "放大"
+    },
+    "gui.pb.zoom_out": {
+      "en": "Zoom out",
+      "zh": "缩小"
+    },
+    "gui.pb.zoom_fit": {
+      "en": "Fit the whole graph",
+      "zh": "缩放到完整流程"
+    },
+    "gui.pb.tab_graph": {
+      "en": "Graph",
+      "zh": "图"
+    },
+    "gui.pb.tab_assembly": {
+      "en": "Assembly guide",
+      "zh": "编排指引"
+    },
+    "gui.pb.tab_contract": {
+      "en": "Contract",
+      "zh": "契约"
+    },
+    "gui.pb.f_mode": {
+      "en": "mode",
+      "zh": "模式"
+    },
+    "gui.pb.f_version": {
+      "en": "spec version",
+      "zh": "规范版本"
+    },
+    "gui.pb.f_confirm": {
+      "en": "before dispatch",
+      "zh": "派发前确认"
+    },
+    "gui.pb.sec_keywords": {
+      "en": "Trigger keywords",
+      "zh": "触发关键词"
+    },
+    "gui.pb.sec_params": {
+      "en": "Runtime inputs",
+      "zh": "入参"
+    },
+    "gui.pb.col_name": {
+      "en": "name",
+      "zh": "名称"
+    },
+    "gui.pb.col_type": {
+      "en": "type",
+      "zh": "类型"
+    },
+    "gui.pb.col_default": {
+      "en": "default",
+      "zh": "缺省"
+    },
+    "gui.pb.col_desc": {
+      "en": "description",
+      "zh": "说明"
+    },
+    "gui.pb.required": {
+      "en": "required",
+      "zh": "必填"
+    },
+    "gui.pb.no_default": {
+      "en": "—",
+      "zh": "—"
     }
   }
 }

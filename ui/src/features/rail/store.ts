@@ -177,7 +177,12 @@ export function markNew(): void {
      are the flyout module's to write -- it is asked, not reached into, and it
      answers whether the group stood open. */
   if (navMark() && top === 'moreBtn') top = null
-  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+  /* Named, not derived: `capsPage` lights skillBtn or plugBtn depending on which
+     tab stands open, so a set built from navState() would leave a stale mark on
+     whichever of the two it could not see. The list is therefore something a new
+     page has to be added to, and rail-nav-registry.test.mjs is what makes
+     forgetting it a failing test rather than a page with no selected state. */
+  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
   }

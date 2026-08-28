@@ -40,6 +40,7 @@ document.addEventListener('keydown', (e) => {
     if ($('#jobVeil').dataset.open === 'true') return $('#jobNo').click();
     if ($('#cronPage').dataset.open === 'true') return closeCron();
     if ($('#memPage').dataset.open === 'true') return closeMem();
+    if ($('#pbPage').dataset.open === 'true') return closePb();
     if ($('#kbPage').dataset.open === 'true') return closeKb();
     if ($('#capsPage').dataset.open === 'true') return closeCaps();
     if ($('#xaPage').dataset.open === 'true') return closeXa();
@@ -114,6 +115,7 @@ $('#skillBtn').onclick = () => openSkills();
 $('#plugBtn').onclick = () => openPlugins();
 /* wrapper, not the reference: live.js replaces openMem with the RPC loader */
 $('#memBtn').onclick = () => openMem();
+$('#pbBtn').onclick = () => openPb();
 $('#kbBtn').onclick = () => openKb();
 
 /* ── the 更多 flyout ──────────────────────────────────────────────────

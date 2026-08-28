@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 144 methods, 83 component schemas.
+// 146 methods, 88 component schemas.
 
 /* eslint-disable */
 /**
@@ -1323,6 +1323,91 @@ export interface KnowledgeHit {
   score: number;
   document_id: string;
   text: string;
+}
+/**
+ * Just enough of one step to draw the graph: which step it is, and what it
+ * waits for. The library page draws a concept diagram per card, and shipping
+ * the prompts and per-node config the detail view needs would be the whole
+ * library on page open.
+ */
+export interface PlaybookNodeShape {
+  id: string;
+  depends_on: string[];
+}
+/**
+ * One playbook as the library list needs it. ``error`` is empty unless the
+ * file would not parse, in which case it carries the reason and ``nodes`` is
+ * empty -- one unreadable file in a directory of user-edited text must not
+ * take the page down with it. ``disabled`` lives in config rather than in the
+ * file, because the file is the distribution unit and the switch is local to
+ * this machine.
+ */
+export interface PlaybookRow {
+  name: string;
+  description: string;
+  task_summary: string;
+  mode: 'dag' | 'prompt';
+  confirm: boolean;
+  origin: string;
+  disabled: boolean;
+  nodes: PlaybookNodeShape[];
+  error: string;
+}
+/**
+ * One runtime input. ``description`` is the sentence the caller is asked when
+ * the value is missing, so a form built from this uses it as the label.
+ */
+export interface PlaybookParam {
+  type: string;
+  required: boolean;
+  default?: JsonValue;
+  enum?: string[];
+  description: string;
+}
+/**
+ * One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may
+ * be empty: those three are the fields an author may leave blank for the
+ * caller to fill at run time. ``skills`` / ``mcps`` are three-state -- null
+ * means the author said nothing, ``[]`` means the author wrote an empty list,
+ * and a list names what to consider.
+ */
+export interface PlaybookNode {
+  id: string;
+  subagent: string;
+  node_summary: string;
+  prompt_template: string;
+  depends_on: string[];
+  skills?: string[];
+  mcps?: string[];
+  instance: string;
+  inputs: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * One whole playbook: its identity, its runtime inputs, and either the graph
+ * (``mode: dag``) or the assembly guidance a model turns into one
+ * (``mode: prompt``). ``path`` is the file this was read from.
+ *
+ * ``version`` is the spec format version the file declares, not a revision of
+ * the playbook's content.
+ */
+export interface PlaybookDetail {
+  name: string;
+  description: string;
+  task_summary: string;
+  version: number;
+  mode: 'dag' | 'prompt';
+  confirm: boolean;
+  origin: string;
+  disabled: boolean;
+  path: string;
+  keywords: string[];
+  params: {
+    [k: string]: PlaybookParam;
+  };
+  nodes: PlaybookNode[];
+  prompts: string;
 }
 export interface SessionListParams {
   /**
@@ -2644,6 +2729,16 @@ export interface MemoryDeleteResult {
    */
   removed: number;
 }
+export interface PlaybooksListParams {}
+export interface PlaybooksListResult {
+  playbooks: PlaybookRow[];
+}
+export interface PlaybooksGetParams {
+  name: string;
+}
+export interface PlaybooksGetResult {
+  playbook: PlaybookDetail;
+}
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
@@ -3350,6 +3445,8 @@ export interface RpcMethods {
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
   'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
+  'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
+  'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
@@ -3460,6 +3557,8 @@ export const RPC_METHODS = [
   "model.remove_endpoint",
   "model.remove_model",
   "model.save_key",
+  "playbooks.get",
+  "playbooks.list",
   "plug.auth",
   "plug.install",
   "plug.remove",

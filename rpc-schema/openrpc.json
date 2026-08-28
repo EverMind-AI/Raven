@@ -4595,6 +4595,59 @@
       }
     },
     {
+      "name": "playbooks.list",
+      "summary": "Every stored playbook, with the shape of each graph.",
+      "params": [],
+      "errors": [],
+      "result": {
+        "name": "PlaybooksListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "playbooks": {
+              "items": {
+                "$ref": "#/components/schemas/PlaybookRow"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "playbooks"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "playbooks.get",
+      "summary": "One playbook, whole: params, nodes and the file it came from.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }],
+      "result": {
+        "name": "PlaybooksGetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "playbook": {
+              "$ref": "#/components/schemas/PlaybookDetail"
+            }
+          },
+          "required": [
+            "playbook"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending shell-approval request.",
       "params": [
@@ -9531,6 +9584,237 @@
         ],
         "type": "object",
         "description": "One search hit. ``score`` is a similarity, so higher is nearer -- the\ndirection every caller already reads."
+      },
+      "PlaybookNodeShape": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "depends_on"
+        ],
+        "type": "object",
+        "description": "Just enough of one step to draw the graph: which step it is, and what it\nwaits for. The library page draws a concept diagram per card, and shipping\nthe prompts and per-node config the detail view needs would be the whole\nlibrary on page open."
+      },
+      "PlaybookRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "task_summary": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "dag",
+              "prompt"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookNodeShape"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "task_summary",
+          "mode",
+          "confirm",
+          "origin",
+          "disabled",
+          "nodes",
+          "error"
+        ],
+        "type": "object",
+        "description": "One playbook as the library list needs it. ``error`` is empty unless the\nfile would not parse, in which case it carries the reason and ``nodes`` is\nempty -- one unreadable file in a directory of user-edited text must not\ntake the page down with it. ``disabled`` lives in config rather than in the\nfile, because the file is the distribution unit and the switch is local to\nthis machine."
+      },
+      "PlaybookParam": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "default": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "enum": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "required",
+          "description"
+        ],
+        "type": "object",
+        "description": "One runtime input. ``description`` is the sentence the caller is asked when\nthe value is missing, so a form built from this uses it as the label."
+      },
+      "PlaybookNode": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "subagent": {
+            "type": "string"
+          },
+          "node_summary": {
+            "type": "string"
+          },
+          "prompt_template": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mcps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "subagent",
+          "node_summary",
+          "prompt_template",
+          "depends_on",
+          "instance",
+          "inputs"
+        ],
+        "type": "object",
+        "description": "One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may\nbe empty: those three are the fields an author may leave blank for the\ncaller to fill at run time. ``skills`` / ``mcps`` are three-state -- null\nmeans the author said nothing, ``[]`` means the author wrote an empty list,\nand a list names what to consider."
+      },
+      "PlaybookDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "task_summary": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "dag",
+              "prompt"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "params": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlaybookParam"
+            },
+            "type": "object"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookNode"
+            },
+            "type": "array"
+          },
+          "prompts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "task_summary",
+          "version",
+          "mode",
+          "confirm",
+          "origin",
+          "disabled",
+          "path",
+          "keywords",
+          "params",
+          "nodes",
+          "prompts"
+        ],
+        "type": "object",
+        "description": "One whole playbook: its identity, its runtime inputs, and either the graph\n(``mode: dag``) or the assembly guidance a model turns into one\n(``mode: prompt``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
       }
     },
     "errors": {
