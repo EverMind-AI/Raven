@@ -33,9 +33,11 @@ class _FakeCron:
 
 
 class _FakeSubagents:
-    def __init__(self) -> None:
+    def __init__(self, order: list | None = None) -> None:
         self.submit = None
         self.delivery_sink = None
+        # Shared with the loop, so teardown order is assertable across both.
+        self.order = order if order is not None else []
 
     def set_submit(self, fn) -> None:
         self.submit = fn
@@ -43,18 +45,30 @@ class _FakeSubagents:
     def set_delivery_sink(self, fn) -> None:
         self.delivery_sink = fn
 
+    async def cancel_all(self) -> None:
+        # Reached by an owning stack's teardown, which logs and swallows what
+        # this raises -- so without it a real assertion failure in such a test
+        # is reported behind an AttributeError traceback that is not the bug.
+        self.order.append("cancel_all")
+
 
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
     def __init__(self, cron: _FakeCron | None = None) -> None:
         self.tools: dict = {}
-        self.subagents = _FakeSubagents()
+        self.order: list[str] = []
+        self.subagents = _FakeSubagents(self.order)
+        self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
         self.deep_research_broker = None
         self.dag_sink = None
         self.mcp_sink = None
+        self.prewarms = 0
+        # Whether the MCP event sink was already bound when the prewarm started.
+        # The URL an OAuth server parks on rides that sink and nothing else.
+        self.sink_at_prewarm: object = "never called"
 
     def set_deep_research_broker(self, broker) -> None:
         self.deep_research_broker = broker
@@ -64,6 +78,14 @@ class _FakeLoop:
 
     def set_mcp_event_sink(self, sink) -> None:
         self.mcp_sink = sink
+
+    def prewarm_mcp(self) -> None:
+        self.prewarms += 1
+        self.sink_at_prewarm = self.mcp_sink
+
+    async def close_mcp(self) -> None:
+        self.mcp_closed += 1
+        self.order.append("close_mcp")
 
 
 async def _sink(_frame: dict) -> None:
@@ -145,6 +167,9 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None
+        # The engine is the host's and the host's ``run()`` already connected
+        # it; a second prewarm here would re-walk every server it attached.
+        assert loop.prewarms == 0
     finally:
         await stack.teardown()
     # Teardown stops only what this stack built; cron is the host's to stop.
@@ -201,6 +226,33 @@ async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> N
 
     await stack.teardown()
     assert cron.stopped is True
+
+
+async def test_the_owning_path_prewarms_mcp_instead_of_charging_the_first_turn(monkeypatch) -> None:
+    """This stack never starts ``run()``, and ``run()`` is where the one-time MCP
+    connect lived -- so the cost landed on whatever turn arrived first (measured:
+    4.52s of handshake before the turn body began). The prewarm has to be ordered
+    after the event sink is bound, or an OAuth server's authorization URL is
+    minted with nobody to publish it to.
+    """
+    from raven import browser as browser_module
+    from raven.cli import tui_commands
+
+    class _NoBrowser:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
+    loop = _FakeLoop(_FakeCron())
+    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    try:
+        assert loop.prewarms == 1
+        assert loop.sink_at_prewarm is loop.mcp_sink
+        assert loop.sink_at_prewarm is not None
+    finally:
+        await stack.teardown()
 
 
 async def test_the_served_page_hears_reminders_dropped_at_startup(monkeypatch) -> None:
@@ -343,3 +395,47 @@ def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> No
     stop = src.index("await agent_loop.backend.stop()")
 
     assert cancel < stop
+
+
+async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch) -> None:
+    """Assembly now opens MCP transports (and stdio children, and the sandbox)
+    whether or not a turn is ever served, so a stack stopped before its first
+    turn has resources to release that it never used to have.
+    """
+    from raven import browser as browser_module
+    from raven.cli import tui_commands
+
+    class _NoBrowser:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
+    loop = _FakeLoop(_FakeCron())
+    # A real backend too, so the one assertion below pins where MCP sits among
+    # everything else the engine owns rather than only that it is closed at all.
+    loop.backend = _RecordingBackend(loop.order)
+
+    async def _drain(*_a, **_kw) -> None:
+        loop.order.append("drain")
+
+    loop.drain_backend_stores = _drain
+    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    assert loop.prewarms == 1
+    assert loop.mcp_closed == 0
+
+    await stack.teardown()
+    assert loop.mcp_closed == 1
+    # Sub-agents first: a run still going can hand the backend another write, and
+    # it runs its tools through the executor close_mcp() tears down. MCP last of
+    # the engine's own resources, so the executor outlives everything using it.
+    assert loop.order == ["cancel_all", "drain", "stop", "close_mcp"]
+
+
+async def test_a_mounted_stack_does_not_close_its_host_s_mcp(monkeypatch) -> None:
+    cron = _FakeCron()
+    loop = _FakeLoop(cron)
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    await stack.teardown()
+    assert loop.mcp_closed == 0

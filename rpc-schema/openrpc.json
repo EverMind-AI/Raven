@@ -7381,6 +7381,10 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "auth_url": {
+            "description": "The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.",
+            "type": "string"
           }
         },
         "required": [

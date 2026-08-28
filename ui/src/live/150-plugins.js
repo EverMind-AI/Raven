@@ -101,6 +101,7 @@ rpc.notify['mcp.status'] = (p) => {
   }
   RavenIslands.plugins.event({
     kind: 'status', name: p.name, state: p.state, tool_count: p.tool_count, error: p.error,
+    auth_url: p.auth_url || null,
   });
 };
 
