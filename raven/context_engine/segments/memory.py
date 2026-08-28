@@ -30,6 +30,9 @@ class MemorySegmentBuilder:
     name = "memory"
     order = 3
     needs_prefix = False
+    # Host memory is picked per message and EverOS recall is a query against
+    # it, so this segment answers to the user's latest words.
+    stable = False
 
     def __init__(
         self,

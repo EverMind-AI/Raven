@@ -12,6 +12,8 @@ class BootstrapSegmentBuilder:
     name = "bootstrap"
     order = 2
     needs_prefix = False
+    # The bootstrap files as they are on disk, read the same way each turn.
+    stable = True
 
     def __init__(self, workspace: Path, bootstrap_files: list[str] | None = None) -> None:
         self._workspace = workspace
