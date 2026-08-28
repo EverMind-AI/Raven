@@ -47,7 +47,6 @@ export type DagSnapshotNodeStatus =
  */
 export type TurnEvent =
   | MessageStartEvent
-  | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
   | TokenDeltaEvent
@@ -1148,18 +1147,17 @@ export interface TurnStartedEvent {
     delegated?: {
       kind: 'spawn' | 'dag';
       label: string;
-      status: 'ok' | 'error' | 'exception';
-      /**
-       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
-       */
-      node_id?: string;
+      status: 'ok' | 'error';
       run_id?: string;
       /**
        * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
        */
       content?: string;
     };
-    target?: DirectTarget;
+    target?: {
+      instance: string;
+      handle: string;
+    };
   };
 }
 /**
@@ -1798,31 +1796,6 @@ export interface PlaybookDetail {
   };
   nodes: PlaybookNode[];
   prompts: string;
-  mcp_servers?: {
-    [k: string]: PlaybookMcpServer;
-  };
-}
-/**
- * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookMcpServer".
- */
-export interface PlaybookMcpServer {
-  type?: 'stdio' | 'sse' | 'streamableHttp';
-  command?: string;
-  args?: string[];
-  url?: string;
-  env?: {
-    [k: string]: string;
-  };
-  headers?: {
-    [k: string]: string;
-  };
-  tool_timeout?: number;
-  enabled?: boolean;
-  auth?: 'none' | 'apikey' | 'oauth';
-  has_oauth_config?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

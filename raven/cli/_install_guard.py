@@ -132,7 +132,7 @@ PAGE_RECORD_ENTRY = "raven/ui/dist/index.html"
 def _packaged_page_is_owed() -> Optional[Path]:
     """Where this build promised a packaged page, or None if it shipped none.
 
-    Read rather than assumed: a wheel built without ``ui/dist`` (``hatch_build``
+    Read rather than assumed: a wheel built without ``ui-web/dist`` (``hatch_build``
     warns and continues) legitimately has no page, and refusing to serve one of
     those would break installations that were never broken.
 

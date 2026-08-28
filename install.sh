@@ -155,7 +155,7 @@ ensure_node() {
 }
 
 # --- 2b. build the web assets a source checkout does not carry -------------
-# `ui-tui/dist/entry.js` (the TUI bundle) and `ui/dist/index.html` (the page
+# `ui-tui/dist/entry.js` (the TUI bundle) and `ui-web/dist/index.html` (the page
 # `raven web` serves) are both gitignored build artifacts. A release wheel
 # carries them; an editable install of a checkout gets neither, so without this
 # a clone install has no TUI and no page. Both must exist before first run.
@@ -164,7 +164,7 @@ build_web_assets() {
   need_tui=0
   need_page=0
   [ -f "$src/ui-tui/dist/entry.js" ] || need_tui=1
-  [ -f "$src/ui/dist/index.html" ] || need_page=1
+  [ -f "$src/ui-web/dist/index.html" ] || need_page=1
   [ "$need_tui" = 1 ] || [ "$need_page" = 1 ] || return 0
 
   # One probe for both builds. ensure_node may have provisioned a private
@@ -195,7 +195,7 @@ build_web_assets() {
     if [ -n "$blocker" ]; then
       warn "$blocker; skipping the served-page build; raven web will not start"
     else
-      info "Building the served page (ui/dist/index.html)..."
+      info "Building the served page (ui-web/dist/index.html)..."
       # Warned rather than propagated, unlike the bundle above: bare `raven`
       # opens the TUI, so a machine that cannot build the page still gets the
       # surface this script exists to deliver.
@@ -205,7 +205,7 @@ build_web_assets() {
   fi
 }
 
-# Vite emits ui/.modern/modern.iife.js, then ui/build.py inlines it with the
+# Vite emits ui-web/.modern/modern.iife.js, then ui-web/build.py inlines it with the
 # page sources and the shared i18n catalogue into the single-file dist.
 #
 # Kept to one `&&` chain on purpose: `set -e` does not apply inside a function
@@ -214,8 +214,8 @@ build_web_assets() {
 # here, rather than from a bare `python3` -- on a machine without the Command
 # Line Tools that name is a stub macOS answers with an install prompt.
 build_page() {
-  ( cd "$1/ui" && PATH="$2:$PATH" npm ci && PATH="$2:$PATH" npm run build ) \
-    && uv run --no-project python "$1/ui/build.py"
+  ( cd "$1/ui-web" && PATH="$2:$PATH" npm ci && PATH="$2:$PATH" npm run build ) \
+    && uv run --no-project python "$1/ui-web/build.py"
 }
 
 # --- 3. install raven ------------------------------------------------------

@@ -1,7 +1,7 @@
 """`raven serve` -- locating the page it serves.
 
 Two independent pieces of the repo have to agree on one path for a released
-raven to answer with the real page: the wheel build hook copies ``ui/dist`` to
+raven to answer with the real page: the wheel build hook copies ``ui-web/dist`` to
 ``raven/ui/dist``, and ``resolve_ui_dist`` looks for it there. Nothing failed
 loudly when they disagreed -- the gateway came up, the WebSocket worked, and
 ``/`` answered with the "No front end built here" placeholder, which is
@@ -24,7 +24,7 @@ from raven.cli import serve_commands
 def two_candidates(tmp_path: Path, monkeypatch):
     """A packaged copy and a source-tree copy, neither built yet."""
     packaged = tmp_path / "wheel" / "raven" / "ui" / "dist"
-    source = tmp_path / "repo" / "ui"
+    source = tmp_path / "repo" / "ui-web"
     monkeypatch.setattr(serve_commands, "_PACKAGED_UI_DIST", packaged)
     monkeypatch.setattr(serve_commands, "_UI_DIR", source)
     return packaged, source / "dist"
@@ -61,7 +61,7 @@ def test_the_packaged_copy_wins_over_a_stale_source_tree(two_candidates) -> None
 def test_a_directory_without_an_index_does_not_count(two_candidates) -> None:
     """A directory is not a built page.
 
-    Not a state `ui/build.py` leaves behind, as it happens -- it writes
+    Not a state `ui-web/build.py` leaves behind, as it happens -- it writes
     index.html first and copies the assets second, and a failed marker check
     exits before `dist/` exists at all. The reachable half-built state is the
     opposite one (index.html present, assets missing or half-copied), and that

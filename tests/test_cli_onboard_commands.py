@@ -5339,23 +5339,69 @@ def test_installers_send_first_run_to_bare_raven() -> None:
 def test_installers_build_both_web_assets_for_an_editable_install() -> None:
     """An editable install of a checkout has to build the served page too.
 
-    ``ui/dist/index.html`` and ``ui-tui/dist/entry.js`` are both gitignored, so
+    ``ui-web/dist/index.html`` and ``ui-tui/dist/entry.js`` are both gitignored, so
     a release wheel carries them and a clone install gets neither. The bundle
     was built here from the start; the page was not, which left ``raven web``
-    refusing to start on every source install until someone ran ui/build.py by
+    refusing to start on every source install until someone ran ui-web/build.py by
     hand. Both now share one node/npm probe, so its skip path has to name both
     consequences rather than only the TUI's.
     """
     root = Path(__file__).resolve().parents[1]
-    for name, page, assembler, tui_skip in (
-        ("install.sh", "ui/dist/index.html", "ui/build.py", "skipping TUI build"),
-        ("install.ps1", r"ui\dist\index.html", r"ui\build.py", "skipping TUI bundle build"),
+    for name, page, assembler, tui_skip, stale in (
+        (
+            "install.sh",
+            "ui-web/dist/index.html",
+            "ui-web/build.py",
+            "skipping TUI build",
+            ("$src/ui/dist", '"$1/ui"', "$1/ui/build.py"),
+        ),
+        (
+            "install.ps1",
+            r"ui-web\dist\index.html",
+            r"ui-web\build.py",
+            "skipping TUI bundle build",
+            (r'"ui\dist\index.html"', r'"ui\build.py"', 'Join-Path $ScriptDir "ui"'),
+        ),
     ):
         text = (root / name).read_text()
         assert page in text, f"{name}: does not probe for a built page"
         assert assembler in text, f"{name}: never runs the page assembler"
         assert tui_skip in text, f"{name}: lost the TUI bundle's own skip warning"
         assert "raven web will not start" in text, f"{name}: page skip names no consequence"
+        # Naming the new path is not the same as having dropped the old one. The
+        # page's sources moved from `ui/` to `ui-web/` and this test was where the
+        # omission hid: it asserted the strings it was handed, so an installer
+        # still probing, entering and assembling the directory that no longer
+        # exists satisfied it. A source install that does that produces no page
+        # and only warns, which is the failure this case exists to prevent.
+        for path in stale:
+            assert path not in text, f"{name}: still builds from the removed ui/ tree ({path})"
+
+
+def test_no_workflow_step_enters_the_removed_page_directory() -> None:
+    """CI must not `cd` into a directory the repository no longer has.
+
+    The page's sources moved from `ui/` to `ui-web/`. A workflow that updated
+    its cache key and left `working-directory: ui` below it stops at `npm ci` on
+    a fresh checkout -- before the contract check, the type-check and the tests
+    it exists to run -- and the job's own failure is the only signal, in a step
+    whose name says it is checking something else.
+
+    Asserted over every workflow rather than the one that had the bug: this is a
+    property of the tree, not of one file.
+    """
+    root = Path(__file__).resolve().parents[1]
+    workflows = sorted((root / ".github" / "workflows").glob("*.yml"))
+    assert workflows, "no workflows found -- the glob is wrong, not the tree"
+    for path in workflows:
+        text = path.read_text()
+        assert "working-directory: ui\n" not in text + "\n", f"{path.name}: enters the removed ui/ tree"
+        assert "--prefix ui " not in text and "--prefix ui\n" not in text + "\n", (
+            f"{path.name}: runs npm against the removed ui/ tree"
+        )
+        assert "python3 ui/build.py" not in text and "python ui/build.py" not in text, (
+            f"{path.name}: assembles the page from the removed ui/ tree"
+        )
 
 
 def test_the_windows_installer_reads_back_every_npm_exit_code() -> None:

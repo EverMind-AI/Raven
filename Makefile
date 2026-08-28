@@ -39,7 +39,7 @@ install: install-deps
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install --hook-type commit-msg
 	npm ci
-	npm ci --prefix ui
+	npm ci --prefix ui-web
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
@@ -50,8 +50,8 @@ lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff format --check $(PYTHON_LINT_TARGETS)
 
 lint-ui:
-	npm run gen:check --prefix ui
-	npm run type-check --prefix ui
+	npm run gen:check --prefix ui-web
+	npm run type-check --prefix ui-web
 
 lint-tui:
 	npm run lint --prefix ui-tui
@@ -65,7 +65,7 @@ lint-bridge:
 test: test-python test-ui test-tui
 
 test-ui:
-	npm test --prefix ui
+	npm test --prefix ui-web
 
 test-python:
 	uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q
@@ -97,9 +97,9 @@ build-tui:
 	npm run build --prefix ui-tui
 
 build-ui:
-	npm ci --prefix ui
-	npm run --prefix ui build
-	python3 ui/build.py
+	npm ci --prefix ui-web
+	npm run --prefix ui-web build
+	python3 ui-web/build.py
 
 build-bridge:
 	npm run build --prefix bridge
@@ -123,7 +123,7 @@ clean:
 	rm -rf .pytest_cache .ruff_cache .uv-cache .mypy_cache htmlcov coverage.xml coverage.json coverage-baseline-candidate.json dist build
 	rm -rf ui-tui/dist ui-tui/coverage ui-tui/.vitest-cache ui-tui/packages/hermes-ink/dist
 	rm -rf bridge/dist
-	rm -rf ui/dist
+	rm -rf ui-web/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
 check-vendored-subagents:

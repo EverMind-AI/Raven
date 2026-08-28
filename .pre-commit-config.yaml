@@ -65,7 +65,7 @@ repos:
 
       - id: ui-rpc-contract
         name: ui rpc contract in sync
-        entry: bash -c '[ -d ui/node_modules ] || exit 0; npm run gen:check --prefix ui'
+        entry: bash -c '[ -d ui-web/node_modules ] || exit 0; npm run gen:check --prefix ui-web'
         language: system
         pass_filenames: false
         files: '^rpc-schema/openrpc\.json$'

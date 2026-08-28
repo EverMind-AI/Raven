@@ -390,18 +390,6 @@ const dispatch = (
       // resource_link the reader can click. Rendering the paths here as well is
       // a product call for this surface, not a consequence of the wire event.
       return
-    case 'turn.started':
-      // The live boundary of a turn the runtime opened. This surface does not
-      // read it: it draws the delegated row from `subagent.delivered` above,
-      // which the page deliberately ignores in favour of this event. The two
-      // mark different moments -- `subagent.delivered` fires when the result is
-      // SUBMITTED, this one when the turn it opened actually starts -- and
-      // moving this surface onto the later, truer one is a change of its own.
-      //
-      // Named rather than left to `default` so the check below keeps meaning
-      // "every variant was considered", not "every variant the union happened
-      // to list when this was written".
-      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.

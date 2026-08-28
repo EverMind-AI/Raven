@@ -1,6 +1,6 @@
 """The CSS token gate rejects what it claims to reject.
 
-``ui/scripts/check-css.mjs`` is the only thing keeping "which color is this
+``ui-web/scripts/check-css.mjs`` is the only thing keeping "which color is this
 role" answerable in one place per theme: it fails CI when a color is written
 as a literal instead of a token. A gate is only worth its line in the
 pipeline if it actually catches the thing it names, and two earlier revisions
@@ -40,8 +40,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _ROOT / "ui" / "scripts" / "check-css.mjs"
-_CSS = _ROOT / "ui" / "src" / "styles" / "page.css"
+_SCRIPT = _ROOT / "ui-web" / "scripts" / "check-css.mjs"
+_CSS = _ROOT / "ui-web" / "src" / "styles" / "page.css"
 
 # (name, rule appended to the stylesheet, is it supposed to pass)
 _CASES = [
