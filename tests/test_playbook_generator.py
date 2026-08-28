@@ -12,14 +12,19 @@ from raven.playbook import (
     PlaybookProviderError,
     StaticInventory,
 )
+from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.prompt import emit_tool
 from raven.providers.base import ErrorClassification
 
-ROSTER = {
+ROSTER_DESCRIPTIONS = {
     "research-raven": "deep retrieval and fact-checking",
     "code-raven": "repository-level code work",
     "data-raven": "the whole data chain",
     "content-raven": "text and deliverables",
+}
+ROSTER = {
+    name: PlaybookAgentProfile(description, True, True, True, False)
+    for name, description in ROSTER_DESCRIPTIONS.items()
 }
 
 
@@ -90,12 +95,13 @@ GOOD_DAG = {
 }
 
 
-def _generator(payloads, skills=("sql-queries",)):
+def _generator(payloads, skills=("sql-queries",), profiles=None):
+    profile_source = profiles if callable(profiles) else lambda: profiles or ROSTER
     return (
         PlaybookGenerator(
             ScriptedProvider(payloads),
             skill_router=None,
-            agent_roster=ROSTER,
+            agent_profiles=profile_source,
             inventory=StaticInventory(mcp=["slack"]),
         ),
         None,
@@ -364,3 +370,118 @@ async def test_revise_keeps_the_name_and_reports_fresh_notes():
     revised = await gen2.revise(result.spec, "make the report daily")
     assert revised.spec.name == result.spec.name
     assert revised.notes == ["Assumption: the report becomes daily"]
+
+
+def test_registry_projection_is_safe_and_uses_effective_mcp_capability():
+    from types import SimpleNamespace
+
+    from raven.playbook.agent_profiles import agent_profiles_from_registry
+
+    row = SimpleNamespace(
+        name="builtin",
+        description="safe description",
+        caps=SimpleNamespace(stateful=True, reads_local_files=False, live_progress=True),
+        injectable=SimpleNamespace(skills=True, mcps=True),
+        kind="builtin",
+        config={"token": "secret"},
+        owns="internal",
+    )
+    profiles = agent_profiles_from_registry(SimpleNamespace(enabled=lambda: [row]))
+
+    assert vars(profiles["builtin"]) == {
+        "description": "safe description",
+        "stateful": True,
+        "reads_local_files": False,
+        "injectable_skills": True,
+        "injectable_mcps": False,
+    }
+
+
+async def test_prompt_exposes_only_safe_runtime_effective_capabilities():
+    gen, _ = _generator([GOOD_DAG])
+
+    await gen.generate("weekly feedback analysis", skills=["sql-queries"])
+
+    system_prompt = gen._provider.calls[0][0]["content"]
+    user_prompt = gen._provider.calls[0][1]["content"]
+    assert "readsLocalFiles=true" in system_prompt
+    assert "only the node opening that session may set" in system_prompt
+    assert '"readsLocalFiles": true' in user_prompt
+    assert '"injectableSkills": true' in user_prompt
+    assert '"injectableMcps": false' in user_prompt
+    assert '"kind"' not in user_prompt
+    assert '"config"' not in user_prompt
+    assert "credentials" not in user_prompt
+
+
+async def test_capability_errors_feed_one_snapshot_into_the_repair_loop():
+    bad = json.loads(json.dumps(GOOD_DAG))
+    bad_node = bad["nodes"][0]
+    bad_node.update(
+        {
+            "instance": "worker",
+            "skills": ["sql-queries"],
+            "mcps": ["slack"],
+            "promptTemplate": "inspect {{ ref_path:/tmp/report.txt }}",
+        }
+    )
+    corrected = json.loads(json.dumps(GOOD_DAG))
+    corrected_node = corrected["nodes"][0]
+    corrected_node.pop("skills")
+    corrected_node["promptTemplate"] = "inspect the supplied report contents"
+
+    profiles = dict(ROSTER)
+    profiles["data-raven"] = PlaybookAgentProfile(
+        description="external data agent",
+        stateful=False,
+        reads_local_files=False,
+        injectable_skills=False,
+        injectable_mcps=False,
+    )
+    source_calls = 0
+
+    def source():
+        nonlocal source_calls
+        source_calls += 1
+        return profiles
+
+    gen, _ = _generator([bad, corrected], profiles=source)
+    result = await gen.generate("weekly feedback analysis", skills=["sql-queries"])
+
+    assert result.spec.nodes[0].instance is None
+    assert source_calls == 1
+    repair_msg = gen._provider.calls[1][-1]["content"]
+    assert "stateless agent" in repair_msg
+    assert "does not support skill injection" in repair_msg
+    assert "cannot receive MCP injection" in repair_msg
+    assert "passes local file paths" in repair_msg
+
+
+async def test_shared_instance_injection_errors_enter_the_repair_loop():
+    bad = json.loads(json.dumps(GOOD_DAG))
+    bad["nodes"][0].update(subagent="content-raven", instance="writer", skills=["writing"])
+    bad["nodes"][1].update(subagent="content-raven", instance="writer", skills=["editing"])
+
+    corrected = json.loads(json.dumps(bad))
+    corrected["nodes"][1].pop("skills")
+
+    gen, _ = _generator([bad, corrected])
+    result = await gen.generate("weekly feedback analysis", skills=["writing", "editing"])
+
+    assert result.spec.nodes[1].skills is None
+    assert len(gen._provider.calls) == 2
+    repair_msg = gen._provider.calls[1][-1]["content"]
+    assert "continuing instance 'writer'" in repair_msg
+    assert "opened by node 'pull'" in repair_msg
+
+
+async def test_revise_prompt_includes_current_agent_capabilities():
+    gen, _ = _generator([GOOD_DAG])
+    current = (await gen.generate("weekly feedback analysis")).spec
+    gen2, _ = _generator([GOOD_DAG])
+
+    await gen2.revise(current, "make it clearer")
+
+    prompt = gen2._provider.calls[0][1]["content"]
+    assert "# Available agents and runtime-effective capabilities" in prompt
+    assert '"stateful": true' in prompt

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, get_args, get_origin
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
+from raven.playbook.agent_profiles import AgentProfileSource, validate_agent_capabilities
 from raven.playbook.llm_result import (
     ProviderFailure,
     ProviderResponseError,
@@ -47,6 +48,7 @@ from raven.playbook.validate import check_assets, validate_structure
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import SkillForgeRouter
+    from raven.playbook.agent_profiles import PlaybookAgentProfile
     from raven.providers.base import LLMProvider
 
 _MAX_REPAIR_ROUNDS = 3
@@ -160,23 +162,23 @@ class GeneratedPlaybook:
 class PlaybookGenerator:
     """Generate and revise playbook drafts. Stateless between calls.
 
-    ``agent_roster`` maps agent name -> capability description, read from the
-    agent table (``AgentRegistry.descriptions``). It is what the casting LLM picks
-    node agents from, so a name it produces is a name the graph can dispatch to.
+    ``agent_profiles`` reads the enabled agent table at the start of each call.
+    It exposes only generation-relevant capabilities, so the model can choose a
+    graph the runtime can execute without seeing transport configuration.
     """
 
     def __init__(
         self,
         provider: "LLMProvider",
         skill_router: "SkillForgeRouter | None",
-        agent_roster: dict[str, str],
+        agent_profiles: AgentProfileSource,
         inventory: CapabilityInventory,
         *,
         model: str | None = None,
     ) -> None:
         self._provider = provider
         self._router = skill_router
-        self._roster = agent_roster
+        self._agent_profiles = agent_profiles
         self._inventory = inventory
         self._model = model
 
@@ -188,9 +190,10 @@ class PlaybookGenerator:
         """
         pinned, inline_docs = _split_skill_refs(skills or [])
         candidates = await self._retrieve_candidates(user_input)
+        profiles = self._agent_profiles()
         user_msg = build_generation_prompt(
             user_input,
-            agent_roster=self._roster,
+            agent_profiles=profiles,
             skill_candidates=candidates,
             user_pinned_skills=pinned,
             known_mcp=self._inventory.known_mcp(),
@@ -204,20 +207,23 @@ class PlaybookGenerator:
             ],
             known_skills=known_skills,
             fixed_name=None,
+            agent_profiles=profiles,
         )
 
     async def revise(self, spec: PlaybookSpec, user_feedback: str) -> GeneratedPlaybook:
         """One revision round over an existing spec; the name stays fixed."""
         candidates = await self._retrieve_candidates(spec.description + "\n" + user_feedback)
         known_skills = [name for name, _ in candidates]
+        profiles = self._agent_profiles()
         known_skills += [s for node in spec.nodes or [] for s in node.skills or []]
         return await self._loop(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_revise_prompt(spec, user_feedback)},
+                {"role": "user", "content": build_revise_prompt(spec, user_feedback, profiles)},
             ],
             known_skills=known_skills,
             fixed_name=spec.name,
+            agent_profiles=profiles,
         )
 
     async def _retrieve_candidates(self, query: str) -> list[tuple[str, str]]:
@@ -232,6 +238,7 @@ class PlaybookGenerator:
         messages: list[dict[str, Any]],
         known_skills: list[str],
         fixed_name: str | None,
+        agent_profiles: dict[str, "PlaybookAgentProfile"],
     ) -> GeneratedPlaybook:
         errors: list[str] = []
         for round_no in range(1 + _MAX_REPAIR_ROUNDS):
@@ -243,7 +250,7 @@ class PlaybookGenerator:
             )
             args = _required_tool_args(response)
 
-            spec, errors, missing, reported = self._check(args, known_skills, fixed_name)
+            spec, errors, missing, reported = self._check(args, known_skills, fixed_name, agent_profiles)
             if spec is not None and not errors:
                 # The model proposes the L1 vocabulary; the guards decide what
                 # is indexable. Without this the schema hands the model a
@@ -271,6 +278,7 @@ class PlaybookGenerator:
         args: dict[str, Any],
         known_skills: list[str],
         fixed_name: str | None,
+        agent_profiles: dict[str, "PlaybookAgentProfile"],
     ) -> tuple[PlaybookSpec | None, list[str], list[str], tuple[list[str], list[str]]]:
         """Fill code-owned fields, then run all validation layers."""
         data = dict(args)
@@ -293,7 +301,8 @@ class PlaybookGenerator:
         # agent names then go unchecked rather than being checked against a
         # stand-in list that would both reject configured agents and pass deleted
         # ones.
-        errors = validate_structure(spec, known_agents=self._roster.keys() or None)
+        errors = validate_structure(spec, known_agents=agent_profiles.keys() or None)
+        errors += validate_agent_capabilities(spec, agent_profiles)
         asset_errors, missing = check_assets(
             spec,
             known_skills=known_skills,

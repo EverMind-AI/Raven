@@ -199,14 +199,14 @@ def playbook_create(
 
     from raven.agent.subagent.registry import AgentRegistry
     from raven.cli._helpers import make_provider
-    from raven.playbook import PlaybookGenerator, live_inventory
+    from raven.playbook import PlaybookGenerator, agent_profiles_from_registry, live_inventory
 
     registry = AgentRegistry()
     registry.apply(config.subagents.agents)
     generator = PlaybookGenerator(
         make_provider(config),
         None,
-        registry.descriptions(),
+        lambda: agent_profiles_from_registry(registry),
         # No tool registry is built on this path, so only the mcp half is known;
         # an unknown *tool* was never checked here anyway (``check_assets`` reads
         # skills and mcps).
@@ -297,7 +297,7 @@ def playbook_run(
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
     from raven.cli._helpers import make_provider
-    from raven.playbook import PlaybookExecutor, PlaybookRuntime
+    from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
 
     provider = make_provider(config)
     manager = SubagentManager(
@@ -327,7 +327,7 @@ def playbook_run(
         # run a prompt-mode playbook at all.
         compose_prompt_mode=True,
     )
-    executor.set_roster(manager.registry.descriptions())
+    executor.set_agent_profiles(lambda: agent_profiles_from_registry(manager.registry))
     runtime = PlaybookRuntime(
         store=store,
         executor=executor,

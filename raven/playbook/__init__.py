@@ -22,6 +22,7 @@ Package layout:
 - ``runtime``    — the library plus ``load``, the one execution entry
 """
 
+from raven.playbook.agent_profiles import agent_profiles_from_registry
 from raven.playbook.executor import ExecutionPlan, PlaybookExecutor
 from raven.playbook.generator import (
     CapabilityInventory,
@@ -69,6 +70,7 @@ __all__ = [
     "TriggerIndex",
     "Triggers",
     "expand_triggers",
+    "agent_profiles_from_registry",
     "find_collisions",
     "live_inventory",
     "normalize",

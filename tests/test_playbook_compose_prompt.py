@@ -13,8 +13,19 @@ from __future__ import annotations
 
 import pytest
 
+from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.prompt import build_compose_prompt, compose_tool
 from raven.playbook.types import NodeSpec
+
+PROFILES = {
+    "research-raven": PlaybookAgentProfile(
+        description="digs",
+        stateful=True,
+        reads_local_files=False,
+        injectable_skills=True,
+        injectable_mcps=False,
+    )
+}
 
 
 def _items() -> dict:
@@ -45,7 +56,7 @@ def test_the_prose_names_only_fields_the_node_model_accepts() -> None:
     should have used -- one round, spent, and the run ends at "graph assembly
     failed". Which is why prose drifting from the schema is not cosmetic here.
     """
-    text = build_compose_prompt("do a thing", {"research-raven": "digs"}, "topic")
+    text = build_compose_prompt("do a thing", PROFILES, ["topic"])
 
     assert "subagent" in text
     assert "/ agent /" not in text and "Rules: agent " not in text
@@ -60,6 +71,13 @@ def test_the_prose_names_only_fields_the_node_model_accepts() -> None:
 
     assert named, "the prose still lists the fields"
     assert named <= accepted, f"prose names fields the schema forbids: {sorted(named - accepted)}"
+
+    assert '"readsLocalFiles": false' in text
+    assert '"injectableSkills": true' in text
+    assert '"injectableMcps": false' in text
+
+    assert "only the node opening that session may set skills or mcps" in text
+    assert "continuation nodes must omit both fields" in text
 
 
 @pytest.mark.parametrize("field", ["agent"])
