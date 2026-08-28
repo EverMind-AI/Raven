@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -334,28 +334,6 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("display_call failed for {}: {}", getattr(tool, "name", "?"), exc)
         return None
-
-
-_MCP_TURN_WAIT_S = 90.0
-"""How long a turn waits for the first MCP sync before proceeding without it.
-
-Mirrors the manager's own per-handshake budget (``_HANDSHAKE_TIMEOUT``), so a
-cold stdio server downloading its package on first run still makes it into the
-very turn a user sends after installing it. The sync no longer includes anyone
-waiting on a person -- a connect that reaches the browser-authorization step is
-marked ``auth_required`` and left behind by the sync itself -- and it connects
-servers concurrently, so in practice this bound is the slowest single
-handshake, not a sum. See ``AgentLoop._connect_mcp``.
-"""
-
-
-def _log_late_mcp_sync(task: "asyncio.Task") -> None:
-    """Report an MCP sync that finished after its turn stopped waiting."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.warning("MCP: the connect a turn stopped waiting for failed: {}", exc)
 
 
 # A whole file both ways is the largest thing a tool event carries, and it is
@@ -793,6 +771,9 @@ class AgentLoop:
         self._mcp_event_sink = None
         self._mcp_connected = False
         self._mcp_connecting = False
+        self._mcp_prewarm_task: asyncio.Task | None = None
+        self._mcp_prewarm_attempts: dict[str, object] = {}
+
         from raven.agent.subagent.dag_mcp_scope import run_mcp_servers
         from raven.agent.subagent.mcp_grant import LiveMcpSource
 
@@ -2357,9 +2338,17 @@ class AgentLoop:
     def _mcp_tool_notices(self) -> list[str]:
         """Host facts about MCP tools the definitions cannot carry.
 
-        One line per enabled server sitting in ``auth_required``: its tools are
-        not in the definitions at all, so without this the model reads an
-        unauthorized plugin as a capability that does not exist and says so.
+        One line per enabled server whose tools are absent from this turn for a
+        reason the model cannot see, and the two reasons need different lines:
+
+        * ``auth_required`` -- the wait is on a person, and the answer names who
+          can end it. Without this the model reads an unauthorized plugin as a
+          capability that does not exist and says so.
+        * ``connecting`` -- the handshake is still running. Reachable on any turn
+          that overtakes it, which since ``prewarm_mcp`` is the ordinary shape of
+          a first turn rather than a rarity: the turn no longer waits, so it can
+          be assembled while servers are still coming up.
+
         Rendered into the runtime-context block, not the system prompt -- the
         set changes turn to turn and must never be cached with the prefix.
         """
@@ -2373,61 +2362,95 @@ class AgentLoop:
         # that way -- an imperative here would be either ignored or a fence
         # violation. The fact alone is enough to stop it reporting a missing
         # capability.
-        return [
-            f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
-            f"absent from this turn's definitions until it is authorized -- by the `plugin` "
-            f"tool's authorize action, or by the user in the plugin panel."
-            for snap in mgr.status()
-            if snap["state"] == "auth_required" and snap.get("enabled", True)
-        ]
+        notices = []
+        for snap in mgr.status():
+            if not snap.get("enabled", True):
+                continue
+            if snap["state"] == "auth_required":
+                notices.append(
+                    f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
+                    f"absent from this turn's definitions until it is authorized -- by the `plugin` "
+                    f"tool's authorize action, or by the user in the plugin panel."
+                )
+            elif snap["state"] == "connecting":
+                notices.append(
+                    f"MCP plugin '{snap['name']}': installed, still connecting. Its tools are absent "
+                    f"from this turn's definitions and register themselves when the handshake "
+                    f"finishes, so they are available from a later turn without anyone acting."
+                )
+        return notices
 
-    async def _connect_mcp(self, *, wait: float | None = None) -> None:
-        """Connect to configured MCP servers (one-time, lazy).
+    def prewarm_mcp(self) -> None:
+        """Start the one-time MCP connect without waiting for it.
 
-        ``wait`` bounds how long the CALLER blocks, not how long the connect
-        gets: past it the sync keeps running and its tools land in the registry
-        for the next turn. The manager already refuses to wait on a person --
-        a connect that reaches the browser-authorization step is marked
-        ``auth_required`` and the sync moves on without it -- so this bound
-        only covers real handshakes, and it matches their own budget. It
-        exists because one wedged sync once held a message for 10m35s, and a
-        turn must never inherit a wait like that whatever the cause.
+        Every path to MCP that is not ``run()``:
 
-        Left unbounded for a caller that has nothing else to do (``run()``),
-        which also keeps SandboxInitError reaching its handler there.
+        * ``build_rpc_stack``, at assembly. This is the one that matters, because
+          it is early enough that no turn has arrived yet.
+        * ``run_turn``, on every turn. Idempotent, so it costs three boolean
+          reads once MCP is up; what it still covers is each host that never
+          reaches the line above -- ``raven tui``, which has no other MCP path at
+          all -- plus the reconnect after ``close_mcp`` and the retry after an
+          assembly-time prewarm that failed.
+
+        Fire and forget on purpose: a turn must not inherit this wait, which once
+        held a message for 10m35s. The turn is assembled from whatever is up, and
+        ``_mcp_tool_notices`` is what tells the model why a configured server's
+        tools are absent. Call order matters at assembly: the MCP event sink must
+        be bound first, or the authorization URL an OAuth server parks on is
+        minted with nobody to publish it to.
+        """
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        # Claimed here rather than inside the task, which is the whole reason
+        # this does not just call ``_connect_mcp``: a coroutine handed to
+        # create_task does not run until the loop next yields, and a turn
+        # arriving in that gap would read the flag as unset and run the entire
+        # blocking connect itself -- the exact wait this exists to remove.
+        self._mcp_connecting = True
+        # This prewarm's own attempt token, held here for the reap. Not read back
+        # off the manager: a manager-wide record of "the most recent apply" is
+        # overwritten by a config apply that starts meanwhile, and the reap would
+        # then reset that newer apply's attempt instead of its own.
+        attempts: dict[str, object] = {}
+        self._mcp_prewarm_attempts = attempts
+
+        async def _prewarm() -> None:
+            try:
+                await self.apply_mcp_config(self._mcp_servers, attempts=attempts)
+            except SandboxInitError as exc:
+                # Not fatal the way it is in run(): that caller shuts the loop
+                # down because it owns the executor, while a turn here runs
+                # with whatever came up and stdio servers simply stay down.
+                logger.error("MCP prewarm: the sandbox could not start, so stdio servers stay down: {}", exc)
+            except Exception:
+                logger.exception("MCP prewarm failed; the servers it did not reach join a later turn")
+            finally:
+                self._mcp_connecting = False
+
+        # Held rather than dropped: a bare create_task is collectable while it
+        # is the only reference to a running task.
+        self._mcp_prewarm_task = asyncio.create_task(_prewarm())
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers, awaited (one-time).
+
+        For ``run()``, which has nothing else to do until the runtime is up and
+        which acts on ``SandboxInitError`` -- so it must reach that handler
+        rather than a log line. Every other caller wants ``prewarm_mcp``: a turn
+        must never inherit this wait, which once held a message for 10m35s.
         """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
         # Set flag synchronously before the first await — asyncio is single-threaded so no
         # context switch occurs here; a lock is not needed for this mutual-exclusion pattern.
         self._mcp_connecting = True
-
-        async def _sync() -> None:
-            try:
-                # Sets ``_mcp_connected`` itself, so every path that brings MCP
-                # up agrees on the flag rather than only this one.
-                await self.apply_mcp_config(self._mcp_servers)
-            finally:
-                self._mcp_connecting = False
-
-        if wait is None:
-            await _sync()
-            return
-
-        # Shielded, so the timeout below leaves the connect running rather than
-        # cancelling it mid-handshake -- a cancelled sync leaves its remaining
-        # servers marked `connecting`, which no later sync retries.
-        task = asyncio.ensure_future(_sync())
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=wait)
-        except TimeoutError:
-            logger.info(
-                "MCP: still connecting after {:.0f}s; starting the turn without the servers "
-                "that have not finished (they join the next one)",
-                wait,
-            )
-            # Nobody awaits the task now, so it has to report for itself.
-            task.add_done_callback(_log_late_mcp_sync)
+            # Sets ``_mcp_connected`` itself, so every path that brings MCP
+            # up agrees on the flag rather than only this one.
+            await self.apply_mcp_config(self._mcp_servers)
+        finally:
+            self._mcp_connecting = False
 
     def mcp_config_changed(self, cfg_servers: dict) -> bool:
         """Whether :meth:`apply_mcp_config` would do anything, without doing it.
@@ -2438,7 +2461,7 @@ class AgentLoop:
         """
         return self.mcp_manager.config_changed(cfg_servers)
 
-    async def apply_mcp_config(self, cfg_servers: dict) -> "ApplyReport":
+    async def apply_mcp_config(self, cfg_servers: dict, *, attempts: dict | None = None) -> "ApplyReport":
         """Reconcile live MCP connections with ``cfg_servers``.
 
         The entry point for everything that changes the server set while the loop
@@ -2454,7 +2477,9 @@ class AgentLoop:
         # The blacklist is re-applied by the manager's post_connect hook, on every
         # connect rather than only the first -- an MCP server can register a name
         # that is also in disabled_tools.
-        report = await self.mcp_manager.apply_config(cfg_servers, executor_provider=self._mcp_executor)
+        report = await self.mcp_manager.apply_config(
+            cfg_servers, executor_provider=self._mcp_executor, attempts=attempts
+        )
         # After the apply, not only after a connect: a *detach* can take the last
         # server that served resources with it, and no connect fires for that.
         self._sync_mcp_meta_tools()
@@ -3894,8 +3919,39 @@ class AgentLoop:
             except Exception:
                 logger.exception("on_turn_complete callback failed")
 
+    async def reap_mcp_prewarm(self) -> None:
+        """Cancel and reap an in-flight prewarm, leaving its servers retryable.
+
+        Must run before anything the handshake is standing on is torn down --
+        the manager, and the sandbox executor a stdio transport is spawned into.
+        A handshake that loses its executor mid-flight is recorded as the
+        server's ``error`` state, and an ``error`` row with unchanged config is
+        deliberately never retried by a reload; cancelling instead takes the
+        attempt through the manager's abort path, which returns the record to
+        ``disconnected`` and leaves ``_mcp_connected`` false, so the next turn's
+        prewarm connects it again.
+        """
+        task = self._mcp_prewarm_task
+        self._mcp_prewarm_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        with suppress(BaseException):
+            await task
+        # Cancelling is not enough on its own. The cancel reaches the handshake
+        # through the SDK, and the manager cannot tell that apart from the
+        # transport aborting the flow itself -- so the record lands in ``error``,
+        # which no later apply or reload retries. Measured: without this the
+        # server was gone until a restart.
+        attempts = self._mcp_prewarm_attempts
+        self._mcp_prewarm_attempts = {}
+        if self._mcp_manager is not None and attempts:
+            with suppress(Exception):
+                await self._mcp_manager.reset_for_retry(attempts)
+
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
+        await self.reap_mcp_prewarm()
         if self._mcp_manager is not None:
             try:
                 await self._mcp_manager.aclose()
@@ -4862,7 +4918,13 @@ class AgentLoop:
             with workdir.bind(turn_workdir):
                 try:
                     await self._start_executor()
-                    await self._connect_mcp(wait=_MCP_TURN_WAIT_S)
+                    # Fire and forget: a turn must not wait on a handshake, and
+                    # every host that serves turns without run() reaches MCP
+                    # through here (the TUI has no other path at all, and this is
+                    # also the reconnect after close_mcp and the retry after a
+                    # prewarm that failed). Idempotent, so an in-flight connect is
+                    # not restarted.
+                    self.prewarm_mcp()
                     out = await self._process_message(
                         req,
                         session_key=cid,
@@ -4877,6 +4939,11 @@ class AgentLoop:
                         drain=drain,
                     )
                 except Exception:
+                    # Before the executor goes: the prewarm this turn started is
+                    # still running, and a stdio handshake inside it is spawned
+                    # into that executor. Closing under it lands the server in
+                    # `error`, which no reload retries.
+                    await self.reap_mcp_prewarm()
                     await self.close_executor()
                     raise
         finally:

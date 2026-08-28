@@ -155,30 +155,43 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             if ref is not None:
                 tool_owner[name] = ref.server
                 owned[ref.server] = owned.get(ref.server, 0) + 1
-        # MCP connects lazily (first turn / install kick), so between a restart
-        # and the first use a declared server has registered nothing yet. It is
-        # listed with what is actually known -- its tools, if any -- rather than
-        # omitted, so an installed plugin never vanishes from the caller's view.
+        # The manager is the authority on state, and this pull has to carry it:
+        # the `mcp.status` / `oauth.pending` notifications that carry the same
+        # facts are dropped when no client is attached, which is every connect
+        # started at assembly time. Without this a server parked at the browser
+        # step reads as `disconnected` here, and the page draws no authorization
+        # action for a plugin that is waiting on one.
+        #
+        # A configured server the manager has no record of yet is still listed,
+        # from config alone, so an installed plugin never vanishes from view.
         try:
             from raven.mcp.client import resolve_transport
+            from raven.mcp.oauth import pending_url
 
+            mgr = getattr(loop, "_mcp_manager", None)
+            live = {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
             for name, sc in servers.items():
                 count = owned.get(name, 0)
-                mcp.append(
-                    {
+                snap = live.get(name)
+                if snap is not None:
+                    row = dict(snap)
+                else:
+                    row = {
                         "name": name,
                         "transport": resolve_transport(sc) or "unknown",
-                        # Connected means "its tools are registered and callable",
-                        # which is what the caller draws. The loop's own
-                        # `_mcp_connected` only says the one-shot connect ran, so
-                        # a server that failed inside it would read as connected.
+                        # Tools registered and callable is what the caller draws,
+                        # and it is all that is knowable without the manager: the
+                        # loop's own `_mcp_connected` only says the one-shot
+                        # connect ran, so a server that failed inside it would
+                        # read as connected.
                         "state": "connected" if count else "disconnected",
                         "connected": bool(count),
                         "tool_count": count,
                         "error": None,
-                        "enabled": bool(getattr(sc, "enabled", True)),
                     }
-                )
+                row["enabled"] = bool(getattr(sc, "enabled", True))
+                row["auth_url"] = pending_url(name)
+                mcp.append(row)
         except Exception:
             logger.exception("ext.list: config mcp merge failed")
         for name in loop.tools.tool_names:

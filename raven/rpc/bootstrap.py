@@ -236,6 +236,16 @@ async def build_rpc_stack(
         default_channel=channel,
     )
 
+    if owns_loop and agent_loop is not None:
+        # A one-time runtime preparation belongs to whoever assembles the engine.
+        # ``run()`` does this in its own startup sequence, which is why the
+        # gateway's first turn never paid for it -- this stack never starts
+        # ``run()``, so without this line the cost landed on the first turn a
+        # user sent (measured: 4.52s of handshake before the turn began, bounded
+        # only by the turn-side timeout). Guarded on ``owns_loop``: a mounted
+        # stack's engine is the host's, and the host already connected it.
+        agent_loop.prewarm_mcp()
+
     if owns_loop and agent_loop is not None and agent_loop.backend is not None:
 
         async def _start_backend() -> None:
@@ -286,6 +296,16 @@ async def build_rpc_stack(
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
+        # Last of the engine's own resources, and after the sub-agents that run
+        # tools through the same executor this closes. Newly required rather than
+        # newly correct: assembly now opens MCP transports (and stdio children,
+        # and the sandbox) even when no turn was ever served, so a stack stopped
+        # before its first turn used to have nothing of this to release.
+        if agent_loop is not None:
+            try:
+                await agent_loop.close_mcp()
+            except Exception:
+                logger.exception("serve: closing MCP failed; continuing shutdown")
         # Chromium is a child process too, and a persistent-profile one: leaving
         # it running holds the profile lock the next launch needs.
         try:

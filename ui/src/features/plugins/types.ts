@@ -7,6 +7,10 @@ export interface McpSnapshot {
   transport?: string
   tool_count?: number
   error?: string
+  /* The authorization URL this server is parked on, when it is. Carried on the
+     pull because the oauth.pending notification that also carries it is dropped
+     when no client is attached, which is every connect started at assembly. */
+  auth_url?: string | null
 }
 
 /* One installed row: a python plugin (state 'on' | 'off', persisted by the
@@ -72,7 +76,7 @@ export interface InstallResult {
 /* Gateway events the live source forwards into the island: connection state
    flips, the OAuth round-trip, and "the installed rows were reloaded". */
 export type PluginsEvent =
-  | { kind: 'status'; name: string; state: string; tool_count?: number; error?: string }
+  | { kind: 'status'; name: string; state: string; tool_count?: number; error?: string; auth_url?: string | null }
   | { kind: 'authPending'; server: string; url: string; expires_in?: number; interactive?: boolean }
   | { kind: 'authDone'; server: string; ok: boolean; error?: string }
   | { kind: 'rows' }

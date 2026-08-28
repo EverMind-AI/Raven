@@ -300,3 +300,92 @@ describe('plugins island', () => {
     })
   })
 })
+
+describe('a startup authorization the page never got an event for', () => {
+  /* The connect ran at assembly, before any socket attached, so its
+     oauth.pending was broadcast to nobody. The URL therefore reaches the page
+     only on the ext.list pull -- and it must then live the same life as one that
+     arrived by event, or a plugin that finished authorizing keeps showing
+     "waiting" behind a dead link. */
+  const parked = (over: Partial<InstalledRow['m']> = {}): InstalledRow => ({
+    id: 'sentry',
+    name: 'sentry',
+    m: {
+      name: 'sentry',
+      enabled: true,
+      state: 'auth_required',
+      tool_count: 0,
+      auth_url: 'https://auth.invalid/authorize?state=abc',
+      ...over,
+    },
+  })
+
+  it('takes the pulled URL and then lets a settled status clear it', async () => {
+    install([], [parked()])
+    await mount()
+
+    act(() => {
+      store.onEvent({ kind: 'rows' })
+    })
+    expect(store.authUrl('sentry')).toBe('https://auth.invalid/authorize?state=abc')
+
+    /* Authorization finished: the commit broadcasts a snapshot whose auth_url is
+       null, which is what has to clear the seeded pull. */
+    act(() => {
+      store.onEvent({ kind: 'status', name: 'sentry', state: 'connected', tool_count: 3, auth_url: null })
+    })
+    expect(store.authUrl('sentry')).toBeUndefined()
+    expect(store.status({ name: 'sentry', enabled: true, state: 'connected', tool_count: 3 }).k).toBe(
+      'gui.plug.st_on',
+    )
+  })
+
+  it('keeps showing it while the park is still live', async () => {
+    install([], [parked()])
+    await mount()
+    act(() => {
+      store.onEvent({ kind: 'rows' })
+      store.onEvent({
+        kind: 'status',
+        name: 'sentry',
+        state: 'auth_required',
+        tool_count: 0,
+        auth_url: 'https://auth.invalid/authorize?state=abc',
+      })
+    })
+    expect(store.authUrl('sentry')).toBe('https://auth.invalid/authorize?state=abc')
+  })
+
+  it('does not resurrect a URL the user already finished with', async () => {
+    const row = parked()
+    install([], [row])
+    await mount()
+    act(() => {
+      store.onEvent({ kind: 'rows' })
+      store.onEvent({ kind: 'authDone', server: 'sentry', ok: true })
+    })
+    expect(store.authUrl('sentry')).toBeUndefined()
+
+    /* A later rows load must not put it back. Two independent reasons it does
+       not, and this asserts the second: the row's own auth_url is cleared (the
+       live layer merges the settled snapshot, and a re-pull reads null once the
+       flow is redeemed), and the seed also refuses a row whose state has
+       settled -- which is what covers a row this page has not re-read yet. */
+    act(() => {
+      row.m!.state = 'connected'
+      store.onEvent({ kind: 'rows' })
+    })
+    expect(store.authUrl('sentry')).toBeUndefined()
+  })
+
+  it('refuses to seed a stale URL left on a row that has settled', async () => {
+    /* The row still carries the URL but says connected -- what a page holding a
+       row it has not re-read since the authorization finished looks like. */
+    install([], [parked({ state: 'connected', tool_count: 3 })])
+    await mount()
+    act(() => {
+      store.onEvent({ kind: 'rows' })
+    })
+    expect(store.authUrl('sentry')).toBeUndefined()
+  })
+})

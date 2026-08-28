@@ -702,3 +702,289 @@ async def test_a_disable_racing_a_handshake_does_not_orphan_its_registrations():
     assert [(s["state"], s["tool_count"]) for s in mgr.status()] == [("disconnected", 0)]
     # And the probe settles, instead of reporting work on every tick.
     assert mgr.config_changed({"srv": _cfg(enabled=False)}) is False
+
+
+async def test_reset_for_retry_only_touches_the_attempts_its_own_apply_began():
+    """Scoped by the epochs apply recorded, never a scan of every record.
+
+    The caller is whoever cancelled a sync, and the point is to undo what that
+    cancel did: a record left in ``error`` or ``connecting`` with no attempt
+    behind it is one no later apply retries and no reload touches, so the server
+    would be gone for the life of the process.
+
+    A record whose epoch has moved on is a different matter -- a ``plug.auth`` or
+    a config apply started meanwhile owns it, and its commit checks the very
+    state a reset would rewrite. Resetting that is worse than the bug: the
+    transport is discarded on commit while ``apply_mcp_config`` still reports MCP
+    as connected, and the server is lost with nothing logged.
+    """
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    attempts: dict[str, object] = {}
+
+    async def refused(name, cfg, registry, stack, executor=None, http_auth=None):
+        raise RuntimeError("nope")
+
+    with patch(_PATCH, new=refused):
+        # A per-server connect failure is recorded, not raised: only a
+        # SandboxInitError comes back out of apply_config.
+        await mgr.apply_config({"mine": _cfg(), "theirs": _cfg()}, attempts=attempts)
+
+    assert {s["name"]: s["state"] for s in mgr.status()} == {"mine": "error", "theirs": "error"}
+    assert set(attempts) == {"mine", "theirs"}
+
+    # A newer attempt took `theirs` over. Only the epoch says so.
+    mgr._conns["theirs"].epoch = object()
+
+    reset = await mgr.reset_for_retry(attempts)
+
+    assert reset == ["mine"]
+    assert mgr._conns["mine"].state == "disconnected"
+    assert mgr._conns["theirs"].state == "error", "a record a newer attempt owns must be left alone"
+
+
+async def test_reset_for_retry_leaves_a_live_park_and_a_live_session_alone():
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await mgr.apply_config({"up": _cfg()})
+    assert mgr._conns["up"].state == "connected"
+
+    # A park: its attempt is still running and commits when the user clicks.
+    mgr._conns["up"].state = "auth_required"
+    assert await mgr.reset_for_retry({"up": mgr._conns["up"].epoch}) == []
+    assert mgr._conns["up"].state == "auth_required"
+
+    mgr._conns["up"].state = "connected"
+    assert await mgr.reset_for_retry({"up": mgr._conns["up"].epoch}) == []
+    assert mgr._conns["up"].state == "connected"
+
+
+async def test_a_reaped_apply_does_not_reset_the_apply_that_replaced_it():
+    """The token is the caller's, and this is why it cannot live on the manager.
+
+    A manager-wide record of "the most recent apply" is overwritten by whichever
+    apply began last. A prewarm cancelled after a config apply started would then
+    read the newer apply's name/epoch set and disconnect ITS attempt: the commit
+    checks the state that reset rewrote, so the transport is discarded, while
+    ``apply_mcp_config`` still sets ``_mcp_connected`` -- MCP reads as connected
+    with the server disconnected and nothing logged.
+
+    Modelled with two real applies rather than a hand-edited epoch, because the
+    overwrite is what has to happen for the bug to appear.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+
+    started: list[asyncio.Event] = [asyncio.Event(), asyncio.Event()]
+    release = asyncio.Event()
+    calls = 0
+
+    async def gated(name, cfg, registry, stack, executor=None, http_auth=None):
+        nonlocal calls
+        mine = calls
+        calls += 1
+        started[mine].set()
+        if mine == 0:
+            await asyncio.Event().wait()  # the reaped apply never finishes on its own
+        await release.wait()
+        return _connected([])
+
+    with patch(_PATCH, new=gated):
+        first: dict[str, object] = {}
+        reaped = asyncio.ensure_future(mgr.apply_config({"svc": _cfg()}, attempts=first))
+        await asyncio.wait_for(started[0].wait(), timeout=2)
+        first_epoch = mgr._conns["svc"].epoch
+
+        # A config apply lands while the first is still handshaking. Changed
+        # config, so it tears the old record down and begins a new attempt --
+        # which is what moves the epoch.
+        second: dict[str, object] = {}
+        newer = asyncio.ensure_future(mgr.apply_config({"svc": _cfg("https://moved.test/mcp")}, attempts=second))
+        await asyncio.wait_for(started[1].wait(), timeout=2)
+        assert mgr._conns["svc"].epoch is not first_epoch
+        assert second["svc"] is mgr._conns["svc"].epoch
+
+        # Now the first apply is reaped, and it must consult its OWN token.
+        reaped.cancel()
+        with suppress(BaseException):
+            await reaped
+        assert await mgr.reset_for_retry(first) == [], "it reset an attempt it never began"
+        assert mgr._conns["svc"].state == "connecting"
+
+        release.set()
+        await asyncio.wait_for(newer, timeout=2)
+
+    (snap,) = mgr.status()
+    assert snap["state"] == "connected", "the newer apply lost its connection to the reaper"
+
+
+async def test_aclose_reaps_an_attempt_deliberately_left_running():
+    """A detached attempt has no awaiter at all, by design.
+
+    An attempt parked at the browser-authorization step is left running on
+    purpose -- its PKCE state is what the published link resolves against, and it
+    commits on its own when the user clicks. Right while the process lives, a
+    leak once it is stopping: nothing else can reach that task, so shutdown
+    returned with a transport and possibly an stdio child still alive.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    entered = asyncio.Event()
+
+    async def parks(name, cfg, registry, stack, executor=None, http_auth=None):
+        # Reaching the browser step is what makes sync stop awaiting this.
+        conn = mgr._conns[name]
+        entered.set()
+        if conn.auth_parked is not None:
+            conn.auth_parked.set()
+        await asyncio.Event().wait()
+
+    with patch(_PATCH, new=parks):
+        applied = asyncio.ensure_future(mgr.apply_config({"parked": _cfg()}))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.wait_for(applied, timeout=2)
+
+        live = {t for t in mgr._attempt_tasks if not t.done()}
+        assert live, "the attempt was supposed to be left running"
+        # The handshake inside it, which is the level the shield makes outlive
+        # its waiter and therefore the one a reap can miss.
+        inner = {t for t in mgr._handshakes if not t.done()}
+        assert inner
+
+        # Through aclose, which is the path `AgentLoop.close_mcp` takes: the
+        # reap has to be part of shutdown, not a separate call a host must know
+        # to make.
+        await mgr.aclose()
+        assert all(t.done() for t in live), "the detached attempt outlived aclose"
+        assert all(t.done() for t in inner), "the handshake outlived aclose"
+
+    assert mgr._attempt_tasks == set()
+    assert mgr._handshakes == set()
+    assert mgr.status() == []
+
+
+async def test_a_cancelled_sync_takes_its_handshake_with_it():
+    """``asyncio.wait`` does not cancel what it waits on.
+
+    Cancelling whoever started the sync reached the coroutine awaiting the
+    attempt, not the attempt -- so the handshake, its transport and its stdio
+    child kept running against a sandbox executor the canceller was about to
+    close.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    entered = asyncio.Event()
+
+    async def never(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch(_PATCH, new=never):
+        applied = asyncio.ensure_future(mgr.apply_config({"svc": _cfg()}))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        inner = {t for t in mgr._attempt_tasks}
+        assert inner and not any(t.done() for t in inner)
+
+        applied.cancel()
+        with suppress(BaseException):
+            await applied
+
+        assert all(t.done() for t in inner), "the handshake survived its sync being cancelled"
+
+
+async def test_reaping_the_attempt_takes_the_shielded_handshake_with_it():
+    """Why one reaping site is enough, asserted rather than assumed.
+
+    The handshake runs as its own task because ``_handshake_watchdog`` waits on
+    it through ``asyncio.shield``: the bound has to stop the WAITING without
+    stopping the work, or a timeout would kill an OAuth flow the user is midway
+    through. A shielded task outliving its waiter is exactly what a reap can
+    miss, and it used to be reaped separately, after the detach.
+
+    The watchdog takes its shielded task down when its own caller is cancelled,
+    so for an attempt ``apply_config`` started, reaping the attempt is enough.
+    This pins that half. It does NOT generalise -- ``connect()`` awaits
+    ``_run_connect`` inline and has no attempt task at all, which is why
+    ``reap_attempts`` sweeps the handshakes too and why
+    ``test_aclose_reaps_a_handshake_still_parked_on_authorization`` reds when
+    that sweep is removed.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    entered = asyncio.Event()
+
+    async def never(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch(_PATCH, new=never):
+        applied = asyncio.ensure_future(mgr.apply_config({"svc": _cfg()}))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        inner = {t for t in mgr._handshakes if not t.done()}
+        assert inner, "no handshake task to speak of"
+
+        assert await mgr.reap_attempts() == 1
+        assert all(t.done() for t in inner), "the shielded handshake survived the attempt reap"
+
+    with suppress(BaseException):
+        await applied
+
+
+async def test_a_connect_started_during_the_reap_is_reaped_too():
+    """The window a single snapshot leaves open.
+
+    Reaping used to read both task sets once, await that fixed list, then clear
+    the sets. A connect registered during that await -- a reload or an install
+    landing on a stack that is shutting down -- was therefore dropped from the
+    set without ever being cancelled, and ``aclose`` returned reporting itself
+    finished while that handshake, its transport and its stdio child were still
+    running.
+
+    The second connect here is started from inside the first one's cancellation,
+    which is exactly during the reap's await rather than approximately.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    second_started = asyncio.Event()
+    latecomer: list[asyncio.Task] = []
+    round_one = asyncio.Event()
+
+    async def hangs(name, cfg, registry, stack, executor=None, http_auth=None):
+        if name == "first":
+            round_one.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # Registered while the reap is awaiting the batch it already read.
+                latecomer.append(asyncio.ensure_future(mgr.apply_config({"late": _cfg()})))
+                raise
+        else:
+            second_started.set()
+            await asyncio.Event().wait()
+
+    with patch(_PATCH, new=hangs):
+        first = asyncio.ensure_future(mgr.apply_config({"first": _cfg()}))
+        await asyncio.wait_for(round_one.wait(), timeout=2)
+
+        await mgr.reap_attempts()
+
+        assert second_started.is_set(), "the latecomer never got going; the test proves nothing"
+        assert not [t for t in mgr._attempt_tasks if not t.done()], "an attempt registered mid-reap survived"
+        assert not [t for t in mgr._handshakes if not t.done()], "a handshake registered mid-reap survived"
+
+    for t in (first, *latecomer):
+        t.cancel()
+        with suppress(BaseException):
+            await t

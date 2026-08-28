@@ -1247,23 +1247,32 @@ async def test_a_working_display_call_still_labels_the_row(tmp_path):
     assert start.display == "the label"
 
 
-async def test_run_turn_bounds_how_long_it_waits_for_mcp(tmp_path):
-    """The call site, not just the bound: a turn has to pass one.
+async def test_run_turn_hands_the_mcp_connect_off_instead_of_awaiting_it(tmp_path):
+    """The call site, not just the mechanism.
 
-    Without it, a server parked at the browser-authorization step held the
-    message behind it for the OAuth flow's whole timeout.
+    This replaces a test that asserted the turn passed a 90s bound. The bound is
+    gone with the wait: a server parked at the browser-authorization step blocks
+    on a human, and a turn that waits on it at all is the defect (measured once at
+    10m35s). The turn must reach ``prewarm_mcp`` and must not await a connect.
     """
-    from raven.agent.loop.main import _MCP_TURN_WAIT_S
+    prewarms = 0
+    awaited = 0
 
-    seen: list[dict] = []
     loop = AgentLoop(provider=_FakeStreamProvider([StreamDelta(content="hi")]), workspace=tmp_path)
     _stub_edges(loop)
 
-    async def _record(**kw) -> None:
-        seen.append(kw)
+    def _prewarm() -> None:
+        nonlocal prewarms
+        prewarms += 1
 
-    loop._connect_mcp = _record
+    async def _connect() -> None:  # pragma: no cover - reaching this is the failure
+        nonlocal awaited
+        awaited += 1
+
+    loop.prewarm_mcp = _prewarm
+    loop._connect_mcp = _connect
 
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
-    assert seen == [{"wait": _MCP_TURN_WAIT_S}]
+    assert prewarms == 1
+    assert awaited == 0

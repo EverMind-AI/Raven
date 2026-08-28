@@ -368,13 +368,13 @@ async def test_the_oauth_flow_reaches_the_same_sink(workspace) -> None:
     assert seen == [("oauth.pending", {"server": "svc", "url": "https://idp.example/authorize?x=1"})]
 
 
-async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(workspace) -> None:
-    """The bound a turn puts on the first connect.
+async def test_a_turn_does_not_wait_for_a_server_that_is_waiting_on_a_person(workspace) -> None:
+    """A turn hands the connect off instead of bounding it.
 
-    A server parked at the browser-authorization step blocks on a human for up
-    to the OAuth flow's timeout, and the manager connects servers one after
-    another -- so without this bound one unanswered park held every later
-    server and the user's message behind them.
+    A server parked at the browser-authorization step blocks on a human for up to
+    the OAuth flow's timeout, and that once held a user's message for 10m35s. The
+    turn used to survive it with a 90s bound; now it does not join the handshake
+    at all, and the connect must still not be cancelled to get there.
     """
     import asyncio
 
@@ -390,7 +390,7 @@ async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(wor
     loop = _loop(workspace, {"parks": MCPServerConfig(url="https://parks.test/mcp")})
 
     with patch(_PATCH, new=parked):
-        await asyncio.wait_for(loop._connect_mcp(wait=0.05), timeout=5)
+        loop.prewarm_mcp()
         # The turn is free to go, and the connect was not cancelled to get there.
         assert not loop.tools.has("mcp_parks_late")
         assert loop._mcp_connecting is True
@@ -406,7 +406,7 @@ async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(wor
     assert loop._mcp_connected is True
 
 
-async def test_an_unbounded_caller_still_waits_for_the_whole_sync(workspace) -> None:
+async def test_the_awaited_caller_still_waits_for_the_whole_sync(workspace) -> None:
     """`run()` has nothing else to do and keeps the old behaviour, which is also
     what keeps a SandboxInitError reaching its handler there."""
     loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
@@ -496,3 +496,268 @@ async def test_the_assembler_asks_the_loop_for_notices_each_turn(workspace) -> N
 
     notes.clear()
     assert "awaiting authorization" not in asm._build_user(ctx)["content"]
+
+
+async def test_prewarm_brings_mcp_up_with_no_turn_involved(workspace) -> None:
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        loop.prewarm_mcp()
+        await loop._mcp_prewarm_task
+
+    assert loop._mcp_connected is True
+    assert loop._mcp_connecting is False
+    assert loop.tools.has("mcp_svc_search")
+    (snap,) = loop.mcp_manager.status()
+    assert snap["state"] == "connected"
+
+
+async def test_prewarm_claims_the_connect_before_it_yields(workspace) -> None:
+    """The claim has to be synchronous. A coroutine given to ``create_task`` does
+    not run until the loop next yields, and a turn arriving in that gap would read
+    ``_mcp_connecting`` as unset and run the whole blocking connect itself.
+    """
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        loop.prewarm_mcp()
+        # No await between the call above and this line, on purpose.
+        assert loop._mcp_connecting is True
+        await loop._mcp_prewarm_task
+
+
+async def test_a_turn_overtaking_the_prewarm_does_not_wait_for_it(workspace) -> None:
+    """The point of the whole change: the turn-side bound is never reached
+    because the turn no longer joins the handshake at all.
+    """
+    import asyncio
+
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await gate.wait()
+        return _connected([])
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=slow):
+        loop.prewarm_mcp()
+        # The handshake is genuinely in flight before the turn arrives, which is
+        # what a served turn meets: the transport starts listening well after
+        # build_rpc_stack returns.
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        # What a turn now does. Would have blocked on the handshake before.
+        loop.prewarm_mcp()
+        assert loop._mcp_connected is False, "the handshake is still gated, so nothing is up yet"
+        gate.set()
+        await loop._mcp_prewarm_task
+
+    assert loop._mcp_connected is True
+
+
+async def test_a_turn_overtaking_the_prewarm_is_told_the_servers_are_connecting(workspace) -> None:
+    """Absent tools with no explanation is how the model reports a configured
+    plugin as a capability that does not exist.
+    """
+    import asyncio
+
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await gate.wait()
+        return _connected([])
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=slow):
+        loop.prewarm_mcp()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        loop.prewarm_mcp()
+
+        (note,) = loop._mcp_tool_notices()
+        assert "svc" in note
+        assert "still connecting" in note
+        assert "later turn" in note
+
+        gate.set()
+        await loop._mcp_prewarm_task
+
+    # Up: the reason to mention it is gone with it.
+    assert loop._mcp_tool_notices() == []
+
+
+async def test_prewarm_reports_a_sandbox_that_cannot_start_instead_of_vanishing(workspace) -> None:
+    """Nobody awaits the prewarm task, so an exception left in it is only a
+    'never retrieved' warning at shutdown. ``run()`` shuts the loop down on this
+    one; here the turns keep running without the stdio servers.
+    """
+    from raven.sandbox import SandboxInitError
+
+    async def no_sandbox(name, cfg, registry, stack, executor=None, http_auth=None):
+        raise SandboxInitError("no boxlite here")
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(command="npx", args=["x"])})
+    with patch(_PATCH, new=no_sandbox):
+        loop.prewarm_mcp()
+        await loop._mcp_prewarm_task
+
+    assert loop._mcp_prewarm_task.exception() is None
+    assert loop._mcp_connecting is False, "a failed prewarm must not leave the flag set"
+    assert loop._mcp_connected is False
+
+
+async def test_prewarm_costs_nothing_when_no_server_is_configured(workspace) -> None:
+    loop = _loop(workspace)
+    loop.prewarm_mcp()
+    assert loop._mcp_prewarm_task is None
+    assert loop._mcp_connecting is False
+
+
+async def test_prewarm_does_not_re_walk_servers_a_hot_reload_already_attached(workspace) -> None:
+    """``apply_mcp_config`` is the runtime-reconfigure path (plug.install,
+    reload.mcp) and it sets ``_mcp_connected`` itself. A prewarm that lost that
+    race must find the work done rather than connect every server a second time.
+    """
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        loop.prewarm_mcp()
+
+    assert loop._mcp_prewarm_task is None
+
+
+async def test_a_failed_turn_leaves_a_reaped_prewarm_retryable(workspace) -> None:
+    """The window the fire-and-forget opened: the turn body now runs beside the
+    handshake, and the turn's own error path closes the executor a stdio connect
+    is spawned into. Left alone, the manager records that as the server's
+    ``error`` state while ``apply_mcp_config`` still sets ``_mcp_connected``, so
+    every later prewarm stops at the connected guard and no reload retries an
+    ``error`` row -- the server is gone until a restart.
+    """
+    import asyncio
+
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await gate.wait()
+        return _connected([])
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=slow):
+        loop.prewarm_mcp()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+
+        inner = {t for t in loop.mcp_manager._attempt_tasks}
+        assert inner and not any(t.done() for t in inner)
+
+        await loop.reap_mcp_prewarm()
+
+        # The handshake itself is gone, not just its awaiter: the executor this
+        # turn is about to close is what a stdio transport was spawned into.
+        assert all(t.done() for t in inner), "the handshake outlived the reap"
+
+        # Retryable: nothing claims MCP is up, and no record is parked in a
+        # state a reload refuses to touch.
+        assert loop._mcp_connected is False
+        assert loop._mcp_connecting is False
+        assert loop._mcp_prewarm_task is None
+        assert [s["state"] for s in loop.mcp_manager.status()] == ["disconnected"]
+
+        # And the next turn really does connect it.
+        gate.set()
+        loop.prewarm_mcp()
+        await loop._mcp_prewarm_task
+
+    assert loop._mcp_connected is True
+    assert [s["state"] for s in loop.mcp_manager.status()] == ["connected"]
+
+
+async def test_close_mcp_reaps_the_prewarm_before_tearing_anything_down(workspace) -> None:
+    """Order, not just cleanup: a live handshake holds the manager and the
+    executor this closes, and a connect that outlives them registers its tools
+    into a registry whose sessions are gone.
+    """
+    import asyncio
+
+    entered = asyncio.Event()
+    closed_while_running: list[bool] = []
+
+    async def never(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await asyncio.Event().wait()  # never returns on its own
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=never):
+        loop.prewarm_mcp()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        task = loop._mcp_prewarm_task
+        assert task is not None and not task.done()
+
+        inner = {t for t in loop.mcp_manager._attempt_tasks}
+        assert inner and not any(t.done() for t in inner)
+
+        await loop.close_mcp()
+        closed_while_running.append(task.done())
+        # The wrapper being done proves nothing about the handshake. `asyncio.wait`
+        # does not cancel what it waits on, so the attempt task -- and the
+        # transport and stdio child inside it -- used to survive both the reap and
+        # this close, and teardown returned with them alive.
+        assert all(t.done() for t in inner), "the attempt task outlived close_mcp"
+
+    assert closed_while_running == [True], "close_mcp must not return with the handshake live"
+    assert loop._mcp_prewarm_task is None
+    assert loop._mcp_connecting is False
+
+
+async def test_every_snapshot_carries_the_authorization_url_key(workspace) -> None:
+    """Null included. A reader that seeds this from a pull needs the later
+    ``mcp.status`` to carry the key in order to clear it -- omitted, the merge
+    leaves a settled server showing the link it was parked on.
+    """
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop._connect_mcp()
+
+    (snap,) = loop.mcp_manager.status()
+    assert "auth_url" in snap
+    assert snap["auth_url"] is None
+
+
+async def test_the_prewarm_holds_its_own_attempt_token_for_the_reap(workspace) -> None:
+    """The call site, not just the manager rule: the reap must pass the mapping
+    THIS prewarm's apply filled, not whatever the manager saw most recently.
+    """
+    import asyncio
+
+    seen: list[dict] = []
+
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    mgr = loop.mcp_manager
+
+    async def _record(attempts):
+        seen.append(attempts)
+        return []
+
+    mgr.reset_for_retry = _record
+
+    entered = asyncio.Event()
+
+    async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch(_PATCH, new=slow):
+        loop.prewarm_mcp()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        token = loop._mcp_prewarm_attempts
+        assert token == {"svc": mgr._conns["svc"].epoch}
+
+        await loop.reap_mcp_prewarm()
+
+    assert seen == [token], "the reap passed a different mapping than the prewarm began"
+    assert loop._mcp_prewarm_attempts == {}, "the token must not survive its own reap"
