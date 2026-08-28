@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _PROMPT = """\
-Decide whether this request is work to run and watch, and name the paths it gives.
+Decide whether this request is work to run and watch, and name the subjects it gives.
 
 Work to run and watch: the owner wants something executed and reported back, and
 getting an answer takes more than one go -- a solver case, a training run, a
@@ -40,9 +40,10 @@ it may be a directory on this very computer.
 Not that: reading a file, answering a question, writing or fixing code, running
 one command and looking at the output, ordinary conversation.
 
-Reply with JSON only: {"watched": true|false, "paths": ["..."]}
-"paths": every filesystem path the request names, absolute where it gave one.
-Empty list if it names none.
+Reply with JSON only: {"watched": true|false, "subjects": ["..."]}
+"subjects": every concrete thing the request names to watch or act on -- a
+filesystem path (absolute where it gave one), a URL, a repository or project
+identifier, an account handle. Empty list if it names none.
 
 The request:
 ---
@@ -54,27 +55,96 @@ _MAX_CHARS = 4000
 
 @dataclass
 class Verdict:
-    """One turn's answer, plus the paths it named."""
+    """One turn's answer, plus the subjects it named."""
 
     watched: bool = False
-    paths: list[str] = field(default_factory=list)
+    subjects: list[str] = field(default_factory=list)
 
-    def claims(self, path: str) -> bool:
-        """Whether ``path`` is one of the named paths, or sits under one."""
-        if not self.watched or not path:
+    def claims(self, subject: str) -> bool:
+        """Whether ``subject`` is one of the named subjects, or reaches one.
+
+        Every named subject first gets the containment test the path-only
+        version applied unconditionally -- relative paths included, since the
+        review measured `subjects=["run"]` losing its claim on `run/job.sh`
+        under a leading-slash dispatch -- and only then the anchor test.
+        Anchors are what URLs, project identifiers and handles match by,
+        because a look rarely repeats the subject verbatim: the owner names a
+        pipeline by its web URL and the look arrives as a CLI call carrying
+        the project slug percent-encoded (measured 2026-08-28, glab api
+        projects/npc-work%2Faic%2F...). Matching generously is the affordable
+        direction here: a false claim adds one inapplicable line and refuses
+        nothing.
+        """
+        if not self.watched or not subject:
             return False
         try:
-            target = Path(path).expanduser()
+            target = Path(subject).expanduser()
         except (OSError, ValueError):
-            return False
-        for named in self.paths:
-            try:
-                root = Path(str(named)).expanduser()
-            except (OSError, ValueError):
-                continue
-            if target == root or root in target.parents:
+            target = None
+        norm_target = _normalize(subject)
+        for named in self.subjects:
+            s = str(named)
+            if target is not None:
+                try:
+                    root = Path(s).expanduser()
+                except (OSError, ValueError):
+                    root = None
+                if root is not None and (target == root or root in target.parents):
+                    return True
+            if any(_hit(a, norm_target) for a in _anchors(s)):
                 return True
         return False
+
+
+def _hit(anchor: str, text: str) -> bool:
+    """Whether ``anchor`` occurs in ``text`` on word boundaries.
+
+    Bare substring containment reads ``/srv/case`` into ``/srv/case-old`` --
+    a sibling with a longer name is not under the subject, and the fork's own
+    path tests pin exactly that. A hit must not continue into an identifier
+    character on either side; a separator or the end of the string is what
+    says the object named is the object reached.
+    """
+    import re
+
+    pattern = rf"(?<![A-Za-z0-9_-]){re.escape(anchor)}(?![A-Za-z0-9_-])"
+    return re.search(pattern, text) is not None
+
+
+def _normalize(text: str) -> str:
+    """One comparable form for both sides: percent-decoded, schemeless, lowered.
+
+    GitLab's ``/-/`` separator is dropped because it appears in web URLs and in
+    nothing the API or CLI side says about the same object.
+    """
+    from urllib.parse import unquote
+
+    out = unquote(str(text or "")).strip().lower()
+    for scheme in ("https://", "http://"):
+        if out.startswith(scheme):
+            out = out[len(scheme) :]
+    return out.replace("/-/", "/").rstrip("/")
+
+
+def _anchors(named: str) -> list[str]:
+    """What a look that reaches this subject must carry, in normalized form.
+
+    The whole subject, its path without the host, and its last two segments --
+    the pair like ``pipelines/2798916676`` that survives every rephrasing of
+    the same object. Derived anchors shorter than 6 characters are dropped
+    rather than allowed to match half the world; the whole subject only needs
+    4, so a short handle like ``@bob`` -- which the prompt explicitly asks
+    for -- stays claimable (the review caught 6 excluding it).
+    """
+    whole = _normalize(named)
+    if len(whole) < 4:
+        return []
+    derived = []
+    parts = whole.split("/")
+    if len(parts) > 1:
+        derived.append("/".join(parts[1:]))
+        derived.append("/".join(parts[-2:]))
+    return [whole] + [a for a in dict.fromkeys(derived) if a != whole and len(a) >= 6]
 
 
 def build_prompt(message: str) -> list[dict[str, str]]:
@@ -100,14 +170,16 @@ def read_verdict(text: str | None) -> Verdict:
         return Verdict()
     if not isinstance(data, dict):
         return Verdict()
-    paths = data.get("paths")
+    subjects = data.get("subjects")
+    if not isinstance(subjects, list):
+        subjects = data.get("paths")
     # Strictly the boolean, or the word. bool() would read any non-empty string
     # as yes, so a reply of {"watched": "unsure"} would come back as a firm yes.
     flag = data.get("watched")
     said_yes = flag is True or (isinstance(flag, str) and flag.strip().lower() == "true")
     return Verdict(
         watched=said_yes,
-        paths=[str(p) for p in paths if str(p).strip()] if isinstance(paths, list) else [],
+        subjects=[str(s) for s in subjects if str(s).strip()] if isinstance(subjects, list) else [],
     )
 
 
