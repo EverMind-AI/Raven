@@ -753,6 +753,34 @@ def _watch_budget_spent(cdir: Path, *, attempting: str = "more") -> str:
     )
 
 
+def _concluded_notice(cdir: Path) -> str | None:
+    """The CONCLUDED banner for this campaign, or None while it is live.
+
+    One renderer for both status paths. The ledger path always carried this
+    banner; the no-ledger path returned before reaching it, so a zero-trial
+    watch read back as live after its own conclusion -- measured 2026-08-28,
+    a look-then-re-arm on a concluded campaign scheduled a fresh wake and each
+    look kept spending the closed campaign's budget.
+    """
+    import json as _json
+
+    concluded_path = cdir / "concluded.json"
+    if not concluded_path.exists():
+        return None
+    try:
+        c = _json.loads(concluded_path.read_text(encoding="utf-8"))
+        return (
+            f"⚠️ CONCLUDED at {c.get('concluded_at', '?')}"
+            + (f" ({c['outcome']})" if c.get("outcome") else "")
+            + (f" -- {c['reason']}" if c.get("reason") else "")
+            + ". This campaign is over: do NOT submit more rounds, and do "
+              "not report again. There is nothing left to do here."
+        )
+    except (OSError, ValueError):
+        return ("⚠️ CONCLUDED. This campaign is over: do NOT submit "
+                "more rounds, and do not report again.")
+
+
 def _meta_lines(meta_path: Path) -> list[str]:
     """Everything the campaign's own setup states, ready to print.
 
@@ -1137,6 +1165,14 @@ class OpsTuneStatusTool(Tool):
         else:
             path = Path(ledger).expanduser()
         if not path.exists():
+            # Concluded first, before anything is read or spent: a zero-trial
+            # campaign never grows a ledger, so this branch is the only status
+            # it ever renders -- and a look taken here would spend the budget of
+            # a campaign that already reported itself over.
+            over = _concluded_notice(path.parent)
+            if over:
+                pre = _meta_lines(path.with_name("meta.json"))
+                return "\n".join([over, *pre, *_reading_series_lines(path.parent)])
             # Not started yet is not a reason to withhold what the campaign states:
             # this is precisely when the loop decides how much budget to ask for.
             # And a watch may live entirely on this path: a campaign waiting for a
@@ -1448,20 +1484,9 @@ class OpsTuneStatusTool(Tool):
         # The campaign's durable "chart": the user's conclusion and mid-campaign
         # instructions live on disk so every role (wake turn, heartbeat, chat)
         # sees the same facts regardless of which conversation they run in.
-        concluded_path = path.with_name("concluded.json")
-        if concluded_path.exists():
-            try:
-                c = _json.loads(concluded_path.read_text(encoding="utf-8"))
-                lines.insert(0, (
-                    f"\u26a0\ufe0f CONCLUDED at {c.get('concluded_at', '?')}"
-                    + (f" ({c['outcome']})" if c.get("outcome") else "")
-                    + (f" -- {c['reason']}" if c.get("reason") else "")
-                    + ". This campaign is over: do NOT submit more rounds, and do "
-                      "not report again. There is nothing left to do here."
-                ))
-            except (OSError, ValueError):
-                lines.insert(0, "\u26a0\ufe0f CONCLUDED. This campaign is over: do NOT submit "
-                                "more rounds, and do not report again.")
+        over = _concluded_notice(path.parent)
+        if over:
+            lines.insert(0, over)
         notes = _read_notes(path.parent)
         if notes:
             # The count at the time is what tells a later read whether an
@@ -2736,10 +2761,25 @@ class OpsCheckLaterTool(_OpsScheduler):
         # entire context a wake turn gets.
         campaign = campaign or cdir.name
         ledger = ledger or str(cdir / "ledger.json")
-        # Both refusals below leave the turn open, and have to: this tool's
+        # All refusals below leave the turn open, and have to: this tool's
         # default is that the turn is over because a wake was arranged, and on a
         # refusal none was. A closed turn then leaves the campaign with nothing
         # pending and nothing reported, which is the one state no wake recovers.
+        #
+        # Concluded is checked here and not only in the cron re-arm: that guard
+        # (service._keep_ops_campaign_watched) covers the wake the machinery adds
+        # by itself, while this tool is how a turn schedules one on purpose -- and
+        # ops_finish stands down pending wakes, not the right to arrange new ones.
+        # Measured 2026-08-28: a look-then-re-arm after conclusion put a fresh
+        # wake in the store, and the wake shell adopted and ran it.
+        over = _concluded_notice(cdir)
+        if over:
+            return ToolResult(
+                f"REFUSED: this campaign is concluded, so no further wake will be arranged.\n"
+                f"  {over}\n"
+                f"If there is genuinely more to watch, declare a new campaign. Nothing was scheduled.",
+                ends_turn=False,
+            )
         spent = _watch_budget_spent(cdir, attempting="another look")
         if spent:
             return ToolResult(spent, ends_turn=False)
