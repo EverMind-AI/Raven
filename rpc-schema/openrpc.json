@@ -8344,8 +8344,13 @@
                     "type": "string",
                     "enum": [
                       "ok",
-                      "error"
+                      "error",
+                      "exception"
                     ]
+                  },
+                  "node_id": {
+                    "description": "Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.",
+                    "type": "string"
                   },
                   "run_id": {
                     "type": "string"
@@ -8357,20 +8362,7 @@
                 }
               },
               "target": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "instance",
-                  "handle"
-                ],
-                "properties": {
-                  "instance": {
-                    "type": "string"
-                  },
-                  "handle": {
-                    "type": "string"
-                  }
-                }
+                "$ref": "#/components/schemas/DirectTarget"
               }
             }
           }
@@ -9503,6 +9495,9 @@
             "$ref": "#/components/schemas/MessageStartEvent"
           },
           {
+            "$ref": "#/components/schemas/TurnStartedEvent"
+          },
+          {
             "$ref": "#/components/schemas/EpisodeStartEvent"
           },
           {
@@ -9564,6 +9559,7 @@
           "propertyName": "type",
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
+            "turn.started": "#/components/schemas/TurnStartedEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
             "notice": "#/components/schemas/NoticeEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",

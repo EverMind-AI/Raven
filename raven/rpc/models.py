@@ -350,8 +350,41 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class TurnStartedDelegated(_Strict):
+    """Which delegated run re-entered the conversation, on the live boundary.
+
+    The same identity a stored user entry carries in ``TranscriptDelegated``, so
+    a client draws the same row from a replay and from the stream. Declared here
+    rather than reused because the two differ in one field: this one carries
+    ``content``, the text that re-entered, which the stored entry already has as
+    its own ``text``.
+    """
+
+    kind: Literal["spawn", "dag"]
+    label: str
+    status: Literal["ok", "error", "exception"]
+    run_id: str | None = None
+    node_id: str | None = Field(
+        None,
+        description=(
+            "Which node of the run this is about. Present only on `kind: dag` "
+            "with `status: exception`, where the report concerns one node rather "
+            "than the whole run."
+        ),
+    )
+    content: str | None = Field(
+        None,
+        description=(
+            "The text that re-entered the conversation, verbatim; a client shows "
+            "the reader-facing part of it by keeping only what sits INSIDE the "
+            "untrusted fence."
+        ),
+    )
+
+
 class TurnStartedPayload(_Strict):
     turn_id: str
+    delegated: TurnStartedDelegated | None = None
     target: DirectTarget | None = None
 
 
@@ -933,6 +966,7 @@ class SessionNamingEndedEvent(_Strict):
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
+        TurnStartedEvent,
         EpisodeStartEvent,
         NoticeEvent,
         TokenDeltaEvent,
