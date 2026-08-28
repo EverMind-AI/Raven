@@ -102,7 +102,7 @@ _OWNING_ENTRY_POINTS = {
     "cli/gateway_commands.py": "bounded_asyncio.run(run())",
     "cli/serve_commands.py": "bounded_asyncio.run(_serve_main(",
     "cli/_tui_relay.py": "bounded_asyncio.run(_main())",
-    "cli/acp_commands.py": "bounded_asyncio.run(_serve())",
+    "cli/acp_commands.py": "bounded_asyncio.run(_serve(",
 }
 
 # `asyncio.run` calls in those same modules that own no teardown, so the sweep

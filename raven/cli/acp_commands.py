@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import typer
 from loguru import logger
@@ -24,20 +25,102 @@ from loguru import logger
 from raven.acp.server import install_crash_handlers, serve
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.cli._log_file import redirect_loguru_to_file
+from raven.config.loader import set_config_path
 from raven.utils import asyncio_runner as bounded_asyncio
 
 _THREAD_CHUNK = 64 * 1024
 
-acp_app = typer.Typer(name="acp", help="Serve Raven as an ACP agent over stdio.")
+# Written out here rather than left to the docstring because this command has no
+# interactive surface to discover it from: a client spawns it, and everything a
+# person needs in order to point it at the right instance, find its log, or drive
+# it by hand has nowhere else to appear.
+_HELP = """Serve Raven as an ACP agent over stdio.
+
+A client -- an editor, or another agent -- spawns this process and
+speaks the Agent Client Protocol to its stdin and stdout:
+newline-delimited JSON-RPC, one frame per line, protocolVersion 1. It
+is not an interactive command: run bare in a terminal it waits for a
+frame that never arrives. To drive it by hand, feed it a file with
+`raven acp < session.jsonl`.
+\b
+Answered:
+  session/new, session/load, session/resume, session/list,
+  session/close, session/delete, session/prompt, session/cancel,
+  session/set_config_option.
+\b
+Not answered:
+  session/set_mode and logout are not implemented. A non-empty
+  mcpServers on session/new or session/load is refused rather than
+  ignored: MCP is connected once per process, and nothing scopes a
+  server to one session.
+
+A session takes its working directory from the cwd the client sends, so
+there is no flag for it: session/new, session/load and session/resume
+each require one and answer -32602 without it. Models switch through
+session/set_config_option with category "model", which binds the
+calling session alone and takes effect on its next turn --
+session/set_model is not in the stable schema. deep-research and
+playbook are announced to the client as available commands. A frame
+over 8 MiB is answered with an error and skipped, leaving the stream
+in sync.
+
+Because stdout carries the protocol, logs go to a file:
+<config dir>/logs/acp.log, rotating at 10 MB, 3 kept. stderr is left
+to the client and carries WARNING and above; an unhandled failure
+prints one line there and exits 1, with the traceback in the log.
+\b
+Environment:
+  RAVEN_ACP_LOG_LEVEL  Level for the log file (default INFO).
+                       --verbose outranks it. DEBUG makes LiteLLM
+                       write each whole request as one record,
+                       measured at 146 KiB on a single line.
+  RAVEN_CLI_DEBUG      Also mirror DEBUG and above to stderr. With a
+                       DEBUG file level, a client whose stderr reader
+                       gives up on a line that long can deadlock this
+                       process.
+  RAVEN_HOME           Move the whole instance: config, logs, runtime
+                       state. --config moves it for one run.
+
+Design notes are in docs/specs, in the files named *-acp-*.
+"""
+
+# No subcommands are registered, so Click's default ``COMMAND [ARGS]...`` in the
+# usage line promises a shape that does not exist. The group itself stays -- see
+# the callback's guard, which keeps a future ``raven acp <something>`` from also
+# starting a server.
+acp_app = typer.Typer(name="acp", help=_HELP, subcommand_metavar="")
 
 
 @acp_app.callback(invoke_without_command=True)
-def acp(ctx: typer.Context) -> None:
-    """Serve the Agent Client Protocol on stdin/stdout."""
+def acp(
+    ctx: typer.Context,
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        help="Config file to serve from (default: the one $RAVEN_HOME names).",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Log at DEBUG to the file. Leaves stderr at WARNING; see RAVEN_CLI_DEBUG.",
+    ),
+) -> None:
+    """Serve the Agent Client Protocol on stdin/stdout.
+
+    ``--config`` is applied before anything derives a path, because ``get_logs_dir``
+    hangs off the config's own directory: an instance pointed at another config
+    writes its log beside that config rather than into the default home. Without
+    it, a host running several of these -- each meant to be a different agent, with
+    its own model, provider and identity -- has no way to say which one this
+    process is, and every one of them comes up on the host's config.
+    """
     if ctx.invoked_subcommand is not None:
         return
+    if config:
+        _use_config(config)
     try:
-        bounded_asyncio.run(_serve())
+        bounded_asyncio.run(_serve(verbose=verbose))
     except Exception as exc:
         # Kept away from Typer's own handler, which renders a rich traceback with
         # ``show_locals`` on -- measured at 228 lines of stderr, with the value of
@@ -50,7 +133,21 @@ def acp(ctx: typer.Context) -> None:
         raise typer.Exit(code=1) from None
 
 
-def _file_log_level() -> str:
+def _use_config(path: str) -> None:
+    """Point this process at ``path`` before any component reads a path from it.
+
+    Exit 2 and not 1: a config that is not there is a mistake in the spawn
+    command, and a client that can tell that apart from the agent having crashed
+    can say so instead of retrying.
+    """
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        typer.echo(f"raven acp: no config file at {resolved}", err=True)
+        raise typer.Exit(code=2)
+    set_config_path(resolved)
+
+
+def _file_log_level(verbose: bool = False) -> str:
     """The level the acp log file accepts. INFO unless asked for more.
 
     DEBUG is expensive here in a way a level usually is not. LiteLLM's
@@ -62,13 +159,18 @@ def _file_log_level() -> str:
     off that path by default rather than relying on the reader to survive it.
 
     ``RAVEN_ACP_LOG_LEVEL`` is the way back to a full trace, for a session where
-    the payloads are the thing being debugged. The gateway's entry point has
-    always taken this level from config; only this one had it hardcoded.
+    the payloads are the thing being debugged, and ``--verbose`` asks the same
+    thing on the command line. The flag outranks the variable: it is set per spawn
+    by whoever is debugging this run, the variable by whatever inherited the
+    environment. The gateway's entry point has always taken this level from
+    config; only this one had it hardcoded.
     """
+    if verbose:
+        return "DEBUG"
     return os.environ.get("RAVEN_ACP_LOG_LEVEL", "").strip().upper() or "INFO"
 
 
-async def _serve() -> None:
+async def _serve(*, verbose: bool = False) -> None:
     """Own the stdio channel, then serve the protocol until the client closes it.
 
     loguru goes to a file, but fd 2 is deliberately left alone: an ACP client
@@ -78,7 +180,9 @@ async def _serve() -> None:
     ``print`` lands on stderr, where it is noise in a log rather than a frame the
     client cannot decode.
     """
-    log_path = redirect_loguru_to_file("acp.log", file_level=_file_log_level(), retention=3, terminal_level="WARNING")
+    log_path = redirect_loguru_to_file(
+        "acp.log", file_level=_file_log_level(verbose), retention=3, terminal_level="WARNING"
+    )
     install_crash_handlers()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)
