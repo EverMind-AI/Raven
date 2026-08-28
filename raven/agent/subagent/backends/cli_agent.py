@@ -486,6 +486,7 @@ class CliAgentBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         runtime_env: dict[str, str] = {}

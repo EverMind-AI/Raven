@@ -34,12 +34,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from raven.agent.flow.answer_text import closing_tag_bar, visible_answer
 from raven.agent.flow.turn_task import task_for
 from raven.agent.harness_text import harness_body_kind, is_harness_echo
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.hook.observers.loopscan import is_spin, spin_stats
+from raven.agent.ledger import ledger_append
 from raven.security.trust import wrap_untrusted
 
 logger = logging.getLogger(__name__)
@@ -171,6 +173,9 @@ class ForcedFinalizeGate(AgentHook):
         if salvage:
             state["synthesized"] = True
             self._mark_committed(state, salvage, "iteration")
+            # The trail must say the shipped answer bypassed the reviewer
+            # (observer order salvages answerless terminals, never reviews them).
+            ledger_append({"ts": time.time(), "op": "force_finalize", "event": "salvage", "seam": "iteration", "reason": reason})
             logger.warning("force-finalize: salvage synthesis replaced an answerless final (%s)", reason)
             return HookDecision(
                 short_circuit_result=salvage,
@@ -200,6 +205,7 @@ class ForcedFinalizeGate(AgentHook):
         if salvage:
             state["synthesized"] = True
             self._mark_committed(state, salvage, "terminal")
+            ledger_append({"ts": time.time(), "op": "force_finalize", "event": "salvage", "seam": "terminal"})
             logger.warning("force-finalize: terminal salvage committed an answer for an answerless turn")
             return HookDecision(
                 short_circuit_result=salvage,

@@ -262,3 +262,28 @@ async def test_the_knob_off_leaves_the_landed_behaviour_byte_identical(monkeypat
     rows = [r for r in _read(ledger) if r["op"] == "verify"]
     assert [r["outcome"] for r in rows] == ["budget_spent"]
     assert rows[0]["reviewed"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_attempt_lands_in_the_ledger_with_its_number(monkeypatch, tmp_path):
+    """A stall used to exist only as a terminal warning line - uncountable after
+    the fact, which is why the stall rate was reconstructed from message-gap
+    archaeology. One row per stalled attempt makes it a statistic, and the op is
+    ``verify_gate`` so the trail's outcome reader never sees it."""
+    import asyncio
+
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
+
+    class _Staller:
+        async def chat_with_retry(self, **kwargs):
+            await asyncio.sleep(1.0)
+
+    gate = DraftReviewerGate(_Staller(), timeout_seconds=0.12, attempt_timeout_seconds=0.05)
+    await gate.after_iteration(_ctx())
+
+    stalls = [r for r in _read(ledger) if r["op"] == "verify_gate" and r.get("event") == "stall"]
+    assert stalls, "each stalled attempt writes a row"
+    assert [r["attempt"] for r in stalls] == list(range(1, len(stalls) + 1))
+    assert all(r["slice_s"] == 0.05 for r in stalls)
+    assert [r for r in _read(ledger) if r["op"] == "verify" and r.get("outcome") == "stall"] == []

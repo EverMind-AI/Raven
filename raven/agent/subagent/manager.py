@@ -222,6 +222,11 @@ class SubagentManager:
         # per-process) so one busy session can't throttle others. Each deque is
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
+        # Which mode each direct-chat instance runs in, keyed
+        # (session_key, agent, handle). In memory on purpose -- see
+        # ``set_instance_mode`` for why it is not persisted, and why the host
+        # rather than the agent is what holds it.
+        self._instance_modes: dict[tuple[str, str, str], str] = {}
         # The one agent table this process dispatches against, shared with the DAG
         # tool rather than built twice (see ``AgentRegistry``). The in-process
         # factory is bound after construction because it is a bound method of this
@@ -339,6 +344,14 @@ class SubagentManager:
         events = getattr(backend, "bind_event_sink", None)
         if callable(events):
             events(self._emit_event)
+        # And how it says the agent described itself differently than the stored
+        # snapshot claims. An acp agent re-advertises its modes on every route
+        # into a session, so a dispatch is where a reworded menu is first seen;
+        # the table's copy is materialized at apply time and would otherwise go
+        # on offering the old wording until a restart.
+        caps = getattr(backend, "bind_caps_listener", None)
+        if callable(caps):
+            caps(self.refresh_agents)
         return backend
 
     def list_agents(self) -> list[AgentMeta]:
@@ -565,8 +578,14 @@ class SubagentManager:
         workspace: Path | None = None,
         authored_task: str | None = None,
         tool_call_id: str | None = None,
+        mode: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
+
+        ``mode`` is the operating profile to run this task under, for a
+        transport that has them (acp). Carried in ``origin`` rather than as a
+        parameter of the background task, for the same reason the workspace is:
+        it is decided by the calling turn and read long after that turn returned.
 
         ``tool_call_id`` is the call that dispatched this run, when the host
         correlates the two; it rides ``origin`` so every ``subagent.status``
@@ -637,6 +656,7 @@ class SubagentManager:
             "workspace": effective_workspace,
             "authored_task": authored_task,
             "tool_call_id": tool_call_id,
+            "mode": mode,
         }
         instance_key = (quota_key, agent, handle)
 
@@ -803,6 +823,7 @@ class SubagentManager:
                             instance=handle,
                             provider=self.provider,
                             model=self.model,
+                            mode=self.resolve_mode(session_key, agent, handle),
                             **kwargs,
                         )
                 except asyncio.CancelledError:
@@ -873,6 +894,81 @@ class SubagentManager:
                 ids.discard(task_id)
                 if not ids:
                     del self._instance_tasks[key]
+
+    def agent_modes(self, agent: str) -> tuple[Any, ...]:
+        """The operating profiles ``agent`` offers, as its probe measured them.
+
+        Read off the registry row rather than re-probed: the row is where the
+        measurement already landed, and a second reader would answer from a
+        different snapshot the first time one of them refreshed.
+        """
+        row = self.registry.get(agent or "")
+        return () if row is None else tuple(row.caps.modes)
+
+    def instance_mode(self, session_key: str | None, agent: str, handle: str) -> str | None:
+        """Which mode this instance's turns run in, or ``None`` for the agent's own."""
+        return self._instance_modes.get((session_key or "", agent, handle))
+
+    def resolve_mode(
+        self,
+        session_key: str | None,
+        agent: str | None,
+        instance: str | None,
+        requested: str | None = None,
+    ) -> str | None:
+        """The mode one dispatch runs under: what it asked for, else the instance's.
+
+        The single implementation every dispatch lane resolves through -- a spawn,
+        a direct chat, and a DAG node. Resolving it per lane is what produced the
+        split this replaces: ``chat`` consulted the override and ``spawn`` did not,
+        so a user who set a mode on an instance had it silently ignored the moment
+        the main agent spawned onto that same handle.
+
+        ``requested`` wins because it is the more specific statement: the caller
+        named a mode for this one dispatch. Absent that, the instance's standing
+        override applies, and absent both the agent runs on its own default.
+
+        ``instance``, not the dispatch's handle: a call that names no instance
+        falls back to a fresh task or node id, which nobody could have set a mode
+        against and which is not this conversation's name. The same gate its
+        ``instance_state`` sibling takes, for the same reason.
+        """
+        if requested:
+            return requested
+        if not instance:
+            return None
+        return self.instance_mode(session_key, agent or "", instance)
+
+    def set_instance_mode(self, session_key: str | None, agent: str, handle: str, mode: str | None) -> str | None:
+        """Put one direct-chat instance in ``mode`` from its next turn on.
+
+        Held here rather than on the agent because the host is what re-asserts
+        it: the agent keys the mode by session id in memory, so it survives an
+        engine eviction but not a restart of the agent process -- and the pool
+        relaunches that process whenever the launch key changes. Sending it on
+        every turn is what repairs that without anyone noticing.
+
+        Not persisted, deliberately, and the same call the agent makes for its
+        own sessions: how much effort a conversation deserves is a judgement
+        made while having it, not a property of the record. A raven restart
+        therefore returns every instance to its agent's default.
+
+        ``None`` clears the override. Raises ``ValueError`` naming what the
+        agent does offer, so a caller is never left guessing at the vocabulary.
+        """
+        key = (session_key or "", agent, handle)
+        if mode is None:
+            self._instance_modes.pop(key, None)
+            return None
+        offered = [m.id for m in self.agent_modes(agent)]
+        if mode not in offered:
+            raise ValueError(
+                f"{agent!r} has no mode {mode!r}"
+                + (f"; it offers {', '.join(offered)}" if offered else "; it offers none")
+            )
+        self._instance_modes[key] = mode
+        logger.info("Instance {}/{} set to mode {}", agent, handle, mode)
+        return mode
 
     async def steer_instance(self, session_key: str, agent: str, handle: str, text: str) -> str:
         """Merge a person's words into the turn this instance is running now.
@@ -1141,6 +1237,7 @@ class SubagentManager:
                         instance=origin.get("instance"),
                         provider=provider,
                         model=model,
+                        mode=self.resolve_mode(session_key, agent, origin.get("instance"), origin.get("mode")),
                         **state_kwargs,
                     )
                 await _write_spawn_status(session_key, agent, handle, "completed")

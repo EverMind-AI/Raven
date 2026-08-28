@@ -9,10 +9,10 @@
       "model": "openai/gpt-5.6-sol-pro",
       "provider": "openrouter",
       "reasoningEffort": "high",
-      "maxToolIterations": 150,
+      "maxToolIterations": 40,
       "maxTokens": 16384,
       "contextWindowTokens": 65536,
-      "requestTimeoutSeconds": 1800
+      "requestTimeoutSeconds": 600
     }
   },
   "memory": {
@@ -35,6 +35,11 @@
   "drFlow": {
     "enabled": true,
     "thinkClosingTagRequired": false,
+    "maxIterations": 20,
+    "budgetNote": {
+      "enabled": true,
+      "warnRatio": 0.3
+    },
     "forceFinalize": {
       "enabled": true
     },
@@ -44,12 +49,32 @@
     "fetchFloor": {
       "enabled": true
     },
+    "fetchGate": {
+      "enabled": true,
+      "k": 15
+    },
+    "sufficiency": {
+      "enabled": true,
+      "minSearches": 1,
+      "minFetches": 2,
+      "timeoutSeconds": 30,
+      "attemptTimeoutSeconds": 15
+    },
     "verify": {
       "constraintRubric": true,
-      "strictRejectOnly": true
+      "strictRejectOnly": true,
+      "timeoutSeconds": 120,
+      "attemptTimeoutSeconds": 40
     },
     "digest": {
       "verbatimHeadChars": 800
+    },
+    "search": {
+      "saturation": {
+        "enabled": true,
+        "k": 5,
+        "onSaturate": "widen"
+      }
     },
     "toolsAllowlist": [
       "web_search",
@@ -68,7 +93,7 @@
       "reportFormatOverride": true,
       "reportDepth": true,
       "reportReminder": true,
-      "reportBounce": true,
+      "reportBounce": false,
       "processAppendix": true
     },
     "askUser": {

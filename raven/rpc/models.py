@@ -1985,6 +1985,33 @@ class SubagentsInstanceSteerResult(_Strict):
     status: Literal["injected", "no_turn", "unsupported"]
 
 
+class SubagentMode(_Strict):
+    """One operating profile an agent offers, as its probe measured it."""
+
+    id: str
+    name: str = ""
+    description: str = ""
+
+
+class SubagentsInstanceSetModeParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+    mode: str | None = Field(None, description="The mode id to switch to. Omit it to report without changing.")
+    clear: bool = Field(
+        False, description="Drop the override and go back to the agent's own default. Ignored when mode is given."
+    )
+
+
+class SubagentsInstanceSetModeResult(_Strict):
+    mode: str | None = Field(None, description="The mode now in force, or null when the agent's default is.")
+    available_modes: list[SubagentMode] = Field(
+        default_factory=list,
+        alias="availableModes",
+        description="Everything this agent offers, so one reply is enough to draw the control.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Method registry — used by tests/test_rpc_schema_match.py to walk every
 # method and compare its Pydantic Params/Result models against the OpenRPC
@@ -3598,6 +3625,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.instance.history": (SubagentsInstanceHistoryParams, SubagentsInstanceHistoryResult),
     "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
     "subagents.instance.steer": (SubagentsInstanceSteerParams, SubagentsInstanceSteerResult),
+    "subagents.instance.set_mode": (SubagentsInstanceSetModeParams, SubagentsInstanceSetModeResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),
