@@ -19,14 +19,14 @@ from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent.dag_graph import parse_dag_spec
+from raven.agent.subagent.dag_graph import DagNodeSpec, parse_dag_spec
 from raven.agent.subagent.dag_runner import DagRunResult, run_dag
 from raven.agent.subagent.dag_store import read_session_nodes
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.base import ToolResult
-from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
 #: How long a drain waits for a cancelled background run to finish. Generous
 #: against the work (a node's subprocess teardown is milliseconds) and short
@@ -4038,6 +4038,27 @@ async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run
             workdir="/w",
             run_root="/hist/mas_dag",
         )
+
+
+def test_the_node_resolver_hands_an_acp_backend_the_session_dir_rule(tmp_path: Path) -> None:
+    """The same hand-over ``SubagentManager._resolve_backend`` makes, and for the
+    reason the capture on the far side makes it necessary: an acp backend builds
+    its resident unprompted-turn recorder on the first prompt it sends and keeps
+    whatever resolver is bound by then, so a graph that dispatches before any
+    spawn or direct chat would leave that connection unable to record. The
+    registry hands both lanes the same instance -- ``build`` narrows only the
+    built-in kind -- so this is about which lane goes first, not about which
+    object each holds."""
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="oncall", command="true")],
+    )
+
+    backend = tool._resolve_node(DagNodeSpec(id="a", subagent="oncall", node_summary="node a", prompt_template="hi"))
+
+    assert backend is not None
+    assert backend._session_dir_for == tool._session_dir_for
+    assert Path(backend._session_dir_for("web:s1")).is_relative_to(tmp_path)
 
 
 async def test_a_node_writes_its_question_into_the_instance_log(tmp_path: Path) -> None:
