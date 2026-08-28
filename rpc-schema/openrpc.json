@@ -27,7 +27,9 @@
           "required": false,
           "schema": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Session channels to include; defaults to tui."
           }
         }
@@ -37,11 +39,15 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["sessions"],
+          "required": [
+            "sessions"
+          ],
           "properties": {
             "sessions": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SessionListItem" }
+              "items": {
+                "$ref": "#/components/schemas/SessionListItem"
+              }
             }
           }
         }
@@ -55,7 +61,9 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -63,14 +71,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["session"],
+          "required": [
+            "session"
+          ],
           "properties": {
-            "session": { "$ref": "#/components/schemas/SessionInfo" }
+            "session": {
+              "$ref": "#/components/schemas/SessionInfo"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        }
       ]
     },
     {
@@ -228,9 +242,15 @@
               "type": "string",
               "description": "Full tui:<chat_id> key; absent/null when no sessions exist."
             },
-            "source": { "type": "string" },
-            "started_at": { "type": "number" },
-            "title": { "type": "string" }
+            "source": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "number"
+            },
+            "title": {
+              "type": "string"
+            }
           }
         }
       },
@@ -262,10 +282,17 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["session_key", "pending"],
+          "required": [
+            "session_key",
+            "pending"
+          ],
           "properties": {
-            "title": { "type": "string" },
-            "session_key": { "type": "string" },
+            "title": {
+              "type": "string"
+            },
+            "session_key": {
+              "type": "string"
+            },
             "pending": {
               "type": "boolean",
               "description": "True when the title is held in memory for a lazy (never-saved) session and lands with the session's first save."
@@ -301,10 +328,18 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pinned", "session_key", "pending"],
+          "required": [
+            "pinned",
+            "session_key",
+            "pending"
+          ],
           "properties": {
-            "pinned": { "type": "boolean" },
-            "session_key": { "type": "string" },
+            "pinned": {
+              "type": "boolean"
+            },
+            "session_key": {
+              "type": "string"
+            },
             "pending": {
               "type": "boolean",
               "description": "True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save."
@@ -340,10 +375,18 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["archived", "session_key", "pending"],
+          "required": [
+            "archived",
+            "session_key",
+            "pending"
+          ],
           "properties": {
-            "archived": { "type": "boolean" },
-            "session_key": { "type": "string" },
+            "archived": {
+              "type": "boolean"
+            },
+            "session_key": {
+              "type": "string"
+            },
             "pending": {
               "type": "boolean",
               "description": "True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save."
@@ -371,7 +414,10 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["session_id", "cleared"],
+          "required": [
+            "session_id",
+            "cleared"
+          ],
           "properties": {
             "session_id": {
               "type": "string",
@@ -412,7 +458,9 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["removed"],
+          "required": [
+            "removed"
+          ],
           "properties": {
             "removed": {
               "type": "integer",
@@ -441,7 +489,9 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["exported"],
+          "required": [
+            "exported"
+          ],
           "properties": {
             "exported": {
               "type": "boolean",
@@ -475,7 +525,9 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "max_messages",
@@ -499,18 +551,27 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["messages", "total"],
+          "required": [
+            "messages",
+            "total"
+          ],
           "properties": {
             "messages": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SessionMessage" }
+              "items": {
+                "$ref": "#/components/schemas/SessionMessage"
+              }
             },
-            "total": { "type": "integer" }
+            "total": {
+              "type": "integer"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        }
       ]
     },
     {
@@ -520,37 +581,55 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "content",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "channel",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "chat_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "sender_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "media",
           "required": false,
-          "schema": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64
+          }
         },
         {
           "name": "target",
           "required": false,
-          "schema": { "$ref": "#/components/schemas/DirectTarget" }
+          "schema": {
+            "$ref": "#/components/schemas/DirectTarget"
+          }
         }
       ],
       "result": {
@@ -558,10 +637,18 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["turn_id", "accepted", "naming"],
+          "required": [
+            "turn_id",
+            "accepted",
+            "naming"
+          ],
           "properties": {
-            "turn_id": { "type": "string" },
-            "accepted": { "type": "boolean" },
+            "turn_id": {
+              "type": "string"
+            },
+            "accepted": {
+              "type": "boolean"
+            },
             "naming": {
               "type": "boolean",
               "description": "Whether a session-naming call was started for this turn. A client holding a placeholder for the name can settle it on false rather than wait out its grace period. Not quite the same as 'no session.titled is coming': a send that arrives while an earlier namer for the same session is still running is also declined, and that one's title may still land -- it overwrites, which is why the weaker guarantee is enough."
@@ -570,9 +657,15 @@
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" },
-        { "$ref": "#/components/errors/TurnInProgress" },
-        { "$ref": "#/components/errors/ModelNotAvailable" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        },
+        {
+          "$ref": "#/components/errors/TurnInProgress"
+        },
+        {
+          "$ref": "#/components/errors/ModelNotAvailable"
+        }
       ]
     },
     {
@@ -582,7 +675,9 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -590,14 +685,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["subscription_id"],
+          "required": [
+            "subscription_id"
+          ],
           "properties": {
-            "subscription_id": { "type": "string" }
+            "subscription_id": {
+              "type": "string"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        }
       ]
     },
     {
@@ -607,7 +708,9 @@
         {
           "name": "subscription_id",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -615,9 +718,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["unsubscribed"],
+          "required": [
+            "unsubscribed"
+          ],
           "properties": {
-            "unsubscribed": { "type": "boolean" }
+            "unsubscribed": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -630,12 +737,16 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "target",
           "required": false,
-          "schema": { "$ref": "#/components/schemas/DirectTarget" }
+          "schema": {
+            "$ref": "#/components/schemas/DirectTarget"
+          }
         }
       ],
       "result": {
@@ -643,14 +754,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["cancelled"],
+          "required": [
+            "cancelled"
+          ],
           "properties": {
-            "cancelled": { "type": "boolean" }
+            "cancelled": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        }
       ]
     },
     {
@@ -663,11 +780,15 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["servers"],
+          "required": [
+            "servers"
+          ],
           "properties": {
             "servers": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/McpServerInfo" }
+              "items": {
+                "$ref": "#/components/schemas/McpServerInfo"
+              }
             }
           }
         }
@@ -682,7 +803,9 @@
         {
           "name": "server_name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -690,16 +813,27 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ok", "latency_ms"],
+          "required": [
+            "ok",
+            "latency_ms"
+          ],
           "properties": {
-            "ok": { "type": "boolean" },
-            "latency_ms": { "type": "number" },
-            "error": { "type": "string" }
+            "ok": {
+              "type": "boolean"
+            },
+            "latency_ms": {
+              "type": "number"
+            },
+            "error": {
+              "type": "string"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/McpServerNotConnected" }
+        {
+          "$ref": "#/components/errors/McpServerNotConnected"
+        }
       ]
     },
     {
@@ -710,7 +844,9 @@
         {
           "name": "server_name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -718,18 +854,26 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["tools"],
+          "required": [
+            "tools"
+          ],
           "properties": {
             "tools": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/McpToolInfo" }
+              "items": {
+                "$ref": "#/components/schemas/McpToolInfo"
+              }
             }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/McpServerNotConnected" },
-        { "$ref": "#/components/errors/McpToolCallFailed" }
+        {
+          "$ref": "#/components/errors/McpServerNotConnected"
+        },
+        {
+          "$ref": "#/components/errors/McpToolCallFailed"
+        }
       ]
     },
     {
@@ -742,7 +886,11 @@
           "required": false,
           "schema": {
             "type": "string",
-            "enum": ["local", "remote", "all"],
+            "enum": [
+              "local",
+              "remote",
+              "all"
+            ],
             "description": "Filter by skill source; default 'all'."
           }
         }
@@ -752,11 +900,15 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["skills"],
+          "required": [
+            "skills"
+          ],
           "properties": {
             "skills": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SkillInfo" }
+              "items": {
+                "$ref": "#/components/schemas/SkillInfo"
+              }
             }
           }
         }
@@ -770,7 +922,9 @@
         {
           "name": "skill_name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -778,15 +932,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pinned"],
+          "required": [
+            "pinned"
+          ],
           "properties": {
-            "pinned": { "type": "boolean" }
+            "pinned": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SkillNotFound" },
-        { "$ref": "#/components/errors/SkillPinConflict" }
+        {
+          "$ref": "#/components/errors/SkillNotFound"
+        },
+        {
+          "$ref": "#/components/errors/SkillPinConflict"
+        }
       ]
     },
     {
@@ -796,7 +958,9 @@
         {
           "name": "skill_name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -804,14 +968,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["unpinned"],
+          "required": [
+            "unpinned"
+          ],
           "properties": {
-            "unpinned": { "type": "boolean" }
+            "unpinned": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SkillNotFound" }
+        {
+          "$ref": "#/components/errors/SkillNotFound"
+        }
       ]
     },
     {
@@ -821,7 +991,9 @@
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -829,13 +1001,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["model", "provider", "providers"],
+          "required": [
+            "model",
+            "provider",
+            "providers"
+          ],
           "properties": {
-            "model": { "type": "string" },
-            "provider": { "type": "string" },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
             "providers": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/ModelOptionProvider" }
+              "items": {
+                "$ref": "#/components/schemas/ModelOptionProvider"
+              }
             }
           }
         }
@@ -849,23 +1031,31 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_key",
           "description": "Empty for a local deployment, which is reached by address and has no key. Required for every other credential shape, and refused for a local one.",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_base",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -873,15 +1063,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider"],
+          "required": [
+            "provider"
+          ],
           "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
+            "provider": {
+              "$ref": "#/components/schemas/ModelOptionProvider"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -891,12 +1089,16 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -904,9 +1106,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["disconnected"],
+          "required": [
+            "disconnected"
+          ],
           "properties": {
-            "disconnected": { "type": "boolean" }
+            "disconnected": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -919,17 +1125,23 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "model",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -937,14 +1149,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider"],
+          "required": [
+            "provider"
+          ],
           "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
+            "provider": {
+              "$ref": "#/components/schemas/ModelOptionProvider"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -954,17 +1172,23 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "model",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -972,14 +1196,20 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider"],
+          "required": [
+            "provider"
+          ],
           "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
+            "provider": {
+              "$ref": "#/components/schemas/ModelOptionProvider"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -989,12 +1219,16 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1002,17 +1236,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["endpoints"],
+          "required": [
+            "endpoints"
+          ],
           "properties": {
             "endpoints": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+              "items": {
+                "$ref": "#/components/schemas/ProviderEndpointInfo"
+              }
             }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1022,28 +1262,38 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "label",
           "description": "Idempotency key: an existing entry with this label is replaced wholesale.",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_key",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_base",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1051,17 +1301,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["endpoints"],
+          "required": [
+            "endpoints"
+          ],
           "properties": {
             "endpoints": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+              "items": {
+                "$ref": "#/components/schemas/ProviderEndpointInfo"
+              }
             }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1071,17 +1327,23 @@
         {
           "name": "slug",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "label",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1089,17 +1351,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["endpoints"],
+          "required": [
+            "endpoints"
+          ],
           "properties": {
             "endpoints": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+              "items": {
+                "$ref": "#/components/schemas/ProviderEndpointInfo"
+              }
             }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1111,7 +1379,9 @@
           "required": false,
           "schema": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "If omitted, return all whitelisted fields. Unknown keys are silently dropped."
           }
         }
@@ -1121,11 +1391,15 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["config"],
+          "required": [
+            "config"
+          ],
           "properties": {
             "config": {
               "type": "object",
-              "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
             }
           }
         }
@@ -1139,30 +1413,44 @@
         {
           "name": "key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "value",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/JsonValue" }
+          "schema": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
         },
         {
           "name": "session_id",
           "summary": "Scopes a model switch to one conversation.",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "provider",
           "summary": "Vendor for a model switch; derived from the id when absent.",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "scope",
           "summary": "How far a model switch reaches: this conversation, or what new ones start on.",
           "required": false,
-          "schema": { "type": "string", "enum": ["session", "default"] }
+          "schema": {
+            "type": "string",
+            "enum": [
+              "session",
+              "default"
+            ]
+          }
         }
       ],
       "result": {
@@ -1170,25 +1458,50 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["applied", "previous"],
+          "required": [
+            "applied",
+            "previous"
+          ],
           "properties": {
-            "applied": { "type": "boolean" },
+            "applied": {
+              "type": "boolean"
+            },
             "previous": {
               "oneOf": [
-                { "$ref": "#/components/schemas/JsonValue" },
-                { "type": "null" }
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
-            "value": { "type": "string" },
-            "scope": { "type": "string", "enum": ["session", "default"] },
-            "session_id": { "type": "string" },
-            "applies_to_session": { "type": "boolean" }
+            "value": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "session",
+                "default"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "applies_to_session": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigFieldReadonly" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigFieldReadonly"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1198,7 +1511,10 @@
         {
           "name": "session_id",
           "required": false,
-          "schema": { "type": "string", "description": "Absent or unknown is an empty list, not an error." }
+          "schema": {
+            "type": "string",
+            "description": "Absent or unknown is an empty list, not an error."
+          }
         }
       ],
       "result": {
@@ -1206,16 +1522,24 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["items"],
+          "required": [
+            "items"
+          ],
           "properties": {
             "items": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SubagentCall" }
+              "items": {
+                "$ref": "#/components/schemas/SubagentCall"
+              }
             }
           }
         }
       },
-      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "subagent.context",
@@ -1224,12 +1548,17 @@
         {
           "name": "id",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "session_id",
           "required": true,
-          "schema": { "type": "string", "description": "A call is addressed by conversation and call, never by call alone." }
+          "schema": {
+            "type": "string",
+            "description": "A call is addressed by conversation and call, never by call alone."
+          }
         }
       ],
       "result": {
@@ -1237,31 +1566,64 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["id", "messages"],
+          "required": [
+            "id",
+            "messages"
+          ],
           "properties": {
-            "id": { "type": "string" },
+            "id": {
+              "type": "string"
+            },
             "messages": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/TranscriptMessage" }
+              "items": {
+                "$ref": "#/components/schemas/TranscriptMessage"
+              }
             },
-            "status": { "type": "string" },
-            "label": { "type": "string" },
-            "agent": { "type": "string" },
-            "started_at": { "type": "string" },
-            "ended_at": { "type": "string" },
+            "status": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "ended_at": {
+              "type": "string"
+            },
             "tool_calls": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "What it did between the question and the answer, in order. Empty where the transport that ran it has no per-step visibility."
             },
-            "tokens": { "type": "integer", "description": "Input plus output; null when usage was not reported." },
-            "tokens_in": { "type": "integer" },
-            "tokens_out": { "type": "integer" },
-            "thought_chars": { "type": "integer", "description": "How much reasoning it emitted, where the transport reports it separately from the answer." }
+            "tokens": {
+              "type": "integer",
+              "description": "Input plus output; null when usage was not reported."
+            },
+            "tokens_in": {
+              "type": "integer"
+            },
+            "tokens_out": {
+              "type": "integer"
+            },
+            "thought_chars": {
+              "type": "integer",
+              "description": "How much reasoning it emitted, where the transport reports it separately from the answer."
+            }
           }
         }
       },
-      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "subagents.list",
@@ -1270,7 +1632,9 @@
         {
           "name": "probe",
           "required": false,
-          "schema": { "type": "boolean" }
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -1278,16 +1642,24 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rows"],
+          "required": [
+            "rows"
+          ],
           "properties": {
             "rows": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SubagentRow" }
+              "items": {
+                "$ref": "#/components/schemas/SubagentRow"
+              }
             }
           }
         }
       },
-      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "subagents.add",
@@ -1296,22 +1668,30 @@
         {
           "name": "preset",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "name",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "description",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_key",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1319,16 +1699,27 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["added", "name"],
+          "required": [
+            "added",
+            "name"
+          ],
           "properties": {
-            "added": { "type": "boolean" },
-            "name": { "type": "string" }
+            "added": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SubagentNotFound" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1338,22 +1729,30 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "new_name",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "description",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "api_key",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1361,16 +1760,27 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["updated", "name"],
+          "required": [
+            "updated",
+            "name"
+          ],
           "properties": {
-            "updated": { "type": "boolean" },
-            "name": { "type": "string" }
+            "updated": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SubagentNotFound" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1380,7 +1790,9 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1388,15 +1800,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["removed"],
+          "required": [
+            "removed"
+          ],
           "properties": {
-            "removed": { "type": "boolean" }
+            "removed": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SubagentNotFound" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1407,7 +1827,9 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1415,7 +1837,10 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["building", "detail"],
+          "required": [
+            "building",
+            "detail"
+          ],
           "properties": {
             "building": {
               "type": "boolean",
@@ -1441,12 +1866,16 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "enabled",
           "required": true,
-          "schema": { "type": "boolean" }
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -1454,15 +1883,23 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled"],
+          "required": [
+            "enabled"
+          ],
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SubagentNotFound" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1474,16 +1911,24 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rows"],
+          "required": [
+            "rows"
+          ],
           "properties": {
             "rows": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/SubagentRow" }
+              "items": {
+                "$ref": "#/components/schemas/SubagentRow"
+              }
             }
           }
         }
       },
-      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "subagents.test",
@@ -1492,14 +1937,19 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "source",
           "required": false,
           "schema": {
             "type": "string",
-            "enum": ["config", "preset"]
+            "enum": [
+              "config",
+              "preset"
+            ]
           }
         }
       ],
@@ -1508,19 +1958,37 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ok", "detail", "elapsed_ms"],
+          "required": [
+            "ok",
+            "detail",
+            "elapsed_ms"
+          ],
           "properties": {
-            "ok": { "type": "boolean" },
-            "detail": { "type": "string" },
-            "elapsed_ms": { "type": "integer" },
-            "reply": { "type": "string" },
-            "cancelled": { "type": "boolean" }
+            "ok": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "elapsed_ms": {
+              "type": "integer"
+            },
+            "reply": {
+              "type": "string"
+            },
+            "cancelled": {
+              "type": "boolean"
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SubagentNotFound" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        },
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1530,7 +1998,9 @@
         {
           "name": "name",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1538,9 +2008,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["cancelled"],
+          "required": [
+            "cancelled"
+          ],
           "properties": {
-            "cancelled": { "type": "boolean" }
+            "cancelled": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -1553,7 +2027,9 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1561,11 +2037,16 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["instances", "pending_handoff_count"],
+          "required": [
+            "instances",
+            "pending_handoff_count"
+          ],
           "properties": {
             "instances": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/InstanceRow" }
+              "items": {
+                "$ref": "#/components/schemas/InstanceRow"
+              }
             },
             "pending_handoff_count": {
               "type": "integer",
@@ -1583,7 +2064,9 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "agent",
@@ -1599,9 +2082,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["instance"],
+          "required": [
+            "instance"
+          ],
           "properties": {
-            "instance": { "$ref": "#/components/schemas/InstanceRow" }
+            "instance": {
+              "$ref": "#/components/schemas/InstanceRow"
+            }
           }
         }
       },
@@ -1614,17 +2101,23 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "agent",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "handle",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1632,11 +2125,15 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["turns"],
+          "required": [
+            "turns"
+          ],
           "properties": {
             "turns": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/DirectTurn" }
+              "items": {
+                "$ref": "#/components/schemas/DirectTurn"
+              }
             }
           }
         }
@@ -1650,17 +2147,23 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "agent",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "handle",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1668,9 +2171,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["removed"],
+          "required": [
+            "removed"
+          ],
           "properties": {
-            "removed": { "type": "boolean" }
+            "removed": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -1683,22 +2190,30 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "agent",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "handle",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "text",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1706,9 +2221,18 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["status"],
+          "required": [
+            "status"
+          ],
           "properties": {
-            "status": { "type": "string", "enum": ["injected", "no_turn", "unsupported"] }
+            "status": {
+              "type": "string",
+              "enum": [
+                "injected",
+                "no_turn",
+                "unsupported"
+              ]
+            }
           }
         }
       },
@@ -1721,14 +2245,18 @@
         {
           "name": "client_version",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "client_capabilities",
           "required": false,
           "schema": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         },
         {
@@ -1745,35 +2273,54 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["server_version", "server_capabilities", "session"],
+          "required": [
+            "server_version",
+            "server_capabilities",
+            "session"
+          ],
           "properties": {
-            "server_version": { "type": "string" },
+            "server_version": {
+              "type": "string"
+            },
             "server_capabilities": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "session": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["default_channel", "default_session_key"],
+              "required": [
+                "default_channel",
+                "default_session_key"
+              ],
               "properties": {
                 "default_channel": {
                   "type": "string",
                   "description": "The channel this dispatcher's turns run on; the terminal and the served page share one."
                 },
-                "default_session_key": { "type": "string" }
+                "default_session_key": {
+                  "type": "string"
+                }
               }
             },
             "platform": {
               "type": "string",
-              "enum": ["mac", "windows", "linux"],
+              "enum": [
+                "mac",
+                "windows",
+                "linux"
+              ],
               "description": "The gateway host's OS family, so a client can word host-side actions (Finder vs Explorer)."
             }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
@@ -1785,13 +2332,18 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pong", "server_time_ms"],
+          "required": [
+            "pong",
+            "server_time_ms"
+          ],
           "properties": {
             "pong": {
               "type": "boolean",
               "const": true
             },
-            "server_time_ms": { "type": "number" }
+            "server_time_ms": {
+              "type": "number"
+            }
           }
         }
       },
@@ -1815,14 +2367,22 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["server_version", "schema_version", "raven_version"],
+          "required": [
+            "server_version",
+            "schema_version",
+            "raven_version"
+          ],
           "properties": {
-            "server_version": { "type": "string" },
+            "server_version": {
+              "type": "string"
+            },
             "schema_version": {
               "type": "string",
               "description": "OpenRPC info.version mirrored back to client."
             },
-            "raven_version": { "type": "string" }
+            "raven_version": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1838,7 +2398,9 @@
           "required": true,
           "schema": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Pre-tokenized argv (TUI side has already shlex-split)."
           }
         },
@@ -1863,12 +2425,20 @@
       ],
       "result": {
         "name": "CliDispatchResult",
-        "schema": { "$ref": "#/components/schemas/CliResult" }
+        "schema": {
+          "$ref": "#/components/schemas/CliResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/CliCommandFailed" },
-        { "$ref": "#/components/errors/CliCommandTimeout" },
-        { "$ref": "#/components/errors/NotDispatchCompatible" }
+        {
+          "$ref": "#/components/errors/CliCommandFailed"
+        },
+        {
+          "$ref": "#/components/errors/CliCommandTimeout"
+        },
+        {
+          "$ref": "#/components/errors/NotDispatchCompatible"
+        }
       ]
     },
     {
@@ -1881,9 +2451,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider_configured"],
+          "required": [
+            "provider_configured"
+          ],
           "properties": {
-            "provider_configured": { "type": "boolean" }
+            "provider_configured": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -1894,21 +2468,54 @@
       "summary": "Reconcile the live MCP server set with the config on disk.",
       "description": "MUST NOT throw. Today's only caller is the TUI's /reload-mcp, typed by a person; the method is also the seam a config-file watch would use, and such a caller fires on a timer, so a failure is reported as status='noop' with a message rather than as an error. Reloading moves the tool list, which is the first thing in the cached prompt prefix, so a caller that does not send confirm gets status='confirm_required' and nothing is reconnected. There is no 'and stop asking' flag: persisting that needs a settings section this config does not have.",
       "params": [
-        { "name": "session_id", "required": false, "schema": { "type": "string" } },
-        { "name": "confirm", "required": false, "schema": { "type": "boolean" } }
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
       ],
       "result": {
         "name": "ReloadMcpResult",
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ok", "status", "message", "reloaded", "tools_changed"],
+          "required": [
+            "ok",
+            "status",
+            "message",
+            "reloaded",
+            "tools_changed"
+          ],
           "properties": {
-            "ok": { "type": "boolean" },
-            "status": { "type": "string", "enum": ["reloaded", "noop", "confirm_required"] },
-            "message": { "type": "string" },
-            "reloaded": { "type": "integer" },
-            "tools_changed": { "type": "boolean" }
+            "ok": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "reloaded",
+                "noop",
+                "confirm_required"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "reloaded": {
+              "type": "integer"
+            },
+            "tools_changed": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -1921,7 +2528,9 @@
       "params": [],
       "result": {
         "name": "CommandsCatalogResult",
-        "schema": { "$ref": "#/components/schemas/CommandsCatalogResponse" }
+        "schema": {
+          "$ref": "#/components/schemas/CommandsCatalogResponse"
+        }
       },
       "errors": []
     },
@@ -1932,15 +2541,21 @@
         {
           "name": "action",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "VoiceToggleResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -1950,20 +2565,28 @@
         {
           "name": "action",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "url",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "BrowserManageResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -1973,15 +2596,21 @@
         {
           "name": "name",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "SpawnTreeSaveResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -1990,10 +2619,14 @@
       "params": [],
       "result": {
         "name": "SpawnTreeListResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2003,15 +2636,21 @@
         {
           "name": "name",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "SpawnTreeLoadResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2020,10 +2659,14 @@
       "params": [],
       "result": {
         "name": "ProcessStopResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2032,10 +2675,14 @@
       "params": [],
       "result": {
         "name": "RollbackListResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2045,15 +2692,21 @@
         {
           "name": "id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "RollbackDiffResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2063,15 +2716,21 @@
         {
           "name": "id",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
         "name": "RollbackRestoreResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2080,10 +2739,14 @@
       "params": [],
       "result": {
         "name": "ToolsConfigureResult",
-        "schema": { "$ref": "#/components/schemas/StubResult" }
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" }
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
       ]
     },
     {
@@ -2091,11 +2754,19 @@
       "summary": "Read one run_subagent_dag run back off disk.",
       "description": "The live dag.* progress events are never replayed, so this is how a client that missed them rebuilds or repairs a graph. An unfinalized run has no manifest, so per-node state is overlaid from the instance registry.",
       "params": [
-        { "name": "run_id", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "run_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
         {
           "name": "session_key",
           "required": false,
-          "schema": { "type": "string" },
+          "schema": {
+            "type": "string"
+          },
           "description": "Scopes the registry rows consulted for an unfinalized run's overlay."
         }
       ],
@@ -2104,9 +2775,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["run"],
+          "required": [
+            "run"
+          ],
           "properties": {
-            "run": { "$ref": "#/components/schemas/DagRunSnapshot" }
+            "run": {
+              "$ref": "#/components/schemas/DagRunSnapshot"
+            }
           }
         }
       }
@@ -2116,18 +2791,34 @@
       "summary": "Read one DAG node's rendered prompt and output.",
       "description": "Neither is carried by the graph: the manifest inlines only the leaf nodes' text, and the tool result kept in the transcript is clamped to 200 chars.",
       "params": [
-        { "name": "run_id", "required": true, "schema": { "type": "string" } },
-        { "name": "node", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "run_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "node",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
         {
           "name": "max_output_chars",
           "required": false,
-          "schema": { "type": "integer" },
+          "schema": {
+            "type": "integer"
+          },
           "description": "Head of the output to return; the file itself is uncapped. Defaults to 20000."
         },
         {
           "name": "session_key",
           "required": false,
-          "schema": { "type": "string" },
+          "schema": {
+            "type": "string"
+          },
           "description": "Which conversation's run to read, as dag.get already takes. A run directory lives inside its session."
         }
       ],
@@ -2136,9 +2827,13 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["node"],
+          "required": [
+            "node"
+          ],
           "properties": {
-            "node": { "$ref": "#/components/schemas/DagNodeDetail" }
+            "node": {
+              "$ref": "#/components/schemas/DagNodeDetail"
+            }
           }
         }
       }
@@ -5869,13 +6564,18 @@
           "status": {
             "enum": [
               "ok",
-              "error"
+              "error",
+              "exception"
             ],
             "type": "string"
           },
           "run_id": {
             "description": "Set for kind=dag, so a client can open the run.",
             "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Set for a dag node's own message, so a client can place it against that row."
           }
         },
         "required": [
@@ -6664,7 +7364,15 @@
       },
       "JsonValue": {
         "description": "Recursive JSON value type. Implemented as an unconstrained object in JSON Schema; downstream Pydantic uses typing.Any.",
-        "type": ["string", "number", "integer", "boolean", "null", "array", "object"]
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean",
+          "null",
+          "array",
+          "object"
+        ]
       },
       "SessionInfo": {
         "type": "object",
@@ -6684,8 +7392,12 @@
             "type": "string",
             "description": "<channel>:<chat_id> composite key."
           },
-          "channel": { "type": "string" },
-          "chat_id": { "type": "string" },
+          "channel": {
+            "type": "string"
+          },
+          "chat_id": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string",
             "description": "ISO-8601 timestamp."
@@ -6694,25 +7406,41 @@
             "type": "string",
             "description": "ISO-8601 timestamp."
           },
-          "message_count": { "type": "integer" },
+          "message_count": {
+            "type": "integer"
+          },
           "metadata": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
           },
-          "has_pending_clarification": { "type": "boolean" }
+          "has_pending_clarification": {
+            "type": "boolean"
+          }
         }
       },
       "SessionListItem": {
         "type": "object",
         "description": "One row in the TUI session picker (gatewayTypes.ts SessionListItem).",
         "additionalProperties": false,
-        "required": ["id", "message_count", "preview", "last_message_preview", "started_at", "updated_at", "title"],
+        "required": [
+          "id",
+          "message_count",
+          "preview",
+          "last_message_preview",
+          "started_at",
+          "updated_at",
+          "title"
+        ],
         "properties": {
           "id": {
             "type": "string",
             "description": "Full session_key: <channel>:<chat_id>."
           },
-          "message_count": { "type": "integer" },
+          "message_count": {
+            "type": "integer"
+          },
           "preview": {
             "type": "string",
             "description": "First user message, used as the untitled-session identity fallback."
@@ -6721,7 +7449,9 @@
             "type": "string",
             "description": "Latest non-empty user or assistant message text."
           },
-          "source": { "type": "string" },
+          "source": {
+            "type": "string"
+          },
           "started_at": {
             "type": "number",
             "description": "Unix timestamp derived from created_at."
@@ -6730,7 +7460,9 @@
             "type": "number",
             "description": "Unix timestamp of the latest user or assistant message."
           },
-          "title": { "type": "string" },
+          "title": {
+            "type": "string"
+          },
           "pinned": {
             "type": "boolean",
             "description": "User pinned this session to the top of the picker."
@@ -6740,7 +7472,12 @@
       "SessionMessage": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["index", "role", "content", "timestamp"],
+        "required": [
+          "index",
+          "role",
+          "content",
+          "timestamp"
+        ],
         "properties": {
           "index": {
             "type": "integer",
@@ -6748,46 +7485,78 @@
           },
           "role": {
             "type": "string",
-            "enum": ["user", "assistant", "system", "tool"]
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "tool"
+            ]
           },
-          "content": { "type": "string" },
+          "content": {
+            "type": "string"
+          },
           "timestamp": {
             "type": "string",
             "description": "ISO-8601 timestamp."
           },
           "metadata": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
           }
         }
       },
       "McpServerInfo": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "transport", "connected", "tool_count"],
+        "required": [
+          "name",
+          "transport",
+          "connected",
+          "tool_count"
+        ],
         "properties": {
-          "name": { "type": "string" },
+          "name": {
+            "type": "string"
+          },
           "transport": {
             "type": "string",
-            "enum": ["stdio", "sse", "streamableHttp"]
+            "enum": [
+              "stdio",
+              "sse",
+              "streamableHttp"
+            ]
           },
-          "connected": { "type": "boolean" },
-          "tool_count": { "type": "integer" }
+          "connected": {
+            "type": "boolean"
+          },
+          "tool_count": {
+            "type": "integer"
+          }
         }
       },
       "McpToolInfo": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "description", "parameters"],
+        "required": [
+          "name",
+          "description",
+          "parameters"
+        ],
         "properties": {
           "name": {
             "type": "string",
             "description": "Raw tool name (without mcp_<server>_ prefix)."
           },
-          "description": { "type": "string" },
+          "description": {
+            "type": "string"
+          },
           "parameters": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "description": "JSON Schema for the tool's input arguments."
           }
         }
@@ -6795,42 +7564,103 @@
       "SkillInfo": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "source", "pinned", "description", "tags"],
+        "required": [
+          "name",
+          "source",
+          "pinned",
+          "description",
+          "tags"
+        ],
         "properties": {
-          "name": { "type": "string" },
+          "name": {
+            "type": "string"
+          },
           "source": {
             "type": "string",
-            "enum": ["local", "remote"]
+            "enum": [
+              "local",
+              "remote"
+            ]
           },
-          "pinned": { "type": "boolean" },
-          "description": { "type": "string" },
+          "pinned": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
           "tags": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
       "SubagentCall": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "label", "status", "message_count"],
-      "properties": {
-        "id": { "type": "string", "description": "A spawn's call id, or '<run_id>/<node>' for a graph node. Opaque to a client: a spawn row opens through subagent.context and a dag row through dag.node, which is what kind is for." },
-        "kind": { "type": "string", "description": "spawn | dag. Which delegation path made this, and so how it is opened." },
-        "run_id": { "type": "string", "description": "dag rows only: the graph run this node belongs to." },
-        "node": { "type": "string", "description": "dag rows only: the node's id inside that run." },
-        "label": { "type": "string", "description": "What it was asked, in short." },
-        "status": { "type": "string", "description": "run | ok | error | cancelled | queued | skipped. The last two only occur for graph nodes." },
-        "agent": { "type": "string", "description": "The external agent that ran it, or null for a raven subagent." },
-        "instance": { "type": "string", "description": "The handle sharing one stateful agent session, if any." },
-        "started_at": { "type": "string", "description": "ISO 8601; the record stores epoch millis." },
-        "ended_at": { "type": "string", "description": "Absent while it is still running." },
-        "message_count": { "type": "integer", "description": "What was asked, plus the answer once there is one." },
-        "tokens": { "type": "integer", "description": "Input plus output tokens this run spent. Null, not zero, when the transport that ran it cannot report usage -- the cli lane never can." },
-        "tool_call_count": { "type": "integer", "description": "How many tools it called. Null where the transport has no per-step visibility." }
-      }
-    },
-    "SubagentRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "status",
+          "message_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "A spawn's call id, or '<run_id>/<node>' for a graph node. Opaque to a client: a spawn row opens through subagent.context and a dag row through dag.node, which is what kind is for."
+          },
+          "kind": {
+            "type": "string",
+            "description": "spawn | dag. Which delegation path made this, and so how it is opened."
+          },
+          "run_id": {
+            "type": "string",
+            "description": "dag rows only: the graph run this node belongs to."
+          },
+          "node": {
+            "type": "string",
+            "description": "dag rows only: the node's id inside that run."
+          },
+          "label": {
+            "type": "string",
+            "description": "What it was asked, in short."
+          },
+          "status": {
+            "type": "string",
+            "description": "run | ok | error | cancelled | queued | skipped. The last two only occur for graph nodes."
+          },
+          "agent": {
+            "type": "string",
+            "description": "The external agent that ran it, or null for a raven subagent."
+          },
+          "instance": {
+            "type": "string",
+            "description": "The handle sharing one stateful agent session, if any."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "ISO 8601; the record stores epoch millis."
+          },
+          "ended_at": {
+            "type": "string",
+            "description": "Absent while it is still running."
+          },
+          "message_count": {
+            "type": "integer",
+            "description": "What was asked, plus the answer once there is one."
+          },
+          "tokens": {
+            "type": "integer",
+            "description": "Input plus output tokens this run spent. Null, not zero, when the transport that ran it cannot report usage -- the cli lane never can."
+          },
+          "tool_call_count": {
+            "type": "integer",
+            "description": "How many tools it called. Null where the transport has no per-step visibility."
+          }
+        }
+      },
+      "SubagentRow": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -6846,15 +7676,30 @@
           "test_running"
         ],
         "properties": {
-          "name": { "type": "string" },
-          "preset": { "type": "string" },
+          "name": {
+            "type": "string"
+          },
+          "preset": {
+            "type": "string"
+          },
           "kind": {
             "type": "string",
-            "enum": ["builtin", "cli", "openai", "acp"]
+            "enum": [
+              "builtin",
+              "cli",
+              "openai",
+              "acp"
+            ]
           },
-          "description": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "configured": { "type": "boolean" },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
           "vendored": {
             "type": "boolean",
             "description": "Discovered under `subagents/` rather than written into config: one of the raven builds that ship beside this one, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (an unbuilt venv leaves it listed and disabled). Absent from a server that predates discovery."
@@ -6877,18 +7722,39 @@
           },
           "group": {
             "type": "string",
-            "enum": ["builtin", "installed", "uninstalled"]
+            "enum": [
+              "builtin",
+              "installed",
+              "uninstalled"
+            ]
           },
           "probe_status": {
             "type": "string",
-            "enum": ["ready", "attention", "missing", "unknown"]
+            "enum": [
+              "ready",
+              "attention",
+              "missing",
+              "unknown"
+            ]
           },
-          "probe_detail": { "type": "string" },
-          "has_api_key": { "type": "boolean" },
-          "last_test_ok": { "type": "boolean" },
-          "last_test_detail": { "type": "string" },
-          "last_test_at_ms": { "type": "integer" },
-          "test_running": { "type": "boolean" }
+          "probe_detail": {
+            "type": "string"
+          },
+          "has_api_key": {
+            "type": "boolean"
+          },
+          "last_test_ok": {
+            "type": "boolean"
+          },
+          "last_test_detail": {
+            "type": "string"
+          },
+          "last_test_at_ms": {
+            "type": "integer"
+          },
+          "test_running": {
+            "type": "boolean"
+          }
         }
       },
       "ModelOptionProvider": {
@@ -6906,23 +7772,45 @@
           "warning"
         ],
         "properties": {
-          "slug": { "type": "string" },
-          "name": { "type": "string" },
-          "authenticated": { "type": "boolean" },
-          "is_current": { "type": "boolean" },
-          "auth_type": { "type": "string" },
-          "key_env": { "type": "string" },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "authenticated": {
+            "type": "boolean"
+          },
+          "is_current": {
+            "type": "boolean"
+          },
+          "auth_type": {
+            "type": "string"
+          },
+          "key_env": {
+            "type": "string"
+          },
           "models": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "total_models": { "type": "integer" },
-          "needs_api_base": { "type": "boolean" },
-          "warning": { "type": "string" },
+          "total_models": {
+            "type": "integer"
+          },
+          "needs_api_base": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "model_labels": {
             "type": "object",
             "description": "Keyed by the model id as it appears in `models`.",
-            "additionalProperties": { "$ref": "#/components/schemas/ModelLabel" }
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelLabel"
+            }
           }
         }
       },
@@ -6930,27 +7818,42 @@
         "type": "object",
         "additionalProperties": false,
         "description": "How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.",
-        "required": ["label"],
+        "required": [
+          "label"
+        ],
         "properties": {
-          "label": { "type": "string" },
-          "description": { "type": "string" }
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
         }
       },
       "ProviderEndpointInfo": {
         "type": "object",
         "additionalProperties": false,
         "description": "One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.",
-        "required": ["label", "api_key"],
+        "required": [
+          "label",
+          "api_key"
+        ],
         "properties": {
-          "label": { "type": "string" },
+          "label": {
+            "type": "string"
+          },
           "api_key": {
             "type": "string",
             "description": "Redacted for display: `****set****` or `(empty)`."
           },
-          "api_base": { "type": "string" },
+          "api_base": {
+            "type": "string"
+          },
           "extra_headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       },
@@ -6958,28 +7861,60 @@
         "type": "object",
         "additionalProperties": false,
         "description": "One sub-agent instance a turn is addressed to. Null means the main conversation.",
-        "required": ["agent", "handle"],
+        "required": [
+          "agent",
+          "handle"
+        ],
         "properties": {
-          "agent": { "type": "string" },
-          "handle": { "type": "string" }
+          "agent": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          }
         }
       },
       "InstanceRow": {
         "type": "object",
         "additionalProperties": false,
         "description": "One sub-agent instance this session has used, verbatim from the instance registry apart from `resumable`. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` name the DAG node an instance belongs to: set on a dag-node row, and on the ordinary row of a stateful node, which is what lets one invocation's two rows be reported as one.",
-        "required": ["sessionKey", "agent", "handle", "kind"],
+        "required": [
+          "sessionKey",
+          "agent",
+          "handle",
+          "kind"
+        ],
         "properties": {
-          "sessionKey": { "type": "string" },
-          "agent": { "type": "string" },
-          "handle": { "type": "string" },
-          "kind": { "type": "string" },
-          "status": { "type": "string" },
-          "agentId": { "type": "string" },
-          "runId": { "type": "string" },
-          "nodeId": { "type": "string" },
-          "createdAtMs": { "type": "integer" },
-          "updatedAtMs": { "type": "integer" },
+          "sessionKey": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "createdAtMs": {
+            "type": "integer"
+          },
+          "updatedAtMs": {
+            "type": "integer"
+          },
           "resumable": {
             "type": "boolean",
             "description": "Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row."
@@ -6998,14 +7933,36 @@
         "type": "object",
         "additionalProperties": false,
         "description": "One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.",
-        "required": ["call_id", "role", "content", "at_ms"],
+        "required": [
+          "call_id",
+          "role",
+          "content",
+          "at_ms"
+        ],
         "properties": {
-          "call_id": { "type": "string" },
-          "role": { "type": "string", "enum": ["user", "assistant", "tool"] },
-          "content": { "type": "string" },
-          "at_ms": { "type": "integer" },
-          "prompt_path": { "type": "string" },
-          "out_path": { "type": "string" },
+          "call_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "at_ms": {
+            "type": "integer"
+          },
+          "prompt_path": {
+            "type": "string"
+          },
+          "out_path": {
+            "type": "string"
+          },
           "reasoning_content": {
             "type": "string",
             "description": "The thought that preceded this turn, where the transport reports one."
@@ -7013,7 +7970,9 @@
           "tool_calls": {
             "type": "array",
             "description": "What this turn called on the way, matched to a later role='tool' row by id.",
-            "items": { "$ref": "#/components/schemas/TranscriptToolCall" }
+            "items": {
+              "$ref": "#/components/schemas/TranscriptToolCall"
+            }
           },
           "tool_call_id": {
             "type": "string",
@@ -7036,21 +7995,43 @@
       "UsageSnapshot": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
         "properties": {
-          "prompt_tokens": { "type": "integer" },
-          "completion_tokens": { "type": "integer" },
-          "total_tokens": { "type": "integer" },
-          "cost_usd": { "type": "number" },
-          "context_used": { "type": "integer" },
-          "context_max": { "type": "integer" },
-          "context_percent": { "type": "integer" }
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "context_used": {
+            "type": "integer"
+          },
+          "context_max": {
+            "type": "integer"
+          },
+          "context_percent": {
+            "type": "integer"
+          }
         }
       },
       "CliResult": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["stdout", "stderr", "exit_code"],
+        "required": [
+          "stdout",
+          "stderr",
+          "exit_code"
+        ],
         "properties": {
           "stdout": {
             "type": "string",
@@ -7073,7 +8054,9 @@
       "StubResult": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "string",
@@ -7088,11 +8071,19 @@
       "CommandsCatalogResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["canon", "pairs", "sub", "categories", "skill_count"],
+        "required": [
+          "canon",
+          "pairs",
+          "sub",
+          "categories",
+          "skill_count"
+        ],
         "properties": {
           "canon": {
             "type": "object",
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "alias (with leading /) -> canonical mapping. v0.1: alias = canonical 1:1 (no short aliases generated; TS-side prefix-1-match handles partials). Group + subcommand are space-separated (e.g. '/channels status'), not slash- or dot-separated."
           },
           "pairs": {
@@ -7101,8 +8092,14 @@
             "items": {
               "type": "array",
               "prefixItems": [
-                { "type": "string", "description": "alias (with leading /)" },
-                { "type": "string", "description": "canonical (with leading /)" }
+                {
+                  "type": "string",
+                  "description": "alias (with leading /)"
+                },
+                {
+                  "type": "string",
+                  "description": "canonical (with leading /)"
+                }
               ],
               "minItems": 2,
               "maxItems": 2
@@ -7112,13 +8109,17 @@
             "type": "object",
             "additionalProperties": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "description": "group -> [subcommand]. Blacklisted entries (e.g. channels login) and agent-REPL are filtered out."
           },
           "categories": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Ordered category list: '(top-level)' first then alphabetical group names. Fully filtered groups (e.g. tui) do not appear."
           },
           "skill_count": {
@@ -7136,34 +8137,74 @@
         "description": "A turn the runtime opened (a delegated result re-entering the conversation) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "turn.started" },
+          "type": {
+            "type": "string",
+            "const": "turn.started"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["turn_id"],
+            "required": [
+              "turn_id"
+            ],
             "properties": {
-              "turn_id": { "type": "string" },
+              "turn_id": {
+                "type": "string"
+              },
               "delegated": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "label", "status"],
+                "required": [
+                  "kind",
+                  "label",
+                  "status"
+                ],
                 "properties": {
-                  "kind": { "type": "string", "enum": ["spawn", "dag"] },
-                  "label": { "type": "string" },
-                  "status": { "type": "string", "enum": ["ok", "error"] },
-                  "run_id": { "type": "string" },
-                  "content": { "description": "The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.", "type": "string" }
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "spawn",
+                      "dag"
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "error"
+                    ]
+                  },
+                  "run_id": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "description": "The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.",
+                    "type": "string"
+                  }
                 }
               },
               "target": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["instance", "handle"],
+                "required": [
+                  "instance",
+                  "handle"
+                ],
                 "properties": {
-                  "instance": { "type": "string" },
-                  "handle": { "type": "string" }
+                  "instance": {
+                    "type": "string"
+                  },
+                  "handle": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -7173,22 +8214,34 @@
       "MessageStartEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "message.start" },
+          "type": {
+            "type": "string",
+            "const": "message.start"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
             "description": "`target` names the conversation this event belongs to; absent is the main agent.",
-            "required": ["turn_id"],
+            "required": [
+              "turn_id"
+            ],
             "properties": {
-              "turn_id": { "type": "string" },
+              "turn_id": {
+                "type": "string"
+              },
               "content": {
                 "type": "string",
                 "default": "",
                 "description": "The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end."
               },
-              "target": { "$ref": "#/components/schemas/DirectTarget" }
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              }
             }
           }
         }
@@ -7196,15 +8249,25 @@
       "EpisodeStartEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "episode.start" },
+          "type": {
+            "type": "string",
+            "const": "episode.start"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["index"],
+            "required": [
+              "index"
+            ],
             "properties": {
-              "index": { "type": "integer" }
+              "index": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -7213,13 +8276,21 @@
         "description": "Prose the runtime wrote, not the model.\n\nIt must not arrive as `token.delta`: that buffer is the model's voice, so the text would render as the answer -- glued to whatever the model narrated just before it, carrying the answer's copy and branch actions, and stuck in English whatever language the turn was in.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "notice" },
+          "type": {
+            "type": "string",
+            "const": "notice"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["kind"],
+            "required": [
+              "kind"
+            ],
             "properties": {
               "kind": {
                 "type": "string",
@@ -7237,16 +8308,28 @@
       "TokenDeltaEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "token.delta" },
+          "type": {
+            "type": "string",
+            "const": "token.delta"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "properties": {
-              "text": { "type": "string" },
-              "target": { "$ref": "#/components/schemas/DirectTarget" }
+              "text": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              }
             }
           }
         }
@@ -7254,15 +8337,25 @@
       "ThinkingDeltaEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "thinking.delta" },
+          "type": {
+            "type": "string",
+            "const": "thinking.delta"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             }
           }
         }
@@ -7270,21 +8363,42 @@
       "ToolStartEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "tool.start" },
+          "type": {
+            "type": "string",
+            "const": "tool.start"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["tool_call_id", "name", "arguments"],
+            "required": [
+              "tool_call_id",
+              "name",
+              "arguments"
+            ],
             "properties": {
-              "tool_call_id": { "type": "string" },
-              "name": { "type": "string" },
+              "tool_call_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
               "arguments": {
                 "type": "object",
-                "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
               },
-              "display": { "type": ["string", "null"] },
+              "display": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "blocking": {
                 "type": "boolean",
                 "description": "The call is a blocking interaction with no automatic deadline. A client that clocks the event stream for liveness must suspend that clock while it is in flight."
@@ -7296,16 +8410,29 @@
       "ToolProgressEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "tool.progress" },
+          "type": {
+            "type": "string",
+            "const": "tool.progress"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["tool_call_id", "preview"],
+            "required": [
+              "tool_call_id",
+              "preview"
+            ],
             "properties": {
-              "tool_call_id": { "type": "string" },
-              "preview": { "type": "string" }
+              "tool_call_id": {
+                "type": "string"
+              },
+              "preview": {
+                "type": "string"
+              }
             }
           }
         }
@@ -7314,10 +8441,19 @@
         "description": "One file a tool call wrote, as contents rather than as a rendering of them. Beside ToolCompleteEvent.diff rather than instead of it: a client that draws its own diff needs the text, and a unified diff cannot be turned back into the file.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "after"],
+        "required": [
+          "path",
+          "after"
+        ],
         "properties": {
-          "path": { "type": "string", "description": "Absolute path of the file that was written." },
-          "after": { "type": "string", "description": "The file's full contents after the write." },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file that was written."
+          },
+          "after": {
+            "type": "string",
+            "description": "The file's full contents after the write."
+          },
           "before": {
             "type": "string",
             "description": "The contents the write replaced. Absent when the file did not exist, so a client renders a creation differently from a rewrite; an empty string means the file existed and was empty."
@@ -7327,30 +8463,50 @@
       "ToolCompleteEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "tool.complete" },
+          "type": {
+            "type": "string",
+            "const": "tool.complete"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["tool_call_id", "result_preview", "truncated"],
+            "required": [
+              "tool_call_id",
+              "result_preview",
+              "truncated"
+            ],
             "properties": {
-              "tool_call_id": { "type": "string" },
-              "result_preview": { "type": "string" },
-              "truncated": { "type": "boolean" },
+              "tool_call_id": {
+                "type": "string"
+              },
+              "result_preview": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
               "ok": {
                 "type": "boolean",
                 "description": "Whether the tool call succeeded, by the emit site's verdict."
               },
               "metadata": {
                 "type": "object",
-                "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
               },
               "diff": {
                 "type": "string",
                 "description": "Unified diff of what the call changed on disk, when the tool could produce one."
               },
-              "file_change": { "$ref": "#/components/schemas/FileChange" }
+              "file_change": {
+                "$ref": "#/components/schemas/FileChange"
+              }
             }
           }
         }
@@ -7358,17 +8514,32 @@
       "MessageCompleteEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "message.complete" },
+          "type": {
+            "type": "string",
+            "const": "message.complete"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["turn_id", "usage"],
+            "required": [
+              "turn_id",
+              "usage"
+            ],
             "properties": {
-              "turn_id": { "type": "string" },
-              "usage": { "$ref": "#/components/schemas/UsageSnapshot" },
-              "target": { "$ref": "#/components/schemas/DirectTarget" },
+              "turn_id": {
+                "type": "string"
+              },
+              "usage": {
+                "$ref": "#/components/schemas/UsageSnapshot"
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              },
               "duration_ms": {
                 "type": "integer",
                 "description": "How long the whole turn took, measured server-side from the moment the runner picked the turn up to the moment it returned. Sent so a live client does not have to time the turn with its own clock: a browser stopwatch starts when the events arrive rather than when the work did, and only exists while that page is open, so the same turn came out one number live and another after a reload. Absent means unknown, same rule as reasoning_ms -- fall back to timing it locally, never to zero."
@@ -7380,28 +8551,46 @@
       "ErrorEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "error" },
+          "type": {
+            "type": "string",
+            "const": "error"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["code", "message"],
+            "required": [
+              "code",
+              "message"
+            ],
             "properties": {
               "code": {
-          "type": "integer"
-        },
-        "turn_id": {
-          "type": "string",
-          "description": "The turn this failure belongs to. Empty when the emitter did not know it; a consumer that correlates a request to a turn must not treat an empty value as its own."
-        },
-        "message": { "type": "string" },
+                "type": "integer"
+              },
+              "turn_id": {
+                "type": "string",
+                "description": "The turn this failure belongs to. Empty when the emitter did not know it; a consumer that correlates a request to a turn must not treat an empty value as its own."
+              },
+              "message": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string",
-                "enum": ["cancelled_by_client", "internal"]
+                "enum": [
+                  "cancelled_by_client",
+                  "internal"
+                ]
               },
-              "detail": { "type": "string" },
-              "target": { "$ref": "#/components/schemas/DirectTarget" }
+              "detail": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              }
             }
           }
         }
@@ -7409,18 +8598,37 @@
       "CronDeliveredEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "cron.delivered" },
+          "type": {
+            "type": "string",
+            "const": "cron.delivered"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["job_id", "name", "text", "fired_at"],
+            "required": [
+              "job_id",
+              "name",
+              "text",
+              "fired_at"
+            ],
             "properties": {
-              "job_id": { "type": "string" },
-              "name": { "type": "string" },
-              "text": { "type": "string" },
-              "fired_at": { "type": "string" }
+              "job_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "fired_at": {
+                "type": "string"
+              }
             }
           }
         }
@@ -7428,25 +8636,46 @@
       "CronMissedEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "cron.missed" },
+          "type": {
+            "type": "string",
+            "const": "cron.missed"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["count", "items"],
+            "required": [
+              "count",
+              "items"
+            ],
             "properties": {
-              "count": { "type": "integer" },
+              "count": {
+                "type": "integer"
+              },
               "items": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["name", "scheduled_at", "message"],
+                  "required": [
+                    "name",
+                    "scheduled_at",
+                    "message"
+                  ],
                   "properties": {
-                    "name": { "type": "string" },
-                    "scheduled_at": { "type": "string" },
-                    "message": { "type": "string" }
+                    "name": {
+                      "type": "string"
+                    },
+                    "scheduled_at": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -7458,16 +8687,29 @@
         "description": "The model named this session, reading the opening message alongside the turn that carried it. Conversation-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "session.titled" },
+          "type": {
+            "type": "string",
+            "const": "session.titled"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["session_id", "title"],
+            "required": [
+              "session_id",
+              "title"
+            ],
             "properties": {
-              "session_id": { "type": "string" },
-              "title": { "type": "string" }
+              "session_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
             }
           }
         }
@@ -7476,16 +8718,35 @@
         "description": "The naming call for this session finished without publishing a title. The other half of `session.titled`: exactly one of the two follows a turn whose `turn.send` reported `naming: true`, so a client parking a placeholder where the title goes can stop waiting on either instead of waiting out a grace period. `reason` is for the log and the bug report rather than for the reader -- 'timeout' the call outran its budget, 'no_title' it came back with nothing usable (the model answered without calling the naming tool, or the provider failed and generate_title swallowed it, logging the cause at debug), 'error' the naming code itself raised, 'renamed' a person named the session while the call ran.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "session.naming_ended" },
+          "type": {
+            "type": "string",
+            "const": "session.naming_ended"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["session_id", "reason"],
+            "required": [
+              "session_id",
+              "reason"
+            ],
             "properties": {
-              "session_id": { "type": "string" },
-              "reason": { "type": "string", "enum": ["timeout", "error", "no_title", "renamed"] }
+              "session_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "timeout",
+                  "error",
+                  "no_title",
+                  "renamed"
+                ]
+              }
             }
           }
         }
@@ -7494,19 +8755,55 @@
         "description": "A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "subagent.delivered" },
+          "type": {
+            "type": "string",
+            "const": "subagent.delivered"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["kind", "label", "status"],
+            "required": [
+              "kind",
+              "label",
+              "status"
+            ],
             "properties": {
-              "kind": { "type": "string", "enum": ["spawn", "dag"] },
-              "label": { "description": "The spawn's display label, or the dag's run_id.", "type": "string" },
-              "status": { "type": "string", "enum": ["ok", "error"] },
-              "run_id": { "description": "Set for kind=dag, so a client can open the run.", "type": "string" },
-              "content": { "description": "The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.", "type": "string" }
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spawn",
+                  "dag"
+                ]
+              },
+              "label": {
+                "description": "The spawn's display label, or the dag's run_id.",
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "error",
+                  "exception"
+                ]
+              },
+              "run_id": {
+                "description": "Set for kind=dag, so a client can open the run.",
+                "type": "string"
+              },
+              "content": {
+                "description": "The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.",
+                "type": "string"
+              },
+              "node_id": {
+                "type": "string",
+                "description": "Set for a dag node's own message, so a client can place it against that row."
+              }
             }
           }
         }
@@ -7515,21 +8812,45 @@
         "description": "One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the conversation; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "subagent.status" },
+          "type": {
+            "type": "string",
+            "const": "subagent.status"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["task_id", "agent", "label", "status"],
+            "required": [
+              "task_id",
+              "agent",
+              "label",
+              "status"
+            ],
             "properties": {
               "task_id": {
                 "description": "The manager's short id for this run, stable across its lifecycle.",
                 "type": "string"
               },
-              "agent": { "type": "string" },
-              "label": { "type": "string" },
-              "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "cancelled"] },
+              "agent": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ]
+              },
               "call_id": {
                 "description": "The spawn record id subagent.context reads. Known from 'running' onward; a 'pending' run has not opened its record yet, so there is nothing to read.",
                 "type": "string"
@@ -7542,38 +8863,87 @@
                 "description": "The addressable handle, when the caller named or minted one.",
                 "type": "string"
               },
-              "started_at": { "type": "integer" },
-              "ended_at": { "type": "integer" }
+              "started_at": {
+                "type": "integer"
+              },
+              "ended_at": {
+                "type": "integer"
+              }
             }
           }
         }
       },
       "DagNodeStatus": {
-        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.",
+        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
         "type": "string",
-        "enum": ["pending", "running", "completed", "failed", "skipped", "cancelled"]
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped",
+          "cancelled",
+          "exception"
+        ]
       },
       "DagSnapshotNodeStatus": {
-        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.",
+        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
         "type": "string",
-        "enum": ["pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted"]
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped",
+          "cancelled",
+          "interrupted",
+          "exception"
+        ]
       },
       "DagSnapshotNode": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["node", "status"],
+        "required": [
+          "node",
+          "status"
+        ],
         "properties": {
-          "node": { "type": "string" },
-          "subagent": { "type": "string" },
-          "depends_on": { "type": "array", "items": { "type": "string" } },
-          "instance": { "type": "string" },
-          "status": { "$ref": "#/components/schemas/DagSnapshotNodeStatus" },
-          "started_at": { "type": "integer" },
-          "ended_at": { "type": "integer" },
-          "prompt_file": { "type": "string" },
-          "output_file": { "type": "string" },
-          "error": { "type": "string" },
-          "prompt_template": { "type": "string" },
+          "node": {
+            "type": "string"
+          },
+          "subagent": {
+            "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instance": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DagSnapshotNodeStatus"
+          },
+          "started_at": {
+            "type": "integer"
+          },
+          "ended_at": {
+            "type": "integer"
+          },
+          "prompt_file": {
+            "type": "string"
+          },
+          "output_file": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "prompt_template": {
+            "type": "string"
+          },
           "node_summary": {
             "description": "One line, for the user, on what this node was asked to do. Absent on a run that predates the field.",
             "type": "string"
@@ -7581,7 +8951,9 @@
           "inputs": {
             "description": "What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.",
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
           }
         }
       },
@@ -7589,25 +8961,49 @@
         "description": "One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["run_id", "dir", "finalized", "files", "summary"],
+        "required": [
+          "run_id",
+          "dir",
+          "finalized",
+          "files",
+          "summary"
+        ],
         "properties": {
-          "run_id": { "type": "string" },
-          "dir": { "type": "string" },
-          "finalized": { "type": "boolean" },
+          "run_id": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "finalized": {
+            "type": "boolean"
+          },
           "task_summary": {
             "type": "string",
             "description": "What the whole graph was dispatched for, in one line. Absent for a run written before the field existed. Per-node the equivalent is DagSnapshotNode.node_summary."
           },
-          "files": { "type": "array", "items": { "$ref": "#/components/schemas/DagSnapshotNode" } },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DagSnapshotNode"
+            }
+          },
           "terminal_outputs": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["node", "text"],
+              "required": [
+                "node",
+                "text"
+              ],
               "properties": {
-                "node": { "type": "string" },
-                "text": { "type": "string" }
+                "node": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -7615,11 +9011,21 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "total": { "type": "integer" },
-              "completed": { "type": "integer" },
-              "failed": { "type": "integer" },
-              "skipped": { "type": "integer" },
-              "cancelled": { "type": "integer" }
+              "total": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "skipped": {
+                "type": "integer"
+              },
+              "cancelled": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -7628,16 +9034,37 @@
         "description": "One node's rendered prompt and the head of its output. Either text is absent when its file does not exist: a node that never ran has no prompt, a failed one no output.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["run_id", "node", "output_chars", "output_truncated"],
+        "required": [
+          "run_id",
+          "node",
+          "output_chars",
+          "output_truncated"
+        ],
         "properties": {
-          "run_id": { "type": "string" },
-          "node": { "type": "string" },
-          "prompt": { "type": "string" },
-          "prompt_file": { "type": "string" },
-          "output": { "type": "string" },
-          "output_file": { "type": "string" },
-          "output_chars": { "type": "integer" },
-          "output_truncated": { "type": "boolean" },
+          "run_id": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "prompt_file": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "output_file": {
+            "type": "string"
+          },
+          "output_chars": {
+            "type": "integer"
+          },
+          "output_truncated": {
+            "type": "boolean"
+          },
           "status": {
             "description": "This node's own last recorded status; null when the run has written no manifest yet.",
             "$ref": "#/components/schemas/DagNodeStatus"
@@ -7648,7 +9075,9 @@
           },
           "messages": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/TranscriptMessage" }
+            "items": {
+              "$ref": "#/components/schemas/TranscriptMessage"
+            }
           }
         }
       },
@@ -7656,15 +9085,26 @@
         "description": "A run_subagent_dag call accepted a graph. Carries the whole topology so a client can lay the graph out before any node reports.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "dag.run_started" },
+          "type": {
+            "type": "string",
+            "const": "dag.run_started"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["run_id", "nodes"],
+            "required": [
+              "run_id",
+              "nodes"
+            ],
             "properties": {
-              "run_id": { "type": "string" },
+              "run_id": {
+                "type": "string"
+              },
               "tool_call_id": {
                 "description": "The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.",
                 "type": "string"
@@ -7678,11 +9118,24 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["id", "subagent", "depends_on"],
+                  "required": [
+                    "id",
+                    "subagent",
+                    "depends_on"
+                  ],
                   "properties": {
-                    "id": { "type": "string" },
-                    "subagent": { "type": "string" },
-                    "depends_on": { "type": "array", "items": { "type": "string" } },
+                    "id": {
+                      "type": "string"
+                    },
+                    "subagent": {
+                      "type": "string"
+                    },
+                    "depends_on": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "instance": {
                       "description": "Shared stateful handle. Nodes naming the same one run sequentially.",
                       "type": "string"
@@ -7702,20 +9155,42 @@
         "description": "One node changed state.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "dag.node_updated" },
+          "type": {
+            "type": "string",
+            "const": "dag.node_updated"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["run_id", "node", "status"],
+            "required": [
+              "run_id",
+              "node",
+              "status"
+            ],
             "properties": {
-              "run_id": { "type": "string" },
-              "tool_call_id": { "type": "string" },
-              "node": { "type": "string" },
-              "status": { "$ref": "#/components/schemas/DagNodeStatus" },
-              "started_at": { "type": "integer" },
-              "ended_at": { "type": "integer" }
+              "run_id": {
+                "type": "string"
+              },
+              "tool_call_id": {
+                "type": "string"
+              },
+              "node": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/DagNodeStatus"
+              },
+              "started_at": {
+                "type": "integer"
+              },
+              "ended_at": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -7724,26 +9199,53 @@
         "description": "The run finished. Terminal node output text is deliberately absent -- it is already in the tool result.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "dag.run_completed" },
+          "type": {
+            "type": "string",
+            "const": "dag.run_completed"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["run_id", "dir", "summary", "files"],
+            "required": [
+              "run_id",
+              "dir",
+              "summary",
+              "files"
+            ],
             "properties": {
-              "run_id": { "type": "string" },
-              "tool_call_id": { "type": "string" },
-              "dir": { "type": "string" },
+              "run_id": {
+                "type": "string"
+              },
+              "tool_call_id": {
+                "type": "string"
+              },
+              "dir": {
+                "type": "string"
+              },
               "summary": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "total": { "type": "integer" },
-                  "completed": { "type": "integer" },
-                  "failed": { "type": "integer" },
-                  "skipped": { "type": "integer" },
-                  "cancelled": { "type": "integer" }
+                  "total": {
+                    "type": "integer"
+                  },
+                  "completed": {
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "type": "integer"
+                  },
+                  "skipped": {
+                    "type": "integer"
+                  },
+                  "cancelled": {
+                    "type": "integer"
+                  }
                 }
               },
               "files": {
@@ -7751,12 +9253,23 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["node", "status"],
+                  "required": [
+                    "node",
+                    "status"
+                  ],
                   "properties": {
-                    "node": { "type": "string" },
-                    "status": { "$ref": "#/components/schemas/DagNodeStatus" },
-                    "output_file": { "type": "string" },
-                    "error": { "type": "string" }
+                    "node": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/DagNodeStatus"
+                    },
+                    "output_file": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -7768,30 +9281,50 @@
         "description": "One file the agent produced as part of its reply, by local path.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "mime", "kind"],
+        "required": [
+          "path",
+          "mime",
+          "kind"
+        ],
         "properties": {
-          "path": { "type": "string", "description": "Absolute path of the file on the machine the agent runs on." },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file on the machine the agent runs on."
+          },
           "mime": {
             "type": "string",
             "description": "MIME type as declared by the emit site. Today every producer declares application/octet-stream, so a client that needs the real type should sniff the extension rather than trust this."
           },
-          "kind": { "type": "string", "description": "Coarse media class; \"file\" is the only value emitted today." }
+          "kind": {
+            "type": "string",
+            "description": "Coarse media class; \"file\" is the only value emitted today."
+          }
         }
       },
       "MediaEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
-          "type": { "type": "string", "const": "media" },
+          "type": {
+            "type": "string",
+            "const": "media"
+          },
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["items"],
+            "required": [
+              "items"
+            ],
             "properties": {
               "items": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/MediaItem" },
+                "items": {
+                  "$ref": "#/components/schemas/MediaItem"
+                },
                 "description": "The files, in the order the turn produced them. Never empty: an event with nothing to deliver is not emitted."
               }
             }
@@ -7801,26 +9334,66 @@
       "TurnEvent": {
         "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
         "oneOf": [
-          { "$ref": "#/components/schemas/MessageStartEvent" },
-          { "$ref": "#/components/schemas/EpisodeStartEvent" },
-          { "$ref": "#/components/schemas/NoticeEvent" },
-          { "$ref": "#/components/schemas/TokenDeltaEvent" },
-          { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
-          { "$ref": "#/components/schemas/ToolStartEvent" },
-          { "$ref": "#/components/schemas/ToolProgressEvent" },
-          { "$ref": "#/components/schemas/ToolCompleteEvent" },
-          { "$ref": "#/components/schemas/MessageCompleteEvent" },
-          { "$ref": "#/components/schemas/ErrorEvent" },
-          { "$ref": "#/components/schemas/CronDeliveredEvent" },
-          { "$ref": "#/components/schemas/SubagentDeliveredEvent" },
-          { "$ref": "#/components/schemas/SubagentStatusEvent" },
-          { "$ref": "#/components/schemas/DagRunStartedEvent" },
-          { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
-          { "$ref": "#/components/schemas/DagRunCompletedEvent" },
-          { "$ref": "#/components/schemas/CronMissedEvent" },
-          { "$ref": "#/components/schemas/MediaEvent" },
-          { "$ref": "#/components/schemas/SessionTitledEvent" },
-          { "$ref": "#/components/schemas/SessionNamingEndedEvent" }
+          {
+            "$ref": "#/components/schemas/MessageStartEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EpisodeStartEvent"
+          },
+          {
+            "$ref": "#/components/schemas/NoticeEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TokenDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ThinkingDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ToolStartEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ToolProgressEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCompleteEvent"
+          },
+          {
+            "$ref": "#/components/schemas/MessageCompleteEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CronDeliveredEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SubagentDeliveredEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SubagentStatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DagRunStartedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DagNodeUpdatedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DagRunCompletedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CronMissedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/MediaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SessionTitledEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SessionNamingEndedEvent"
+          }
         ],
         "discriminator": {
           "propertyName": "type",

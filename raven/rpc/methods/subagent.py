@@ -201,6 +201,7 @@ _DAG_WIRE_STATUS = {
     "skipped": "skipped",
     "cancelled": "cancelled",
     "interrupted": "error",
+    "exception": "error",  # A node waiting for the caller to decide; "error" is lossy but honest about "this needs you"
 }
 
 

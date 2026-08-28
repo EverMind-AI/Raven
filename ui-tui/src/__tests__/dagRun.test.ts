@@ -73,6 +73,12 @@ describe('foldDagEvent', () => {
     expect(done?.nodes[0]).toMatchObject({ endedAt: 4_000, startedAt: 1_000, status: 'completed' })
   })
 
+  it('keeps a suspended node non-terminal and its dependent pending', () => {
+    const run = foldDagEvent(foldDagEvent(null, started(CHAIN)), updated('a', 'exception'))
+
+    expect(run?.nodes.map(n => n.status)).toEqual(['exception', 'pending'])
+  })
+
   it('drops an update that arrives before the run started', () => {
     // The subscription can attach mid-run; without the graph there is nothing
     // to draw, and inventing a node from an update would draw a partial graph

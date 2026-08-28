@@ -998,6 +998,18 @@ const StatusView = memo(function StatusView({ lane, seg }: { lane: Lane; seg: St
   )
 })
 
+/* One row per wire status: `error` is a failure the reader must notice,
+   `exception` is neither success nor failure -- the node suspended waiting on
+   a verdict -- so it wears its own class and text rather than folding into
+   either. A Record over the union rather than a lookup with a fallback, so a
+   status added to the wire without an entry here is a type error, not a row
+   that silently reads as `ok`. */
+const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> = {
+  ok: { cls: '', key: 'gui.deleg.delivered' },
+  error: { cls: ' err', key: 'gui.deleg.delivered_err' },
+  exception: { cls: ' warn', key: 'gui.deleg.delivered_exception' },
+}
+
 const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; seg: DeliveredData }): ReactElement {
   useSeg(lane, seg)
   /* The row says a result came back and opens the run it came from; the fold
@@ -1006,12 +1018,13 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
      be checked against, and it is the sub-agent's words rather than Raven's. */
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleDelivered(lane, seg))
+  const { cls, key } = DELIVERED[seg.status]
   return (
-    <div className={'sdlv' + (seg.err ? ' err' : '') + (seg.shown ? ' open' : '')}>
+    <div className={'sdlv' + cls + (seg.shown ? ' open' : '')}>
       <div className="sdhd">
         <Ico d={SDLV_ICO} cls="ic" />
         <button className="nm" onClick={seg.open}>{seg.isDag ? t('gui.deleg.dag_title') : seg.label}</button>
-        <span className="tx">{t(seg.err ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered')}</span>
+        <span className="tx">{t(key)}</span>
         {seg.body ? (
           <button ref={headRef} className="sdcv" onClick={flip}
             aria-label={t('gui.deleg.body_aria')}

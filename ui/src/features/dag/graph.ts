@@ -130,6 +130,7 @@ export const MARKS: Record<string, { d: string; cls: string }> = {
   cancelled: { d: 'M-3.4 -3.4h6.8v6.8h-6.8z', cls: 'stop' },
   skipped: { d: 'M-4.5 0h9', cls: 'skip' },
   interrupted: { d: 'M-4.5 0h9', cls: 'skip' },
+  exception: { d: 'M0 -4.5v6M0 3.6v.01', cls: 'warn' },
 }
 
 /* One row per layer, deepest last: what the card's own sentence counts and what

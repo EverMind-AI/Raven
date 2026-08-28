@@ -527,6 +527,10 @@
       "en": "failed; the error just joined this conversation",
       "zh": "运行失败，失败详情已注入本轮对话"
     },
+    "gui.deleg.delivered_exception": {
+      "en": "hit an exception and is waiting on a decision; its report just joined this conversation",
+      "zh": "遇到异常，等待裁决，报告已注入本轮对话"
+    },
     "gui.deleg.dag_title": {
       "en": "Task graph",
       "zh": "编排任务图"
@@ -1670,6 +1674,10 @@
     "gui.dag.st_completed": {
       "en": "done",
       "zh": "已完成"
+    },
+    "gui.dag.st_exception": {
+      "en": "needs a decision",
+      "zh": "待裁决"
     },
     "gui.dag.st_failed": {
       "en": "failed",

@@ -6,7 +6,14 @@
  * computed once and every later event is an update in place.
  */
 
-export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'interrupted'
+export type NodeStatus =
+  | 'pending'
+  | 'running'
+  | 'exception'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'interrupted'
 
 /* Where one of a node's inputs came from. A bare string is a literal the caller
    wrote inline; the other two name something to read. Kept as a union rather

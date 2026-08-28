@@ -1,11 +1,11 @@
 """Model-facing controls for an in-flight DAG run (control_tools.py).
 
-cancel_dag / dag_status are schema-hidden tools: the provider never sees them,
-the DAG tool's acceptance text is their only advertisement -- and only when a
-call path exists (tool_call above the fold). The tools are exercised directly,
-their conversation scoping is asserted, and the hiding surface (registry
-definitions + the tool_search catalog) is pinned to keep them out of every
-discovery path except that text.
+cancel_dag / dag_status / resolve_dag_node are schema-hidden tools: the
+provider never sees them, the DAG tool's acceptance text is their only
+advertisement -- and only when a call path exists (tool_call above the fold).
+The tools are exercised directly, their conversation scoping is asserted, and
+the hiding surface (registry definitions + the tool_search catalog) is pinned
+to keep them out of every discovery path except that text.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool
+from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
@@ -246,6 +246,86 @@ async def test_dag_status_reports_an_unknown_run() -> None:
     assert "dag_status without a run_id" in out
 
 
+class _ResolvableDagTool(_DagTool):
+    """A run_subagent_dag double whose read_run succeeds and records resolve_node calls."""
+
+    def __init__(self, resolves: bool = True) -> None:
+        super().__init__(_finished_run())
+        self._resolves = resolves
+        self.resolved: tuple[str, str, str, str | None] | None = None
+
+    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+        self.resolved = (run_id, node_id, decision, message)
+        return self._resolves
+
+
+class _LoopWithRun(_Loop):
+    """A loop whose registered graph tool owns run r1 and answers resolve_node."""
+
+    def __init__(self, resolves: bool = True) -> None:
+        self._dag_tool = _ResolvableDagTool(resolves=resolves)
+        super().__init__(tool=self._dag_tool)
+
+    @property
+    def resolved(self) -> tuple[str, str, str, str | None] | None:
+        return self._dag_tool.resolved
+
+
+class _LoopWithoutRun(_Loop):
+    """A loop whose registered graph tool cannot resolve run r1 for this session."""
+
+    def __init__(self) -> None:
+        super().__init__(tool=_DagTool(error="no readable DAG run for r1"))
+
+
+async def test_resolve_requires_a_message_when_continuing():
+    # "message" alone also matches the CONTINUE success text ("...with your
+    # message."), so pin the exact guard text and confirm resolve_node was
+    # never reached -- either alone would already catch a deleted guard.
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue")
+    assert out == (
+        "Error: continuing node 'a' needs a message telling it what to do differently. "
+        "Supply what the report said was missing."
+    )
+    assert loop.resolved is None, "an unmet guard must never reach resolve_node"
+
+
+async def test_resolve_rejects_an_unknown_decision():
+    # A loose "continue" and "abandon" substring check also matches the abandon
+    # success text ("...continues... abandoned..."), so pin the exact guard
+    # text and confirm resolve_node was never reached.
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+    out = await tool.execute(run_id="r1", node_id="a", decision="maybe", message="x")
+    assert out == "Error: decision must be 'continue' or 'abandon', not 'maybe'."
+    assert loop.resolved is None, "an unmet guard must never reach resolve_node"
+
+
+async def test_resolve_refuses_a_run_this_conversation_does_not_own():
+    tool = ResolveDagNodeTool(loop=_LoopWithoutRun())
+    out = await tool.execute(run_id="r1", node_id="a", decision="abandon")
+    assert "No DAG run r1 in this conversation" in out
+
+
+async def test_resolve_says_when_nobody_is_waiting():
+    tool = ResolveDagNodeTool(loop=_LoopWithRun(resolves=False))
+    out = await tool.execute(run_id="r1", node_id="a", decision="abandon")
+    assert "no longer waiting" in out.lower()
+
+
+async def test_resolve_confirms_a_continue():
+    # "a" in out matches almost any sentence, including the abandon text, so it
+    # would not notice the continue/abandon response branches being swapped.
+    # Pin the exact continue-only wording instead.
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
+    assert out == "Node 'a' of run r1 will run again with your message."
+    assert loop.resolved == ("r1", "a", "continue", "use staging")
+
+
 class _Hidden(Tool):
     @property
     def name(self) -> str:
@@ -348,7 +428,7 @@ def workspace() -> Path:
         yield Path(td)
 
 
-async def test_the_loop_registers_both_tools_outside_the_schema(workspace: Path) -> None:
+async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: Path) -> None:
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -360,11 +440,16 @@ async def test_the_loop_registers_both_tools_outside_the_schema(workspace: Path)
 
     assert loop.tools.has("cancel_dag")
     assert loop.tools.has("dag_status")
+    assert loop.tools.has("resolve_dag_node")
     names = {t["function"]["name"] for t in loop.tools.get_definitions()}
     assert "cancel_dag" not in names
     assert "dag_status" not in names
+    assert "resolve_dag_node" not in names
 
     out = await loop.tools.execute("cancel_dag", {"run_id": "r1"})
+    assert "No DAG run r1 in this conversation" in out
+
+    out = await loop.tools.execute("resolve_dag_node", {"run_id": "r1", "node_id": "a", "decision": "abandon"})
     assert "No DAG run r1 in this conversation" in out
 
     assert loop.dag_control_reachable() is False, "a default deploy has no route to the hidden tools"

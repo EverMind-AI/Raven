@@ -21,6 +21,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, AdjudicationDesk
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
 from raven.agent.subagent.dag_render import render_prompt
@@ -32,6 +33,7 @@ from raven.agent.subagent.dag_store import (
     node_live_key,
     read_session_nodes,
 )
+from raven.agent.subagent.dag_verdict import Verdict
 from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
@@ -59,6 +61,10 @@ def _now_ms() -> int:
 
 
 ProgressPublisher = Callable[[str, dict], Awaitable[None]]
+
+# (run_id, node_id, report, origin) -> awaitable. How a suspended node's report
+# reaches the main agent; the host supplies ``SubagentManager.announce_dag_exception``.
+ExceptionAnnouncer = Callable[[str, str, str, dict], Awaitable[None]]
 
 # asyncio only holds a weak reference to a running task, so a fire-and-forget
 # record has to be kept alive by its scheduler until it finishes.
@@ -147,6 +153,13 @@ async def run_dag(
     auto_instances: frozenset[str] = frozenset(),
     everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
+    desk: AdjudicationDesk | None = None,
+    adjudication_timeout_s: float = 600.0,
+    judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    announce_exception: ExceptionAnnouncer | None = None,
+    max_continuations: int = 2,
+    origin: dict | None = None,
+    adjudicate: "Callable[[str, str, float | None], Awaitable[str | None]] | None" = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -213,6 +226,25 @@ async def run_dag(
     node as ``cancelled`` and every other not-yet-terminal node as
     ``skipped``; the run still finishes normally and returns a result
     describing what stopped, rather than raising.
+
+    ``desk``, when given, is where a node the graph suspended (``status[nid]
+    == "exception"``) waits for the main agent's decision: once the ready set
+    is empty with at least one node suspended, the run blocks in
+    ``_await_adjudications`` on that node's answer instead of ending there.
+    Leaving ``desk`` unset keeps the old behavior exactly -- an empty ready
+    set always ends the run. ``adjudication_timeout_s`` bounds that wait per
+    node, so one answer that never arrives fails just that node instead of
+    blocking the run forever.
+
+    ``judge_node``, when given, is called after a node completes or fails to
+    decide whether it actually accomplished its task; a bad verdict suspends it
+    (the same ``exception`` status ``desk`` waits on) rather than letting it
+    complete or fail outright, as long as ``desk`` and ``announce_exception``
+    are both set and the node has continuations left under ``max_continuations``
+    -- otherwise the verdict fails the node instead. ``announce_exception``
+    delivers the report to the main agent through the same ``origin`` the host
+    used to reach this run, the moment the node is suspended rather than only
+    at the end of the run.
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
@@ -246,6 +278,8 @@ async def run_dag(
     status: dict[str, str] = {nid: "pending" for nid in by_id}
     output_paths: dict[str, str] = {}
     errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+    attempts: dict[str, int] = {}
     prompt_written: set[str] = set()
     node_started_at: dict[str, int] = {}
     node_ended_at: dict[str, int] = {}
@@ -317,7 +351,34 @@ async def run_dag(
                 if st == "pending" and all(status[d] == "completed" for d in deps[nid])
             ]
             if not ready:
-                break
+                suspended = [nid for nid, st in status.items() if st == "exception"]
+                if not suspended or desk is None:
+                    break
+                # Both do the same job from the same place -- nothing else can
+                # run, every suspended node has already given its slot back --
+                # and differ only in who answers: the model through the desk, or
+                # the person watching a blocking call.
+                if adjudicate is not None:
+                    await _adjudicate_open_nodes(
+                        desk,
+                        status,
+                        errors,
+                        continuations,
+                        adjudicate=adjudicate,
+                        origin=origin,
+                        timeout_s=adjudication_timeout_s,
+                        cancel=cancel,
+                    )
+                else:
+                    await _await_adjudications(
+                        desk,
+                        status,
+                        errors,
+                        continuations,
+                        timeout_s=adjudication_timeout_s,
+                        cancel=cancel,
+                    )
+                continue
             # Nodes sharing a stateful instance run sequentially (id order); independent
             # nodes each form a singleton group and run concurrently under the semaphore.
             groups: dict[str, list[str]] = {}
@@ -352,6 +413,16 @@ async def run_dag(
                         session_key=session_key,
                         subagents_root=subagents_root,
                         record_tasks=record_tasks,
+                        attempts=attempts,
+                        continuations=continuations,
+                        desk=desk,
+                        judge_node=judge_node,
+                        announce_exception=announce_exception,
+                        max_continuations=max_continuations,
+                        origin=origin,
+                        dependents=dependents,
+                        adjudication_timeout_s=adjudication_timeout_s,
+                        answered_in_turn=adjudicate is not None,
                     )
                     for nids in groups.values()
                 ),
@@ -446,6 +517,225 @@ def _tally(status: dict[str, str]) -> dict:
     }
 
 
+def _exception_report(
+    *,
+    run_id: str,
+    node: DagNodeSpec,
+    verdict: Any,
+    attempt: int,
+    remaining: int,
+    blocked: list[str],
+    timeout_s: float,
+    answered_in_turn: bool = False,
+) -> str:
+    """The text the main agent is woken with. Everything it needs to decide, once.
+
+    The blocked list is not decoration: without it the agent is choosing between
+    continuing and abandoning with no idea what abandoning costs.
+
+    ``answered_in_turn`` is the foreground shape, where the reader is the person
+    watching a blocking call rather than the main agent. Both closing lines are
+    wrong for them: there is no deadline, because they are being asked
+    synchronously, and they have no way to call `resolve_dag_node`.
+    """
+    lines = [
+        f"DAG run {run_id}: node '{node.id}' ({node.subagent}) did not accomplish its task.",
+        f"task: {node.node_summary}",
+        f"category: {verdict.category or 'other'}",
+        f"what is missing: {verdict.what_is_missing or '(the judge did not say)'}",
+    ]
+    if verdict.evidence:
+        lines.append(f"evidence: {verdict.evidence}")
+    if not verdict.evidence_complete:
+        lines.append("evidence is incomplete: this sub-agent's transport publishes no per-step transcript.")
+    lines.append(f"blocked while this waits: {', '.join(blocked) if blocked else '(no dependents)'}")
+    if remaining <= 0:
+        lines.append(
+            f"This was attempt {attempt}; the continuation limit is reached, the node has failed and "
+            "no adjudication is being awaited. Its dependents are skipped. Re-plan if this line matters."
+        )
+        return "\n".join(lines)
+    if answered_in_turn:
+        lines.append(f"attempt {attempt}; {remaining} continuation(s) left")
+        lines.append(
+            "Reply with what the node should try next, or 'abandon' to give up on it and everything waiting on it."
+        )
+        return "\n".join(lines)
+    lines.append(f"attempt {attempt}; {remaining} continuation(s) left; deciding within {timeout_s:g}s")
+    lines.append(
+        f'Answer with resolve_dag_node("{run_id}", "{node.id}", "continue", "<message to the node>") '
+        f'or resolve_dag_node("{run_id}", "{node.id}", "abandon"). Ask the user first if only they '
+        "can supply what is missing."
+    )
+    return "\n".join(lines)
+
+
+async def _adjudicate_open_nodes(
+    desk: AdjudicationDesk,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    *,
+    adjudicate: "Callable[[str, str, float | None], Awaitable[str | None]]",
+    origin: dict | None,
+    timeout_s: float,
+    cancel: asyncio.Event | None,
+) -> None:
+    """Ask a person about every suspended node, one at a time. Foreground only.
+
+    The counterpart of `_await_adjudications`, and reached from the same place in
+    the wave loop for the same reason: the node that suspended has already
+    returned and given its dispatch slot back, so nothing is held while the answer
+    is outstanding.
+
+    **One at a time is a hard constraint, not a preference.** `QuestionBroker` is
+    keyed by conversation and allows one pending question per conversation; a
+    second one displaces the first and resolves it to its default, which reads
+    here as an abandon nobody asked for. Asking in series is what keeps that from
+    happening, and it is why the whole round shares one deadline the way
+    `_await_adjudications` does -- N nodes asked in series against a per-question
+    timeout would cost N timeouts.
+
+    ``None`` from the adjudicator is every outcome that is not a continuation --
+    an abandon, an empty answer, a round trip that could not be made -- because
+    all three end the node the same way, and a continuation with nothing to say is
+    already a failure everywhere else.
+    """
+    for nid, st in status.items():
+        if st == "exception" and not desk.is_open(nid):
+            status[nid] = "failed"
+            errors[nid] = "No adjudication was ever opened for this node, so it could not be resolved."
+    open_nodes = sorted(desk.open_nodes())
+    if not open_nodes:
+        return
+    conversation = str((origin or {}).get("session_key") or "")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    for nid in open_nodes:
+        if cancel is not None and cancel.is_set():
+            return
+        report = desk.report(nid)
+        budget = deadline - loop.time()
+        answer = None
+        if conversation and budget > 0:
+            try:
+                answer = await adjudicate(conversation, report, budget)
+            except Exception as exc:  # noqa: BLE001 - a node nobody could be asked about takes the old failure path
+                logger.opt(exception=True).warning("DAG node {} could not be adjudicated: {}", nid, exc)
+                answer = None
+        desk.close(nid)
+        text = (answer or "").strip()
+        if text and text.lower() != ABANDON:
+            continuations[nid] = text
+            status[nid] = "pending"
+            continue
+        status[nid] = "failed"
+        if text:
+            errors[nid] = "This node was abandoned."
+        elif not conversation:
+            errors[nid] = "There was nobody to ask about this node, so it could not continue."
+        elif loop.time() >= deadline:
+            # Read after the await, never the value taken before it: the broker
+            # answers with its default -- an empty string, indistinguishable here
+            # from a person saying nothing -- when the budget it was handed runs
+            # out, so a pre-wait budget is still positive at this point and would
+            # report every timeout as a decision the user never made.
+            errors[nid] = f"No decision arrived within {timeout_s:g}s, so the node timed out."
+        else:
+            errors[nid] = "No decision was given for this node, so it could not continue."
+
+
+async def _apply_verdict(
+    node: DagNodeSpec,
+    *,
+    store: DagRunStore,
+    status: dict[str, str],
+    errors: dict[str, str],
+    output_paths: dict[str, str],
+    node_output: str | None,
+    attempt: int,
+    desk: "AdjudicationDesk | None",
+    judge_node: "Callable[..., Awaitable[Any]]",
+    announce_exception: ExceptionAnnouncer | None,
+    max_continuations: int,
+    origin: dict | None,
+    dependents: dict[str, list[str]],
+    adjudication_timeout_s: float,
+    answered_in_turn: bool = False,
+) -> None:
+    """Turn a finished node's verdict into a status, and report a bad one.
+
+    The last attempt reports too: the agent learns this line of the graph is dead
+    while other branches are still running, rather than at the closing announce an
+    hour later.
+    """
+    if status[node.id] not in ("completed", "failed"):
+        return
+    crashed = status[node.id] == "failed"
+    try:
+        verdict = await judge_node(
+            node=node,
+            store=store,
+            output=node_output or "",
+            error=errors.get(node.id, ""),
+            crashed=crashed,
+        )
+    except Exception as exc:  # noqa: BLE001 - matches _verdict.judge's own fail-open contract
+        logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
+        verdict = Verdict(accomplished=True)
+    if verdict.accomplished:
+        return
+    reason = verdict.what_is_missing or "The node did not accomplish its task."
+    errors[node.id] = reason
+    # A node that did not accomplish its task must not be readable as anyone's
+    # input, whatever happens next.
+    output_paths.pop(node.id, None)
+    remaining = max_continuations - (attempt - 1)
+    report = _exception_report(
+        run_id=store.run_id,
+        node=node,
+        verdict=verdict,
+        attempt=attempt,
+        remaining=remaining,
+        blocked=sorted(dependents.get(node.id, [])),
+        timeout_s=adjudication_timeout_s,
+        answered_in_turn=answered_in_turn,
+    )
+    # `origin` is part of this predicate because whoever is going to be asked is
+    # reached through it: a node suspended on a report that cannot be delivered
+    # waits out its whole timeout and then blames the answerer for not answering a
+    # question they never received. Which channel counts depends on the lane -- the
+    # model is woken by `announce_exception`, the person is asked from the wave
+    # loop -- so a foreground run suspends on the adjudicator being wired instead.
+    deliverable = announce_exception is not None if not answered_in_turn else True
+    suspending = remaining > 0 and desk is not None and deliverable and origin is not None
+    # Opened before the announce, not after: the announce can be answered
+    # synchronously (a host that dispatches the turn inline, every test that
+    # resolves from its announcer), and a desk opened afterwards would refuse
+    # that answer and leave the node waiting out its whole timeout.
+    if suspending:
+        status[node.id] = "exception"
+        # The report is parked on the desk because the foreground lane does not
+        # ask here: this node returns first, releasing the dispatch slot it holds,
+        # and the question is put from the wave loop once nothing else can run.
+        desk.open(node.id, report)
+    else:
+        status[node.id] = "failed"
+    if announce_exception is not None and origin is not None and not answered_in_turn:
+        try:
+            await announce_exception(store.run_id, node.id, report, origin)
+        except Exception as exc:  # noqa: BLE001 - the node's fate must not depend on delivery
+            logger.opt(exception=True).warning("DAG node {} exception report could not be delivered: {}", node.id, exc)
+            if suspending:
+                # The desk is open and the node is waiting on a decision the agent
+                # was never told to make. Left alone this stalls for the full
+                # adjudication timeout and then blames the agent for not answering
+                # a question it never received, instead of the real cause.
+                desk.close(node.id)
+                status[node.id] = "failed"
+                errors[node.id] = f"The exception report could not be delivered: {exc}"
+
+
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
     """Write this run's per-node outcome into the session index.
 
@@ -476,10 +766,11 @@ def _mark_stopped(status: dict[str, str]) -> None:
     A `running` node was cut off mid-flight and never reached a terminal
     status, because CancelledError bypasses _run_node's except-Exception. A
     `pending` one was never dispatched, which is what `skipped` means
-    everywhere else.
+    everywhere else. An `exception` node was waiting on an adjudication that is
+    never coming now, and would otherwise outlive the run that owns it.
     """
     for nid, st in status.items():
-        if st == "running":
+        if st in ("running", "exception"):
             status[nid] = "cancelled"
         elif st == "pending":
             status[nid] = "skipped"
@@ -493,9 +784,108 @@ def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> Non
         for nid, in_graph in deps.items():
             if status[nid] != "pending":
                 continue
+            # `exception` is deliberately absent: a suspended node's dependents
+            # must stay pending, because the adjudication may yet continue it.
             if any(status[d] in ("failed", "skipped") for d in in_graph):
                 status[nid] = "skipped"
                 changed = True
+
+
+async def _await_adjudications(
+    desk: AdjudicationDesk,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    *,
+    timeout_s: float,
+    cancel: asyncio.Event | None,
+) -> None:
+    """Block until every suspended node has an answer, or the wait runs out.
+
+    Reached only when nothing else in the graph can run: the report went to the
+    main agent the moment the node was suspended, so this wait costs the graph
+    nothing it could otherwise be doing.
+
+    Every open node waits against one shared deadline, `timeout_s` from when
+    this call started, all at once rather than one after another -- N nodes
+    awaited in series would cost N times `timeout_s`, contradicting both the
+    per-node deadline `_exception_report` already promised the main agent and
+    the one-hour cap `adjudication_timeout_s` is configured against.
+
+    A continued node goes back to `pending` with its message parked in
+    ``continuations`` -- its dependencies are still `completed`, so the next pass
+    of the ready set picks it up like any other node. Abandoned and timed-out
+    nodes take the ordinary failure path, which cascades to their dependents.
+
+    `status` and the desk are two independent records of what is suspended. A
+    node this call was never given a desk entry for (`exception` in `status`
+    but not `desk.is_open`) can never be resolved -- nothing will ever call
+    `resolve_dag_node` for it -- so it is failed outright before the wait
+    below, instead of returning with nothing changed and inviting the caller
+    to loop back here with no `await` in between.
+    """
+    for nid, st in status.items():
+        if st == "exception" and not desk.is_open(nid):
+            status[nid] = "failed"
+            errors[nid] = "No adjudication was ever opened for this node, so it could not be resolved."
+    open_nodes = sorted(desk.open_nodes())
+    if not open_nodes:
+        return
+    waiters = {nid: desk.waiter(nid) for nid in open_nodes}
+    node_tasks = {nid: asyncio.create_task(event.wait()) for nid, event in waiters.items()}
+    stop = asyncio.create_task(cancel.wait()) if cancel is not None else None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    cancelled = False
+    try:
+        node_pending = set(node_tasks.values())
+        while node_pending:
+            budget = max(0.0, deadline - loop.time())
+            waiting_on = {*node_pending, stop} if stop is not None else set(node_pending)
+            done, _ = await asyncio.wait(waiting_on, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
+            if stop is not None and stop in done:
+                cancelled = True
+                break
+            node_pending -= done
+            if loop.time() >= deadline:
+                break
+        if cancelled:
+            return
+        for nid in open_nodes:
+            event = waiters[nid]
+            answer = desk.take(nid) if event.is_set() else None
+            if answer is None:
+                desk.close(nid)
+                status[nid] = "failed"
+                errors[nid] = f"No decision arrived within {timeout_s:g}s, so the node timed out."
+                continue
+            if answer.decision == CONTINUE and answer.message:
+                continuations[nid] = answer.message
+                status[nid] = "pending"
+            elif answer.decision == CONTINUE:
+                status[nid] = "failed"
+                errors[nid] = (
+                    "The main agent chose to continue but sent no message, so the node failed instead of resuming."
+                )
+            else:
+                status[nid] = "failed"
+                errors[nid] = "The main agent abandoned this node."
+    finally:
+        if stop is not None and not stop.done():
+            stop.cancel()
+        # Reached on every exit, including a hard Task.cancel() on the run
+        # itself (as opposed to setting the soft `cancel` Event) raising
+        # CancelledError right out of asyncio.wait above: that route skips
+        # past the per-node close/take calls in the loop entirely, so without
+        # this an open node's wait task would keep running unsupervised, and
+        # the desk would keep telling is_open yes for a run that no longer
+        # exists to act on its answer.
+        for task in node_tasks.values():
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*node_tasks.values(), *([stop] if stop is not None else []), return_exceptions=True)
+        for nid in open_nodes:
+            desk.close(nid)
 
 
 async def _run_group(
@@ -524,6 +914,16 @@ async def _run_group(
     session_key: str | None = None,
     subagents_root: str | None = None,
     record_tasks: "set[asyncio.Task] | None" = None,
+    attempts: dict[str, int] | None = None,
+    continuations: dict[str, str] | None = None,
+    desk: "AdjudicationDesk | None" = None,
+    judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    announce_exception: ExceptionAnnouncer | None = None,
+    max_continuations: int = 2,
+    origin: dict | None = None,
+    dependents: dict[str, list[str]] | None = None,
+    adjudication_timeout_s: float = 600.0,
+    answered_in_turn: bool = False,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
@@ -552,25 +952,52 @@ async def _run_group(
             session_key=session_key,
             subagents_root=subagents_root,
             record_tasks=record_tasks,
+            attempts=attempts,
+            continuations=continuations,
+            desk=desk,
+            judge_node=judge_node,
+            announce_exception=announce_exception,
+            max_continuations=max_continuations,
+            origin=origin,
+            dependents=dependents,
+            adjudication_timeout_s=adjudication_timeout_s,
+            answered_in_turn=answered_in_turn,
         )
 
 
-async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any) -> None:
+async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any, attempt: int = 1) -> None:
     """Persist what the node did on the way, one message per line.
 
     Its own file rather than a manifest field: the manifest is re-read on every
     poll of the graph, and only an opened node reads this. Failing to write it
     must not fail the node -- the account of a run is worth less than the run.
+
+    Written twice, to the latest-attempt file the judge reads and to this
+    attempt's own archive. Without the second, a continued node's earlier
+    transcript is overwritten and the evidence its verdict rested on is gone,
+    while that same attempt's prompt and output stay readable.
     """
     messages = getattr(did, "transcript", None)
-    if isinstance(messages, list) and messages:
-        try:
-            await store.write_text(
-                store.transcript_path(node_id),
-                "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages),
-            )
-        except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
-            logger.warning("DAG node {} transcript could not be written: {}", node_id, exc)
+    # An empty list is published, not absent: a backend that answered directly
+    # this time says so by publishing nothing. Skipping the write would leave the
+    # previous attempt's transcript in place, and the judge -- which reads the
+    # latest file to see the attempt in front of it -- would be handed the last
+    # one's evidence and told it was complete.
+    if isinstance(messages, list):
+        text = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
+        for path in (store.transcript_path(node_id), store.attempt_transcript_path(node_id, attempt)):
+            try:
+                await store.write_text(path, text)
+            except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
+                logger.warning("DAG node {} transcript could not be written to {}: {}", node_id, path, exc)
+
+
+async def _previous_output(store: DagRunStore, node_id: str) -> str:
+    """The last attempt's answer, for a stateless node's follow-up prompt."""
+    try:
+        return await store.read_text(store.output_path(node_id))
+    except Exception:  # noqa: BLE001 - a missing prior answer is not worth failing the retry
+        return "(the previous attempt left no output)"
 
 
 async def _add_node_to_instance_log(
@@ -656,9 +1083,23 @@ async def _run_node(
     session_key: str | None = None,
     subagents_root: str | None = None,
     record_tasks: "set[asyncio.Task] | None" = None,
+    attempts: dict[str, int] | None = None,
+    continuations: dict[str, str] | None = None,
+    desk: "AdjudicationDesk | None" = None,
+    judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    announce_exception: ExceptionAnnouncer | None = None,
+    max_continuations: int = 2,
+    origin: dict | None = None,
+    dependents: dict[str, list[str]] | None = None,
+    adjudication_timeout_s: float = 600.0,
+    answered_in_turn: bool = False,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
+        attempt = (attempts or {}).get(node.id, 0) + 1
+        if attempts is not None:
+            attempts[node.id] = attempt
+        follow_up = (continuations or {}).pop(node.id, None)
         started_at_ms = _now_ms()
         did = None
         node_started_at[node.id] = started_at_ms
@@ -674,7 +1115,7 @@ async def _run_node(
         await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
         node_output: str | None = None
         try:
-            prompt = await render_prompt(
+            rendered_prompt = await render_prompt(
                 node,
                 backend=backend,
                 cwd=workdir,
@@ -686,9 +1127,26 @@ async def _run_node(
                 by_id=by_id,
                 capabilities=capabilities,
             )
+            prompt = rendered_prompt
+            if follow_up is not None:
+                # A node with an instance is resuming a conversation whose history
+                # is already on disk, so restating the task would only compete with
+                # it. A stateless one has no history at all, so the whole task has
+                # to travel with the follow-up or it starts from nothing.
+                previous = await _previous_output(store, node.id)
+                prompt = (
+                    follow_up
+                    if node.instance
+                    else f"{prompt}\n\nYour previous attempt returned:\n{previous}\n\nNow: {follow_up}"
+                )
             prompt_path = store.prompt_path(node.id)
             output_path = store.output_path(node.id)
-            await store.write_text(prompt_path, prompt)
+            if attempt == 1:
+                # `prompt_path` is the task the judge and dag_status/read_node show
+                # for this node, so it must stay fixed at the original render even
+                # once a later attempt substitutes a follow-up into `prompt`.
+                await store.write_text(prompt_path, rendered_prompt)
+            await store.write_text(store.attempt_prompt_path(node.id, attempt), prompt)
             prompt_written.add(node.id)
             # The instance's message list, on the same terms as `spawn` and a
             # direct chat. A node that names an `instance` is asking to continue
@@ -747,16 +1205,47 @@ async def _run_node(
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see
             # `_terminal_outputs`), and this file is what the reader, the next
-            # node's placeholder, and the record all resolve to.
-            await store.write_text(output_path, activity.persisted_output(did, result) or "")
+            # node's placeholder, and the record all resolve to. The per-attempt
+            # archive keeps the same uncapped text, for the same reason.
+            persisted = activity.persisted_output(did, result) or ""
+            await store.write_text(output_path, persisted)
+            await store.write_text(store.attempt_output_path(node.id, attempt), persisted)
             node_output = result
             status[node.id] = "completed"
             output_paths[node.id] = output_path
+            # An earlier attempt's reason is still in `errors`, and nothing else
+            # pops it: a continuation that finally succeeds would otherwise reach
+            # the manifest reading `completed` with the failure that made it
+            # retry still attached. Only reached when this attempt returned, so a
+            # real failure of this attempt is recorded after it, not lost.
+            errors.pop(node.id, None)
         except Exception as exc:  # noqa: BLE001 - record and continue
             logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
             status[node.id] = "failed"
             errors[node.id] = str(exc)
-        await _write_node_transcript(store, node.id, did)
+        # Written before the verdict, not after: the production judge reads this
+        # file back through `store.transcript_path` to build its evidence, so
+        # writing it later meant a first attempt was always judged with no
+        # transcript, and a continuation's judge read the previous attempt's.
+        await _write_node_transcript(store, node.id, did, attempt)
+        if judge_node is not None:
+            await _apply_verdict(
+                node,
+                store=store,
+                status=status,
+                errors=errors,
+                output_paths=output_paths,
+                node_output=node_output,
+                attempt=attempt,
+                desk=desk,
+                judge_node=judge_node,
+                announce_exception=announce_exception,
+                max_continuations=max_continuations,
+                origin=origin,
+                dependents=dependents or {},
+                adjudication_timeout_s=adjudication_timeout_s,
+                answered_in_turn=answered_in_turn,
+            )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()
         node_ended_at[node.id] = ended_at_ms

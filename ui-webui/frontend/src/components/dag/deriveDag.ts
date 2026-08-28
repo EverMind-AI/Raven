@@ -5,6 +5,13 @@ export const RUN_SUBAGENT_DAG_TOOL = 'run_subagent_dag';
 
 /** Per-node status vocabulary shared by the live overlay and the manifest.
  *
+ * `exception` is a node that finished without accomplishing its task and is
+ * waiting on a decision from the agent that spawned it (continue or abandon),
+ * so it is not terminal: the same node can still resolve to any status below.
+ * A dead run's `exception` node reads back as `interrupted`, the same overlay
+ * a dead run's `running` node already gets; a live one does not, so the two
+ * stay visually distinct.
+ *
  * `interrupted` never comes off the wire: the runner only ever reports the
  * other four terminal states. It is what a *restored* run reports for a node
  * the instance registry still calls running even though the DAG tool is no
@@ -24,6 +31,7 @@ export type DagNodeStatus =
 	| 'failed'
 	| 'skipped'
 	| 'cancelled'
+	| 'exception'
 	| 'interrupted'
 	| 'reused';
 
@@ -42,6 +50,7 @@ export const DAG_STATUS_LABEL_KEY: Record<DagNodeStatus, string> = {
 	failed: 'dag.status.failed',
 	skipped: 'dag.status.skipped',
 	cancelled: 'dag.status.cancelled',
+	exception: 'dag.status.exception',
 	interrupted: 'dag.status.interrupted',
 	reused: 'dag.status.reused',
 };
@@ -111,13 +120,17 @@ export function readDagManifest(metadata: Record<string, unknown> | undefined): 
  *  and `interrupted` are both kept: the runner records the first when it stops
  *  a node, while the second is a reader's inference about a node no run is
  *  executing any more. Neither may fall through to `pending`, which would draw
- *  a node that is never going to run again as though it were still queued. */
+ *  a node that is never going to run again as though it were still queued.
+ *  `exception` is kept for the opposite reason: falling through to `pending`
+ *  would draw a node that already ran and is waiting on a decision as though
+ *  it had not started yet. */
 export function toStatus(s: string | undefined): DagNodeStatus {
 	return s === 'running' ||
 		s === 'completed' ||
 		s === 'failed' ||
 		s === 'skipped' ||
 		s === 'cancelled' ||
+		s === 'exception' ||
 		s === 'interrupted'
 		? s
 		: 'pending';
@@ -136,7 +149,9 @@ export function resolveStatus(
 	liveStatus: string | undefined,
 ): DagNodeStatus {
 	const fromManifest = toStatus(manifestStatus);
-	if (fromManifest !== 'pending' && fromManifest !== 'running') return fromManifest;
+	if (fromManifest !== 'pending' && fromManifest !== 'running' && fromManifest !== 'exception') {
+		return fromManifest;
+	}
 	return toStatus(liveStatus ?? manifestStatus);
 }
 

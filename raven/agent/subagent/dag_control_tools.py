@@ -1,13 +1,15 @@
 """Model-facing controls for an in-flight ``run_subagent_dag`` run.
 
 ``cancel_dag`` stops a run the model already submitted; ``dag_status`` reports
-one run's live per-node progress, or lists the runs in flight. Both are kept out
-of the provider's tool schema on purpose (``ToolRegistry.hide_from_schema``):
-the only place that tells the model these exist is ``run_subagent_dag``'s own
-acceptance text, so the per-turn tool list carries nothing a conversation that
-never starts a DAG has any use for. Where progressive disclosure is active the
-model reaches them through ``tool_call``; the registry resolves either way, as
-its dispatch never consults the schema.
+one run's live per-node progress, or lists the runs in flight; ``resolve_dag_node``
+answers a node suspended on an exception verdict. All three are kept out of the
+provider's tool schema on purpose (``ToolRegistry.hide_from_schema``): the only
+place that tells the model these exist is ``run_subagent_dag``'s own acceptance
+text -- and, for ``resolve_dag_node``, the exception report -- so the per-turn
+tool list carries nothing a conversation that never starts a DAG has any use
+for. Where progressive disclosure is active the model reaches them through
+``tool_call``; the registry resolves either way, as its dispatch never consults
+the schema.
 """
 
 from __future__ import annotations
@@ -16,7 +18,8 @@ import json
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.subagent.dag_live import cancel_run, live_run_ids
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS
+from raven.agent.subagent.dag_live import cancel_run, live_run_ids, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
 from raven.agent.tools.base import Tool
@@ -140,6 +143,90 @@ class CancelDagTool(_ControlTool):
         except DagReadError:
             return head
         return head + "\n\n" + _render_run(run)
+
+
+class ResolveDagNodeTool(_ControlTool):
+    """Answer a suspended node: continue it with a message, or abandon it."""
+
+    @property
+    def name(self) -> str:
+        return "resolve_dag_node"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Decide what happens to a DAG node that reported it could not accomplish its "
+            "task: continue it with a message, or abandon it and skip its dependents."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "The run id, as given in the exception report."},
+                "node_id": {"type": "string", "description": "The node that reported the exception."},
+                "decision": {
+                    "type": "string",
+                    "enum": [CONTINUE, ABANDON],
+                    "description": (
+                        "'continue' sends your message to the node and lets it try again. "
+                        "'abandon' fails the node and skips its dependents; the rest of the "
+                        "graph carries on. To stop the whole run instead, call cancel_dag."
+                    ),
+                },
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "What to tell the node, required when continuing. Supply what it said "
+                        "was missing. Ask the user first if only they can provide it."
+                    ),
+                },
+            },
+            "required": ["run_id", "node_id", "decision"],
+        }
+
+    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> str:
+        if decision not in DECISIONS:
+            return f"Error: decision must be '{CONTINUE}' or '{ABANDON}', not {decision!r}."
+        if decision == CONTINUE and not (message or "").strip():
+            return (
+                f"Error: continuing node '{node_id}' needs a message telling it what to do "
+                "differently. Supply what the report said was missing."
+            )
+        tool = _registered_tool(self._loop)
+        if tool is None:
+            # Fail closed: without the session-scoped reader there is no way to
+            # prove this run belongs to this conversation, and an unproven
+            # resolve could answer another chat's suspended node -- one that
+            # chat never asked this conversation to decide.
+            return (
+                f"Cannot resolve node '{node_id}' of DAG run {run_id}: run ownership cannot be "
+                "resolved here (no run_subagent_dag tool is registered), so nothing was signalled."
+            )
+        # Ownership first: a run id must resolve under this conversation's run
+        # history before the node is answered, or one chat's model could
+        # resolve another chat's suspended node -- deciding continue or
+        # abandon on a wait that conversation is still watching.
+        try:
+            await tool.read_run(run_id, self._session.get())
+        except DagReadError:
+            return (
+                f"No DAG run {run_id} in this conversation: a run id must resolve under this "
+                "conversation's run history before its nodes can be resolved."
+            )
+        if not resolve_node(self._loop, run_id, node_id, decision, message):
+            return (
+                f"Node '{node_id}' of run {run_id} is no longer waiting for a decision: it timed "
+                f'out, the run was cancelled, or the id is wrong. dag_status("{run_id}") shows '
+                "where every node stands."
+            )
+        if decision == CONTINUE:
+            return f"Node '{node_id}' of run {run_id} will run again with your message."
+        return (
+            f"Node '{node_id}' of run {run_id} is abandoned; its dependents are skipped and the "
+            "rest of the graph continues. Use cancel_dag to stop the whole run."
+        )
 
 
 class DagStatusTool(_ControlTool):

@@ -166,6 +166,7 @@ if TYPE_CHECKING:
         MemoryConfig,
         RuntimeConfig,
         SkillForgeRouterConfig,
+        SubagentDagConfig,
     )
     from raven.config.schema import (
         AskUserToolConfig,
@@ -474,6 +475,7 @@ class AgentLoop:
         agents: list | None = None,
         media_config: Any = None,
         deep_research_config: Any = None,
+        subagent_dag_config: "SubagentDagConfig | None" = None,
         disabled_tools: list[str] | None = None,
         tool_search_config: Any = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
@@ -559,10 +561,12 @@ class AgentLoop:
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
+        from raven.config.raven import SubagentDagConfig
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
         self.media_config = media_config or MediaGenConfig()
         self.deep_research_config = deep_research_config or DeepResearchToolConfig()
+        self.subagent_dag_config = subagent_dag_config or SubagentDagConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.cron_service = cron_service
@@ -1228,21 +1232,26 @@ class AgentLoop:
                 everos_for=self.subagents.everos_identity,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
+                announce_exception=self.subagents.announce_dag_exception,
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
+                provider_for=self._verdict_provider,
+                adjudicate=self._adjudicate_node,
+                verdict_config=self.subagent_dag_config,
             )
         )
         # The graph tool's own acceptance text is the only advertisement these
-        # two get: hidden from the schema so the per-turn tool list carries
+        # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
         # stay reachable through the registry (and tool_call where it exists).
-        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool
+        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 
         self.tools.register(CancelDagTool(loop=self))
         self.tools.register(DagStatusTool(loop=self))
-        self.tools.hide_from_schema("cancel_dag", "dag_status")
+        self.tools.register(ResolveDagNodeTool(loop=self))
+        self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
@@ -1430,9 +1439,16 @@ class AgentLoop:
             state_for=self.subagents.instance_state,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
+            announce_exception=self.subagents.announce_dag_exception,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
             ask=self._confirm_graph,
+            # Same manager hooks as the registered tool (see the docstring above):
+            # a playbook step is an ordinary DAG node, so it is judged on the same
+            # terms once judgement is wired in.
+            provider_for=self._verdict_provider,
+            adjudicate=self._adjudicate_node,
+            verdict_config=self.subagent_dag_config,
         )
         from raven.playbook import PlaybookGenerator, RouterSizes, live_inventory
 
@@ -1484,6 +1500,23 @@ class AgentLoop:
 
         return disabled_playbook_names(self._live_config)
 
+    def _verdict_provider(self) -> Any:
+        """The provider the node judge should call, resolved per dispatch.
+
+        `provider` is a property over the running turn's binding, so reading it
+        while this loop was still being built froze the default one onto the
+        graph tool: a session that switched model never reached the judge. And a
+        pinned `verdictModel` has to travel with the provider holding its
+        credential -- a bare model id sent through another vendor's provider
+        fails, and the judge fails open, so verdicts would go quietly off.
+        """
+        pinned = self.subagent_dag_config.verdict_model
+        if pinned and self._provider_pool is not None:
+            binding = self._provider_pool.bind_pin(pinned)
+            if binding is not None:
+                return binding.provider
+        return self.provider
+
     async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
         """The graph-level ``confirm`` gate's route to a human.
 
@@ -1510,6 +1543,35 @@ class AgentLoop:
         if answer is None:
             return True
         return answer.strip().lower() in {"run it", "run", "yes", "y", "ok", "go", "sure"}
+
+    async def _adjudicate_node(self, conversation_id: str, report: str, timeout_s: float | None = None) -> str | None:
+        """A foreground graph's route to a decision about a node that fell short.
+
+        A backgrounded run reports to the model and waits for `resolve_dag_node`,
+        which works because the turn that submitted it has already returned. A
+        foreground run has not: its own tool call is still on the stack, the
+        scheduler serialises the conversation's lane, and the turn that would
+        answer cannot start until this one ends. Every foreground suspension
+        would therefore wait out its whole timeout and then blame the agent.
+
+        So in foreground the question goes to the person watching the blocking
+        call instead, over the same round trip the confirm gate uses. Free text,
+        not a yes/no: a continuation with nothing to say is already treated as a
+        failure, so a bool could only ever abandon.
+
+        ``timeout_s`` is the runner's remaining budget for the whole round, not
+        this question's own: the broker allows one pending question per
+        conversation, so a graph with several suspended nodes asks them in
+        series, and without a shared budget N nodes would cost N timeouts.
+
+        ``None`` means the round trip is structurally unavailable -- no broker,
+        no conversation -- and the caller falls back to failing the node, which
+        is what happened before any of this existed.
+        """
+        tool = self.tools.get("ask_user")
+        if not isinstance(tool, AskUserTool):
+            return None
+        return await tool.ask_direct(report, ["Continue", "Abandon"], conversation_id, timeout_s)
 
     def _dag_guide_skill_id(self) -> str | None:
         """The orchestration guide's id for the DAG tool description, or None.
@@ -2534,6 +2596,7 @@ class AgentLoop:
             "deliver_files",
             "dag_status",
             "cancel_dag",
+            "resolve_dag_node",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -2547,6 +2610,7 @@ class AgentLoop:
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
+                    "resolve_dag_node",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
@@ -2599,11 +2663,16 @@ class AgentLoop:
         """Stop one in-flight run, whichever instance owns it."""
         return any(tool.request_cancel(run_id) for tool in self.dag_tools())
 
+    def resolve_dag_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+        """Answer one suspended node, whichever instance owns its run."""
+        return any(tool.resolve_node(run_id, node_id, decision, message) for tool in self.dag_tools())
+
     def dag_control_reachable(self) -> bool:
         """Whether the schema-hidden dag control tools have a call path.
 
-        The graph tool advertises ``dag_status`` / ``cancel_dag`` in its
-        acceptance text, and this is the gate that keeps the advertisement
+        The graph tool advertises ``dag_status`` / ``cancel_dag`` /
+        ``resolve_dag_node`` in its acceptance text, and this is the gate that
+        keeps the advertisement
         honest: it answers the same question ToolSearchStrategy answers when it
         assembles the per-turn tool list, through the controller's single
         predicate rather than a second copy of the fold condition.

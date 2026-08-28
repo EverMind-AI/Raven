@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyUpdate, fromArgs, fromSnapshot, fromStarted, merge } from './nodes'
+import { applyUpdate, fromArgs, fromSnapshot, fromStarted, merge, settled } from './nodes'
 
 /* The three sources a graph reaches the page through, and the merge that lets a
  * card learn from more than one of them.
@@ -147,6 +147,18 @@ describe('merging one source onto another', () => {
     expect([stale[0]?.started_at, stale[0]?.ended_at]).toEqual([5, 9])
   })
 
+  it('does not let a stale running read pull a suspended node back to in progress', () => {
+    /* `exception` must outrank `running`: a `dag.get` read issued before the
+       node suspended can still answer after it did, and taking that stale
+       read as newer would drag a node waiting on a verdict back to "in
+       progress" -- the same bug as the terminal-status case above, one rank
+       lower. */
+    const live = merge(args, fromSnapshot([{ node: 'a', status: 'exception', started_at: 5, ended_at: 9 }]))
+    const stale = merge(live, fromSnapshot([{ node: 'a', status: 'running', started_at: 5 }]))
+
+    expect(stale[0]?.status).toBe('exception')
+  })
+
   it('still takes a status the existing node has not reached', () => {
     /* The other direction, which is the common one: a card restored from history
        holds nothing but `pending`, and the read is the only thing that knows the
@@ -203,5 +215,24 @@ describe('one node updated', () => {
     const started = applyUpdate(two, { node: 'a', status: 'running', started_at: 7 })
     const ended = applyUpdate(started, { node: 'a', status: 'completed' })
     expect(ended[0]?.started_at).toBe(7)
+  })
+})
+
+describe('settled', () => {
+  it('reads a suspended node as open, not finished', () => {
+    /* `exception` means the node stopped without finishing and is waiting on
+       the caller's verdict -- not one of the run's endings, whatever its rank
+       relative to `running`. */
+    expect(settled('exception')).toBe(false)
+  })
+
+  it('reads every terminal status as settled', () => {
+    expect(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'].map(settled)).toEqual([
+      true, true, true, true, true,
+    ])
+  })
+
+  it('reads pending and running as open', () => {
+    expect(['pending', 'running'].map(settled)).toEqual([false, false])
   })
 })

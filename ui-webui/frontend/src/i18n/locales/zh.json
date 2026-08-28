@@ -549,6 +549,7 @@
 			"failed": "失败",
 			"skipped": "已跳过",
 			"cancelled": "已停止",
+			"exception": "异常",
 			"interrupted": "已中断",
 			"reused": "已复用"
 		},

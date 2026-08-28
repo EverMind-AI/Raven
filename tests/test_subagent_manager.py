@@ -2336,3 +2336,32 @@ async def test_a_refused_spawn_does_not_leak_a_prior_uncollected_handle() -> Non
 
     assert result.startswith("Error")
     assert tool.take_metadata() is None
+
+
+async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> None:
+    """The mark this producer builds is validated by two strict models on the way
+    out, so a field it adds that neither declares is rejected as extra_forbidden.
+
+    Asserted against the mark the manager actually emits rather than a copy of
+    it, so the contract and the producer cannot drift apart silently.
+    """
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "survey",
+        "node 'survey' did not accomplish its task",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+    )
+
+    assert len(delivered) == 1
+    mark = dict(delivered[0])
+    assert mark["node_id"] == "survey"
+    content = mark.pop("content")
+    assert SubagentDeliveredPayload(**mark, content=content).node_id == "survey"
+    assert TranscriptDelegated(**mark).node_id == "survey"

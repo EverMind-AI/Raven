@@ -72,7 +72,9 @@ result when it finishes -- keep working, and do not submit this graph again.
 ```
 
 The graph keeps running after your turn ends, and its full result is delivered to you as a
-new message when it finishes — the same way a `spawn` reports back. So:
+new message when it finishes — the same way a `spawn` reports back. One other message can
+reach you before that one: a node that could not do its job asking you what to do about it
+(see below). So:
 
 - **Don't** re-submit the same graph, and don't call the tool again to check on it. There is
   nothing to poll; the result comes to you.
@@ -87,6 +89,41 @@ A malformed graph is rejected in your own turn either way, before anything is di
 a call that returns "started" has already passed every check.
 
 A stopped run reports nothing back — if the user cancels it, no announcement arrives.
+
+## When a node cannot do its job
+
+Finishing is not the same as succeeding. Every node's answer is judged against the task it
+was given, so a sub-agent that ran to the end and reported it could not do the work -- a
+missing credential, a missing piece of the request, a tool that kept failing -- does not
+count as done. Its output is withheld from the nodes that depend on it, and you get a
+message naming the node, what is missing, and which downstream nodes are blocked behind it.
+
+That message arrives mid-run, not at the end. The rest of the graph keeps going: only the
+blocked branch waits.
+
+Answer it with `resolve_dag_node`:
+
+- `resolve_dag_node("<run_id>", "<node_id>", "continue", "<message>")` sends your message to
+  the node and lets it try again, keeping the graph and everything it has already done.
+- `resolve_dag_node("<run_id>", "<node_id>", "abandon")` gives up on that node. Its
+  dependents are skipped; the other branches finish normally.
+
+Pick `continue` whenever you can supply what the report says is missing. **If only the user
+can supply it -- a credential, a decision, a fact about what they want -- ask them first,
+then continue the node with their answer.** That is the case this whole mechanism exists
+for, and abandoning instead throws away work the user could have unblocked in one sentence.
+
+Two limits worth knowing. A node gets a small number of continuations before it fails for
+good, so a message that does not actually change anything wastes one. And the run does not
+wait forever -- if nobody answers, the node fails on its own and its dependents are skipped.
+
+All of this is about a backgrounded run. In a `background: false` call there is no
+message to you and no `resolve_dag_node` to call: the question goes straight to the user
+and the answer is applied before your call returns, so what you get back already reflects
+whatever they decided.
+
+To stop the whole run rather than one node, use `cancel_dag`. Re-planning means `cancel_dag`
+followed by a fresh graph.
 
 Each run costs one unit of the same per-hour budget `spawn` draws on
 (`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop

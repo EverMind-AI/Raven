@@ -230,7 +230,7 @@ export interface DeliveredData {
   kind: 'sdlv'
   label: string
   isDag: boolean
-  err: boolean
+  status: 'ok' | 'error' | 'exception'
   open: () => void
   /* What was delivered, as a reader may read it: the text from inside the
      untrusted fence, with the fence and the framing the model was given left

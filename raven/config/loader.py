@@ -61,6 +61,11 @@ EXTENSION_KEYS = (
     # down with it -- including the documented way to turn the feature off.
     "sessionTitle",
     "session_title",
+    # DAG node judging: verdict model/timeout, evidence budget, adjudication
+    # (raven.agent.subagent). Same consequence as sessionTitle above if
+    # omitted: the block fails base Config validation instead of being read.
+    "subagentDag",
+    "subagent_dag",
 )
 
 # Global variable to store current config path (for multi-instance support)

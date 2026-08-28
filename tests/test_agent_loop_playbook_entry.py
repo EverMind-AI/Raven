@@ -278,6 +278,36 @@ def test_both_graph_tools_are_one_surface_to_a_consumer(tmp_path) -> None:
     assert loop.cancel_dag_run("run-x") is True, "a run only the engine owns is still cancellable"
 
 
+def test_resolve_dag_node_reaches_a_node_the_playbook_engine_owns(tmp_path) -> None:
+    """A suspended node's desk lives on whichever tool dispatched its run.
+
+    A mode: dag playbook's run is dispatched by the engine's private tool, so
+    the desk holding its open nodes lives there too, never on the registered
+    instance. resolve_dag_node has to consult both the way cancel_dag_run
+    already does, or the model would be told a node is done waiting while
+    dag_status -- which reads liveness through the same dag_tools() union --
+    still shows it open.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+    registered, private = loop.dag_tools()
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    private._desks["run-x"] = desk
+
+    assert loop.resolve_dag_node("run-x", "missing", "abandon", None) is False
+    assert loop.resolve_dag_node("run-x", "a", "continue", "use staging") is True
+
+
 class _Flag:
     def __init__(self) -> None:
         self.set_called = False

@@ -147,23 +147,31 @@ export function fromSnapshot(files: unknown): DagNode[] {
    merge take state from whichever source has it without knowing which source is
    newer. Every terminal status shares one rank: they are mutually exclusive
    endings, so two sources can only disagree about one by being about different
-   runs. */
+   runs. `exception` sits on its own rank between `running` and terminal: it
+   must outrank `running`, or a stale `running` read merged in after the node
+   has already suspended would silently drag it back to "in progress" -- but it
+   must not share the terminal rank, because the node is waiting on the caller,
+   not done. */
 const STAGE: Record<string, number> = {
   pending: 0,
   running: 1,
-  completed: 2,
-  failed: 2,
-  skipped: 2,
-  cancelled: 2,
-  interrupted: 2,
+  exception: 2,
+  completed: 3,
+  failed: 3,
+  skipped: 3,
+  cancelled: 3,
+  interrupted: 3,
 }
 
 const stage = (status: string): number => STAGE[status] ?? 0
+const TERMINAL_STAGE = 3
 
 /* Whether a node has stopped. Read off the same table the merge ranks by, so
    "this node is over" has one answer in this domain rather than a set of names
-   kept in step by hand. */
-export const settled = (status: string): boolean => stage(status) > 1
+   kept in step by hand. `exception` ranks above `running` but below this
+   threshold, so it reads as open -- the node is suspended, waiting on the
+   caller's verdict, not finished. */
+export const settled = (status: string): boolean => stage(status) >= TERMINAL_STAGE
 
 /* Later facts on top of earlier ones, per node, without either source erasing
  * what it does not know.

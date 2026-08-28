@@ -1319,6 +1319,28 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] announced result to {}", run_id, origin["session_key"])
 
+    async def announce_dag_exception(self, run_id: str, node_id: str, report: str, origin: dict[str, str]) -> None:
+        """Announce that one node of a run needs a decision before it can go on.
+
+        The same route a run's result takes, and for the same reason: the main
+        agent is not in a turn when this happens, so an injected message is the
+        only thing that starts one. The marker names the node as well as the run,
+        so a client can place this against the row it concerns rather than
+        against the run as a whole.
+
+        Fenced like a result, and more pointedly: the report quotes the node's own
+        output and transcript, which is exactly the text an attacker who reached
+        the sub-agent would have written.
+        """
+        if self._submit is None:
+            logger.warning("DAG run {} node {} suspended with no submit wired; not announced", run_id, node_id)
+            return
+        injected = wrap_untrusted(report, source="subagent")
+        mark = {"kind": "dag", "label": run_id, "status": "exception", "run_id": run_id, "node_id": node_id}
+        self._inject(injected, origin, mark)
+        self._emit_delivered(origin, {**mark, "content": injected})
+        logger.debug("DAG run [{}] node [{}] reported an exception to {}", run_id, node_id, origin["session_key"])
+
     def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> None:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 

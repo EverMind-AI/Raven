@@ -137,4 +137,20 @@ describe('the shared DAG renderer', () => {
     expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
       .toEqual(['run-a12-ok', 'run-a12-no'])
   })
+
+  it('marks a suspended node differently from both a failed and a pending one', () => {
+    /* `exception` reads as neither -- a failure the run is done with, nor a
+       step that has not started -- because the viewer still has to act on it.
+       Falling through to the same fallback mark pending gets would say
+       nothing needs attention; sharing failed's mark would say the run is
+       over, when the node is waiting on a verdict. */
+    const nodes = [node('n1'), { ...node('n2'), status: 'failed' }, { ...node('n3'), status: 'exception' }]
+    draw(nodes, 'sheet')
+    const clsOf = (id: string): string | null =>
+      host.querySelector(`.nd[data-node="${id}"] .mk`)?.getAttribute('class') || null
+
+    expect(clsOf('n1')).toBe('mk wait')
+    expect(clsOf('n2')).toBe('mk bad')
+    expect(clsOf('n3')).toBe('mk warn')
+  })
 })

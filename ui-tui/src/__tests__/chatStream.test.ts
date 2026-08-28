@@ -1074,6 +1074,33 @@ describe('createChatStream — instance refresh', () => {
   })
 })
 
+describe('createChatStream — delegated delivery wording', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tells a waiting node it is waiting, not that it finished', async () => {
+    // announce_dag_exception reports status "exception" on this same event --
+    // a suspended node still open for adjudication, not a completed delivery.
+    // A two-way ok/error ternary has no branch for it and falls through to the
+    // finished wording, announcing success for a node that has not resolved.
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default', sys: m => sysCalls.push(m) })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'stuck-node', status: 'exception' } })
+
+    expect(sysCalls.some(m => m.includes('waiting on a decision'))).toBe(true)
+    expect(sysCalls.some(m => m.includes('finished;'))).toBe(false)
+  })
+})
+
 describe('bindInstanceRefresh', () => {
   afterEach(() => {
     resetInstanceRefresh()

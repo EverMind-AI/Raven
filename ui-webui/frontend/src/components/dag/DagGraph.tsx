@@ -25,6 +25,7 @@ import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 import CheckCircle2 from '~icons/solar/check-circle-bold-duotone';
 import XCircle from '~icons/solar/close-circle-bold-duotone';
+import TriangleAlert from '~icons/solar/danger-triangle-bold-duotone';
 import MinusCircle from '~icons/solar/minus-circle-bold-duotone';
 import Circle from '~icons/solar/record-circle-linear';
 import LoaderCircle from '~icons/solar/refresh-linear';
@@ -56,6 +57,10 @@ const STATUS_STYLE: Record<DagNodeStatus, { box: string; icon: ReactNode }> = {
 	cancelled: {
 		box: 'border-destructive/70 text-destructive/90',
 		icon: <MinusCircle className="size-3 shrink-0" />,
+	},
+	exception: {
+		box: 'border-amber-500/40 text-amber-600 dark:text-amber-400',
+		icon: <TriangleAlert className="size-3 shrink-0" />,
 	},
 	interrupted: {
 		box: 'border-dashed border-destructive/60 text-destructive/80',

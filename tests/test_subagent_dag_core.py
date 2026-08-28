@@ -1024,3 +1024,176 @@ async def test_a_referenced_input_still_renders_where_it_is_named(tmp_path: Path
     assert validate_and_order(spec) == ["a"]
     rendered = await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path), output_paths={})
     assert rendered == "use keep it short now"
+
+
+def test_subagent_dag_config_defaults():
+    from raven.config.raven import RavenConfig
+
+    cfg = RavenConfig().subagent_dag
+    assert cfg.verdict_enabled is True
+    assert cfg.verdict_model is None
+    assert cfg.verdict_timeout_seconds == 30.0
+    assert cfg.evidence_budget_chars == 8000
+    assert cfg.adjudication_timeout_seconds == 600.0
+    assert cfg.max_continuations == 2
+
+
+def test_adjudication_timeout_is_capped_at_an_hour():
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from raven.config.raven import SubagentDagConfig
+
+    assert SubagentDagConfig(adjudication_timeout_seconds=3600.0).adjudication_timeout_seconds == 3600.0
+    with _pytest.raises(ValidationError):
+        SubagentDagConfig(adjudication_timeout_seconds=3601.0)
+
+
+def test_dag_tool_accepts_a_provider_and_verdict_config(tmp_path):
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.config.raven import SubagentDagConfig
+
+    sentinel = object()
+    cfg = SubagentDagConfig(verdict_model="cheap-tier")
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: sentinel, verdict_config=cfg)
+    assert tool._provider_for() is sentinel
+    assert tool._verdict_config.verdict_model == "cheap-tier"
+
+
+def test_dag_tool_without_a_provider_still_builds(tmp_path):
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+    assert tool._provider_for is None
+    assert tool._verdict_config.verdict_enabled is True
+
+
+async def test_the_judge_resolves_its_provider_at_dispatch_not_at_construction(tmp_path):
+    """The loop's `provider` is a property over the running turn's binding, so a
+    tool built at startup that captured its value would send every judge call
+    through the default binding -- a session that switched model would never
+    reach the judge, and a verdictModel from another vendor would fail open.
+    """
+    import raven.agent.subagent.dag_tool as tool_mod
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    seen: list[object] = []
+
+    async def _fake_judge(provider, **kwargs):
+        seen.append(provider)
+        return Verdict(accomplished=True)
+
+    live = ["first"]
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: live[0])
+    judge_node = tool._judge_node()
+    assert judge_node is not None
+
+    class _Store:
+        async def read_text(self, _path):
+            return ""
+
+        def transcript_path(self, _node_id):
+            return "t"
+
+        def prompt_path(self, _node_id):
+            return "p"
+
+    class _Node:
+        id = "a"
+
+    original = tool_mod.judge
+    tool_mod.judge = _fake_judge
+    try:
+        await judge_node(node=_Node(), store=_Store(), output="o", error="", crashed=False)
+        live[0] = "switched"
+        await judge_node(node=_Node(), store=_Store(), output="o", error="", crashed=False)
+    finally:
+        tool_mod.judge = original
+
+    assert seen == ["first", "switched"], f"the judge captured its provider instead of resolving it: {seen}"
+
+
+def test_agent_loop_passes_its_subagent_dag_config_to_the_registered_tool(tmp_path):
+    from raven.agent.loop import AgentLoop
+    from raven.config.raven import SubagentDagConfig
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            return LLMResponse(content="stub", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    non_default = SubagentDagConfig(verdict_model="cheap-tier")
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+        subagent_dag_config=non_default,
+    )
+
+    tool = loop.tools.get("run_subagent_dag")
+    assert tool is not None
+    assert tool._verdict_config.verdict_model == "cheap-tier"
+
+
+async def test_agent_loop_wires_the_adjudicator_into_the_registered_tool(tmp_path):
+    """The blocking lane's only route to a decision, and it has to survive startup.
+
+    Unwired, every foreground node that fell short would take the plain failure
+    path -- which is indistinguishable from the feature working, right up until
+    someone runs a graph with `background=false` and is never asked anything.
+    """
+    from raven.agent.loop import AgentLoop
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            return LLMResponse(content="stub", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+    )
+
+    tool = loop.tools.get("run_subagent_dag")
+    assert tool is not None
+    assert tool._adjudicate == loop._adjudicate_node
+
+    # No broker is wired in this loop, so the round trip is structurally
+    # unavailable and the caller is told so rather than left waiting.
+    assert await loop._adjudicate_node("web:sess1", "node 'a' did not accomplish its task") is None

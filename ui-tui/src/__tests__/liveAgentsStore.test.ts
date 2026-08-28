@@ -412,4 +412,27 @@ describe('$dagRuns reconcile', () => {
 
     expect(dagRunCounts($dagRuns.get()[0]!)).toMatchObject({ running: 1 })
   })
+
+  it('keeps a node waiting on adjudication open when the list folds it to "error"', async () => {
+    // raven/rpc/methods/subagent.py's _DAG_WIRE_STATUS collapses a suspended
+    // node's status to "error" on this wire, the same value a genuine failure
+    // reports. The list poll right after the exception announce carries
+    // exactly that, and must not be read as the node resolving itself.
+    const { applyDagEvent, reconcileFromList } = await import('../app/liveAgentsStore.js')
+
+    applyDagEvent({
+      type: 'dag.run_started',
+      payload: { run_id: 'run-3', nodes: [{ id: 'stuck', subagent: 'coder', depends_on: [] }] }
+    } as DagRunStartedEvent)
+    applyDagEvent({
+      type: 'dag.node_updated',
+      payload: { run_id: 'run-3', node: 'stuck', status: 'exception' }
+    } as never)
+
+    reconcileFromList([{ id: 'run-3/stuck', kind: 'dag', label: 'stuck', message_count: 1, status: 'error' }])
+
+    const row = $liveAgents.get().find(r => r.id === 'run-3/stuck')
+    expect(row).toMatchObject({ status: 'exception' })
+    expect(row?.settledAtMs).toBeUndefined()
+  })
 })

@@ -32,7 +32,8 @@ export const DAG_STATUS_GLYPH: Record<DagRunNodeStatus, { color: (t: Theme) => s
   failed: { color: t => t.color.error, glyph: '✗' },
   skipped: { color: t => t.color.muted, glyph: '⊘' },
   cancelled: { color: t => t.color.error, glyph: '⊗' },
-  interrupted: { color: t => t.color.warn, glyph: '■' }
+  interrupted: { color: t => t.color.warn, glyph: '■' },
+  exception: { color: t => t.color.warn, glyph: '⚠' }
 }
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`
@@ -285,6 +286,10 @@ export const dagRunHeadline = (run: DagRunState): string => {
 
   if (!run.done && counted('running') > 0) {
     parts.push(`${counted('running')} running`)
+  }
+
+  if (!run.done && counted('exception') > 0) {
+    parts.push(plural(counted('exception'), 'exception'))
   }
 
   if (failed > 0) {

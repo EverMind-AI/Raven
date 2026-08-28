@@ -292,6 +292,26 @@ class DagRunStore:
         """
         return self._backend.join_path(self.run_dir, f"{node_id}.prompt.md")
 
+    def attempt_prompt_path(self, node_id: str, attempt: int) -> str:
+        """Path of one attempt's dispatched prompt, kept beside the latest.
+
+        ``prompt_path`` stays fixed at the node's original task text forever
+        (attempt 1's render); a continued node's follow-up-substituted prompt is
+        archived here instead of overwriting it, the same way ``output_path`` and
+        ``attempt_output_path`` split "latest" from "this attempt".
+
+        Args:
+            node_id (`str`):
+                The node id.
+            attempt (`int`):
+                1-based attempt number.
+
+        Returns:
+            `str`:
+                ``<run_dir>/<node_id>.attempt-<n>.prompt.md``.
+        """
+        return self._backend.join_path(self.run_dir, f"{node_id}.attempt-{attempt}.prompt.md")
+
     def output_path(self, node_id: str) -> str:
         """Path of a node's captured output file.
 
@@ -305,6 +325,21 @@ class DagRunStore:
         """
         return output_path_in(self._backend, self._root, self.run_id, node_id)
 
+    def attempt_output_path(self, node_id: str, attempt: int) -> str:
+        """Path of one attempt's captured output, kept beside the latest.
+
+        Args:
+            node_id (`str`):
+                The node id.
+            attempt (`int`):
+                1-based attempt number.
+
+        Returns:
+            `str`:
+                ``<run_dir>/<node_id>.attempt-<n>.out.md``.
+        """
+        return self._backend.join_path(self.run_dir, f"{node_id}.attempt-{attempt}.out.md")
+
     def transcript_path(self, node_id: str) -> str:
         """Path of a node's own transcript file.
 
@@ -317,6 +352,27 @@ class DagRunStore:
                 ``<run_dir>/<node_id>.transcript.jsonl``.
         """
         return self._backend.join_path(self.run_dir, f"{node_id}.transcript.jsonl")
+
+    def attempt_transcript_path(self, node_id: str, attempt: int) -> str:
+        """Path of one attempt's transcript, kept beside the latest.
+
+        ``transcript_path`` is overwritten by each attempt because that is what
+        the judge reads -- it judges the attempt in front of it. The evidence a
+        *previous* attempt's verdict rested on would otherwise be gone, while
+        that attempt's prompt and output both remain auditable, so it is archived
+        the same way they are.
+
+        Args:
+            node_id (`str`):
+                The node id.
+            attempt (`int`):
+                1-based attempt number.
+
+        Returns:
+            `str`:
+                ``<run_dir>/<node_id>.attempt-<n>.transcript.jsonl``.
+        """
+        return self._backend.join_path(self.run_dir, f"{node_id}.attempt-{attempt}.transcript.jsonl")
 
     def memory_path(self, node_id: str) -> str:
         """Path of a node's Memory record.
