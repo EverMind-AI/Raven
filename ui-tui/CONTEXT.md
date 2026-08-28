@@ -77,18 +77,28 @@ A call's full argument and its output, rendered on a filled background (a `▏` 
 256 colors). The only place the raw command, path, or URL appears; rows above it carry
 short labels only.
 
-**Activity Row**:
-A dim row naming machine work, with an inline duration and no fold glyph. Expandability is
-a property of the activity column, not marked per row; a failure is shown by coloring the
-row red, not by a marker.
+**Activity Row** (`ui-tui/src/components/episodeView.tsx`):
+A muted row naming machine work, with an inline duration and no fold glyph. Expandability
+is a property of the activity column, not marked per row. The outcome is a marker in the
+row's left margin -- a green check when the call settled, a red cross when it failed, the
+spinner while it runs, nothing for work still queued -- and not the row's own colour:
+recolouring the whole row red made the row a reader most needs the hardest one to read,
+left a finished call indistinguishable from one that never started, and said nothing at
+all on a terminal without colour. The failure note beside the label keeps the red the row
+gave up, because it names which call broke. The row stands on the same filled ground a
+Detail Block does, so a call and its output read as one object.
 
 **Prompt Block** (`ui-tui/src/components/messageLine.tsx`):
-The person's own message, drawn on a filled background with the prompt chevron in its
-gutter. A wrapped prompt stays one rectangle rather than one per line. Two padding rows
-sit inside the fill, drawn at every color tier so `estimatedMsgHeight` can reserve a row
-count without reading the terminal's capability; the fill itself is skipped below 256
-colors, where nothing sits between black and brightBlack, and the chevron carries the row
-alone.
+The person's own message, drawn on a filled background with an accent rule down its
+flush-left edge. A wrapped prompt stays one rectangle rather than one per line. Two padding
+rows sit inside the fill, drawn at every color tier so `estimatedMsgHeight` can reserve a
+row count without reading the terminal's capability; the fill itself is skipped below 256
+colors, where nothing sits between black and brightBlack, and the rule carries the row
+alone. The rule is a left border rather than a glyph per row, so it spans the padding rows
+the fill covers, and it costs exactly the one cell the prompt chevron used to occupy -- the
+chevron now leads the composer only, where it is the prompt. The fill itself is mixed from
+the terminal's own background (`deriveSurfaces` in `theme.ts`), so the block reads as a
+layer over the reader's ground rather than as a patch of a different hue.
 
 **Cover** (`ui-tui/src/components/branding.tsx`):
 The opening screen — wordmark above the session panel — which lives in the transcript as

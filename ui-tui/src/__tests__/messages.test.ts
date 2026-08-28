@@ -15,7 +15,7 @@ import { patchUiState } from '../app/uiStore.js'
 import { EpisodeView } from '../components/episodeView.js'
 import { MessageLine } from '../components/messageLine.js'
 import { toTranscriptMessages, withoutSpentIntro } from '../domain/messages.js'
-import { composerPromptWidth, transcriptGutterWidth } from '../lib/inputMetrics.js'
+import { composerPromptWidth, TRANSCRIPT_GUTTER_INSET, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import { upsert } from '../lib/messages.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
@@ -618,15 +618,15 @@ describe('transcript reply gutter', () => {
     expect(activity).not.toContain(DEFAULT_THEME.brand.tool)
   })
 
-  it('sizes the gutter for the glyph the transcript actually draws', () => {
+  it('sizes the gutter for the glyph the transcript actually draws, plus its inset', () => {
     expect(transcriptGutterWidth('assistant', DEFAULT_THEME.brand.prompt)).toBe(
-      composerPromptWidth(DEFAULT_THEME.brand.tool)
+      composerPromptWidth(DEFAULT_THEME.brand.tool) + TRANSCRIPT_GUTTER_INSET
     )
   })
 })
 
 describe('MessageLine', () => {
-  it('preserves a separator after compound user prompt glyphs in transcript rows', () => {
+  it('marks a user row with the rule, not the prompt glyph, and keeps the separator', () => {
     const stdout = new PassThrough()
     const stdin = new PassThrough()
     const stderr = new PassThrough()
@@ -665,7 +665,13 @@ describe('MessageLine', () => {
       .split('\n')
       .find(line => line.includes('Okay'))
 
-    expect(renderedLine).toContain('Ψ > Okay')
+    // The slab's own rule is the user row's mark now, so a skin's prompt symbol
+    // no longer doubles it here -- it still leads the composer, where it is the
+    // prompt. The separator the compound glyph used to need is what the gutter
+    // beside the rule now carries, so the text never butts against the mark.
+    expect(renderedLine).toContain('▎')
+    expect(renderedLine).not.toContain('Ψ >')
+    expect(renderedLine).toMatch(/▎\s+Okay/)
   })
 
   it('renders compact artifact sections with a missing marker', () => {

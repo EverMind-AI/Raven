@@ -25,6 +25,7 @@ import {
 } from '../domain/episodeSummary.js'
 import { fmtDuration } from '../domain/messages.js'
 import { spawnRunSettled } from '../domain/spawnRun.js'
+import { TRANSCRIPT_GUTTER_INSET, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { boundedLiveRenderText, compactPreview, tailPreview, clipToWidthFromEnd } from '../lib/text.js'
 import { DagPanel } from './dagPanel.js'
@@ -39,7 +40,10 @@ import { Spinner } from './thinking.js'
 // activity leaves it blank. Either way the body column is shared on purpose:
 // inventing a second left edge would misalign this message kind from every
 // other one. Depth steps in from there.
-const INDENT = 2
+// The activity column starts where the reply glyph's does -- the marker margin
+// is shared with it (see ActivityRow), so it is derived from the same helper
+// rather than restated as a literal that has to be kept equal by hand.
+const INDENT = transcriptGutterWidth('assistant', '')
 const STEP = 2
 const MIN_TAIL = 12
 
@@ -100,6 +104,7 @@ const sameArgument = (rowDetail: string, argument: string) => {
 const DetailBlock = memo(function DetailBlock({
   argument,
   compact,
+  indent,
   onToggle,
   output,
   t,
@@ -107,20 +112,27 @@ const DetailBlock = memo(function DetailBlock({
 }: {
   argument: string
   compact?: boolean
+  /** How far in the payload's text sits. Spent as left padding rather than as
+   *  a margin so the block's ground runs to the same left edge the call's own
+   *  row does: the two are one card, and a slab starting four columns in under
+   *  a row starting at zero reads as two. */
+  indent: number
   onToggle?: () => void
   output: string[]
   t: Theme
   width: number
 }) {
   const fill = canFill()
-  const body = Math.max(8, width - 2)
+  const body = Math.max(8, width - indent - 2)
 
   return (
     <Box
       flexDirection="column"
       marginBottom={1}
       onClick={onToggle}
-      paddingX={1}
+      paddingBottom={1}
+      paddingLeft={indent + 1}
+      paddingRight={1}
       width={width}
       {...(fill && { backgroundColor: t.color.detailBg })}
     >
@@ -217,27 +229,35 @@ const ReasoningRow = memo(function ReasoningRow({
   time?: string
   width: number
 }) {
-  const head = `reasoning${time ? ` (${time})` : ''}`
+  // Two states, two words. While the model is still at it the row is a
+  // present-tense label and a clock that moves; once it has stopped, leaving it
+  // reading "reasoning" says the model is still thinking about a step it
+  // finished several tool calls ago. Past tense, and the span it took.
+  const head = running ? `reasoning${time ? ` (${time})` : ''}` : time ? `thought for ${time}` : 'thought'
   // ` \u00b7 ` costs 3, and a tail shorter than this is more ellipsis than text.
   const room = width - INDENT - stringWidth(head) - 3
   const trail = tail && room >= MIN_TAIL ? clipToWidthFromEnd(tail, room) : ''
 
   return (
     <Box width={width}>
-      <Box flexShrink={0} width={INDENT}>
+      <Box flexShrink={0} paddingLeft={TRANSCRIPT_GUTTER_INSET} width={INDENT}>
         {running ? (
           <NoSelect fromLeftEdge>
             <Text>
               <Spinner color={t.color.accent} variant="tool" />
             </Text>
           </NoSelect>
-        ) : null}
+        ) : (
+          <NoSelect fromLeftEdge>
+            <Text color={t.color.label}>{'\u00b7'}</Text>
+          </NoSelect>
+        )}
       </Box>
 
       <Box flexGrow={1} minWidth={0} onClick={onToggle}>
-        <Text color={t.color.muted} dim wrap="truncate-end">
-          {head}
-          {trail ? ` \u00b7 ${trail}` : ''}
+        <Text wrap="truncate-end">
+          <Text color={t.color.muted}>{head}</Text>
+          {trail ? <Text color={t.color.label}>{` \u00b7 ${trail}`}</Text> : null}
         </Text>
       </Box>
     </Box>
@@ -314,54 +334,99 @@ const ReasoningBlock = memo(function ReasoningBlock({
   )
 })
 
-// One activity row: dim text, an inline duration, and nothing else. There is no
-// fold marker -- a summary row announces that it summarizes, and repeating that
-// as a glyph on every row is what made the transcript look like a control panel.
-// Expandability is a property of the whole activity column, not of each row.
+// One activity row: a verb, its target, an inline duration, and an outcome in
+// the margin. Three inks, because a row is three things and painting them one
+// value let the target win on length alone -- a path is the longest part and the
+// last one a reader needs. There is no fold marker -- a summary row announces
+// that it summarizes, and repeating that as a glyph on every row is what made
+// the transcript look like a control panel. Expandability is a property of the
+// whole activity column, not of each row.
+//
+// Nothing here is `dim`: `muted` is already the de-emphasis, and stacking SGR 2
+// on top of it put every row in this view under 3:1 -- by an amount the terminal
+// decides for itself. Same call the aside block above already made, for the same
+// reason.
+//
+// The row stands on the same filled ground its detail block uses, so a call and
+// what it returned read as one object rather than as two runs of transcript --
+// the ground the DAG and spawn panels get from a border, at the same width and
+// without spending two rows on one. Nothing inside the fill moves: the label
+// column is shared with the reasoning row and the reply, and a card that indents
+// its own text would be the only row in the view aligned with nothing.
 const ActivityRow = memo(function ActivityRow({
   depth,
+  done,
   failed,
   label,
   note,
   onToggle,
+  opened,
   running,
   t,
   time,
+  verb,
   width
 }: {
   depth: number
+  /** A settled call or stretch, so the margin can say how it went. Work still
+   *  queued, and the in-flight summary whose spinner already owns that cell,
+   *  leave it unset and keep the margin empty. */
+  done?: boolean
   failed?: boolean
   label: string
   note?: string
+  /** Heading an expanded detail block, so the card wants a blank row above its
+   *  first line the way the user's slab does. Never set on a collapsed row: the
+   *  height estimator counts a folded stretch as exactly one row, and a line
+   *  item that spends three rows on one line of text is not a card. */
+  opened?: boolean
   onToggle?: () => void
   running?: boolean
   t: Theme
   time?: string
+  /** The head of a single call's row -- `read`, `ran`, `listed`. Carries the
+   *  row's emphasis so the target beside it can sit a step back, which is what
+   *  lets a reader scan a column of verbs instead of a column of paths. A folded
+   *  summary row is a sentence rather than a verb plus a target, and leaves it
+   *  unset. */
+  verb?: string
   width: number
 }) {
-  const color = failed ? t.color.error : t.color.muted
+  // Outcome as a glyph, not as the row's colour. Recolouring the whole row red
+  // made the row a reader most needs to read the hardest one to read, and left a
+  // finished call indistinguishable from one that never started. A glyph also
+  // survives a terminal with no colour, where a red row is just a row.
+  const marker = failed ? '\u2717' : done ? '\u2713' : ''
 
   return (
-    <Box>
+    <Box paddingTop={opened ? 1 : 0} width={width} {...(canFill() && { backgroundColor: t.color.detailBg })}>
       {/* The spinner goes in the marker margin the reasoning row and the reply
           glyph already share, not inline ahead of the label. Inline, a row's
           text sat two columns right of every other row for as long as the call
           ran and snapped back when it landed -- the running row, the one a
           reader is actually watching, was the only row aligned with nothing. */}
-      <Box flexShrink={0} width={INDENT}>
+      <Box flexShrink={0} paddingLeft={TRANSCRIPT_GUTTER_INSET} width={INDENT}>
         {running ? (
           <NoSelect fromLeftEdge>
             <Text>
               <Spinner color={t.color.accent} variant="tool" />
             </Text>
           </NoSelect>
+        ) : marker ? (
+          <NoSelect fromLeftEdge>
+            <Text color={failed ? t.color.error : t.color.ok}>{marker}</Text>
+          </NoSelect>
         ) : null}
       </Box>
-      <Box flexGrow={1} minWidth={0} onClick={onToggle} paddingLeft={Math.max(0, depth - INDENT)}>
-        <Text color={color} dim={!failed} wrap="truncate-end">
-          {label}
-          {note ? ` · ${note}` : ''}
-          {time ? ` (${time})` : ''}
+      <Box flexGrow={1} minWidth={0} onClick={onToggle} paddingLeft={Math.max(0, depth - INDENT)} paddingRight={1}>
+        <Text wrap="truncate-end">
+          {verb ? <Text color={t.color.text}>{`${verb} `}</Text> : null}
+          <Text color={t.color.muted}>{label}</Text>
+          {/* A failure note names which call broke, which is the whole reason a
+              folded stretch does not auto-expand -- so it keeps the colour the
+              row itself gave up. */}
+          {note ? <Text color={failed ? t.color.error : t.color.muted}>{` · ${note}`}</Text> : null}
+          {time ? <Text color={t.color.label}>{` (${time})`}</Text> : null}
         </Text>
       </Box>
     </Box>
@@ -409,7 +474,10 @@ const WorkSegment = memo(function WorkSegment({
   // call, the graph and the tally, and the row above it said the first of those
   // a second time -- with the node ids spelled out again, which is what the box
   // header replaced. A spawn call renders as a panel on the same terms.
-  const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void) => {
+  // `opened` is whether a detail block actually follows, not whether the fold is
+  // open: a call with no argument and no output renders no block, and a blank row
+  // above nothing is a one-line band spending two rows.
+  const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void, opened = false) => {
     if (tool.dag || tool.spawn) {
       return null
     }
@@ -421,15 +489,17 @@ const WorkSegment = memo(function WorkSegment({
     return (
       <ActivityRow
         depth={depth}
+        done={tool.done}
         failed={failed}
         key={tool.id}
-        label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
-        note={failed ? 'failed' : undefined}
+        label={parts.detail}
         onToggle={onToggle}
+        opened={opened}
         running={running}
         t={t}
         time={durationLabel(elapsedOf(tool, now), running)}
-        width={summaryRoom}
+        verb={parts.verb}
+        width={width}
       />
     )
   }
@@ -453,13 +523,7 @@ const WorkSegment = memo(function WorkSegment({
   const spawnFor = (tool: EpisodeTool, depth: number) =>
     tool.spawn ? (
       <Box key={`s:${tool.id}`} paddingLeft={depth}>
-        <SpawnPanel
-          now={now}
-          prompt={toolArgument(tool)}
-          run={tool.spawn}
-          t={t}
-          width={Math.max(28, width - depth)}
-        />
+        <SpawnPanel now={now} prompt={toolArgument(tool)} run={tool.spawn} t={t} width={Math.max(28, width - depth)} />
       </Box>
     ) : null
 
@@ -487,14 +551,15 @@ const WorkSegment = memo(function WorkSegment({
     }
 
     return (
-      <Box key={`d:${tool.id}`} paddingLeft={depth}>
+      <Box key={`d:${tool.id}`}>
         <DetailBlock
           argument={body}
           compact={compact}
+          indent={depth}
           onToggle={onCollapse}
           output={hidden > 0 ? [...shown, `… +${hidden}`] : shown}
           t={t}
-          width={Math.max(12, width - depth)}
+          width={width}
         />
       </Box>
     )
@@ -518,12 +583,14 @@ const WorkSegment = memo(function WorkSegment({
     // both gives the same sentence twice, under two spinners. So it opens the
     // way a settled lone call does -- its row straight into its detail.
     if (solo) {
+      const detail = isOpen ? detailFor(latest, INDENT, toggleSelf) : null
+
       return (
         <Box flexDirection="column">
-          {callRow(latest, INDENT, toggleSelf)}
+          {callRow(latest, INDENT, toggleSelf, Boolean(detail))}
           {dagFor(latest, INDENT)}
           {spawnFor(latest, INDENT)}
-          {isOpen ? detailFor(latest, INDENT, toggleSelf) : null}
+          {detail}
         </Box>
       )
     }
@@ -539,17 +606,21 @@ const WorkSegment = memo(function WorkSegment({
           running={!isOpen}
           t={t}
           time={durationLabel(done, false)}
-          width={summaryRoom}
+          width={width}
         />
         {isOpen ? (
-          tools.map(tool => (
-            <Box flexDirection="column" key={tool.id}>
-              {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP)}
-              {spawnFor(tool, INDENT + STEP)}
-              {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
-            </Box>
-          ))
+          tools.map(tool => {
+            const detail = openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
+
+            return (
+              <Box flexDirection="column" key={tool.id}>
+                {callRow(tool, INDENT + STEP, () => toggleCall(tool.id), Boolean(detail))}
+                {dagFor(tool, INDENT + STEP)}
+                {spawnFor(tool, INDENT + STEP)}
+                {detail}
+              </Box>
+            )
+          })
         ) : (
           <>
             {/* The spinner above already says "in flight"; a second one on the
@@ -557,11 +628,12 @@ const WorkSegment = memo(function WorkSegment({
             {latest.dag || latest.spawn ? null : (
               <ActivityRow
                 depth={INDENT + STEP}
-                label={[parts.verb, parts.detail].filter(Boolean).join(' ')}
+                label={parts.detail}
                 onToggle={() => toggleCall(latest.id)}
                 t={t}
                 time={durationLabel(elapsed, true)}
-                width={summaryRoom}
+                verb={parts.verb}
+                width={width}
               />
             )}
             {dagFor(latest, INDENT + STEP)}
@@ -578,13 +650,14 @@ const WorkSegment = memo(function WorkSegment({
   // ── One call: the folded row IS the call; opening goes straight to detail ──
   if (solo) {
     const tool = tools[0]!
+    const detail = isOpen ? detailFor(tool, INDENT, toggleSelf) : null
 
     return (
       <Box flexDirection="column">
-        {callRow(tool, INDENT, toggleSelf)}
+        {callRow(tool, INDENT, toggleSelf, Boolean(detail))}
         {dagFor(tool, INDENT)}
         {spawnFor(tool, INDENT)}
-        {isOpen ? detailFor(tool, INDENT, toggleSelf) : null}
+        {detail}
       </Box>
     )
   }
@@ -593,23 +666,28 @@ const WorkSegment = memo(function WorkSegment({
     <Box flexDirection="column">
       <ActivityRow
         depth={INDENT}
+        done
         failed={Boolean(failure)}
         label={toolsSummary(tools, summaryRoom)}
         note={failure || undefined}
         onToggle={toggleSelf}
         t={t}
         time={durationLabel(total, false)}
-        width={summaryRoom}
+        width={width}
       />
       {isOpen
-        ? tools.map(tool => (
-            <Box flexDirection="column" key={tool.id}>
-              {callRow(tool, INDENT + STEP, () => toggleCall(tool.id))}
-              {dagFor(tool, INDENT + STEP)}
-              {spawnFor(tool, INDENT + STEP)}
-              {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
-            </Box>
-          ))
+        ? tools.map(tool => {
+            const detail = openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
+
+            return (
+              <Box flexDirection="column" key={tool.id}>
+                {callRow(tool, INDENT + STEP, () => toggleCall(tool.id), Boolean(detail))}
+                {dagFor(tool, INDENT + STEP)}
+                {spawnFor(tool, INDENT + STEP)}
+                {detail}
+              </Box>
+            )
+          })
         : defaultOpen
           ? tools.map(tool => [dagFor(tool, INDENT + STEP), spawnFor(tool, INDENT + STEP)])
           : null}
@@ -697,7 +775,7 @@ export const EpisodeView = memo(function EpisodeView({
   // body column does not move and activity rows still line up with it.
   const prose = (node: ReactNode) => (
     <Box>
-      <Box flexShrink={0} width={INDENT}>
+      <Box flexShrink={0} paddingLeft={TRANSCRIPT_GUTTER_INSET} width={INDENT}>
         <Text color={t.color.muted}>{t.brand.tool}</Text>
       </Box>
 

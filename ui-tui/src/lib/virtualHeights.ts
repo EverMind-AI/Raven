@@ -100,8 +100,9 @@ const wrappedProseLines = (text: string, width: number) =>
 
 // Mirrors episodeView.tsx's own INDENT/STEP. Kept local rather than shared
 // across the lib/component boundary -- this estimator is the only other place
-// that needs them.
-const INDENT = 2
+// that needs them. INDENT tracks the transcript gutter (see
+// TRANSCRIPT_GUTTER_INSET), which is what episodeView derives its own from.
+const INDENT = 3
 const STEP = 2
 
 /**

@@ -47,6 +47,7 @@ ARGUMENT_KEY = {
     "move_file": "path",
     "grep": "pattern",
     "find": "pattern",
+    "glob": "pattern",
     "web_fetch": "url",
     "web_search": "query",
     # The claude names, each mapped to the key its old RAVEN_NAME target

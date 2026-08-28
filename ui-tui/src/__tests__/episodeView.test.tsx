@@ -14,6 +14,7 @@ import { resetFolds, toggleFold } from '../app/foldStore.js'
 import { EpisodeMessage, EpisodeView, turnFoldScope } from '../components/episodeView.js'
 import { foldDirectTurns } from '../domain/directEpisodes.js'
 import { TOOL_PREVIEW_ROWS } from '../domain/episodeSummary.js'
+import { TRANSCRIPT_GUTTER_INSET, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
@@ -348,7 +349,7 @@ describe('EpisodeView', () => {
 
     // The spinner belongs in the marker margin, so the label starts where every
     // other row's text starts -- and does not jump left when the call lands.
-    expect(columnOf(running, 'ran ')).toBe(columnOf(running, 'reasoning'))
+    expect(columnOf(running, 'ran ')).toBe(columnOf(running, 'thought for'))
     expect(columnOf(running, 'ran ')).toBe(columnOf(settled, 'ran '))
   })
 
@@ -427,7 +428,7 @@ describe('EpisodeView', () => {
     ]
 
     const folded = view(episodes)
-    expect(folded).toContain('reasoning (8s)')
+    expect(folded).toContain('thought for 8s')
     expect(folded).not.toContain('SECRET internal plan')
 
     expect(view(episodes, { openKeys: ['rsn:0'] })).toContain('SECRET internal plan')
@@ -610,7 +611,7 @@ describe('an open reasoning block', () => {
 
     const answer = rows.find(l => l.includes('so here is the shape of it'))!
 
-    expect(answer.indexOf('so here')).toBe(2)
+    expect(answer.indexOf('so here')).toBe(transcriptGutterWidth('assistant', ''))
   })
 
   it('is an aside, not a tool payload, so it has no filled ground', () => {
@@ -624,7 +625,9 @@ describe('an open reasoning block', () => {
 describe('the reasoning row while the model is still reasoning', () => {
   // The margin column: the spinner here, the rule under it, the reply marker
   // on the answer. Text starts after it, on one shared column.
-  const MARGIN = 2
+  // The margin the spinner and the outcome markers share, inset from the
+  // terminal's own edge by TRANSCRIPT_GUTTER_INSET.
+  const MARGIN = transcriptGutterWidth('assistant', '')
 
   const REASONING =
     'The user asks how to explain the Riemann Hypothesis to a person. This is a ' +
@@ -648,7 +651,9 @@ describe('the reasoning row while the model is still reasoning', () => {
     const row = turn({ scope: 'spin' }).find(line => line.includes('reasoning ('))!
 
     expect(row.indexOf('reasoning')).toBe(MARGIN)
-    expect(row[0]).not.toBe(' ')
+    // The margin column is spent on the spinner rather than left blank -- one
+    // cell in, where every other mark in the transcript sits.
+    expect(row[TRANSCRIPT_GUTTER_INSET]).not.toBe(' ')
   })
 
   it('scrolls a live tail of the reasoning when the block is closed', () => {
@@ -668,5 +673,32 @@ describe('the reasoning row while the model is still reasoning', () => {
     // tail, because the block under it is already showing the whole thing.
     expect(row.slice(MARGIN).trimEnd()).toMatch(/^reasoning \([^)]+\)$/)
     expect(rows.some(line => line.includes('\u258f'))).toBe(true)
+  })
+})
+
+describe('the reasoning row once the model has stopped', () => {
+  const settled = (episode: Partial<Episode>) =>
+    view([
+      { index: 0, narration: 'here is the shape of it', reasoning: 'weighing the two shapes', tools: [], ...episode }
+    ])
+
+  it('says what it did, in the past, with the span it took', () => {
+    // Left in the present tense the row claims the model is still thinking
+    // about a step it finished several tool calls ago.
+    const row = settled({ reasoningMs: 12_000 })
+
+    expect(row).toContain('thought for 12s')
+    expect(row).not.toContain('reasoning')
+  })
+
+  it('drops the span rather than printing a floored zero', () => {
+    // `fmtDuration` floors, so a burst under a second reads "0s" -- a number
+    // that says less than no number at all.
+    expect(settled({ reasoningMs: 400 })).toContain('thought')
+    expect(settled({ reasoningMs: 400 })).not.toContain('thought for')
+  })
+
+  it('still hides the reasoning itself behind the row', () => {
+    expect(settled({ reasoningMs: 12_000 })).not.toContain('weighing the two shapes')
   })
 })

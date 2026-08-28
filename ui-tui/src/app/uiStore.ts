@@ -67,15 +67,16 @@ export const applySkinTheme = (s: GatewaySkin) => {
 }
 
 /**
- * Fold an OSC 11 background-color reply into the theme. When it flips the
- * detected light/dark scheme, rebuild the active theme — from the last skin
- * if one has arrived, else the curated per-scheme palette — so the whole UI
- * re-themes. No-ops when the scheme is unchanged or the reply is unparseable.
+ * Fold an OSC 11 background-color reply into the theme. Rebuild the active
+ * theme — from the last skin if one has arrived, else the curated per-scheme
+ * palette — when the reply flips the detected light/dark scheme OR moves the
+ * ground the transcript's block surfaces are derived from. No-ops when neither
+ * changed, or when the reply is unparseable.
  */
 export const applyTerminalBackground = (oscData: string) => {
   const res = applyDetectedBackground(oscData)
 
-  if (res?.changed) {
+  if (res && (res.changed || res.surfacesChanged)) {
     patchUiState({ theme: lastSkin ? buildSkinTheme(lastSkin) : resolveCurrentDefaultTheme() })
   }
 

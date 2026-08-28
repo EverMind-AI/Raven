@@ -37,7 +37,7 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey } from '../domain/messages.js'
+import { deliveredMessageKey, noticeLine } from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -316,13 +316,11 @@ const dispatch = (
     }
     case 'notice': {
       // Runtime prose, not the model's: never merged into the streamed answer.
-      // The sentence is picked here so it follows the reader's locale, with
-      // the blocking tool's own first line underneath when one was given.
-      if (sys) {
-        const said = t(`gui.notice.${event.payload.kind}`, event.payload.kind)
-        const detail = event.payload.detail
-        sys(detail ? `${said}\n${detail}` : said)
-      }
+      // Handed to the turn rather than appended here, because it arrives mid-turn
+      // and this turn's steps reach the transcript only at `message.complete` --
+      // a row appended now sits above every step it reports on. The turn commits
+      // it as its last row (`turnController.recordNotice`).
+      turnController.recordNotice(noticeLine(event.payload))
       return
     }
     case 'subagent.delivered': {

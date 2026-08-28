@@ -115,6 +115,19 @@ class TestToolCalls:
         assert _texts(updates) == []
         assert updates[0]["content"] == [{"type": "content", "content": {"type": "text", "text": "ok"}}]
 
+    def test_a_replayed_call_states_its_own_name_too(self):
+        """A resumed session has to name its calls on the same terms a live one
+        does, or a row reads as ``other`` only after a reconnect. ``todowrite``
+        is the case that has nowhere else to go: it is filed under no kind, and
+        its title is the runtime's own rendering rather than its name."""
+        updates = replay(
+            [{"role": "assistant", "tool_calls": [{"id": "c1", "name": "todowrite", "arguments": "{}"}]}],
+            session_id="acp:s1",
+        )
+
+        assert updates[0]["_meta"] == {"raven.toolName": "todowrite"}
+        assert updates[0]["kind"] == "other"
+
     def test_stored_arguments_are_parsed_so_the_row_can_be_labelled(self):
         """They are kept as the JSON string the provider sent, so a title or a
         location needs them parsed."""
