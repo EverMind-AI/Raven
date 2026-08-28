@@ -116,13 +116,13 @@ class ChannelManager:
             if not section or not getattr(section, "enabled", False):
                 continue
             try:
-                # M1 pilot (storage handover): telegram's factory receives the
-                # door-dispensed view; the other channels follow with the
-                # central-model retirement.
-                if modname == "telegram":
-                    from raven.core.admission import dispense_channel_config
+                # Storage handover: every declaring channel's factory receives
+                # the door-dispensed view (declared keys from the admitted
+                # slice, socket fields from the central section, frozen). An
+                # undeclaring channel keeps the verbatim section.
+                from raven.core.admission import dispense_channel_config
 
-                    section = dispense_channel_config(spec, section, channel=modname)
+                section = dispense_channel_config(spec, section, channel=modname)
                 channel = spec.factory(section)
                 channel.transcription_api_key = groq_key
                 self.channels[modname] = channel
