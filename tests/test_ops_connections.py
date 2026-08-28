@@ -336,3 +336,16 @@ def test_clearing_the_env_var_gives_the_instance_its_own_registry_back(tmp_path,
 
     assert borrowed == theirs
     assert connections.store_path() != theirs
+
+
+def test_a_padded_id_is_blocking_rather_than_healthy_but_unselectable():
+    """`named` strips the id a DAG node asks for while `Verdict.machine` and
+    `shown` carry the raw one, so a padded id read as usable and then could not
+    be selected. Refused at the row instead (reproduced in review)."""
+    from raven.ops.connections import row_problems
+
+    faults = row_problems(
+        {"id": " cpu ", "display_name": "CPU box", "transport": "local", "budget_unit": "minute", "concurrency": 1}
+    )
+
+    assert any(f.blocking and "whitespace" in f.text for f in faults)

@@ -199,3 +199,19 @@ def test_doctor_exits_nonzero_when_every_row_shares_one_id(monkeypatch, tmp_path
     result = CliRunner().invoke(connection_app, ["doctor"])
 
     assert result.exit_code == 1, "an ambiguous registry must not read as healthy"
+
+
+def test_add_refuses_rather_than_erasing_entries_the_reader_filtered(monkeypatch, tmp_path):
+    """`read` drops entries without an id and reports them; rewriting from its
+    rows would serialize the survivors and silently delete the owner's
+    hand-written ones (reproduced in review)."""
+    path = tmp_path / "connections.json"
+    path.write_text(json.dumps({"connections": [{"display_name": "typo, no id"}]}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
+
+    from raven.cli.ops_connection_commands import _write
+
+    with pytest.raises(ValueError, match="had no id"):
+        _write({"id": "cpu", "display_name": "CPU box", "transport": "local"})
+
+    assert json.loads(path.read_text())["connections"] == [{"display_name": "typo, no id"}]

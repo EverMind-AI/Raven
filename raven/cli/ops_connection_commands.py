@@ -128,8 +128,17 @@ def _write(row: dict[str, Any]) -> Path:
     found = read()
     if found.state == "unreadable":
         raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
+    # `read` filters entries without an id and says so in `detail`; rewriting
+    # from its rows would serialize the survivors and erase the rest. The owner
+    # hand-wrote those, and a recoverable typo is theirs to fix, not ours to
+    # delete on the way past.
+    if found.detail:
+        raise ValueError(
+            f"{found.detail}\nAdding a machine here would rewrite the file without them. "
+            "Give those entries an id (or remove them) first, then add this machine."
+        )
     rows = list(found.rows)
-    if any(str(r.get("id")) == row["id"] for r in rows):
+    if any(str(r.get("id")).strip() == row["id"] for r in rows):
         raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
     rows.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
