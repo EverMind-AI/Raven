@@ -33,6 +33,7 @@ from raven.agent.acp.capabilities import (
     verify_agent,
 )
 from raven.agent.acp.pool import close_pool, get_pool
+from raven.agent.acp.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.agent.subagent.instances import InstanceRegistry
@@ -157,6 +158,7 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
     assert (snapshot.agent_name, snapshot.agent_version) == ("stub-agent", "9.9.9")
     assert snapshot.protocol_version == 1
     assert (snapshot.can_resume, snapshot.can_fork, snapshot.can_load) == (True, True, True)
+    assert (snapshot.mcp_http, snapshot.mcp_sse) == (True, False)
     assert snapshot.prompt_modalities == ("text", "image")
     # Only entries that actually carry a modelId are advertised; the third stub
     # entry has none and must not become an invented id.
@@ -166,6 +168,43 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
     assert [m.id for m in snapshot.available_modes] == ["fast", "deep"]
     assert snapshot.available_modes[1].description == "searches longer"
     assert snapshot.auth_methods == ("stub-auth",)
+
+
+def test_the_per_session_mcp_promise_is_read_from_meta_and_survives_storage() -> None:
+    """``_meta``, by presence, and through the row a snapshot is stored as.
+
+    No spec field carries this: a raven build that answers ``mcpServers`` with
+    ``-32602`` reports the same ``mcpCapabilities`` object as one that connects
+    it, so the declaration is the only signal -- and a field that did not survive
+    ``to_row`` / ``from_row`` would read as absent on every dispatch after the
+    one that measured it.
+    """
+    from raven.agent.acp.capabilities import handshake_of
+    from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY
+
+    def caps(meta: dict | None) -> dict:
+        agent: dict = {"mcpCapabilities": {"http": True}}
+        if meta is not None:
+            agent["_meta"] = meta
+        return {"agentCapabilities": agent}
+
+    # The schema spells "supported" as an empty object, so truthiness would read
+    # a declaration as no declaration.
+    assert handshake_of(caps({SESSION_MCP_CAPABILITY: {}})).session_mcp is True
+    assert handshake_of(caps({"raven.steer": {}})).session_mcp is False
+    assert handshake_of(caps(None)).session_mcp is False
+    assert handshake_of(caps({})).session_mcp is False
+    # Transport flags are a different question and must not answer this one.
+    assert handshake_of(caps(None)).mcp_http is True
+
+    stored = CapabilitySnapshot(
+        agent="a", fingerprint="fp", status="ready", detail="", measured_at_ms=1, session_mcp=True
+    )
+    assert stored.to_row()["sessionMcp"] is True
+    assert CapabilitySnapshot.from_row(stored.to_row()) == stored
+    # A row written before the field existed degrades to "did not promise".
+    older = {k: v for k, v in stored.to_row().items() if k != "sessionMcp"}
+    assert CapabilitySnapshot.from_row(older).session_mcp is False
 
 
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
@@ -218,7 +257,9 @@ async def test_snapshot_store_round_trips_and_invalidates_on_launch_change(tmp_p
     cfg = stub_config("a")
     store.record(await verify_agent(cfg))
 
-    assert store.load([cfg])["a"].can_resume is True
+    loaded = store.load([cfg])["a"]
+    assert loaded.can_resume is True
+    assert (loaded.mcp_http, loaded.mcp_sse) == (True, False)
 
     moved = stub_config("a", ready_timeout_ms=999)
     assert store.load([moved]) == {}, "a snapshot must not survive a change to how the agent is launched"
@@ -1021,6 +1062,36 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
     assert await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
     rebound = await registry.lookup("s", "a", "work", kind="acp")
     assert rebound is not None and rebound != "pruned-session"
+
+
+async def test_load_fallback_reuses_the_same_mcp_grant(tmp_path: Path) -> None:
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            calls.append((method, params))
+            if method == "session/load":
+                raise AcpRemoteError(method, -32000, "session not found")
+            return {"sessionId": "fresh-session"}
+
+    mcp_servers = [{"name": "docs", "type": "http", "url": "https://mcp.example.test", "headers": []}]
+    session_id, resumed = await backend._open_session(
+        _Client(), cwd=str(tmp_path), skey="s", handle="work", budget=5, mcp_servers=mcp_servers
+    )
+
+    assert (session_id, resumed) == ("fresh-session", False)
+    assert [method for method, _params in calls] == ["session/load", "session/new"]
+    assert [params["mcpServers"] for _method, params in calls] == [mcp_servers, mcp_servers]
 
 
 async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:

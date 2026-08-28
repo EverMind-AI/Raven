@@ -363,13 +363,14 @@ function Canvas({
 
 /* One of the three states. Absent is a gap in the column and an empty list is
    the file's own two characters -- neither gets a sentence about it. */
-function Listed({ of }: { of: Written }): JSX.Element {
+function Listed({ of, carried }: { of: Written; carried?: string[] }): JSX.Element {
   if (of.state === 'unwritten') return <span className="gap">{t('gui.pb.unwritten')}</span>
   if (of.state === 'empty') return <span className="gap">{t('gui.pb.empty_list')}</span>
+  const shipped = new Set(carried || [])
   return (
     <span className="chips">
       {of.items.map((x) => (
-        <span className="tag" key={x}>
+        <span className={shipped.has(x) ? 'tag own' : 'tag'} key={x} title={shipped.has(x) ? t('gui.pb.carried') : undefined}>
           {x}
         </span>
       ))}
@@ -399,7 +400,7 @@ function InputValue({ value }: { value: unknown }): JSX.Element {
    what waits for what, and a shared session is drawn as the lane around its
    members with the handle on every box inside it. Repeating either here would be
    a worse copy of a picture the reader is already looking at. */
-function NodePanel({ node }: { node: PlaybookNode | null }): JSX.Element {
+function NodePanel({ node, carried }: { node: PlaybookNode | null; carried?: string[] }): JSX.Element {
   if (!node) return <div className="pbpanel empty">{t('gui.pb.pick_step')}</div>
   const inputs = Object.entries(node.inputs || {})
   return (
@@ -425,7 +426,10 @@ function NodePanel({ node }: { node: PlaybookNode | null }): JSX.Element {
         </dd>
         <dt>mcps</dt>
         <dd>
-          <Listed of={written(node.mcps)} />
+          {/* Marked, because the name alone does not say which server it is:
+              one the playbook ships travels with the file, one it does not is
+              whatever this machine has configured under that name. */}
+          <Listed of={written(node.mcps)} carried={carried} />
         </dd>
       </dl>
       {inputs.length ? (
@@ -760,7 +764,84 @@ function Contract({ detail }: { detail: PlaybookDetail }): JSX.Element {
         <h2>{t('gui.pb.sec_params')}</h2>
         <Params params={detail.params} />
       </section>
+      <section className="pbsec">
+        <h2>{t('gui.pb.sec_servers')}</h2>
+        <CarriedServers servers={detail.mcp_servers || {}} />
+      </section>
     </>
+  )
+}
+
+/* The servers the playbook itself ships. A node's `mcps` entry is only a name,
+   and the same name may be a server this machine already configures -- a
+   different process, reached differently. Shown so a reader can tell which is
+   which before running it.
+
+   `env` and `headers` are printed as the file writes them, which is a reference
+   (`{{ params.X }}`) and never a value: a carried server names the credential
+   the run has to supply, and the value never enters the file. */
+function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_servers']> }): JSX.Element {
+  const names = Object.keys(servers)
+  if (!names.length) return <p className="pbnone">{t('gui.pb.no_servers')}</p>
+  return (
+    <table className="pbtbl">
+      <thead>
+        <tr>
+          <th>{t('gui.pb.col_name')}</th>
+          <th>{t('gui.pb.col_transport')}</th>
+          <th className="wide">{t('gui.pb.col_launch')}</th>
+          <th>{t('gui.pb.col_auth')}</th>
+          <th>{t('gui.pb.col_refs')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {names.map((name) => {
+          const s = servers[name]
+          if (!s) return null
+          const stdio = !!s.command
+          const refs = [...Object.entries(s.env || {}), ...Object.entries(s.headers || {})]
+          /* Whatever the wire says, and no fallback: the handler already reports
+             the transport the runtime will pick, including for a file that left
+             the field out. Guessing again here is how the page came to label an
+             `/sse` url as streamable http while the runtime dialled it as sse --
+             two readers deriving the same thing separately, and disagreeing. */
+          const transport = s.type || ''
+          const off = s.enabled === false
+          return (
+            <tr key={name} className={off ? 'dim' : undefined}>
+              <td className="nm">
+                {name}
+                {/* A definition the run will not dial. Said on the row, because
+                    the rest of it reads as launchable. */}
+                {off ? <span className="tag warn">{t('gui.pb.server_off')}</span> : null}
+              </td>
+              <td className="ty">{transport || t('gui.pb.no_transport')}</td>
+              <td className="ds">
+                {stdio ? [s.command, ...(s.args || [])].join(' ') : s.url}
+                {s.tool_timeout && s.tool_timeout !== 30 ? (
+                  <span className="en">{t('gui.pb.tool_timeout', { n: s.tool_timeout })}</span>
+                ) : null}
+              </td>
+              <td className="ty">
+                {s.auth && s.auth !== 'none' ? s.auth : t('gui.pb.no_auth')}
+                {s.has_oauth_config ? <span className="en">{t('gui.pb.own_oauth')}</span> : null}
+              </td>
+              <td className="ds">
+                {refs.length ? (
+                  refs.map(([k, v]) => (
+                    <span className="en" key={k}>
+                      {k + '=' + v}
+                    </span>
+                  ))
+                ) : (
+                  <span className="gap">{t('gui.pb.no_refs')}</span>
+                )}
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
   )
 }
 
@@ -819,7 +900,7 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
         {detail.mode === 'dag' ? (
           <>
             <Board detail={detail} picked={s.pickedNode} />
-            <NodePanel node={node} />
+            <NodePanel node={node} carried={Object.keys(detail.mcp_servers || {})} />
           </>
         ) : (
           /* One column, because there is no second thing: a panel beside this

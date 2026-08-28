@@ -83,9 +83,11 @@ class DagNodeSpec(BaseModel):
             reported and safety gates being refused.
         mcps (`list[str] | None`):
             MCP servers to attach to this node's session, on the same three-valued
-            terms. The field exists so a playbook can declare the intent and get a
-            straight answer; wiring an MCP client into a sub-agent session is
-            separate work, so today every value here downgrades with a notice.
+            terms: omitted leaves the agent row's own default, a list replaces it,
+            and an empty list attaches none. Resolved per dispatch, so a node
+            sharing an ``instance`` with an earlier one may change or clear what
+            that session holds; an agent whose row cannot take a list at all
+            downgrades with a notice instead.
         inputs (`dict[str, object]`):
             Per-node inputs; each value is a literal string, a file
             reference of the form ``{"file": "<path>"}``, or another

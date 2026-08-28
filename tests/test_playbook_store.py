@@ -501,3 +501,41 @@ def test_an_external_agent_whose_name_ends_in_raven_is_left_alone(tmp_path: Path
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
 
     assert store.load("mine").nodes[0].subagent == "myteam-raven"
+
+
+def test_a_secret_stays_a_reference_across_a_round_trip(tmp_path: Path) -> None:
+    """The file is the distribution unit, so what must survive is the reference.
+
+    A value that reached this file would be a credential in git, handed to
+    everyone the playbook is shared with.
+    """
+    from raven.config.schema import MCPServerConfig
+
+    store = _store(tmp_path)
+    spec = PlaybookSpec(
+        name="audit",
+        description="audit the analytics database",
+        task_summary="run the analytics audit and report back",
+        mode="dag",
+        triggers=Triggers(keywords=["audit"]),
+        params={"PG_PASSWORD": ParamSpec(type="secret", description="the analytics database password")},
+        mcp_servers={
+            "local-pg": MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "{{ params.PG_PASSWORD }}"}),
+        },
+        nodes=[
+            NodeSpec(
+                id="scan",
+                subagent="research-raven",
+                node_summary="audit every table",
+                prompt_template="audit every table",
+                mcps=["local-pg"],
+            )
+        ],
+    )
+    path = store.save(spec)
+
+    text = path.read_text(encoding="utf-8")
+    assert "{{ params.PG_PASSWORD }}" in text
+    back = store.load("audit")
+    assert back.mcp_servers["local-pg"].env == {"PGPASSWORD": "{{ params.PG_PASSWORD }}"}
+    assert back.params["PG_PASSWORD"].type == "secret"
