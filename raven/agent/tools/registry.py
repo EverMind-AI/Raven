@@ -1,8 +1,7 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -91,16 +90,6 @@ class ToolRegistry:
         # resolves by registry, never by schema -- it is just not advertised).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
-        # The tools a session brought with it, keyed by session, plus the
-        # turn-local view of one session's set. Two halves because the two facts
-        # have different lifetimes: the binding lives as long as the session, the
-        # visibility only as long as the turn that runs under it.
-        #
-        # A ContextVar and not a field, for the reason ``_channel`` gives: turns
-        # from two sessions run concurrently on one registry, and a field would
-        # let whichever turn entered last decide what the other one can see.
-        self._session_tools: dict[str, dict[str, Tool]] = {}
-        self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
 
     def set_withheld_source(self, source: "Callable[[], frozenset[str]] | None") -> None:
         """Install the answer to "which tools has the operator switched off".
@@ -177,7 +166,7 @@ class ToolRegistry:
         operator switched off, which ``execute`` then refuses, is the one thing
         the switch is supposed to make impossible.
         """
-        tool = self._visible(name)
+        tool = self._tools.get(name)
         return tool is not None and self.offers(tool)
 
     def offers(self, tool: Tool, withheld: "frozenset[str] | None" = None) -> bool:
@@ -229,88 +218,13 @@ class ToolRegistry:
         """
         return [name for name, ref in self._origins.items() if ref.server == server]
 
-    def bind_session_tools(self, session_key: str, tools: "Mapping[str, Tool]") -> None:
-        """Record the tools one session brought with it, without registering them.
-
-        Registering would publish them process-wide: one registry serves every
-        session on a connection, so a tool registered for session A stays
-        reachable from session B's turn and from the next session on the same
-        process. These are held aside instead, and made visible only inside
-        :meth:`session_scope_for`.
-
-        Replaces any earlier set for the same session -- a session that brings
-        servers twice (``session/new`` then ``session/load``) means the second
-        set, not both.
-        """
-        self._session_tools[session_key] = dict(tools)
-
-    def release_session_tools(self, session_key: str) -> None:
-        """Forget one session's tools. Idempotent -- a session that brought none is normal."""
-        self._session_tools.pop(session_key, None)
-
-    @contextmanager
-    def session_scope(self, tools: "Mapping[str, Tool] | None") -> Iterator[None]:
-        """Make ``tools`` visible for the duration of the current task, and only there.
-
-        Entered where the turn runs, not where it was requested: the turn is
-        submitted onto the spine and executes on its own task, which does not
-        inherit a context set by the request handler.
-
-        Passing nothing (or an empty mapping) is not a no-op -- it clears the
-        overlay for this task. A turn whose session brought no servers must not
-        see another session's, so "no tools" has to be stated rather than left to
-        whatever the surrounding context happened to hold.
-        """
-        token = self._overlay.set(dict(tools) if tools else None)
-        try:
-            yield
-        finally:
-            self._overlay.reset(token)
-
-    @contextmanager
-    def session_scope_for(self, session_key: str) -> Iterator[None]:
-        """:meth:`session_scope` over whatever this session bound, if anything."""
-        with self.session_scope(self._session_tools.get(session_key)):
-            yield
-
-    def session_tools_in_scope(self) -> dict[str, Tool]:
-        """The session tools this turn can see; empty outside any scope.
-
-        For the one reader that cannot be served by ``_visible_tools``:
-        tool-search ranks a BM25 index that is built once and shared by every
-        concurrent turn, so a turn's own tools have to be added on the read side
-        instead of indexed. ``tool_names`` / ``names`` stay the registration
-        view -- MCP teardown diffs them to learn what a connect added.
-        """
-        return dict(self._overlay.get() or {})
-
-    def _visible(self, name: str) -> Tool | None:
-        """One name resolved the way this turn sees it: its session's tools, then the process's.
-
-        The single lookup behind ``get`` / ``has`` / ``execute`` / ``is_blocking``
-        / ``take_metadata``, so a session tool cannot be advertised through one
-        and missing from another -- the shape that would show up as a tool the
-        model is offered and then told does not exist.
-        """
-        overlay = self._overlay.get()
-        if overlay is not None and name in overlay:
-            return overlay[name]
-        return self._tools.get(name)
-
-    def _visible_tools(self) -> dict[str, Tool]:
-        """Every tool this turn can reach, session tools last so a clash resolves to them."""
-        overlay = self._overlay.get()
-        if not overlay:
-            return self._tools
-        return {**self._tools, **overlay}
-
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
-        return self._visible(name)
+        return self._tools.get(name)
 
     def has(self, name: str) -> bool:
         """Check if a tool is registered."""
-        return self._visible(name) is not None
+        return name in self._tools
 
     def resolve_configured(self, configured: str) -> list[str]:
         """Every registered name a config entry refers to (possibly empty).
@@ -332,7 +246,7 @@ class ToolRegistry:
         """
         from raven.mcp.naming import spellings
 
-        if configured in self._visible_tools():
+        if configured in self._tools:
             return [configured]
         return [name for name, ref in self._origins.items() if configured in spellings(ref.server, ref.tool)]
 
@@ -354,7 +268,7 @@ class ToolRegistry:
         that this call has no deadline and may go silent for as long as it runs,
         without the consumer keeping its own list of tool names.
         """
-        tool = self._visible(name)
+        tool = self._tools.get(name)
         return bool(tool is not None and tool.blocking_for(params or {}))
 
     def take_metadata(self, name: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -364,7 +278,7 @@ class ToolRegistry:
         forwarding tool (``tool_call``) owns none of the metadata it returns, so
         the payload must be collected from whatever it forwarded to.
         """
-        tool = self._visible(name)
+        tool = self._tools.get(name)
         if tool is None:
             return None
         return tool.metadata_owner(params or {}).take_metadata()
@@ -380,7 +294,7 @@ class ToolRegistry:
         withheld = self.withheld_names()
         return [
             tool.to_schema()
-            for tool in self._visible_tools().values()
+            for tool in self._tools.values()
             if self.offers(tool, withheld) and tool.name not in self._schema_hidden
         ]
 
@@ -415,7 +329,7 @@ class ToolRegistry:
         #
         # The channel half of ``offers`` cannot move in here: its ContextVar is
         # unset on internally-initiated calls, so testing it would refuse them all.
-        tool = self._visible(name)
+        tool = self._tools.get(name)
         if not tool or name in self.withheld_names():
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a

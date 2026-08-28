@@ -844,8 +844,6 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
-  mcps: string[];
-  allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
   last_test_detail?: string;
   last_test_at_ms?: number;
@@ -2505,8 +2503,6 @@ export interface SubagentsAddParams {
   name?: string;
   description?: string;
   api_key?: string;
-  mcps?: string[];
-  allow_mcp_secrets?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2525,8 +2521,6 @@ export interface SubagentsUpdateParams {
   new_name?: string;
   description?: string;
   api_key?: string;
-  mcps?: string[];
-  allow_mcp_secrets?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

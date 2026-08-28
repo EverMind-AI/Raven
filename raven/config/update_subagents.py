@@ -69,22 +69,6 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
                 "backend has no tools and no filesystem access, so nothing can open a path on "
                 "this machine; remove the field or set it false"
             )
-        if (
-            entry.get("mcps")
-            or entry.get("allowMcpSecrets")
-            or entry.get("allow_mcp_secrets")
-            # Written rather than dropped, for the reason the two above are: a
-            # field that loads and does nothing is the failure that takes longest
-            # to find. `sessionMcp` says how an agent scopes MCP servers it is
-            # given, and this backend is given none.
-            or "sessionMcp" in entry
-            or "session_mcp" in entry
-        ):
-            name = entry.get("name") or "<unnamed>"
-            raise ValueError(
-                f"mcps/allowMcpSecrets/sessionMcp are not supported for kind 'openai' (sub-agent "
-                f"{name!r}): the backend has no tool loop; remove the field(s)"
-            )
 
 
 def reject_unsupported_acp_fields(entries: list[dict]) -> None:

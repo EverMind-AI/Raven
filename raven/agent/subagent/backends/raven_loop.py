@@ -20,13 +20,6 @@ from raven.agent.subagent.backends.base import (
     SubagentActionAbortedError,
     SubagentNoAnswerError,
 )
-from raven.agent.subagent.mcp_grant import (
-    McpGrant,
-    McpSource,
-    annotate_mcp_failure,
-    raven_loop_target,
-    resolve_grant,
-)
 from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
@@ -131,7 +124,6 @@ class RavenLoopBackend:
         web_proxy: str | None = None,
         tools_allow: Collection[str] | None = None,
         skills_allow: Collection[str] | None = None,
-        mcp_allow: Collection[str] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -149,17 +141,6 @@ class RavenLoopBackend:
         # skills_allow additionally stacks with the tool-based skill filter.
         self.tools_allow = set(tools_allow) if tools_allow is not None else None
         self.skills_allow = skills_allow
-        self.mcp_allow = list(mcp_allow) if mcp_allow is not None else None
-        self.mcp_source: McpSource | None = None
-
-    def set_mcp_source(self, source: McpSource | None) -> None:
-        """Late-bind the host MCP view without rebuilding this cached backend."""
-        self.mcp_source = source
-
-    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
-        """Resolve this dispatch's override or the agent row's default."""
-        effective = self.mcp_allow if mcps is None else mcps
-        return resolve_grant(effective, self.mcp_source, raven_loop_target())
 
     async def run(
         self,
@@ -172,31 +153,26 @@ class RavenLoopBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-        mcps: list[str] | None = None,
-        mcp_grant: McpGrant | None = None,
         mode: str | None = None,
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
-        grant = self.resolve_mcp_grant(mcps)
         try:
-            with annotate_mcp_failure(grant):
-                return await self._run(
-                    task,
-                    task_id=task_id,
-                    workspace=workspace,
-                    executor=executor,
-                    session_key=session_key,
-                    instance=instance,
-                    provider=provider,
-                    model=model,
-                    grant=grant,
-                    history=history,
-                    on_messages=on_messages,
-                    on_delta=on_delta,
-                )
+            return await self._run(
+                task,
+                task_id=task_id,
+                workspace=workspace,
+                executor=executor,
+                session_key=session_key,
+                instance=instance,
+                provider=provider,
+                model=model,
+                history=history,
+                on_messages=on_messages,
+                on_delta=on_delta,
+            )
         finally:
             IN_SUBAGENT_RUN.reset(token)
 
@@ -211,7 +187,6 @@ class RavenLoopBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-        grant: McpGrant,
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -227,10 +202,6 @@ class RavenLoopBackend:
         model = model or self.model
         # Build subagent tools (no message tool, no spawn tool).
         tools = ToolRegistry()
-        if self.mcp_source is not None:
-            tools.set_withheld_source(self.mcp_source.disabled_tools)
-        for wrapper, origin in grant.for_registry():
-            tools.register(wrapper, origin=origin)
 
         def allowed(name: str) -> bool:
             return self.tools_allow is None or name in self.tools_allow
@@ -427,11 +398,6 @@ class RavenLoopBackend:
         # for keeping the last write the complete one. The reader supplies the
         # prompt and the answer itself, so only the middle goes here.
         activity.note_transcript(messages[own_turns_from:])
-        if note := grant.note_text():
-            notice = f"\n\n[raven] {note}."
-            if on_delta is not None:
-                await on_delta(notice)
-            final_result += notice
         if on_messages is not None:
             messages.append({"role": "assistant", "content": final_result})
             on_messages(messages)

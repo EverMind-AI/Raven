@@ -147,12 +147,6 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "command": _OPENCODE_ACP,
         "readyTimeoutMs": 120000,
-        # Measured on 1.18.16: two sessions on one connection see each other's
-        # MCP servers, so a dispatch's grant would reach every concurrent
-        # sub-agent of this agent. The other two shipped adapters isolate and
-        # report the same mcpCapabilities, which is why this is declared here
-        # rather than read off the handshake.
-        "sessionMcp": False,
     },
     "hermes": {
         "name": "hermes",
@@ -227,33 +221,8 @@ def third_party_subagent_preset(name: str) -> dict[str, Any]:
     return _normalized([THIRD_PARTY_SUBAGENT_PRESETS[name]])[0]
 
 
-def session_mcp_for(cfg: Any) -> bool:
-    """Whether one configured acp agent keeps a session's MCP servers to it.
-
-    The row's own ``sessionMcp`` when it declares one -- an operator who wrote it
-    is answering for their own build, and that answer wins.
-
-    Otherwise the measured answer for the preset the row was created from. A
-    stored row is a full config and is never re-merged from the preset table when
-    it loads, so a row written before this field existed carries no key. Reading
-    that absence as "isolates" would leave every opencode agent already in a
-    config delivering as if it did, which is the one agent measured not to -- and
-    the operator would have to know a field they never wrote now needs writing.
-
-    ``True`` where neither says anything: a hand-written row, or a preset with no
-    measurement. That is the ungated stdio baseline, and withholding from an agent
-    nobody has checked would turn off MCP for peers that work.
-    """
-    declared = getattr(cfg, "session_mcp", None)
-    if declared is not None:
-        return bool(declared)
-    preset = THIRD_PARTY_SUBAGENT_PRESETS.get(getattr(cfg, "preset", None) or "") or {}
-    return bool(preset.get("sessionMcp", True))
-
-
 __all__ = [
     "THIRD_PARTY_SUBAGENT_PRESETS",
-    "session_mcp_for",
     "third_party_subagent_presets",
     "third_party_subagent_preset",
 ]

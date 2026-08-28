@@ -1191,8 +1191,6 @@ async def _run_node(
                 state_kwargs = (
                     {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
                 )
-                if node.mcps is not None:
-                    state_kwargs["mcps"] = node.mcps
                 # Indexed by instance too, on the same terms and with the same
                 # handle rule as `_add_node_to_instance_log`, so the conversation
                 # view reaches a node's steps while it runs rather than only after

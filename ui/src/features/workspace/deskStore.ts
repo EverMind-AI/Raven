@@ -31,7 +31,7 @@ import type { WsChange } from './types'
  * pane belongs beside comes back empty for the same reason, so a lone restored
  * diff would be the odd one out on the desk rather than the reader's screen. */
 export type DeskIntent =
-  | { k: 'file'; path: string; dl?: string }
+  | { k: 'file'; path: string }
   | { k: 'agent'; agent: string; handle: string; run?: string; node?: string }
   | { k: 'record'; id?: string; run?: string; node?: string }
 
@@ -57,7 +57,7 @@ export const saved = (key: string): DeskSaved | null => KEPT.read(key)
 
 const intentOf = (pane: DeskPane): DeskIntent | null => {
   if (pane.kind === 'file') {
-    return { k: 'file', path: pane.file.path, ...(pane.file.downloadPath ? { dl: pane.file.downloadPath } : {}) }
+    return { k: 'file', path: pane.file.path }
   }
   if (pane.kind === 'agent') {
     return {
@@ -417,7 +417,7 @@ export function openDeskTab(tab: DeskTab): void {
    a hunk the reader never read, on the strength of them opening the file for
    some other reason. A change is marked read where a change is actually shown
    -- `openDeskDiff`. */
-export function openDeskFile(path: string, downloadPath?: string): void {
+export function openDeskFile(path: string): void {
   /* Only a path the shelf actually carries. This door is also every other way
      of opening a file -- an attachment chip, a changed file's row, the replay a
      reload does -- and a record of having "seen" a file no tab counts is a
@@ -425,7 +425,7 @@ export function openDeskFile(path: string, downloadPath?: string): void {
      a card the reader can click is a card whose row the same turn event put
      there. */
   if (deliveries.paths().includes(path)) readItem('deliverables', path)
-  addPane({ id: `file:${path}`, kind: 'file', file: workspace.makeFile(path, downloadPath) })
+  addPane({ id: `file:${path}`, kind: 'file', file: workspace.makeFile(path) })
 }
 
 export function openDeskDiff(change: WsChange): void {

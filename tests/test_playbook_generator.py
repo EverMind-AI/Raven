@@ -23,7 +23,8 @@ ROSTER_DESCRIPTIONS = {
     "content-raven": "text and deliverables",
 }
 ROSTER = {
-    name: PlaybookAgentProfile(description, True, True, True, True) for name, description in ROSTER_DESCRIPTIONS.items()
+    name: PlaybookAgentProfile(description, True, True, True, False)
+    for name, description in ROSTER_DESCRIPTIONS.items()
 }
 
 
@@ -282,48 +283,6 @@ async def test_a_stringified_object_field_is_decoded_not_refused():
     assert len(gen._provider.calls) == 1, "it should not have needed a repair round"
 
 
-async def test_a_twice_serialised_mcp_section_is_decoded_too():
-    """The section that arrived on the spec after the decoder did.
-
-    Nothing was added to the decoder for it -- it is covered because the field
-    set is read off ``PlaybookSpec`` -- so this is the assertion that the
-    derivation actually pays out on a real generation, not just that the field
-    name appears in a set. A secret reference has to survive the round trip
-    intact: it is the whole reason the section can name a credential at all.
-    """
-    payload = json.loads(json.dumps(GOOD_DAG))
-    payload["params"] = json.dumps(
-        {
-            **GOOD_DAG["params"],
-            "PG_PASSWORD": {"type": "secret", "description": "postgres password for the analytics db"},
-        }
-    )
-    payload["mcpServers"] = json.dumps(
-        {
-            "local-pg": {
-                "command": "pg-mcp",
-                "args": ["--db", "analytics"],
-                "env": {"PGPASSWORD": "{{ params.PG_PASSWORD }}"},
-            }
-        }
-    )
-    nodes = json.loads(json.dumps(GOOD_DAG["nodes"]))
-    nodes[0]["mcps"] = ["local-pg"]
-    payload["nodes"] = json.dumps(nodes)
-
-    gen, _ = _generator([payload] * 4)
-    result = await gen.generate("weekly feedback analysis", skills=["sql-queries"])
-
-    assert len(gen._provider.calls) == 1, "it should not have needed a repair round"
-    assert list(result.spec.mcp_servers) == ["local-pg"]
-    assert result.spec.mcp_servers["local-pg"].command == "pg-mcp"
-    # Referenced, not resolved: the playbook carries the reference and the run
-    # supplies the value.
-    assert result.spec.mcp_servers["local-pg"].env == {"PGPASSWORD": "{{ params.PG_PASSWORD }}"}
-    assert result.spec.params["PG_PASSWORD"].type == "secret"
-    assert result.spec.nodes[0].mcps == ["local-pg"]
-
-
 async def test_free_text_that_parses_as_json_is_left_alone():
     """`prompts` is the author's prose, not a structure to decode."""
     payload = {
@@ -340,19 +299,11 @@ async def test_free_text_that_parses_as_json_is_left_alone():
 
 
 def test_the_decoded_field_set_tracks_the_contract():
-    """A new object or array field on the spec must not need a second list.
-
-    ``mcpServers`` is that claim being paid out: it arrived on the spec after
-    this derivation did, and both spellings entered the set with no edit to the
-    decoder -- the alias because a model emits that one, the field name because
-    a hand-written file may use either.
-    """
+    """A new object or array field on the spec must not need a second list."""
     assert set(generator_mod._STRUCTURAL_FIELDS) == {
         "triggers",
         "params",
         "nodes",
-        "mcpServers",
-        "mcp_servers",
         "blockingQuestions",
         "assumptions",
     }
@@ -422,12 +373,6 @@ async def test_revise_keeps_the_name_and_reports_fresh_notes():
 
 
 def test_registry_projection_is_safe_and_uses_effective_mcp_capability():
-    """Effective now means the row's own answer.
-
-    The projection also required a runtime-wide flag while nothing delivered a
-    node's ``mcps``; the runtime does, so an agent that accepts injection is
-    advertised as accepting it.
-    """
     from types import SimpleNamespace
 
     from raven.playbook.agent_profiles import agent_profiles_from_registry
@@ -448,7 +393,7 @@ def test_registry_projection_is_safe_and_uses_effective_mcp_capability():
         "stateful": True,
         "reads_local_files": False,
         "injectable_skills": True,
-        "injectable_mcps": True,
+        "injectable_mcps": False,
     }
 
 
@@ -463,7 +408,7 @@ async def test_prompt_exposes_only_safe_runtime_effective_capabilities():
     assert "only the node opening that session may set" in system_prompt
     assert '"readsLocalFiles": true' in user_prompt
     assert '"injectableSkills": true' in user_prompt
-    assert '"injectableMcps": true' in user_prompt
+    assert '"injectableMcps": false' in user_prompt
     assert '"kind"' not in user_prompt
     assert '"config"' not in user_prompt
     assert "credentials" not in user_prompt
@@ -540,46 +485,3 @@ async def test_revise_prompt_includes_current_agent_capabilities():
     prompt = gen2._provider.calls[0][1]["content"]
     assert "# Available agents and runtime-effective capabilities" in prompt
     assert '"stateful": true' in prompt
-
-
-def test_the_system_prompt_states_where_a_secret_may_go():
-    """The generator sees only this text, so an unstated rule is an unenforced one.
-
-    ``type: secret`` is refused by the validator when referenced from a node
-    template or from prompt-mode guidance. A generator that has not been told
-    that writes specs the validator then rejects, and the user sees a failure
-    where they should have seen a playbook.
-    """
-    from raven.playbook.prompt import SYSTEM_PROMPT
-
-    assert "type: secret" in SYSTEM_PROMPT
-    # The boundary itself, not just the word: env or headers only, and no default.
-    assert "`env` or `headers`" in SYSTEM_PROMPT
-    assert "may not have a default" in SYSTEM_PROMPT
-    assert "never from a `promptTemplate`" in SYSTEM_PROMPT
-
-
-def test_the_system_prompt_offers_a_playbook_its_own_mcp_servers():
-    """A bare mcps name resolves only against the host's own config.
-
-    Without this section the generator can only name servers it hopes the
-    running machine has, which makes every playbook that needs one
-    non-portable -- the thing the mcpServers section exists to fix.
-    """
-    from raven.playbook.prompt import SYSTEM_PROMPT
-
-    assert "# mcpServers" in SYSTEM_PROMPT
-    assert "playbook-first, host" in SYSTEM_PROMPT
-    # And the node-level rule that pairs with it.
-    assert "or one this playbook" in SYSTEM_PROMPT
-
-
-def test_the_create_playbook_tool_asks_for_the_servers_a_step_needs():
-    from raven.agent.tools.create_playbook import CreatePlaybookTool
-
-    tool = CreatePlaybookTool(generator=None, store=None)
-    workflow = tool.parameters["properties"]["workflow"]["description"]
-
-    assert "MCP server" in workflow
-    assert "credential" in workflow
-    assert "MCP servers any step needs" in tool.description

@@ -60,12 +60,10 @@ def agent_capabilities() -> dict[str, Any]:
             # failure -- see updates/prompt content handling.
             "embeddedContext": True,
         },
-        # A session may bring stdio servers of its own -- they are connected
-        # into a registry that session owns and are visible to its turns alone.
-        # http and sse stay false because every server a dispatcher hands a
-        # sub-agent arrives as one stdio stanza pointing at a host endpoint,
-        # whatever the upstream transport is, and declaring a transport means
-        # honouring a definition (and its credentials) inside this process.
+        # Per-session MCP servers are refused explicitly rather than declared:
+        # the agent loop connects MCP once per process, lazily, and there is no
+        # mechanism for a session to bring its own. Declaring http/sse here
+        # would invite exactly the request that has to be refused.
         "mcpCapabilities": {"http": False, "sse": False},
         # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is
         # how the schema spells "supported". Each one is declared because the
@@ -82,11 +80,6 @@ def agent_capabilities() -> dict[str, Any]:
         # either. Declaring auth.logout would put a method on the wire whose
         # only honest answer is that there was no session to end.
         "auth": {},
-        # ``SESSION_MCP_CAPABILITY`` is a promise, not a feature flag: it says
-        # the servers a session brings really are connected, and the tools behind
-        # them are reachable from that session's turns and from no sibling
-        # session on this connection.
-        "_meta": {protocol.SESSION_MCP_CAPABILITY: {}},
     }
 
 

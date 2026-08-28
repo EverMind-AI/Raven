@@ -122,18 +122,6 @@ def _cfg_fingerprint(cfg: Any) -> Any:
     return dump() if callable(dump) else cfg
 
 
-def _drain_exception(task: "asyncio.Future") -> None:
-    """Mark a finished task's exception retrieved, so asyncio stays quiet.
-
-    A task nobody holds is not an error here -- see the call site -- but an
-    unretrieved exception is printed at loop shutdown, and a wall of stack after
-    a run that degraded correctly reads as a crash.
-    """
-    if task.cancelled():
-        return
-    task.exception()
-
-
 class MCPConnectionManager:
     """Owns every MCP connection of one agent loop.
 
@@ -158,23 +146,12 @@ class MCPConnectionManager:
         post_connect: Callable[[], None] | None = None,
         on_state_change: Callable[[dict], None] | None = None,
         on_oauth_event: Callable[[str, dict], None] | None = None,
-        allow_auth_park: bool = True,
     ) -> None:
         self._registry = registry
         self._post_connect = post_connect
         self.on_state_change = on_state_change
         self.on_oauth_event = on_oauth_event
-        # A manager owned by a short-lived batch (a playbook pre-flight) cannot
-        # hold its caller for a browser round-trip: nobody is standing by to
-        # finish one, and the run must not pay the flow timeout per server.
-        self._allow_auth_park = allow_auth_park
         self._conns: dict[str, MCPConnection] = {}
-        # Handshakes still running. Held because every wait on one is shielded,
-        # so a parked OAuth attempt outlives its waiter -- and a task still
-        # pending when the loop closes has its exception printed by
-        # ``asyncio.run`` itself, whoever did or did not retrieve it. `aclose`
-        # is where they get reaped.
-        self._handshakes: set[asyncio.Task] = set()
         self._lock = asyncio.Lock()
         # Names already warned about, so a config poll does not repeat itself.
         self._warned_names: set[str] = set()
@@ -529,16 +506,6 @@ class MCPConnectionManager:
         async with self._lock:
             for name in list(self._conns):
                 await self._disconnect_locked(name, drop=True)
-        # After the detach, because detaching is what wakes a parked handshake:
-        # it fails, and reaping it here is what keeps that failure out of the
-        # loop's shutdown report. Bounded, and swallowing everything -- these are
-        # attempts this call has already decided to abandon.
-        pending = [t for t in self._handshakes if not t.done()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            with suppress(BaseException):
-                await asyncio.wait(pending, timeout=5)
 
     # ── Connect machinery ──────────────────────────────────────────
 
@@ -674,20 +641,10 @@ class MCPConnectionManager:
         the connection is 'connecting' for the rest of the process.
 
         A server parked at the browser-authorization step is exempt while
-        it stays parked - that wait blocks on the user, and the OAuth flow
-        enforces its own timeout. Only an *interactive* park earns that, though:
-        a background connect nobody was asked to authorize has no click coming,
-        so extending its leash buys nothing and costs the caller the whole flow
-        timeout before the same degrade happens anyway.
+        it stays parked — that wait blocks on the user, and the OAuth flow
+        enforces its own timeout.
         """
         task = asyncio.ensure_future(coro)
-        # Retrieving the exception keeps the "never retrieved" warning away; the
-        # set keeps the task reachable so `aclose` can reap one that is still
-        # parked, which is the half that silences `asyncio.run`'s own shutdown
-        # report. Neither alone is enough.
-        task.add_done_callback(_drain_exception)
-        self._handshakes.add(task)
-        task.add_done_callback(self._handshakes.discard)
         deadline = asyncio.get_running_loop().time() + _AUTH_PARK_MAX
         while True:
             try:
@@ -700,7 +657,7 @@ class MCPConnectionManager:
                 # SDK's auth path is exactly what this watchdog exists for) leaks
                 # its pending entry, and an unbounded exemption would then park
                 # this server in `connecting` for the life of the process.
-                if name in auth_wait_servers(parkable_only=True) and asyncio.get_running_loop().time() < deadline:
+                if name in auth_wait_servers() and asyncio.get_running_loop().time() < deadline:
                     continue
                 task.cancel()
                 try:
@@ -784,10 +741,7 @@ class MCPConnectionManager:
         if conn is None:
             return
         conn.epoch = None  # invalidates any in-flight attempt
-        # Detach, not a newer attempt: this is the last thing a short-lived host
-        # does, and a waiter told it was superseded sends the reader after a
-        # second flow that never existed.
-        cancel_pending(name, reason=f"MCP server {name!r} was detached before authorization completed")
+        cancel_pending(name)
         for t in self._registry.names_from(name):
             self._registry.unregister(t)
         if conn.stack is not None:
@@ -837,9 +791,7 @@ class MCPConnectionManager:
             if self.on_oauth_event is not None:
                 self.on_oauth_event(event, payload)
 
-        return await provider_for(
-            conn.name, cfg, notify=notify, interactive=interactive, can_park=self._allow_auth_park
-        )
+        return await provider_for(conn.name, cfg, notify=notify, interactive=interactive)
 
     @staticmethod
     def _is_auth_error(exc: BaseException) -> bool:

@@ -24,7 +24,6 @@ from raven.agent.subagent.dag_graph import DagNodeSpec, parse_dag_spec
 from raven.agent.subagent.dag_runner import DagRunResult, run_dag
 from raven.agent.subagent.dag_store import DagRunStore, read_session_nodes
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
-from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.base import ToolResult
@@ -433,68 +432,6 @@ async def test_run_dag_threads_session_key_and_node_instance_to_backend() -> Non
     assert calls_by_id["b"]["instance"] is None
 
 
-async def test_run_dag_preserves_omitted_override_and_explicit_empty_mcps() -> None:
-    omitted = object()
-
-    class McpExec(_FakeExec):
-        async def run(
-            self,
-            task: str,
-            *,
-            task_id: str,
-            workspace: Any,
-            executor: Any,
-            session_key: str | None = None,
-            instance: str | None = None,
-            mode: str | None = None,
-            mcps: Any = omitted,
-        ) -> str:
-            self.calls.append({"task_id": task_id, "mcps": mcps})
-            return task
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "run the graph under test",
-            "nodes": [
-                {
-                    "id": "default",
-                    "subagent": "x",
-                    "node_summary": "no mcps override",
-                    "prompt_template": "default",
-                },
-                {
-                    "id": "none",
-                    "subagent": "x",
-                    "node_summary": "explicitly no mcps",
-                    "prompt_template": "none",
-                    "mcps": [],
-                },
-                {
-                    "id": "one",
-                    "subagent": "x",
-                    "node_summary": "one mcp server",
-                    "prompt_template": "one",
-                    "mcps": ["github"],
-                },
-            ],
-        }
-    )
-    executor = McpExec()
-
-    await run_dag(
-        spec,
-        resolve=_by_name({"x": executor}),
-        backend=_InMemBackend(),
-        workdir="/w",
-        run_root="/hist/mas_dag",
-    )
-
-    calls = {call["task_id"]: call["mcps"] for call in executor.calls}
-    assert calls["default"] is omitted
-    assert calls["none"] == []
-    assert calls["one"] == ["github"]
-
-
 async def test_run_dag_failure_cascades_to_skip() -> None:
     spec = parse_dag_spec(
         {
@@ -860,66 +797,6 @@ class _Announces:
         return list(self.calls)
 
 
-async def test_a_node_naming_an_unconfigured_server_still_lets_the_graph_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """MCP is an attachment to the work, so it must not be able to cancel it.
-
-    The pre-dispatch pass used to raise on a raven-loop node whose grant came back
-    with anything missing, which threw away every other node in the graph over one
-    name the host does not configure. Now it is a notice: the run happens, the
-    caller is told which node lost what, and that node's own reply carries the
-    same sentence.
-    """
-
-    class _NoServers:
-        kind = "raven-loop"
-
-        def __init__(self) -> None:
-            self.calls: list[str] = []
-
-        def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
-            return McpGrant(missing=tuple(MissingServer(name=n, reason="not_configured") for n in (mcps or [])))
-
-        async def run(self, task: str, *, task_id: str, workspace, executor, **kwargs) -> str:
-            self.calls.append(task_id)
-            return f"OUT[{task_id}]"
-
-    # `{mcp_file}` is what makes the row mcp-injectable, which is the condition
-    # for the node's grant to be resolved at all.
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat {mcp_file}")],
-    )
-    backend = _NoServers()
-    monkeypatch.setattr(tool, "_resolve_node", lambda node: backend)
-
-    out = await tool.execute(
-        task_summary="run the graph under test",
-        nodes=[
-            {
-                "id": "a",
-                "subagent": "echo",
-                "node_summary": "wants a server nobody configured",
-                "prompt_template": "go",
-                "mcps": ["ghost"],
-            },
-            {
-                "id": "b",
-                "subagent": "echo",
-                "node_summary": "wants nothing at all",
-                "prompt_template": "go too",
-            },
-        ],
-        background=False,
-    )
-
-    text = getattr(out, "model_text", None) or str(out)
-    assert "2 completed" in text, "one unresolved server must not cost the graph its run"
-    assert backend.calls == ["a", "b"], "both nodes must have been dispatched"
-    assert "ghost" in text and "not configured" in text, "the caller is still told what was lost"
-
-
 async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     tool = SubAgentDagTool(
         workspace=tmp_path,
@@ -945,85 +822,6 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     assert "2 completed" in out.model_text
     assert "hello world" in out.model_text  # a's output flowed to b (the sink) and back
     assert "(instance:" not in out.model_text  # stateless nodes must not include instance tags
-
-
-async def test_the_tool_lets_a_continued_instance_replace_its_mcps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Through the tool, so the pre-dispatch validation runs for real.
-
-    A stateful group used to be refused outright for naming ``mcps`` on any node
-    after the one that opens the session, which left the per-session replacement
-    this MR implements unreachable from the graph tool: a group could neither
-    change nor clear its grant between turns. Both nodes must be accepted *and*
-    each must resolve its own list -- the second one's ``[]`` is the release, not
-    an omission that would leave the first node's servers attached.
-    """
-    resolved: list[tuple[str, Any]] = []
-
-    class _Recording:
-        kind = "cli"
-
-        def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
-            resolved.append((self.node_id, mcps))
-            return McpGrant()
-
-        def __init__(self, node_id: str) -> None:
-            self.node_id = node_id
-            self.calls: list[dict] = []
-
-        async def run(self, task: str, *, task_id: str, workspace, executor, **kwargs) -> str:
-            self.calls.append({"task_id": task_id, "mcp_grant": kwargs.get("mcp_grant")})
-            return f"OUT[{task_id}]"
-
-    # `{mcp_file}` in both templates is what makes the row mcp-injectable, and
-    # `resume_command` is what makes it stateful -- the two conditions a node
-    # needs before its `mcps` is resolved at all.
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[
-            ThirdPartyCliSubagentConfig(
-                name="holder",
-                command="cat {mcp_file} {agent_id}",
-                resume_command="cat {mcp_file} {agent_id}",
-            )
-        ],
-    )
-    backends = {"open": _Recording("open"), "later": _Recording("later")}
-    monkeypatch.setattr(tool, "_resolve_node", lambda node: backends[node.id])
-
-    out = await tool.execute(
-        task_summary="run the graph under test",
-        nodes=[
-            {
-                "id": "open",
-                "subagent": "holder",
-                "node_summary": "open the session",
-                "prompt_template": "first",
-                "instance": "s",
-                "mcps": ["db"],
-            },
-            {
-                "id": "later",
-                "subagent": "holder",
-                "node_summary": "continue it with nothing attached",
-                "prompt_template": "second",
-                "instance": "s",
-                "depends_on": ["open"],
-                "mcps": [],
-            },
-        ],
-        background=False,
-    )
-
-    # A refused graph comes back as the rendered refusal, not a run receipt, so
-    # read the text either way rather than asserting through `.model_text` -- a
-    # regression here must name the refusal, not raise AttributeError.
-    text = getattr(out, "model_text", None) or str(out)
-    assert "silently do nothing" not in text  # the old refusal
-    assert "not implemented" not in text
-    assert "2 completed" in text
-    assert dict(resolved) == {"open": ["db"], "later": []}
 
 
 async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path: Path) -> None:

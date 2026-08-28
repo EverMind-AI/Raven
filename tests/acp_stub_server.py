@@ -113,7 +113,6 @@ CAPABILITIES = {
         # only in the ``steerable`` mode; declaring it everywhere keeps the
         # capability read under test in every other mode too.
         "_meta": {"raven.steer": {}},
-        "mcpCapabilities": {"http": True, "sse": False},
     },
     "authMethods": [{"id": "stub-auth", "name": "Stub auth"}],
 }

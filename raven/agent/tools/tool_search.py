@@ -34,12 +34,11 @@ and the fold on ``tools.tool_search.enabled``.
 from __future__ import annotations
 
 import json
-from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import absent_tool_error
-from raven.agent.tools.tool_index import ToolIndex, rank_tools
+from raven.agent.tools.tool_index import ToolIndex
 from raven.token_wise.base import TokenStrategy
 
 if TYPE_CHECKING:
@@ -164,11 +163,16 @@ class ToolSearchController:
         Rank, then filter, then truncate -- in that order. Truncating first lets
         a tool this channel cannot use consume a result slot, so a usable
         lower-ranked hit is dropped and the model is told nothing matched.
-        Reading that many names is free: :meth:`_ranked_names` scores and sorts
-        the whole catalog either way, and only the final slice is bounded.
+        Reading that many names is free: the index scores and sorts the whole
+        catalog either way, and only the final slice is bounded. The bound is
+        the registry's current size, not the index's -- it stays >= the indexed
+        catalog because ``refresh()`` runs at the top of every
+        ``before_llm_call``, ahead of any search. Unregistering a tool after the
+        last refresh is the one state that inverts that and truncates the
+        ranking ahead of the filter.
         """
         cap = limit or self.search_result_limit
-        ranked = self._ranked_names(query, cap)
+        ranked = self._index.search(query, len(self._registry.tool_names) or cap)
         # Asked once for the whole scan, not once per candidate: the source
         # behind it is a file read, and the loop below walks the entire ranked
         # catalog. One answer for the scan is also the more correct one -- a set
@@ -190,45 +194,6 @@ class ToolSearchController:
             if len(hits) >= cap:
                 break
         return hits
-
-    def _ranked_names(self, query: str, cap: int) -> list[str]:
-        """The catalog ranked for this query, plus the tools this turn's session brought.
-
-        The bound on the indexed half is the registry's current size, not the
-        index's -- it stays >= the indexed catalog because ``refresh()`` runs at
-        the top of every ``before_llm_call``, ahead of any search. Unregistering
-        a tool after the last refresh is the one state that inverts that and
-        truncates the ranking ahead of the caller's filter.
-
-        Session tools are ranked beside the index rather than in it, for the
-        reason :meth:`_catalog_tools` gives about the channel filter: the index
-        is keyed on the catalog and shared by every concurrent turn, so making
-        it session-dependent would have two sessions' turns swapping it out from
-        under each other. They are a small dict and need no index of their own.
-
-        Merged by rank, not by score: the two rankings come from different
-        corpora, and BM25's idf falls with corpus size, so comparing the numbers
-        would bury a session tool under every catalog hit however well it
-        matched. Alternating keeps the catalog's own hit first while still
-        getting every session hit in ahead of ``cap``. A session tool shadowing
-        a registered name keeps the indexed position -- ``get`` resolves that
-        name to the session's tool anyway, so the hit already describes it.
-        """
-        indexed = self._index.search(query, len(self._registry.tool_names) or cap)
-        session = [
-            tool
-            for name, tool in self._registry.session_tools_in_scope().items()
-            # Same two exclusions the indexed catalog is built with.
-            if name not in META_TOOL_NAMES and name not in self._registry.schema_hidden_names()
-        ]
-        if not session:
-            return indexed
-        seen = set(indexed)
-        extra = [name for name in rank_tools(query, session, cap) if name not in seen]
-        merged: list[str] = []
-        for pair in zip_longest(indexed, extra):
-            merged.extend(name for name in pair if name is not None)
-        return merged
 
     def resolve_target(self, name: Any) -> _Target:
         """What ``tool_call`` would forward this name to, and why not when it would not.

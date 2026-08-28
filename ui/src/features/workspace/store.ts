@@ -285,21 +285,21 @@ export function relToWorkspace(p: string): string | null {
 
 let fileSeq = 0
 
-export function makeFile(p: string, downloadPath?: string): WsFile {
+export function makeFile(p: string): WsFile {
   return {
-    path: String(p), ...(downloadPath ? { downloadPath } : {}), kind: fileKind(p), raw: false, text: null,
+    path: String(p), kind: fileKind(p), raw: false, text: null,
     err: null, size: null, loading: false, seq: ++fileSeq,
   }
 }
 
-export function showFile(p: string, downloadPath?: string): void {
-  const desk = window.RavenIslands?.workspace as { openFile?: (path: string, downloadPath?: string) => void } | undefined
+export function showFile(p: string): void {
+  const desk = window.RavenIslands?.workspace as { openFile?: (path: string) => void } | undefined
   if (desk?.openFile) {
-    desk.openFile(p, downloadPath)
+    desk.openFile(p)
     return
   }
   const ws = shared()
-  ws.file = makeFile(p, downloadPath)
+  ws.file = makeFile(p)
   verb('showWorkspace')('file')
 }
 
@@ -311,9 +311,9 @@ export function openPath(p: string): void {
   else src.openPath?.(p)
 }
 
-export function openDelivery(p: string, downloadPath: string): void {
+export function openDelivery(p: string): void {
   const src = source()
-  if (src.canBrowse) showFile(p, downloadPath)
+  if (src.canBrowse) showFile(p)
   else src.openPath?.(p)
 }
 

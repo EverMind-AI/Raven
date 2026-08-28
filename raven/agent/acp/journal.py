@@ -38,7 +38,6 @@ import json
 import os
 import shutil
 import time
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -72,28 +71,6 @@ belong to -- one reader, one time key -- without ever claiming a frame is a
 message. It is not the same file: nothing feeds a frame log to
 ``SessionManager``, whose loader treats an unknown ``_type`` as a message rather
 than skipping it."""
-
-
-def redact_acp_frame(frame: dict[str, Any]) -> dict[str, Any]:
-    """Return a journal-safe copy of a session frame carrying MCP secrets."""
-    if frame.get("method") not in ("session/new", "session/load"):
-        return frame
-    copied = deepcopy(frame)
-    params = copied.get("params")
-    servers = params.get("mcpServers") if isinstance(params, dict) else None
-    if not isinstance(servers, list):
-        return copied
-    for server in servers:
-        if not isinstance(server, dict):
-            continue
-        for field in ("env", "headers"):
-            entries = server.get(field)
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if isinstance(entry, dict) and "value" in entry:
-                    entry["value"] = "<redacted>"
-    return copied
 
 
 def enabled() -> bool:
@@ -283,5 +260,4 @@ __all__ = [
     "journal_root",
     "open_journal",
     "prune",
-    "redact_acp_frame",
 ]

@@ -3405,12 +3405,7 @@ class AgentLoop:
         concurrently, which is the point.
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
-        # The tools a session brought with it become visible here, for the same
-        # reason the model binding does: this is where the turn's task begins.
-        # The ACP handler that accepted them cannot open the scope itself -- it
-        # submits the turn onto the spine and the turn runs on a task that
-        # inherits nothing from it.
-        with use_binding(self.binding_for_session(session_key)), self.tools.session_scope_for(session_key):
+        with use_binding(self.binding_for_session(session_key)):
             return await self._run_turn(
                 req,
                 emit,

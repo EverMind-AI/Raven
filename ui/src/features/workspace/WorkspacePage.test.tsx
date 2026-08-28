@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { WsApp } from './WorkspacePage'
+import * as deliveries from './deliveries'
 import * as store from './store'
 
 import type { Shell } from '../../shell/bridge'
@@ -197,18 +198,15 @@ describe('workspace island', () => {
     expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
   })
 
-  it('carries a delivered file download into the real viewer', async () => {
+  it('opens a delivered file in the real viewer', async () => {
     const state = install(emptyWs(), {
       canBrowse: true,
     })
     await mount()
     await act(async () => {
-      store.openDelivery('/repo/deck.pptx', '/files/download?token=deck')
+      store.openDelivery('/repo/deck.pptx')
     })
-    expect(state.ws.file).toMatchObject({
-      path: '/repo/deck.pptx',
-      downloadPath: '/files/download?token=deck',
-    })
+    expect(state.ws.file).toMatchObject({ path: '/repo/deck.pptx' })
     expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
   })
 
@@ -295,7 +293,61 @@ describe('workspace island', () => {
   it('withholds the offer when the gateway is not this desktop', async () => {
     install(emptyWs({
       file: {
-        path: '/repo/deck.pptx', downloadPath: '/files/download?token=deck', kind: 'bin',
+        path: '/repo/deck.pptx', kind: 'bin',
+        raw: false, text: null, err: null, size: 9, loading: false,
+      },
+      /* Delivered, which is what gives the note a URL to save from. */
+      deliveries: [{
+        path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck', description: '',
+        ext: 'pptx', mediaType: '', size: 9, turn: 1, missing: false,
+        downloadPath: '/files/download?token=deck',
+      }],
+    }), {
+      canBrowse: true,
+      openIn: async () => ({}),
+      hostIsLocal: () => false,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
+    /* And copying the path, which needs no host at all, stays. */
+    expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
+    /* The one download that stays, and this is the case it exists for: the
+       viewer cannot render this kind, the host cannot be asked to open it, and
+       the path in the note is a path on the gateway's machine. Without the
+       link there is no way left to reach the bytes. */
+    expect(screen.getByText('gui.ws.save_copy').closest('a')?.getAttribute('href'))
+      .toBe('/files/download?token=deck')
+  })
+
+  /* And a file that was never delivered has no URL to offer: the viewer reads
+     it through the gateway, but nothing serves a copy of an arbitrary path. */
+  it('offers no copy to save for a file this session never delivered', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/vendor/blob.bin', kind: 'bin',
+        raw: false, text: null, err: null, size: 9, loading: false,
+      },
+    }), {
+      canBrowse: true,
+      openIn: async () => ({}),
+      hostIsLocal: () => false,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
+    expect(document.querySelector('.binote a')).toBeNull()
+  })
+
+  /* The ordering a session reopen actually produces: `resume()` restores this
+     pane while `loadDeliveries()` is still in flight, so the row arrives after
+     the note is on screen. Read once, the link never appears; the remote reader
+     is stranded by timing rather than by policy. */
+  it('offers the copy when the delivery row arrives after the note mounts', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/deck.pptx', kind: 'bin',
         raw: false, text: null, err: null, size: 9, loading: false,
       },
     }), {
@@ -305,11 +357,16 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
-    expect(screen.getByText('gui.ws.download').closest('a')?.getAttribute('href'))
+    expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
+
+    /* What `deliverables.list` answering looks like from here. */
+    await act(async () => {
+      deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
+                         download_path: '/files/download?token=deck', size: 9 }])
+    })
+
+    expect(screen.getByText('gui.ws.save_copy').closest('a')?.getAttribute('href'))
       .toBe('/files/download?token=deck')
-    /* And copying the path, which needs no host at all, stays. */
-    expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
   })
 
   it('withholds the offer when the source cannot open at all', async () => {

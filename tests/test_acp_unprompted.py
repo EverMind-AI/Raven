@@ -197,13 +197,7 @@ async def test_a_resumed_session_does_not_replay_its_history_as_an_unprompted_tu
         ),
     )
     session_id, resumed = await backend._open_session(
-        _Client(),
-        cwd=str(tmp_path),
-        skey="tui:sess-1",
-        handle="h-1",
-        budget=5.0,
-        mcp_servers=[],
-        router=router,
+        _Client(), cwd=str(tmp_path), skey="tui:sess-1", handle="h-1", budget=5.0, router=router
     )
 
     assert (session_id, resumed) == ("acp:abc", True)

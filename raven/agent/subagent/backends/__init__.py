@@ -23,7 +23,6 @@ from raven.agent.subagent.backends.base import (
 from raven.agent.subagent.backends.cli_agent import CliAgentBackend
 from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_subagent_prompt
-from raven.agent.subagent.presets import session_mcp_for
 
 
 class AgentMeta(NamedTuple):
@@ -161,39 +160,6 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
 _STALE_SNAPSHOT_SEEN: set[tuple[str, str]] = set()
 
 
-def session_mcp_delivered(*, session_mcp: bool, snapshot: Any) -> bool:
-    """Whether a granted server would actually reach this agent's session.
-
-    The one predicate behind two questions that must not answer differently: what
-    a dispatch delivers, and what the playbook generator is told an agent can
-    take. Advertising an attachment the dispatch then withholds is worse than
-    advertising none -- the generated work order assumes a capability the run
-    deliberately does not have, and the degrade is silent by design.
-
-    ``session_mcp`` is the peer's own property, resolved by
-    :func:`~raven.agent.subagent.presets.session_mcp_for`; ``snapshot`` carries
-    the transitional half. Both are spelled out in
-    ``AcpAgentBackend._session_mcp_refused``, which is the reader for why each
-    exists and why only one of them is temporary.
-    """
-    if not session_mcp:
-        return False
-    if snapshot is None or snapshot.session_mcp:
-        return True
-    return "raven" not in (getattr(snapshot, "agent_name", "") or "").lower()
-
-
-def session_mcp_effective(cfg: Any, *, snapshot: Any = None) -> bool:
-    """:func:`session_mcp_delivered` for a config, reading its snapshot if needed.
-
-    ``snapshot`` is passed by a caller that already loaded one, so a roster build
-    does not read the store twice per row.
-    """
-    if snapshot is None:
-        snapshot = acp_snapshot_for(cfg)
-    return session_mcp_delivered(session_mcp=session_mcp_for(cfg), snapshot=snapshot)
-
-
 def acp_snapshot_for(cfg: Any) -> Any:
     """The stored capability snapshot for one acp config, or ``None``.
 
@@ -313,8 +279,6 @@ def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | 
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
             registry=registry,
-            mcps=cfg.mcps,
-            allow_mcp_secrets=cfg.allow_mcp_secrets,
         )
     if kind == "acp":
         from raven.agent.acp.capabilities import CapabilitySnapshot
@@ -330,9 +294,6 @@ def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | 
             max_output_chars=cfg.max_output_chars,
             snapshot=snapshot if isinstance(snapshot, CapabilitySnapshot) else None,
             registry=registry,
-            mcps=cfg.mcps,
-            allow_mcp_secrets=cfg.allow_mcp_secrets,
-            session_mcp=session_mcp_for(cfg),
         )
     if kind == "openai":
         return OpenAIApiBackend(
@@ -360,8 +321,6 @@ __all__ = [
     "enabled_agents",
     "enabled_third_party",
     "format_agent_listing",
-    "session_mcp_delivered",
-    "session_mcp_effective",
     "third_party_agent_meta",
     "RavenLoopBackend",
     "AcpAgentBackend",

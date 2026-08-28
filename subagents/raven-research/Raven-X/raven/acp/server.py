@@ -108,22 +108,7 @@ async def serve(
             _arm_one(agent_loop, enabled)
         logger.info("acp: ask_user round trip {}", "armed" if enabled else "disarmed")
 
-    # Latched like ``declared`` above: the hook is registered before the methods
-    # layer exists, because the methods layer is built with ``loops.get`` and the
-    # engines it builds run this hook.
-    served: dict[str, Any] = {}
-
-    def _on_engine_built(agent_loop: Any, conversation: str) -> None:
-        _arm_one(agent_loop, declared["ask_user"])
-        # A session whose engine was evicted between turns keeps its MCP
-        # connections -- they are held by the methods layer -- but not the
-        # binding, which went with the old engine's registry. See
-        # AcpMethods.rebind_session_mcp.
-        methods_now = served.get("methods")
-        if methods_now is not None:
-            methods_now.rebind_session_mcp(agent_loop, conversation)
-
-    loops.on_create(_on_engine_built)
+    loops.on_create(lambda agent_loop: _arm_one(agent_loop, declared["ask_user"]))
 
     methods = AcpMethods(
         submit=scheduler.submit,
@@ -139,9 +124,7 @@ async def serve(
         arm_ask_user=arm_ask_user,
         on_session_open=loops.get,
         modes=modes,
-        peek_session_loop=loops.peek,
     )
-    served["methods"] = methods
     logger.info("acp: engine ready on channel {}", channel)
 
     tasks: set[asyncio.Task[None]] = set()
@@ -157,14 +140,6 @@ async def serve(
         # on an answer that can no longer arrive.
         question_broker.cancel_all()
         await _drain(sessions, tasks)
-        # After the drain, so a handler still finishing cannot find its tools
-        # gone; before the engine teardown, because each of these is a
-        # subprocess of ours and no other path reclaims them -- this surface has
-        # no session/close.
-        try:
-            await methods.aclose()
-        except Exception:
-            logger.exception("acp: reclaiming per-session MCP servers failed")
         try:
             await teardown()
         except Exception:

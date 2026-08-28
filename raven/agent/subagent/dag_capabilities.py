@@ -24,6 +24,13 @@ from raven.agent.subagent.prompt_capabilities import AgentCapabilities, check_pa
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
 
+# Whether attaching an MCP server to a sub-agent's session is implemented at all.
+# It is not: nothing under ``raven/agent/subagent/`` reads a per-node mcp list.
+# The field exists so a playbook can state the intent and be answered instead of
+# silently ignored, and this flag is what keeps the answer honest -- flip it when
+# the wiring lands and the notice stops firing on its own.
+MCPS_IMPLEMENTED = False
+
 
 def validate_capabilities(
     spec: SubAgentDagSpec,
@@ -135,7 +142,7 @@ def _instance_groups(spec: SubAgentDagSpec) -> dict[tuple[str, str], list[DagNod
 
 
 def _check_injection_on_continuation(spec: SubAgentDagSpec) -> None:
-    """Reject ``skills`` on a node that continues an existing session.
+    """Reject ``skills`` / ``mcps`` on a node that continues an existing session.
 
     A resumed raven-loop session reuses the system prompt stored in its history
     (``backends/raven_loop.py``), and the skill menu is fixed in that first
@@ -145,27 +152,17 @@ def _check_injection_on_continuation(spec: SubAgentDagSpec) -> None:
     "do not write it after the first" is the same restriction stated so the file
     cannot lie.
 
-    Only checked when some member actually declares some, and only then is the
-    group required to form a dependency chain. Without a chain there is no "first"
-    node -- the runner serializes the group but the order among nodes with no
-    mutual dependency is not pinned -- so which member's skills would take effect
-    is undecidable, and a graph that depends on the answer must be refused rather
-    than guessed at.
-
-    ``mcps`` is deliberately *not* checked here, though it once was. A grant is
-    resolved per dispatch and lands in a tool list, not in the stored system
-    prompt: every backend rebuilds that list from the grant this node resolved
-    (``backends/raven_loop.py``, ``cli_agent.py``, ``acp_agent.py``), and for an
-    acp peer the per-session delivery is explicitly a *replacement* -- an empty
-    list releases what the previous node held. So a later node's ``mcps`` does
-    take effect, and refusing it would leave a stateful group unable to change or
-    clear its grant between turns while the replacement path went unreachable
-    from the graph tool.
+    Only checked when some member actually declares something, and only then is
+    the group required to form a dependency chain. Without a chain there is no
+    "first" node -- the runner serializes the group but the order among nodes with
+    no mutual dependency is not pinned -- so which member's skills would take
+    effect is undecidable, and a graph that depends on the answer must be refused
+    rather than guessed at.
     """
     for (agent, instance), members in _instance_groups(spec).items():
         if len(members) < 2:
             continue
-        declaring = [n for n in members if n.skills is not None]
+        declaring = [n for n in members if n.skills is not None or n.mcps is not None]
         if not declaring:
             continue
         ids = {n.id for n in members}
@@ -176,20 +173,19 @@ def _check_injection_on_continuation(spec: SubAgentDagSpec) -> None:
         if len(heads) != 1:
             raise DagValidationError(
                 f"nodes {sorted(ids)} share instance '{instance}' on agent '{agent}' and declare "
-                f"'skills', but they do not form a dependency chain, so which of them starts the "
-                f"session is not decided -- and only the node that starts it can set its skills. "
-                f"Chain them with 'depends_on' so the first one is unambiguous, or drop the 'skills' "
-                f"fields. Then call run_subagent_dag again with the corrected graph."
+                f"'skills'/'mcps', but they do not form a dependency chain, so which of them starts "
+                f"the session is not decided -- and only the node that starts it can set its skills. "
+                f"Chain them with 'depends_on' so the first one is unambiguous, or drop the "
+                f"'skills'/'mcps' fields. Then call run_subagent_dag again with the corrected graph."
             )
         offenders = sorted(n.id for n in declaring if n.id != heads[0].id)
         if offenders:
             raise DagValidationError(
-                f"nodes {offenders} declare 'skills' while continuing the session that node "
+                f"nodes {offenders} declare 'skills'/'mcps' while continuing the session that node "
                 f"'{heads[0].id}' opened (shared instance '{instance}' on agent '{agent}'). A resumed "
-                f"session keeps the skill menu it was opened with, so the field would silently do "
-                f"nothing. Move it onto '{heads[0].id}', or give these nodes their own instance if "
-                f"they need a different menu. Then call run_subagent_dag again with the corrected "
-                f"graph. ('mcps' is not restricted this way -- a grant is resolved per dispatch.)"
+                f"session keeps the skill menu it was opened with, so those fields would silently do "
+                f"nothing. Move them onto '{heads[0].id}', or give these nodes their own instance if "
+                f"they need a different menu. Then call run_subagent_dag again with the corrected graph."
             )
 
 
@@ -208,7 +204,12 @@ def _injection_notices(spec: SubAgentDagSpec, capabilities: dict[str, AgentCapab
                 f"node '{node.id}': agent '{node.subagent}' cannot take injected skills "
                 f"(only a built-in raven agent can), so its 'skills' list is ignored"
             )
-        if node.mcps is not None and caps is not None and not caps.injectable_mcps:
+        if node.mcps is not None and not MCPS_IMPLEMENTED:
+            notices.append(
+                f"node '{node.id}': attaching mcp servers to a sub-agent session is not implemented "
+                f"yet, so its 'mcps' list is ignored"
+            )
+        elif node.mcps is not None and caps is not None and not caps.injectable_mcps:
             notices.append(
                 f"node '{node.id}': agent '{node.subagent}' cannot take injected mcp servers, "
                 f"so its 'mcps' list is ignored"
@@ -242,4 +243,4 @@ def _check_path_placeholders(
     )
 
 
-__all__ = ["AgentCapabilities", "validate_capabilities"]
+__all__ = ["MCPS_IMPLEMENTED", "AgentCapabilities", "validate_capabilities"]

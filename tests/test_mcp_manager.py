@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from typing import Any
 from unittest.mock import patch
 
@@ -320,7 +319,7 @@ async def test_a_server_parked_at_the_browser_is_exempt_only_for_a_while():
         patch(_PATCH, new=never),
         patch.object(mod, "_HANDSHAKE_TIMEOUT", 0.05),
         patch.object(mod, "_AUTH_PARK_MAX", 0.15),
-        patch("raven.mcp.oauth.auth_wait_servers", lambda **_: {"srv"}),
+        patch("raven.mcp.oauth.auth_wait_servers", lambda: {"srv"}),
     ):
         snap = await _asyncio.wait_for(mgr.connect("srv", _cfg()), timeout=5)
 
@@ -451,7 +450,7 @@ def _capture_oauth_notify(monkeypatch):
 
     captured: dict[str, Any] = {}
 
-    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
+    async def fake_provider_for(server, cfg, notify=None, interactive=False):
         captured["notify"] = notify
         captured["interactive"] = interactive
         return None
@@ -595,65 +594,18 @@ async def test_a_concurrent_apply_starts_the_executor_once():
 @pytest.mark.asyncio
 async def test_beginning_or_dropping_an_attempt_invalidates_its_pending_link(monkeypatch):
     """The epoch dooms a superseded attempt's commit; its authorization link
-    must be invalidated at the same edges (new attempt, detach).
-
-    The two edges tell the parked waiter different things, and the difference is
-    the point: a detach is the last act of a short-lived host that never opened a
-    browser, so reporting it as a newer attempt sends the reader looking for a
-    second flow that never existed.
-    """
+    must be invalidated at the same edges (new attempt, detach)."""
     from raven.mcp import oauth as mcp_oauth
 
-    cancelled: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        mcp_oauth,
-        "cancel_pending",
-        lambda name, *, reason="superseded by a newer authorization attempt": cancelled.append((name, reason)),
-    )
+    cancelled: list[str] = []
+    monkeypatch.setattr(mcp_oauth, "cancel_pending", lambda name: cancelled.append(name))
 
     mgr = MCPConnectionManager(ToolRegistry())
     with patch(_PATCH, new=_fake_connect([])):
         await mgr.connect("svc", _cfg())
         await mgr.disconnect("svc")
 
-    assert [name for name, _ in cancelled] == ["svc", "svc"]
-    begin_reason, detach_reason = (reason for _, reason in cancelled)
-    assert "superseded" in begin_reason
-    assert "detached" in detach_reason and "superseded" not in detach_reason
-
-
-@pytest.mark.asyncio
-async def test_aclose_reaps_a_handshake_still_parked_on_authorization():
-    """A task still pending when the loop closes has its exception printed by
-    ``asyncio.run`` itself -- whoever did or did not retrieve it.
-
-    Every wait on a handshake is shielded so a timeout cannot kill an OAuth park,
-    which is exactly what lets one outlive its waiter. A short-lived host then
-    ends, the loop shuts down, and a run that degraded correctly signs off with a
-    wall of stack. Retrieving the exception is not enough on its own; the task
-    has to be finished before the loop is.
-    """
-    import asyncio
-
-    started = asyncio.Event()
-
-    async def parks_forever(*_a, **_k):
-        started.set()
-        await asyncio.Event().wait()  # the browser callback that never comes
-
-    mgr = MCPConnectionManager(ToolRegistry())
-    with patch(_PATCH, new=parks_forever):
-        task = asyncio.ensure_future(mgr.connect("svc", _cfg()))
-        await asyncio.wait_for(started.wait(), timeout=5)
-
-        await mgr.aclose()
-
-        assert not [t for t in mgr._handshakes if not t.done()], (
-            "a handshake left pending here is one asyncio reports at shutdown"
-        )
-    task.cancel()
-    with suppress(BaseException):
-        await task
+    assert cancelled == ["svc", "svc"]
 
 
 @pytest.mark.asyncio

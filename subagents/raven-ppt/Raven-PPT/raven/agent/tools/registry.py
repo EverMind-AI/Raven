@@ -2,9 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
@@ -26,75 +24,6 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
-        # The tools a session brought with it, keyed by session, and the
-        # turn-local view of one session's set. Split because the two facts have
-        # different lifetimes: the binding lasts as long as the session, the
-        # visibility only as long as the turn running under it.
-        self._session_tools: dict[str, dict[str, Tool]] = {}
-        # Turn-local, not a field, so the guarantee survives two turns sharing
-        # one registry. This surface builds an engine per session today, so the
-        # registries are already apart -- but a promise that holds only because
-        # of how the engines happen to be built is one a later change breaks
-        # silently, and the promise is on the wire (see SESSION_MCP_CAPABILITY).
-        self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
-
-    def bind_session_tools(self, session_key: str, tools: Mapping[str, Tool]) -> None:
-        """Record the tools one session brought, without registering them.
-
-        Registering would publish them for the life of the registry. Held aside
-        instead, and made visible only inside :meth:`session_scope_for`. Replaces
-        any earlier set for the same session.
-        """
-        self._session_tools[session_key] = dict(tools)
-
-    def release_session_tools(self, session_key: str) -> None:
-        """Forget one session's tools. Idempotent -- most sessions bring none."""
-        self._session_tools.pop(session_key, None)
-
-    @contextmanager
-    def session_scope(self, tools: Mapping[str, Tool] | None) -> Iterator[None]:
-        """Make ``tools`` visible for the current task, and only there.
-
-        Entered where the turn runs, not where it was requested: the turn is
-        submitted onto the scheduler and runs on its own task, which inherits no
-        context from the request handler.
-
-        Passing nothing is not a no-op -- it clears the overlay for this task. A
-        turn whose session brought no servers must not see another session's.
-        """
-        token = self._overlay.set(dict(tools) if tools else None)
-        try:
-            yield
-        finally:
-            self._overlay.reset(token)
-
-    @contextmanager
-    def session_scope_for(self, session_key: str) -> Iterator[None]:
-        """:meth:`session_scope` over whatever this session bound, if anything."""
-        with self.session_scope(self._session_tools.get(session_key)):
-            yield
-
-    def session_tools_in_scope(self) -> dict[str, Tool]:
-        """The session tools this turn can see; empty outside any scope."""
-        return dict(self._overlay.get() or {})
-
-    def _visible(self, name: str) -> Tool | None:
-        """One name resolved the way this turn sees it: its session's tools, then the registry's.
-
-        The single lookup behind ``get`` / ``has`` / ``execute``, so a session
-        tool cannot be advertised through one and missing from another.
-        """
-        overlay = self._overlay.get()
-        if overlay is not None and name in overlay:
-            return overlay[name]
-        return self._tools.get(name)
-
-    def _visible_tools(self) -> dict[str, Tool]:
-        """Every tool this turn can reach, session tools last so a clash resolves to them."""
-        overlay = self._overlay.get()
-        if not overlay:
-            return self._tools
-        return {**self._tools, **overlay}
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -106,11 +35,11 @@ class ToolRegistry:
 
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
-        return self._visible(name)
+        return self._tools.get(name)
 
     def has(self, name: str) -> bool:
         """Check if a tool is registered."""
-        return self._visible(name) is not None
+        return name in self._tools
 
     def get_definitions(self, only_names: Iterable[str] | None = None) -> list[dict[str, Any]]:
         """Tool definitions in OpenAI format, all of them or a named subset.
@@ -123,11 +52,10 @@ class ToolRegistry:
         not installed gets a shorter list rather than an error -- the caller is
         describing a stage, not asserting an inventory.
         """
-        visible = self._visible_tools()
         if only_names is None:
-            return [tool.to_schema() for tool in visible.values()]
+            return [tool.to_schema() for tool in self._tools.values()]
         wanted = set(only_names)
-        return [tool.to_schema() for name, tool in visible.items() if name in wanted]
+        return [tool.to_schema() for name, tool in self._tools.items() if name in wanted]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
@@ -146,10 +74,9 @@ class ToolRegistry:
         """
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
-        visible = self._visible_tools()
-        tool = visible.get(name)
+        tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found. Available: {', '.join(visible)}"
+            return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
         # Refused before dispatch, not after validation: a truncated call whose
         # required fields happen to have arrived still validates, and running it
@@ -268,17 +195,11 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> list[str]:
-        """Get list of registered tool names.
-
-        The registration view, not the turn's: the BM25 tool-search index is
-        built once off this and shared by every turn on this registry, so a
-        session's own tools have to be read on the search side (see
-        ``session_tools_in_scope``) rather than indexed here.
-        """
+        """Get list of registered tool names."""
         return list(self._tools.keys())
 
     def __len__(self) -> int:
         return len(self._tools)
 
     def __contains__(self, name: str) -> bool:
-        return self._visible(name) is not None
+        return name in self._tools

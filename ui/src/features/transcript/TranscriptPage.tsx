@@ -1214,7 +1214,7 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
       </span>
       <button className="hit" disabled={state !== 'ready'}
         aria-label={t('gui.arts.open', { f: row.name })}
-        onClick={() => wsOpenDelivery(row.path, row.downloadPath)} />
+        onClick={() => wsOpenDelivery(row.path)} />
     </div>
   )
 })

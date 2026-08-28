@@ -284,7 +284,6 @@ describe('the desk shelf', () => {
 
     const panes = desk.getState().panes
     expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
-    expect(panes[0]?.kind === 'file' && panes[0].file.downloadPath).toBe('/files/download?token=t1')
   })
 
   /* The demo shell's source cannot read a file, and a viewer with nothing to

@@ -47,13 +47,6 @@ from raven.agent.subagent.backends.transcript import (
     parse_opencode_json,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry, hold_handle
-from raven.agent.subagent.mcp_grant import (
-    McpGrant,
-    McpSource,
-    annotate_mcp_failure,
-    raven_cli_target,
-    resolve_grant,
-)
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -213,8 +206,6 @@ class CliAgentBackend:
         timeout: int | None = None,
         max_output_chars: int = 30000,
         registry: InstanceRegistry | None = None,
-        mcps: list[str] | None = None,
-        allow_mcp_secrets: bool = False,
     ) -> None:
         self.name = name
         self.command = command
@@ -228,39 +219,18 @@ class CliAgentBackend:
         self._session_id_re = re.compile(session_id_pattern) if session_id_pattern else None
         self._output_re = re.compile(output_pattern) if output_pattern else None
         self._registry = registry or get_registry()
-        self.mcps = mcps
-        self.allow_mcp_secrets = allow_mcp_secrets
-        self.mcp_source: McpSource | None = None
         self.streams = self._can_stream(command, resume_command, transcript_format)
-
-    def set_mcp_source(self, source: McpSource | None) -> None:
-        """Late-bind the host MCP definition source."""
-        self.mcp_source = source
-
-    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
-        """Resolve this dispatch's override or the configured default."""
-        effective = self.mcps if mcps is None else mcps
-        return resolve_grant(effective, self.mcp_source, raven_cli_target(allow_secrets=self.allow_mcp_secrets))
 
     @property
     def is_stateful(self) -> bool:
         return bool(self.resume_command)
 
-    def _build_argv(
-        self,
-        template: str,
-        prompt: str,
-        prompt_file: str,
-        agent_id: str | None,
-        mcp_file: str | None = None,
-    ) -> tuple[list[str], bool]:
+    def _build_argv(self, template: str, prompt: str, prompt_file: str, agent_id: str | None) -> tuple[list[str], bool]:
         argv: list[str] = []
         used_placeholder = False
         for tok in shlex.split(template):
             if agent_id is not None:
                 tok = tok.replace("{agent_id}", agent_id)
-            if mcp_file is not None:
-                tok = tok.replace("{mcp_file}", mcp_file)
             if "{prompt}" in tok:
                 argv.append(tok.replace("{prompt}", prompt))
                 used_placeholder = True
@@ -407,13 +377,12 @@ class CliAgentBackend:
         attempts: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
-        mcp_file: str | None = None,
     ) -> tuple[str, str]:
         fd, prompt_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".prompt.txt")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(task)
-            argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id, mcp_file)
+            argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id)
             # The capture shells out and can block for real seconds on a slow
             # profile (nvm/conda init); to_thread keeps that off the event loop.
             env_base = await asyncio.to_thread(login_shell_env)
@@ -517,8 +486,6 @@ class CliAgentBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-        mcps: list[str] | None = None,
-        mcp_grant: McpGrant | None = None,
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
@@ -546,48 +513,26 @@ class CliAgentBackend:
         # the DAG runner has to pass anything down.
         attempts: list[dict[str, Any]] = []
         output = ""
-        grant = mcp_grant if mcp_grant is not None else self.resolve_mcp_grant(mcps)
-        mcp_path: str | None = None
-        if "{mcp_file}" in self.command or (self.resume_command and "{mcp_file}" in self.resume_command):
-            fd, mcp_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".mcp.json")
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump({"tools": grant.for_child_config()}, stream, ensure_ascii=False)
-        try:
-            with (
-                external_agent_span(agent=self.name, transport="cli", task_id=task_id, instance=handle) as span,
-                annotate_mcp_failure(grant),
-            ):
-                try:
-                    output = await self._dispatch(
-                        task,
-                        task_id,
-                        workspace,
-                        session_key=session_key,
-                        handle=handle,
-                        resumable=instance is not None,
-                        attempts=attempts,
-                        on_delta=sink,
-                        notice_sink=on_delta,
-                        runtime_env=runtime_env,
-                        mcp_file=mcp_path,
-                    )
-                    if note := grant.note_text():
-                        notice = f"\n\n[raven] {note}."
-                        if on_delta is not None and self.streams:
-                            await on_delta(notice)
-                        output += notice
-                    return output
-                except Exception as exc:
-                    span.error(exc)
-                    raise
-                finally:
-                    self._record(span, attempts, output=output, started=started)
-        finally:
-            if mcp_path is not None:
-                try:
-                    os.unlink(mcp_path)
-                except OSError:
-                    pass
+        with external_agent_span(agent=self.name, transport="cli", task_id=task_id, instance=handle) as span:
+            try:
+                output = await self._dispatch(
+                    task,
+                    task_id,
+                    workspace,
+                    session_key=session_key,
+                    handle=handle,
+                    resumable=instance is not None,
+                    attempts=attempts,
+                    on_delta=sink,
+                    notice_sink=on_delta,
+                    runtime_env=runtime_env,
+                )
+                return output
+            except Exception as exc:
+                span.error(exc)
+                raise
+            finally:
+                self._record(span, attempts, output=output, started=started)
 
     def _record(self, span: Any, attempts: list[dict[str, Any]], *, output: str, started: float) -> None:
         """Put this dispatch's raw material on the span.
@@ -635,7 +580,6 @@ class CliAgentBackend:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
-        mcp_file: str | None = None,
     ) -> str:
         skey = session_key or "default"
         cwd = self.cwd or str(workspace)
@@ -667,7 +611,6 @@ class CliAgentBackend:
                     on_delta=on_delta,
                     notice_sink=notice_sink,
                     runtime_env=runtime_env,
-                    mcp_file=mcp_file,
                 )
 
         return await self._attempt(
@@ -683,7 +626,6 @@ class CliAgentBackend:
             on_delta=on_delta,
             notice_sink=notice_sink,
             runtime_env=runtime_env,
-            mcp_file=mcp_file,
         )
 
     async def _run_stateful(
@@ -699,7 +641,6 @@ class CliAgentBackend:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
-        mcp_file: str | None = None,
     ) -> str:
         """Resume this handle's session, or mint one.
 
@@ -737,7 +678,6 @@ class CliAgentBackend:
                     on_delta=on_delta,
                     notice_sink=notice_sink,
                     runtime_env=runtime_env,
-                    mcp_file=mcp_file,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -774,7 +714,6 @@ class CliAgentBackend:
             on_delta=on_delta,
             notice_sink=notice_sink,
             runtime_env=runtime_env,
-            mcp_file=mcp_file,
         )
 
     async def _attempt(
@@ -792,7 +731,6 @@ class CliAgentBackend:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
-        mcp_file: str | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
         stdout, stderr = await self._exec(
@@ -804,7 +742,6 @@ class CliAgentBackend:
             attempts,
             on_delta=on_delta,
             runtime_env=runtime_env,
-            mcp_file=mcp_file,
         )
 
         jsonl_id: str | None = None

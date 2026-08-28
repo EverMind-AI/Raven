@@ -55,7 +55,7 @@ async function whenListed<T>(pick: () => T | null, ask: () => Promise<void>, ope
 
 async function replay(intent: DeskIntent): Promise<void> {
   if (intent.k === 'file') {
-    desk.openDeskFile(intent.path, intent.dl)
+    desk.openDeskFile(intent.path)
     return
   }
   /* A graph node is reopenable from its (run, node) pair alone: the panel opens

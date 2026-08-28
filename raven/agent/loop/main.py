@@ -793,30 +793,6 @@ class AgentLoop:
         self._mcp_event_sink = None
         self._mcp_connected = False
         self._mcp_connecting = False
-        from raven.agent.subagent.dag_mcp_scope import run_mcp_servers
-        from raven.agent.subagent.mcp_grant import LiveMcpSource
-
-        self.subagents.set_mcp_source(
-            LiveMcpSource(
-                lambda: self._mcp_servers,
-                lambda: self._mcp_manager,
-                self.tools,
-                self.tools.withheld_names,
-                # A bridged upstream is spawned by the endpoint, not by this
-                # manager, so the confinement has to travel with the source or a
-                # granted stdio server escapes the sandbox the host configured.
-                self._mcp_executor,
-                # The one place a playbook's own ``mcpServers`` becomes
-                # resolvable in a conversation, and a read rather than a write:
-                # ``self._mcp_servers`` is this process's configuration and stays
-                # that, so a run cannot leave a definition behind and the main
-                # agent's own tool list does not move because a playbook named a
-                # server. Handed over as a second mapping rather than merged into
-                # the first so the source can tell whose definition it answered
-                # with -- see ``LiveMcpSource`` and ``subagent.dag_mcp_scope``.
-                run_mcp_servers,
-            )
-        )
         # Consecutive backend.store failures; see _note_memory_failure.
         self._memory_fail_streak = 0
         self._processing_lock = asyncio.Lock()
@@ -4550,12 +4526,7 @@ class AgentLoop:
         concurrently, which is the point.
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
-        # The tools a session brought with it become visible here, for the same
-        # reason the model binding does: this is where the turn's task begins.
-        # The request handler that accepted them cannot open the scope itself --
-        # it submits the turn onto the spine and the turn runs on a task that
-        # inherits nothing from it.
-        with use_binding(self.binding_for_session(session_key)), self.tools.session_scope_for(session_key):
+        with use_binding(self.binding_for_session(session_key)):
             return await self._run_turn(
                 req,
                 emit,

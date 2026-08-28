@@ -276,7 +276,6 @@ class SubagentManager:
             web_proxy=self.web_proxy,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
-            mcp_allow=getattr(row.config, "mcps", None),
         )
 
     def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
@@ -299,10 +298,6 @@ class SubagentManager:
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
         )
-
-    def set_mcp_source(self, source: Any) -> None:
-        """Late-bind the host MCP source into the shared agent table."""
-        self.registry.set_mcp_source(source)
 
     def apply_agents(self, configs: list) -> None:
         """(Re)build the agent table from config. Hot-appliable at runtime (P4).
@@ -358,20 +353,6 @@ class SubagentManager:
         if callable(caps):
             caps(self.refresh_agents)
         return backend
-
-    @staticmethod
-    async def _preflight_mcp(backend: SubagentBackend, mcps: list[str] | None = None) -> tuple[bool, str, Any]:
-        resolver = getattr(backend, "resolve_mcp_grant", None)
-        if resolver is None:
-            return False, "", None
-        # The async form when the backend offers one: the acp backend has to read
-        # the adapter's login-shell PATH, and capturing that runs a subprocess
-        # with a 15s bound -- on this thread it would freeze every turn in the
-        # process until the memo is warm.
-        async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
-        grant = await async_resolver(mcps) if async_resolver is not None else resolver(mcps)
-        in_process = getattr(backend, "kind", None) == "raven-loop"
-        return in_process and bool(grant.missing), grant.note_text(), None if in_process else grant
 
     def list_agents(self) -> list[AgentMeta]:
         """Advertised capabilities of every enabled agent (for the tool descriptions)."""
@@ -644,13 +625,6 @@ class SubagentManager:
                 f"{SPAWN_REFUSED_PREFIX}delegation is paused. The user paused sub-agent "
                 "spawning; do the work in this turn instead, or ask them to resume."
             )
-        try:
-            backend = self._resolve_backend(agent)
-        except RuntimeError as exc:
-            return f"{SPAWN_REFUSED_PREFIX}{exc}"
-        reject_mcp, mcp_note, mcp_grant = await self._preflight_mcp(backend)
-        if reject_mcp:
-            return f"{SPAWN_REFUSED_PREFIX}{mcp_note}. No sub-agent was run."
         quota_key = session_key or "default"
         if not self._charge_dispatch_quota(quota_key):
             logger.warning(
@@ -699,18 +673,13 @@ class SubagentManager:
         # that window would hand it an endpoint chosen after it was asked for.
         # A subagent has no model of its own, so it follows its conversation.
         binding = resolve(None, self._fallback)
-        # Passed only when there is one, the way `_run_subagent_inner` is called
-        # below: the argument is new here, and a caller that replaces this method
-        # keeps working as long as it is not handed something it never declared.
-        extra = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_summary, origin, binding.provider, binding.model, **extra)
+            self._run_subagent(task_id, task, display_summary, origin, binding.provider, binding.model)
         )
         self._track(task_id, bg_task, session_key, instance_key)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_summary)
-        receipt = f"Subagent [{display_summary}] started (id: {task_id}). I'll notify you when it completes."
-        return receipt if not mcp_note else f"{receipt}\nNote: {mcp_note}."
+        return f"Subagent [{display_summary}] started (id: {task_id}). I'll notify you when it completes."
 
     def _require_addressable(self, agent: str, *, doing: str) -> None:
         """Raise unless ``agent`` can hold a direct chat at all.
@@ -813,22 +782,17 @@ class SubagentManager:
         effective_workspace = workspace or self.workspace
         task_id = str(uuid.uuid4())[:8]
         state = self.instance_state(session_key, agent, handle)
-        backend = self._resolve_backend(agent)
-        reject_mcp, mcp_note, mcp_grant = await self._preflight_mcp(backend)
-        if reject_mcp:
-            raise RuntimeError(mcp_note)
 
         record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=text)
         async with self._hold_instance_slot(session_key, agent, handle), hold_handle(session_key, agent, handle):
             await _write_spawn_status(session_key, agent, handle, "running")
+            backend = self._resolve_backend(agent)
             kwargs: dict[str, Any] = {}
             if state is not None:
                 kwargs["history"] = state.load()
                 kwargs["on_messages"] = state.save
             if on_delta is not None and getattr(backend, "streams", False):
                 kwargs["on_delta"] = on_delta
-            if mcp_grant is not None:
-                kwargs["mcp_grant"] = mcp_grant
             # Collected here as the spawn lane does it: a direct turn is a turn of
             # the same instance's conversation, and without this it contributed
             # only a prompt and an answer to the instance log while a spawned
@@ -1098,7 +1062,6 @@ class SubagentManager:
         origin: dict[str, Any],
         provider: LLMProvider,
         model: str,
-        mcp_grant: Any = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
@@ -1120,10 +1083,7 @@ class SubagentManager:
                 )
                 async with executor:
                     dispatched = True
-                    kwargs = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
-                    await self._run_subagent_inner(
-                        task_id, task, task_summary, origin, executor, provider, model, **kwargs
-                    )
+                    await self._run_subagent_inner(task_id, task, task_summary, origin, executor, provider, model)
         except asyncio.CancelledError:
             if not dispatched:
                 self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
@@ -1197,7 +1157,6 @@ class SubagentManager:
         executor: Any,
         provider: LLMProvider,
         model: str,
-        mcp_grant: Any = None,
     ) -> None:
         session_key = origin.get("session_key")
         agent = origin.get("agent") or GENERIC_AGENT
@@ -1279,7 +1238,6 @@ class SubagentManager:
                         provider=provider,
                         model=model,
                         mode=self.resolve_mode(session_key, agent, origin.get("instance"), origin.get("mode")),
-                        **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                         **state_kwargs,
                     )
                 await _write_spawn_status(session_key, agent, handle, "completed")

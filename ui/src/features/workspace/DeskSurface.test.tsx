@@ -44,8 +44,6 @@ function wire(): void {
 
 const manifest = (files: Array<Record<string, unknown>>): unknown => ({ raven_delivery: { files } })
 
-const strip = (): HTMLElement | null => document.querySelector('.desk-pane > .dlv-strip')
-
 beforeEach(wire)
 
 afterEach(() => {
@@ -83,7 +81,12 @@ describe('the desk handle', () => {
 })
 
 describe('the pane of a delivered file', () => {
-  it('names what was delivered above the file it opened as', async () => {
+  /* The pane shows the file, and only the file. It used to carry a strip above
+     the body naming the delivery -- title, one-line description, kind, size and
+     the turn that handed it over -- which is the shelf's job: the shelf is
+     where a reader is choosing between products, and by the time one is open
+     they are reading it. */
+  it('opens as the file, with nothing above it about the delivery', async () => {
     deliveries.record(2, manifest([{
       path: '/w/a.md', name: 'a.md', title: 'Comparison', description: 'Three products, one table', size: 1824,
     }]))
@@ -92,47 +95,12 @@ describe('the pane of a delivered file', () => {
       desk.openDeskFile('/w/a.md')
     })
 
-    expect(strip()?.querySelector('b')?.textContent).toBe('Comparison')
-    expect(strip()?.querySelector('p')?.textContent).toBe('Three products, one table')
-    expect([...strip()!.querySelectorAll('.dlv-meta i')].map((n) => n.textContent))
-      .toEqual(['MD', '1.8 KB', 'gui.ws.dlv_here'])
-    /* The pane is still the file: its header names the file, not the title. */
-    expect(document.querySelector('.desk-pane > header b')?.textContent).toBe('a.md')
-  })
-
-  it('leaves a file that was never delivered without one', async () => {
-    render(<DeskSurface />)
-    await act(async () => {
-      desk.openDeskFile('/w/pool.go')
-    })
-
-    expect(document.querySelector('.desk-pane')).toBeTruthy()
-    expect(strip()).toBeNull()
-  })
-
-  it('says which earlier turn delivered it', async () => {
-    deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
-    render(<DeskSurface />)
-    await act(async () => {
-      desk.openDeskFile('/w/a.md')
-    })
-
-    expect([...strip()!.querySelectorAll('.dlv-meta i')].map((n) => n.textContent))
-      .toEqual(['MD', 'gui.ws.dlv_turn {"n":"1"}'])
-  })
-
-  it('picks up the file going missing while the pane is open', async () => {
-    deliveries.record(2, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
-    render(<DeskSurface />)
-    await act(async () => {
-      desk.openDeskFile('/w/a.md')
-    })
-    expect(strip()?.querySelector('.bad')).toBeNull()
-
-    await act(async () => {
-      workspace.markDeliveryMissing('/w/a.md')
-    })
-    expect(strip()?.querySelector('.bad')?.textContent).toBe('gui.arts.missing')
+    const pane = document.querySelector('.desk-pane') as HTMLElement
+    expect(pane).toBeTruthy()
+    expect(pane.querySelector('header b')?.textContent).toBe('a.md')
+    expect(pane.textContent).not.toContain('Comparison')
+    expect(pane.textContent).not.toContain('Three products, one table')
+    expect(pane.querySelector('.dlv-strip')).toBeNull()
   })
 
   /* A picture that failed to load says nothing about why. */

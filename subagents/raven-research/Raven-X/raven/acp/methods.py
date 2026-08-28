@@ -21,7 +21,6 @@ Two rules run through the whole file (the main repo's, kept):
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -115,7 +114,6 @@ class AcpMethods:
         arm_ask_user: Callable[[bool], None] | None = None,
         on_session_open: Callable[[str], Awaitable[Any]] | None = None,
         modes: Any = None,
-        peek_session_loop: Callable[[str], Any] | None = None,
     ) -> None:
         self._submit = submit
         self._sessions = sessions
@@ -123,11 +121,6 @@ class AcpMethods:
         self._session_manager = session_manager
         self._channel = channel
         self._on_session_open = on_session_open
-        # Reads the engine currently serving a session without building one.
-        # The reclaim needs it: hiding a session's tools before their sockets
-        # close is this layer's one ordering guarantee, and by then the caller
-        # that is ending the connection has no engine in hand.
-        self._peek_session_loop = peek_session_loop
         # The ask_user round trip (raven/acp/questions.py). The broker resolves
         # ``_raven/clarify_respond``; ``arm_ask_user`` is the server's seam that
         # binds or unbinds it on the engine's tool, called from initialize with
@@ -139,15 +132,6 @@ class AcpMethods:
         # leaves session/set_mode method-not-found and every session response
         # without a ``modes`` object, which is the pre-modes wire byte for byte.
         self._modes = modes
-        # One AsyncExitStack per session that brought MCP servers of its own.
-        # Held here and not on the engine because the connections belong to the
-        # session: an engine is evicted between turns (``AcpLoops``) and rebuilt
-        # on the next one, and a grant that died with it would vanish silently
-        # from a stateful session that had done nothing wrong.
-        self._session_mcp: dict[str, Any] = {}
-        # What each of those sessions is holding, by tool name, so the rebuild
-        # above can hand the same tools to the new engine without reconnecting.
-        self._session_mcp_tools: dict[str, dict[str, Any]] = {}
         self.initialized = False
         self.client = ClientCapabilities()
 
@@ -269,16 +253,14 @@ class AcpMethods:
         session id, so the client's directory has nothing to bind to. Logged
         so a client that expected it to matter leaves a trace.
         """
-        servers = self._validated_mcp_servers(params)
+        self._refuse_per_session_mcp(params)
         cwd = params.get("cwd")
         if isinstance(cwd, str) and cwd.strip():
             logger.info("acp: session cwd {} noted and ignored; the workspace is fixed at construction", cwd)
         chat_id = _new_chat_id()
         session = AcpSession(session_id=f"{self._channel}:{chat_id}", chat_id=chat_id)
         self._sessions.add(session)
-        # The engine first, because the servers are bound into the registry it
-        # owns; then the servers, because the client may prompt at once.
-        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
+        await self._open_session(session.session_id)
         logger.info("acp: session {} created", session.session_id)
         return self._with_modes({"sessionId": session.session_id}, session.session_id)
 
@@ -291,8 +273,8 @@ class AcpMethods:
         :mod:`raven.acp.replay`; continuity for the prompts that follow is the
         engine's session manager loading the same key from disk.
         """
-        stored, session, servers = self._reopen(params)
-        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
+        stored, session = self._reopen(params)
+        await self._open_session(session.session_id)
         for update in replay(stored.messages, cwd=None):
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
         logger.info("acp: loaded session {} ({} stored message(s))", session.session_id, len(stored.messages))
@@ -308,12 +290,12 @@ class AcpMethods:
         way. This is also the method behind ``sessionCapabilities.resume`` --
         the key the consuming raven reads as statefulness (plan §6 decision A).
         """
-        _, session, servers = self._reopen(params)
-        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
+        _, session = self._reopen(params)
+        await self._open_session(session.session_id)
         logger.info("acp: resumed session {}", session.session_id)
         return self._with_modes({}, session.session_id)
 
-    def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession, dict[str, Any]]:
+    def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession]:
         """The stored session behind ``params`` and its live registry entry.
 
         Only ids this channel minted are looked up: the engine's manager also
@@ -324,7 +306,7 @@ class AcpMethods:
         session shows a person an empty transcript for a conversation that had
         one.
         """
-        servers = self._validated_mcp_servers(params)
+        self._refuse_per_session_mcp(params)
         session_id = params.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise AcpMethodError(protocol.INVALID_PARAMS, "sessionId is required", {"field": "sessionId"})
@@ -338,24 +320,20 @@ class AcpMethods:
         if session is None:
             session = AcpSession(session_id=session_id, chat_id=session_id[len(prefix) :])
             self._sessions.add(session)
-        return stored, session, servers
+        return stored, session
 
-    async def _open_session(self, session_id: str) -> Any:
+    async def _open_session(self, session_id: str) -> None:
         """Build the session's engine, or fail the method that opened it.
 
         The registry entry is rolled back on failure: a session that answered
         with an error and stayed registered would take a prompt, and the engine
         it could not build would be built again halfway through that turn --
         exactly the failure this ordering exists to prevent.
-
-        Returns the engine so the caller can scope this session's own MCP
-        servers in the registry it owns. ``None`` where no hook is wired, which
-        is a surface with no engine to scope anything in.
         """
         if self._on_session_open is None:
-            return None
+            return
         try:
-            return await self._on_session_open(session_id)
+            await self._on_session_open(session_id)
         except Exception:
             self._sessions.remove(session_id)
             raise
@@ -610,181 +588,18 @@ class AcpMethods:
             )
         return session
 
-    def _validated_mcp_servers(self, params: dict[str, Any]) -> dict[str, Any]:
-        """The servers a session brought, as a config mapping. Empty is the normal value.
-
-        Dropped and logged, never refused. The servers a dispatcher attaches are
-        a capability on top of the task, so one this build cannot honour costs the
-        session those tools -- it must not cost the session. Answering
-        ``session/new`` with ``-32602`` instead fails the whole dispatch over an
-        optional attachment, and the sub-agent never runs at all.
-
-        Shape only. Whether this deployment can scope them at all is the
-        *engine's* answer now that there is one engine per session, and no engine
-        for this id exists yet at this point -- so that half is refused in
-        :meth:`_adopt_per_session_mcp`, which runs once the engine is built and
-        rolls the session back the same way a failed build does.
-        """
-        entries = params.get("mcpServers")
-        if not isinstance(entries, list) or not entries:
-            return {}
-        servers: dict[str, Any] = {}
-        for entry in entries:
-            try:
-                name, config = _acp_mcp_config(entry)
-            except AcpMethodError as exc:
-                logger.warning("acp: dropping a per-session MCP server: {}", exc)
-                continue
-            servers[name] = config
-        return servers
-
-    async def _adopt_per_session_mcp(self, session_key: str, entries: dict[str, Any], agent_loop: Any) -> None:
-        """Connect the servers a session brought, for that session alone.
-
-        The definitions come from whoever dispatched this agent and carry no
-        credentials: each is a stdio stanza pointing at an endpoint that
-        dispatcher opened, and the socket's mode is the whole of the boundary. So
-        there is nothing here to merge into this agent's own config -- the servers
-        are connected into a registry this session owns and made visible only for
-        its turns (see ``ToolRegistry.bind_session_tools``).
-
-        Scoped even though ``agent_loop`` already serves this session alone: the
-        one-engine-per-session registry is a build option (``AcpLoops.single``
-        serves every session from one engine), and the scoping is what keeps that
-        shape correct rather than an accident of the other one.
-
-        A server that fails to connect costs this session its tools and nothing
-        else. The session is still minted: refusing it would turn one unreachable
-        server into a sub-agent that cannot answer at all. An engine that cannot
-        scope them at all is dropped on the same terms and for the same reason --
-        the servers are a capability on top of the task, and failing the dispatch
-        over an optional attachment is the worse answer.
-
-        Adopting is a replacement, and an empty set is one of the values it can
-        take: ``session/load`` and ``session/resume`` carry the current dispatch's
-        server list, not a delta, so a session reopened with none must be left
-        holding none whatever it held before. Returning early on the empty case
-        instead left the previous set bound -- the dispatcher had already closed
-        that dispatch's endpoints, so the next turn was offered tools whose
-        sockets were gone, which fails at the call rather than at the offer. Hence
-        the release runs first, unconditionally; ``session/new`` reaches it with a
-        freshly minted key and nothing to reclaim, which is why it needs no branch
-        of its own.
-        """
-        await self._release_per_session_mcp(session_key, agent_loop)
-        if not entries:
-            return
-        registry = self._per_session_registry(agent_loop)
-        if registry is None:
-            logger.warning(
-                "acp: session {} brought {} MCP server(s) its engine cannot scope; dropping them",
-                session_key,
-                len(entries),
-            )
-            return
-        from raven.agent.tools.mcp import connect_mcp_servers
-        from raven.agent.tools.registry import ToolRegistry
-
-        held = ToolRegistry()
-        stack = AsyncExitStack()
-        await stack.__aenter__()
-        self._session_mcp[session_key] = stack
-        try:
-            # No executor: the endpoint is a unix socket on this host, so the
-            # bridge command has to run where that socket is.
-            await connect_mcp_servers(entries, held, stack, executor=None)
-        except Exception:
-            logger.exception("acp: connecting session {}'s MCP servers failed", session_key)
-        tools = {name: tool for name in held.names() if (tool := held.get(name)) is not None}
-        self._session_mcp_tools[session_key] = tools
-        registry.bind_session_tools(session_key, tools)
-        logger.info("acp: session {} brought {} MCP tool(s)", session_key, len(tools))
-
-    def rebind_session_mcp(self, agent_loop: Any, session_key: str) -> None:
-        """Re-scope a session's already-connected servers into a fresh engine.
-
-        ``AcpLoops`` evicts the engine of an *idle* session to stay under its
-        cap and builds a new one on the session's next turn. The connections
-        survive that -- they are held here, keyed by session -- but the binding
-        does not: it lived in the registry that went with the old engine. Without
-        this the tools disappear between two turns of a stateful session that did
-        nothing wrong, and the turn reports no tool rather than an error.
-
-        Nothing to do for a session that brought none, which is every session on
-        a connection whose dispatcher configured no per-session servers.
-        """
-        tools = self._session_mcp_tools.get(session_key)
-        if not tools:
-            return
-        registry = self._per_session_registry(agent_loop)
-        if registry is None:
-            return
-        registry.bind_session_tools(session_key, tools)
-        logger.info("acp: session {} kept its {} MCP tool(s) across an engine rebuild", session_key, len(tools))
-
-    async def _release_per_session_mcp(self, session_key: str, agent_loop: Any = None) -> None:
-        """Drop one session's MCP servers: hidden first, then disconnected.
-
-        Hidden first because the two failures are not symmetric -- a turn that
-        finds a tool whose connection is gone reports a broken tool call, while a
-        turn that cannot see the tool asks for something else.
-
-        ``agent_loop`` is the engine currently serving the session, when the
-        caller has one -- a re-adopt does, and its binding is the one that has to
-        come off. :meth:`aclose` does not, so the engine is peeked instead:
-        the connection ending is not the process ending, and a turn still in
-        flight must not be left holding a tool whose socket just closed.
-
-        Idempotent. Reached from two places and only two, because this surface
-        has no ``session/close`` and no ``session/delete``: a re-adopt, and
-        :meth:`aclose` when the connection ends. A session therefore holds its
-        servers for the life of the connection, which is the same lifetime the
-        session itself has here.
-        """
-        if agent_loop is None and self._peek_session_loop is not None:
-            agent_loop = self._peek_session_loop(session_key)
-        registry = self._per_session_registry(agent_loop) if agent_loop is not None else None
-        if registry is not None:
-            registry.release_session_tools(session_key)
-        self._session_mcp_tools.pop(session_key, None)
-        stack = self._session_mcp.pop(session_key, None)
-        if stack is None:
-            return
-        try:
-            await stack.aclose()
-        except (RuntimeError, BaseExceptionGroup):
-            # The MCP SDK's anyio cancel scopes are noisy when the close lands on
-            # a different task than the connect did, which is the normal case here.
-            logger.debug("acp: closing session {}'s MCP servers was noisy", session_key)
-        except Exception:
-            logger.exception("acp: closing session {}'s MCP servers failed", session_key)
-
-    async def aclose(self) -> None:
-        """Reclaim every session's MCP servers. Called when the connection ends.
-
-        The only reclaim point this surface has, so it is not merely tidy: each
-        connection a session brought is a subprocess, and nothing else would kill
-        them. Best-effort per session -- one failure must not cost the rest.
-        """
-        for session_key in list(self._session_mcp):
-            await self._release_per_session_mcp(session_key)
-
     @staticmethod
-    def _per_session_registry(agent_loop: Any) -> Any:
-        """The tool registry one engine's session servers can be scoped in, or None.
-
-        None says this engine cannot scope them -- a stub loop in a test, or a
-        registry too old to have the seam -- which is why the field is refused
-        rather than accepted in that state.
-
-        Read off the engine rather than injected, because after the move to one
-        engine per session there is no connection-wide registry to inject: the
-        session's tools live in the registry of whichever engine currently serves
-        it, which is also why they have to be re-bound when that engine is
-        rebuilt (see :meth:`rebind_session_mcp`).
-        """
-        tools = getattr(agent_loop, "tools", None)
-        return tools if hasattr(tools, "bind_session_tools") else None
+    def _refuse_per_session_mcp(params: dict[str, Any]) -> None:
+        # MCP is connected once per process; nothing scopes a server to one
+        # session, and accepting the field would leave a client believing its
+        # tools are available. An empty array is the schema's normal value.
+        servers = params.get("mcpServers")
+        if isinstance(servers, list) and servers:
+            raise AcpMethodError(
+                protocol.INVALID_PARAMS,
+                "per-session MCP servers are not supported; configure MCP servers in raven's own config",
+                {"field": "mcpServers", "count": len(servers)},
+            )
 
     def _say(self, session: AcpSession, text: str) -> None:
         self._emit(
@@ -823,69 +638,6 @@ def _file_uri_to_path(uri: str) -> str | None:
         return None
     path = unquote(parsed.path)
     return path or None
-
-
-def _acp_mcp_config(entry: Any) -> tuple[str, Any]:
-    """One ACP ``McpServer`` object as a ``(name, MCPServerConfig)`` pair.
-
-    Stdio only, matching what ``mcpCapabilities`` declares: every server a
-    dispatcher hands a sub-agent projects to a stdio stanza pointing at a host
-    endpoint, whatever the upstream transport is. An http or sse stanza is
-    refused rather than connected -- the capability said it would not come, and
-    honouring it anyway would put the definition (and its credentials) in this
-    process.
-    """
-    from raven.config.schema import MCPServerConfig
-
-    if not isinstance(entry, dict):
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS, "each mcpServers entry must be an object", {"field": "mcpServers"}
-        )
-    name = entry.get("name")
-    if not isinstance(name, str) or not name:
-        raise AcpMethodError(protocol.INVALID_PARAMS, "an mcpServers entry needs a name", {"field": "mcpServers.name"})
-    if entry.get("type") not in (None, "stdio") or entry.get("url"):
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS,
-            "only stdio MCP servers are supported per session; see mcpCapabilities",
-            {"field": "mcpServers.type", "name": name},
-        )
-    command = entry.get("command")
-    if not isinstance(command, str) or not command:
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS,
-            "a stdio mcpServers entry needs a command",
-            {"field": "mcpServers.command", "name": name},
-        )
-    args = [str(arg) for arg in entry.get("args") or []]
-    return name, MCPServerConfig(type="stdio", command=command, args=args, env=_acp_env(entry.get("env"), name))
-
-
-def _acp_env(raw: Any, name: str) -> dict[str, str]:
-    """The ``env`` of a stdio stanza, in either shape the wire uses.
-
-    The schema's shape is a list of ``{name, value}`` objects; a mapping is
-    accepted too because it says the same thing unambiguously and a client that
-    sends one is not wrong about anything a refusal would teach it.
-    """
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return {str(key): str(value) for key, value in raw.items()}
-    if isinstance(raw, list):
-        env: dict[str, str] = {}
-        for item in raw:
-            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-                raise AcpMethodError(
-                    protocol.INVALID_PARAMS,
-                    "each mcpServers env entry must be an object with a name",
-                    {"field": "mcpServers.env", "name": name},
-                )
-            env[item["name"]] = str(item.get("value") or "")
-        return env
-    raise AcpMethodError(
-        protocol.INVALID_PARAMS, "mcpServers env must be a list or an object", {"field": "mcpServers.env", "name": name}
-    )
 
 
 __all__ = [

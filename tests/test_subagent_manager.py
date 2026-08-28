@@ -30,16 +30,9 @@ from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.registry import AgentRegistry
 from raven.agent.tools.base import Continuation
 from raven.agent.tools.shell import ExecTool
-from raven.config.schema import (
-    AgentDefaults,
-    BuiltinAgentConfig,
-    ThirdPartyAcpSubagentConfig,
-    ThirdPartyCliSubagentConfig,
-    ThirdPartyOpenAISubagentConfig,
-)
+from raven.config.schema import AgentDefaults, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -107,105 +100,6 @@ def _make_manager(max_concurrent: int) -> SubagentManager:
         workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
     )
-
-
-class _MissingMcpSource:
-    def server(self, name: str) -> None:
-        return None
-
-    def tools(self, name: str) -> tuple:
-        return ()
-
-    def disabled_tools(self) -> frozenset[str]:
-        return frozenset()
-
-
-async def test_spawn_rejects_a_raven_loop_with_a_missing_declared_mcp_before_scheduling() -> None:
-    manager = SubagentManager(
-        provider=_StubProvider(),
-        workspace=Path("/tmp"),
-        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, mcps=["ghost"])],
-    )
-    manager.set_mcp_source(_MissingMcpSource())
-
-    receipt = await manager.spawn("task", agent=GENERIC_AGENT)
-
-    assert receipt.startswith("Spawn refused:")
-    assert "ghost" in receipt and "not configured" in receipt
-    assert manager.get_running_count() == 0
-
-
-async def test_spawn_reports_external_mcp_degradation_but_still_schedules(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = SubagentManager(
-        provider=_StubProvider(),
-        workspace=Path("/tmp"),
-        agents=[
-            ThirdPartyCliSubagentConfig(
-                name="external",
-                command="external {prompt_file} {mcp_file}",
-                mcps=["ghost"],
-            )
-        ],
-    )
-    manager.set_mcp_source(_MissingMcpSource())
-    monkeypatch.setattr(manager_mod, "build_executor", lambda *args, **kwargs: _DummyExecutor())
-    blocked = asyncio.Event()
-    grants: list[Any] = []
-
-    async def hold(*args: Any, mcp_grant: Any = None, **kwargs: Any) -> None:
-        grants.append(mcp_grant)
-        await blocked.wait()
-
-    monkeypatch.setattr(manager, "_run_subagent_inner", hold)
-
-    receipt = await manager.spawn("task", agent="external")
-    try:
-        assert receipt.startswith("Subagent [task] started")
-        assert "ghost" in receipt and "not configured" in receipt
-        await _settle(lambda: bool(grants))
-        assert grants[0].note_text() and "ghost" in grants[0].note_text()
-        assert manager.get_running_count() == 1
-    finally:
-        await manager.cancel_all()
-
-
-def test_registry_late_binds_mcp_sources_across_hot_apply() -> None:
-    config = ThirdPartyCliSubagentConfig(
-        name="external",
-        command="external {prompt_file} {mcp_file}",
-    )
-    registry = AgentRegistry()
-    registry.apply([config])
-    source = _MissingMcpSource()
-
-    registry.set_mcp_source(source)
-    first = registry.backend("external")
-    registry.apply([config])
-    second = registry.backend("external")
-
-    assert first is not None and first.mcp_source is source
-    assert second is not None and second is not first and second.mcp_source is source
-
-
-def test_registry_derives_mcp_injection_from_each_transport_contract() -> None:
-    registry = AgentRegistry()
-    registry.apply(
-        [
-            ThirdPartyCliSubagentConfig(name="plain", command="plain {prompt_file}"),
-            ThirdPartyCliSubagentConfig(name="handoff", command="handoff {prompt_file} {mcp_file}"),
-            ThirdPartyAcpSubagentConfig(name="acp", command="acp-agent"),
-            ThirdPartyOpenAISubagentConfig(name="http", base_url="https://example.test", model="m"),
-        ]
-    )
-    rows = {row.name: row for row in registry.rows()}
-
-    assert rows[GENERIC_AGENT].injectable.mcps is True
-    assert rows["plain"].injectable.mcps is False
-    assert rows["handoff"].injectable.mcps is True
-    assert rows["acp"].injectable.mcps is True
-    assert rows["http"].injectable.mcps is False
 
 
 async def _drive(monkeypatch, *, max_concurrent: int, spawn_n: int) -> int:

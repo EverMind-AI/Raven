@@ -539,5 +539,3 @@ async def test_subagents_list(workspace: Path) -> None:
 
     row = next(r for r in out.rows if r.name == "claude_code")
     assert row.upgrade_to == "acp", "the preset moved to acp, so a cli entry should offer the upgrade"
-    assert row.mcps == []
-    assert row.allow_mcp_secrets is False

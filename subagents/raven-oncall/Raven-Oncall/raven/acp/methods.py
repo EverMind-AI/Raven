@@ -28,7 +28,6 @@ import binascii
 import contextlib
 import mimetypes
 from collections.abc import Callable
-from contextlib import AsyncExitStack
 from itertools import count
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -159,8 +158,6 @@ class AcpMethods:
         self.initialized = False
         self.client = ClientCapabilities()
         self._titles: dict[str, str] = {}
-        # One AsyncExitStack per session that brought MCP servers of its own.
-        self._session_mcp: dict[str, Any] = {}
 
     # -- frame handling ---------------------------------------------------
 
@@ -292,7 +289,7 @@ class AcpMethods:
 
     async def _session_new(self, params: dict[str, Any]) -> dict[str, Any]:
         """Mint a session pinned to the client's working directory."""
-        servers = self._validated_mcp_servers(params)
+        self._refuse_per_session_mcp(params)
         cwd = self._validated_cwd(params.get("cwd"))
         session_key = f"{self._channel}:{_new_chat_id()}"
         self._bind_workdir(session_key, cwd)
@@ -304,9 +301,6 @@ class AcpMethods:
             subscription_id=subscription_id,
         )
         self._translator.add(session)
-        # After the session exists, because the connections are keyed by it, and
-        # before the answer goes out, because the client may prompt on it at once.
-        await self._adopt_per_session_mcp(session_key, servers)
         logger.info("acp: session {} created at {}", session_key, cwd)
         self._announce_commands(session_key)
         # The ACP sessionId *is* the raven session key. One identity rather than
@@ -336,7 +330,7 @@ class AcpMethods:
         matters -- a client silently handed a new session shows a person an empty
         transcript for a conversation that had one.
         """
-        servers = self._validated_mcp_servers(params)
+        self._refuse_per_session_mcp(params)
         cwd = self._validated_cwd(params.get("cwd"))
         session_id = params.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
@@ -368,7 +362,6 @@ class AcpMethods:
             # session and double every later frame.
             session.cwd = cwd
 
-        await self._adopt_per_session_mcp(session_id, servers)
         updates = replay(result.get("messages"), session_id=session_id, cwd=cwd)
         for update in updates:
             self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
@@ -390,7 +383,6 @@ class AcpMethods:
         session for one and a client silently handed a new id would prompt an
         empty conversation for one that had history.
         """
-        servers = self._validated_mcp_servers(params)
         cwd = self._validated_cwd(params.get("cwd"))
         session_id = params.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
@@ -415,7 +407,6 @@ class AcpMethods:
             self._translator.add(session)
         else:
             session.cwd = cwd
-        await self._adopt_per_session_mcp(session_id, servers)
         logger.info("acp: resumed session {}", session_id)
         self._announce_commands(session_id)
         return {}
@@ -437,7 +428,6 @@ class AcpMethods:
             with contextlib.suppress(AcpMethodError):
                 await self._call("turn.cancel", {"session_key": session.session_key})
         self._translator.release_session(session_id)
-        await self._release_per_session_mcp(session.session_key)
         logger.info("acp: closed session {}", session_id)
         return {}
 
@@ -473,7 +463,6 @@ class AcpMethods:
                 with contextlib.suppress(AcpMethodError):
                     await self._call("turn.cancel", {"session_key": held.session_key})
             self._translator.release_session(session_id)
-        await self._release_per_session_mcp(session_id)
         if manager is not None:
             manager.delete(session_id)
         self._titles.pop(session_id, None)
@@ -828,119 +817,23 @@ class AcpMethods:
             )
         return session
 
-    def _validated_mcp_servers(self, params: dict[str, Any]) -> dict[str, Any]:
-        """The servers a session brought, as a config mapping. Empty is the normal value.
+    @staticmethod
+    def _refuse_per_session_mcp(params: dict[str, Any]) -> None:
+        """Refuse a non-empty ``mcpServers``, rather than ignoring it.
 
-        Dropped and logged, never refused. The servers a dispatcher attaches are
-        a capability on top of the task, so one this build cannot honour costs the
-        session those tools -- it must not cost the session. Answering
-        ``session/new`` with ``-32602`` instead fails the whole dispatch over an
-        optional attachment, and the sub-agent never runs at all.
-
-        Refused rather than ignored when this connection has no registry that can
-        scope them: accepting the field would promise tools no turn could reach.
+        MCP is connected once per process, lazily, and nothing scopes a server to
+        one session -- so accepting the field would leave a client believing its
+        tools are available for the rest of the session. Required by the schema
+        on both ``session/new`` and ``session/load``, and an empty array is the
+        normal value.
         """
-        entries = params.get("mcpServers")
-        if not isinstance(entries, list) or not entries:
-            return {}
-        if self._per_session_registry() is None:
-            logger.warning(
-                "acp: dropping {} per-session MCP server(s): no tool registry to scope them in",
-                len(entries),
+        servers = params.get("mcpServers")
+        if isinstance(servers, list) and servers:
+            raise AcpMethodError(
+                protocol.INVALID_PARAMS,
+                "per-session MCP servers are not supported; configure MCP servers in raven's own config",
+                {"field": "mcpServers", "count": len(servers)},
             )
-            return {}
-        servers: dict[str, Any] = {}
-        for entry in entries:
-            try:
-                name, config = _acp_mcp_config(entry)
-            except AcpMethodError as exc:
-                logger.warning("acp: dropping a per-session MCP server: {}", exc)
-                continue
-            servers[name] = config
-        return servers
-
-    async def _adopt_per_session_mcp(self, session_key: str, entries: dict[str, Any]) -> None:
-        """Connect the servers a session brought, for that session alone.
-
-        The definitions come from whoever dispatched this agent and carry no
-        credentials: each is a stdio stanza pointing at an endpoint that
-        dispatcher opened, and the socket's mode is the whole of the boundary. So
-        there is nothing here to merge into this agent's own config -- the servers
-        are connected into a registry this session owns and made visible only for
-        its turns (see ``ToolRegistry.bind_session_tools``).
-
-        A server that fails to connect costs this session its tools and nothing
-        else. The session is still minted: refusing it would turn one unreachable
-        server into a sub-agent that cannot answer at all.
-
-        Adopting is a replacement, and an empty set is one of the values it can
-        take: ``session/load`` and ``session/resume`` carry the current dispatch's
-        server list, not a delta, so a session reopened with none must be left
-        holding none whatever it held before. Returning early on the empty case
-        instead left the previous set bound -- the dispatcher had already closed
-        that dispatch's endpoints, so the next turn was offered tools whose
-        sockets were gone, which fails at the call rather than at the offer. Hence
-        the release runs first, unconditionally; ``session/new`` reaches it with a
-        freshly minted key and nothing to reclaim, which is why it needs no branch
-        of its own.
-        """
-        await self._release_per_session_mcp(session_key)
-        if not entries:
-            return
-        registry = self._per_session_registry()
-        if registry is None:
-            return
-        from raven.agent.tools.mcp import connect_mcp_servers
-        from raven.agent.tools.registry import ToolRegistry
-
-        held = ToolRegistry()
-        stack = AsyncExitStack()
-        await stack.__aenter__()
-        self._session_mcp[session_key] = stack
-        try:
-            # No executor: the endpoint is a unix socket on this host, so the
-            # bridge command has to run where that socket is.
-            await connect_mcp_servers(entries, held, stack, executor=None)
-        except Exception:
-            logger.exception("acp: connecting session {}'s MCP servers failed", session_key)
-        tools = {name: tool for name in held.tool_names if (tool := held.get(name)) is not None}
-        registry.bind_session_tools(session_key, tools)
-        logger.info("acp: session {} brought {} MCP tool(s)", session_key, len(tools))
-
-    async def _release_per_session_mcp(self, session_key: str) -> None:
-        """Drop one session's MCP servers: hidden first, then disconnected.
-
-        Hidden first because the two failures are not symmetric -- a turn that
-        finds a tool whose connection is gone reports a broken tool call, while a
-        turn that cannot see the tool asks for something else.
-
-        Idempotent, and called on every path a session leaves this connection by:
-        most sessions brought no servers at all.
-        """
-        registry = self._per_session_registry()
-        if registry is not None:
-            registry.release_session_tools(session_key)
-        stack = self._session_mcp.pop(session_key, None)
-        if stack is None:
-            return
-        try:
-            await stack.aclose()
-        except (RuntimeError, BaseExceptionGroup):
-            # The MCP SDK's anyio cancel scopes are noisy when the close lands on
-            # a different task than the connect did, which is the normal case here.
-            logger.debug("acp: closing session {}'s MCP servers was noisy", session_key)
-        except Exception:
-            logger.exception("acp: closing session {}'s MCP servers failed", session_key)
-
-    def _per_session_registry(self) -> Any:
-        """The tool registry a session's servers can be scoped in, or None.
-
-        None says this connection has no agent loop to scope anything in (a build
-        that failed, or a stub in a test), which is why the field is refused
-        rather than accepted in that state.
-        """
-        tools = getattr(self._agent_loop, "tools", None)
-        return tools if hasattr(tools, "bind_session_tools") else None
 
     def _validated_cwd(self, raw: Any) -> str:
         """The client's working directory, checked the way raven checks its own.
@@ -1066,10 +959,6 @@ class AcpMethods:
                 await self._call("turn.unsubscribe", {"subscription_id": session.subscription_id})
             except Exception as exc:
                 logger.debug("acp: closing subscription for {} failed: {}", session.session_id, exc)
-        # The backstop: a session dropped without close/delete (a client that
-        # exits) still owns subprocesses, and nothing else would reap them.
-        for session_key in list(self._session_mcp):
-            await self._release_per_session_mcp(session_key)
 
     async def _subscribe(self, session_key: str) -> str:
         result = await self._call("turn.subscribe", {"session_key": session_key})
@@ -1172,69 +1061,6 @@ def _file_uri_to_path(uri: str) -> str | None:
         return None
     path = unquote(parsed.path)
     return path or None
-
-
-def _acp_mcp_config(entry: Any) -> tuple[str, Any]:
-    """One ACP ``McpServer`` object as a ``(name, MCPServerConfig)`` pair.
-
-    Stdio only, matching what ``mcpCapabilities`` declares: every server a
-    dispatcher hands a sub-agent projects to a stdio stanza pointing at a host
-    endpoint, whatever the upstream transport is. An http or sse stanza is
-    refused rather than connected -- the capability said it would not come, and
-    honouring it anyway would put the definition (and its credentials) in this
-    process.
-    """
-    from raven.config.schema import MCPServerConfig
-
-    if not isinstance(entry, dict):
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS, "each mcpServers entry must be an object", {"field": "mcpServers"}
-        )
-    name = entry.get("name")
-    if not isinstance(name, str) or not name:
-        raise AcpMethodError(protocol.INVALID_PARAMS, "an mcpServers entry needs a name", {"field": "mcpServers.name"})
-    if entry.get("type") not in (None, "stdio") or entry.get("url"):
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS,
-            "only stdio MCP servers are supported per session; see mcpCapabilities",
-            {"field": "mcpServers.type", "name": name},
-        )
-    command = entry.get("command")
-    if not isinstance(command, str) or not command:
-        raise AcpMethodError(
-            protocol.INVALID_PARAMS,
-            "a stdio mcpServers entry needs a command",
-            {"field": "mcpServers.command", "name": name},
-        )
-    args = [str(arg) for arg in entry.get("args") or []]
-    return name, MCPServerConfig(type="stdio", command=command, args=args, env=_acp_env(entry.get("env"), name))
-
-
-def _acp_env(raw: Any, name: str) -> dict[str, str]:
-    """The ``env`` of a stdio stanza, in either shape the wire uses.
-
-    The schema's shape is a list of ``{name, value}`` objects; a mapping is
-    accepted too because it says the same thing unambiguously and a client that
-    sends one is not wrong about anything a refusal would teach it.
-    """
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return {str(key): str(value) for key, value in raw.items()}
-    if isinstance(raw, list):
-        env: dict[str, str] = {}
-        for item in raw:
-            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-                raise AcpMethodError(
-                    protocol.INVALID_PARAMS,
-                    "each mcpServers env entry must be an object with a name",
-                    {"field": "mcpServers.env", "name": name},
-                )
-            env[item["name"]] = str(item.get("value") or "")
-        return env
-    raise AcpMethodError(
-        protocol.INVALID_PARAMS, "mcpServers env must be a list or an object", {"field": "mcpServers.env", "name": name}
-    )
 
 
 __all__ = [

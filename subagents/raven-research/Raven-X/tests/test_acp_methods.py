@@ -149,21 +149,11 @@ async def test_session_new_mints_channel_prefixed_id_and_ignores_cwd():
     assert h.sessions.get(sid) is not None
 
 
-async def test_session_new_drops_per_session_mcp_with_no_registry_to_scope_it():
-    """The field is honoured now (see ``test_acp_per_session_mcp.py``), but only
-    where the session's engine has a registry to scope it in. This harness builds
-    none, so the field can do nothing -- and doing nothing must not fail the
-    dispatch, which is the whole session.
-
-    The stanza is well formed on purpose: this is about an engine that cannot
-    scope it, not about a shape nobody can parse.
-    """
+async def test_session_new_refuses_per_session_mcp():
     h = _Harness()
     await h.start()
-    stanza = {"name": "x", "command": "/usr/bin/raven", "args": ["mcp", "bridge", "/tmp/s.sock"], "env": []}
-    response = await h.call("session/new", {"cwd": "/tmp", "mcpServers": [stanza]})
-    assert "error" not in response, response
-    assert h.sessions.sessions() != (), "the session is the dispatch and must survive"
+    response = await h.call("session/new", {"cwd": "/tmp", "mcpServers": [{"name": "x"}]})
+    assert response["error"]["code"] == protocol.INVALID_PARAMS
 
 
 async def test_unknown_session_is_resource_not_found():
@@ -462,16 +452,14 @@ async def test_load_without_an_engine_is_resource_not_found():
     assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
 
 
-async def test_load_drops_unscopable_per_session_mcp_but_still_requires_an_id(tmp_path):
-    """Two different failures, and only one of them is the request being
-    unanswerable. A stanza this build cannot serve is an attachment it drops; a
-    missing ``sessionId`` is the call itself having nothing to act on."""
+async def test_load_refuses_per_session_mcp_and_requires_an_id(tmp_path):
     from raven.session.manager import SessionManager
 
     h = _Harness(session_manager=SessionManager(tmp_path))
     await h.start()
-    dropped = await h.call("session/load", {"sessionId": "acp:x", "mcpServers": [{"name": "s"}]})
-    assert dropped.get("error", {}).get("data", {}).get("field") != "mcpServers", dropped
+    assert (await h.call("session/load", {"sessionId": "acp:x", "mcpServers": [{"name": "s"}]}))["error"][
+        "code"
+    ] == protocol.INVALID_PARAMS
     assert (await h.call("session/load", {}))["error"]["code"] == protocol.INVALID_PARAMS
 
 
@@ -484,13 +472,10 @@ async def test_initialize_arms_ask_user_from_the_client_declaration():
     directions on a re-initialize."""
     armed: list[bool] = []
     h = _Harness(arm_ask_user=armed.append)
-    await h.call(
-        "initialize",
-        {
-            "protocolVersion": 1,
-            "clientCapabilities": {"_meta": {"raven": {"askUser": True}}},
-        },
-    )
+    await h.call("initialize", {
+        "protocolVersion": 1,
+        "clientCapabilities": {"_meta": {"raven": {"askUser": True}}},
+    })
     await h.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
     assert armed == [True, False]
 
@@ -529,7 +514,9 @@ async def test_clarify_respond_resolves_a_pending_question():
     h = _Harness(question_broker=broker)
     await h.start()
 
-    question = asyncio.ensure_future(broker.await_question("acp:chat1", prompt="which year?", choices=["2023", "2024"]))
+    question = asyncio.ensure_future(
+        broker.await_question("acp:chat1", prompt="which year?", choices=["2023", "2024"])
+    )
     await asyncio.sleep(0)
     request_id = frames[0]["params"]["update"]["requestId"]
     response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": request_id, "answer": "2024"})

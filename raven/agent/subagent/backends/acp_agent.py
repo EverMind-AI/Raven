@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,12 +39,11 @@ from raven.agent.acp.capabilities import CapabilitySnapshot, relearn_session_mod
 from raven.agent.acp.elicitor import Elicitor
 from raven.agent.acp.permissions import PERMISSION_METHOD
 from raven.agent.acp.pool import get_pool
-from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD, AcpError, AcpRemoteError
+from raven.agent.acp.protocol import STEER_METHOD, AcpError, AcpRemoteError
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends import turn_rows
-from raven.agent.subagent.backends.base import SubagentActionAbortedError, bounded_delta, clamp_output
-from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_events,
@@ -53,8 +52,6 @@ from raven.agent.subagent.backends.observability import (
     record_session,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
-from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
-from raven.mcp.endpoint import McpEndpoints, bridge_command
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -509,7 +506,6 @@ class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
     streams = True
-    kind = "acp"
 
     def __init__(
         self,
@@ -523,9 +519,6 @@ class AcpAgentBackend:
         max_output_chars: int = 30000,
         snapshot: CapabilitySnapshot | None = None,
         registry: InstanceRegistry | None = None,
-        mcps: list[str] | None = None,
-        allow_mcp_secrets: bool = False,
-        session_mcp: bool = True,
     ) -> None:
         self.name = name
         self.command = command
@@ -536,10 +529,6 @@ class AcpAgentBackend:
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
         self._registry = registry or get_registry()
-        self.mcps = mcps
-        self.allow_mcp_secrets = allow_mcp_secrets
-        self.session_mcp = session_mcp
-        self.mcp_source: McpSource | None = None
         # Set by whichever manager dispatches through this backend; see
         # ``bind_session_dir``. ``None`` until then, which is why the recorder is
         # built lazily rather than in this constructor.
@@ -630,208 +619,6 @@ class AcpAgentBackend:
         """
         self._session_dir_for = resolver
 
-    def set_mcp_source(self, source: McpSource | None) -> None:
-        """Late-bind the host MCP definition source."""
-        self.mcp_source = source
-
-    def _adapter_path(self) -> str | None:
-        """The PATH the adapter process will see, which is where raven has to be findable.
-
-        Costly exactly once per process: ``login_shell_env`` runs the user's
-        login shell with a 15-second budget and memoizes the result, so the
-        first caller pays for a slow profile and every later one reads the memo.
-        Which caller that is matters -- see :meth:`resolve_mcp_grant_async`.
-        """
-        return {**login_shell_env(), **self.env}.get("PATH")
-
-    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
-        """Resolve this dispatch against this entry's export policy.
-
-        The adapter's PATH is captured only when this dispatch actually asked
-        for servers. It used to be captured first, to build the target, and that
-        put :meth:`_adapter_path` on the path of every ordinary dispatch --
-        including the ones requesting no MCP at all, whose grant is empty
-        whatever the PATH turns out to be.
-
-        Synchronous, because the preflight callers are. A caller with a loop to
-        await on should take :meth:`resolve_mcp_grant_async` instead, which keeps
-        the capture off it.
-        """
-        effective = self.mcps if mcps is None else mcps
-        stdio_path = self._adapter_path() if effective else None
-        target = acp_target(allow_secrets=self.allow_mcp_secrets, stdio_path=stdio_path)
-        return resolve_grant(effective, self.mcp_source, target)
-
-    async def resolve_mcp_grant_async(self, mcps: list[str] | None = None) -> McpGrant:
-        """:meth:`resolve_mcp_grant` with the PATH capture off the event loop.
-
-        The capture shells out and can block for real seconds on a slow profile
-        (nvm/conda init); ``to_thread`` keeps that off the loop, the same way the
-        cli transport and the ACP client spawn do it. It is warmed rather than
-        read here because the memo is what the synchronous resolution below then
-        hits, so the thread hop costs one dispatch per process and nothing after.
-        """
-        effective = self.mcps if mcps is None else mcps
-        if effective:
-            await asyncio.to_thread(login_shell_env)
-        return self.resolve_mcp_grant(mcps)
-
-    @property
-    def _session_mcp_refused(self) -> bool:
-        """Whether this dispatch's ``mcpServers`` must be withheld.
-
-        Two unrelated peers earn it, and the two reasons are worth keeping apart.
-
-        **The agent is configured as not isolating** (``sessionMcp: false``).
-        Nothing in ``initialize`` reports isolation -- the three shipped adapters
-        report the same ``mcpCapabilities`` and only one of them fails to isolate
-        -- so this is a declaration on the agent row and not something to probe;
-        see ``ThirdPartyAcpSubagentConfig.session_mcp``. It matters because raven
-        pools one connection per agent name: on a peer that does not isolate, two
-        concurrent sub-agents see each other's servers, so a node deliberately not
-        granted one reaches it through the sibling that was.
-
-        **The peer is a raven build that would refuse the field**, answering a
-        non-empty ``mcpServers`` with ``-32602`` instead of connecting it. Such a
-        build reports the same ``mcpCapabilities`` object as one that honours the
-        field, so the only signal is the absence of the ``_meta`` promise
-        (``SESSION_MCP_CAPABILITY``) -- read from the snapshot the way
-        ``is_stateful`` and ``can_steer`` are, because the decision has to be made
-        before any endpoint is opened.
-
-        Absence of the promise is *not* read as a refusal on its own, and this is
-        the load-bearing half: stdio servers are the ACP baseline, so
-        claude-agent-acp, codex-acp and opencode all accept a bridge stanza while
-        declaring nothing, and per-session lifetime for them is the host socket's
-        lifetime rather than anything they agreed to. Requiring the promise from
-        them would turn their MCP off. So the peer must also identify as a raven,
-        by the same ``agentInfo.name`` substring test ``dialect_for`` uses --
-        measured: ``raven``, ``raven-ppt`` and ``raven-x-research`` against
-        ``@agentclientprotocol/claude-agent-acp``, ``@agentclientprotocol/codex-acp``
-        and ``OpenCode``.
-
-        An unmeasured agent has no snapshot and is therefore never refused by the
-        second branch, which leaves the pre-existing ``-32602`` as its failure and
-        never silences a peer that would have worked.
-
-        That second branch is transitional by intent: every raven fork is meant to
-        serve per-session MCP, so it exists for the window in which a fork has not
-        taken the code yet, not as a standing policy about forks. The first is not
-        transitional -- it is the peer's own property.
-        """
-        from raven.agent.subagent.backends import session_mcp_delivered
-
-        return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot)
-
-    def _mcp_note(self, grant: McpGrant) -> str:
-        """Every secret-free reason this dispatch's MCP is degraded.
-
-        The withholding decided here is not a ``McpGrant`` reason, so it is
-        joined onto ``note_text`` rather than routed through it -- a grant whose
-        servers all resolved cleanly still owes the user this sentence, because a
-        sub-agent that silently received no servers looks exactly like one nobody
-        configured.
-        """
-        notes = []
-        if self._session_mcp_refused and grant.granted:
-            names = ", ".join(repr(server.name) for server in grant.granted)
-            if not self.session_mcp:
-                notes.append(
-                    f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
-                    f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
-                    f"connection per agent, so delivering them would offer this dispatch's servers to every "
-                    f"concurrent sub-agent of that agent. Set sessionMcp: true once it isolates"
-                )
-            else:
-                notes.append(
-                    f"MCP servers {names} were withheld because acp agent {self.name!r} is a raven build that "
-                    f"does not declare per-session MCP support ({SESSION_MCP_CAPABILITY}); sending them would "
-                    f"fail the session instead of degrading it. Upgrade that agent's raven to deliver them"
-                )
-        if note := grant.note_text():
-            notes.append(note)
-        return "; ".join(notes)
-
-    @contextmanager
-    def _annotate_mcp_failure(self, grant: McpGrant) -> Iterator[None]:
-        """``mcp_grant.annotate_mcp_failure`` over :meth:`_mcp_note`.
-
-        Same shape and same reason, one note wider: the withholding this backend
-        decides is not a ``McpGrant`` reason, so the generic helper cannot see it,
-        and a dispatch that failed *because* its tools never arrived would
-        otherwise carry no word of why.
-        """
-        try:
-            yield
-        except SubagentActionAbortedError:
-            raise
-        except Exception as exc:
-            if note := self._mcp_note(grant):
-                raise McpDispatchError(f"{exc}\n\n[raven] {note}.") from exc
-            raise
-
-    @asynccontextmanager
-    async def _mcp_endpoints(self, node_id: str, grant: McpGrant) -> AsyncIterator[list[dict[str, Any]]]:
-        """The bridge stanzas for one dispatch, live for exactly as long as it runs.
-
-        ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
-        task id -- because reaping is per node and not per run: a graph of a
-        dozen nodes would otherwise hold every node's sockets, and the upstream
-        server process behind each of them, open until the whole graph finished.
-
-        Empty when raven is not on the adapter's PATH, and empty when the peer
-        would refuse the field (:attr:`_session_mcp_refused`). Nothing is withheld
-        silently in either case: ``resolve_grant`` records the first as
-        ``command_not_found``, :meth:`_mcp_note` names the second, and the
-        dispatch closes with both.
-
-        A grant with nothing to bridge leaves without asking for the adapter's
-        PATH at all, and the ask itself is a thread hop: :meth:`_adapter_path`
-        can run the login shell, and this runs inside the dispatch's own turn.
-        """
-        # Both of these come off the host's MCP source: the executor so a bridged
-        # stdio server is spawned inside the sandbox the host configured rather
-        # than on the host, and the deny set so a tool the host switched off is
-        # unreachable through the relay too. Without them the endpoint has the
-        # mechanism and no policy.
-        provider = getattr(self.mcp_source, "executor_provider", None)
-        endpoints = McpEndpoints(
-            executor_provider=provider() if callable(provider) else None,
-            disabled_tools=frozenset(grant.disabled_tools),
-        )
-        try:
-            if not grant.granted:
-                yield []
-                return
-            argv = bridge_command(path=await asyncio.to_thread(self._adapter_path))
-            if argv is None or self._session_mcp_refused:
-                if self._session_mcp_refused:
-                    # Two independent reasons reach here and they call for
-                    # different actions, so they must not share a sentence: one
-                    # is answered by upgrading that agent's raven, the other by
-                    # the peer learning to isolate. ``_mcp_note`` already tells
-                    # them apart on the reply; this is the operator's copy.
-                    logger.warning(
-                        "acp agent {!r}: withholding {} MCP server(s); {}",
-                        self.name,
-                        len(grant.granted),
-                        "configured as not keeping a session's servers to that session (sessionMcp: false)"
-                        if not self.session_mcp
-                        else f"a raven build with no {SESSION_MCP_CAPABILITY} declaration",
-                    )
-                yield []
-                return
-            paths = {
-                server.name: str(await endpoints.open(node_id, server.name, server.config)) for server in grant.granted
-            }
-            yield grant.with_endpoints(paths).for_acp(argv)
-        finally:
-            # Through close(), never by closing the listeners here: it also
-            # cancels the in-flight relays, and without that wait_closed blocks
-            # for as long as the sub-agent keeps its bridge open -- which is
-            # exactly this moment.
-            await endpoints.close(node_id)
-
     @property
     def is_stateful(self) -> bool:
         """Whether reusing a handle continues this agent's session.
@@ -854,8 +641,6 @@ class AcpAgentBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-        mcps: list[str] | None = None,
-        mcp_grant: McpGrant | None = None,
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
@@ -879,185 +664,173 @@ class AcpAgentBackend:
         launch_cwd = self.cwd or str(workspace)
         session_cwd = str(workspace)
         started = time.monotonic()
-        grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
-        async with self._mcp_endpoints(task_id, grant) as mcp_servers:
-            with (
-                external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span,
-                self._annotate_mcp_failure(grant),
-            ):
-                # The entry's own budget, not the pool's default: `readyTimeoutMs` is
-                # documented as how long the `initialize` handshake may take, and
-                # after the handshake moved into the connection it was the one thing
-                # that stopped honouring it -- so an operator who raised it for a
-                # slow adapter had `verify` pass at 150s and every dispatch fail at
-                # the module constant.
-                budget = max(1.0, self.ready_timeout_ms / 1000)
-                connection = await get_pool().acquire(
-                    name=self.name,
-                    command=self.command,
-                    cwd=launch_cwd,
-                    env=dict(self.env),
-                    ready_timeout_s=budget,
+
+        with external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span:
+            # The entry's own budget, not the pool's default: `readyTimeoutMs` is
+            # documented as how long the `initialize` handshake may take, and
+            # after the handshake moved into the connection it was the one thing
+            # that stopped honouring it -- so an operator who raised it for a
+            # slow adapter had `verify` pass at 150s and every dispatch fail at
+            # the module constant.
+            budget = max(1.0, self.ready_timeout_ms / 1000)
+            connection = await get_pool().acquire(
+                name=self.name,
+                command=self.command,
+                cwd=launch_cwd,
+                env=dict(self.env),
+                ready_timeout_s=budget,
+            )
+            client = connection.client
+            # Marked after acquire, so a call's range covers its own traffic and
+            # not the handshake of a connection it merely inherited. The pool
+            # records where that handshake ends, and it is carried alongside so a
+            # reader of one call can still find it.
+            journal = client.journal
+            frames_start = journal.offset if journal is not None else None
+
+            session_id, resumed = await self._open_session(
+                client,
+                cwd=session_cwd,
+                skey=skey,
+                handle=handle,
+                budget=budget,
+                router=connection.router,
+                mode=mode,
+            )
+            if journal is not None:
+                # Inside the marked range on purpose, so the per-call copy of the
+                # frames carries the line that says whose call they are.
+                journal.bind(
+                    {
+                        "session": session_id,
+                        "agent": self.name,
+                        "instance": handle,
+                        "task_id": task_id,
+                        "session_key": skey,
+                        "resumed": resumed,
+                    }
                 )
-                client = connection.client
-                # Marked after acquire, so a call's range covers its own traffic and
-                # not the handshake of a connection it merely inherited. The pool
-                # records where that handshake ends, and it is carried alongside so a
-                # reader of one call can still find it.
-                journal = client.journal
-                frames_start = journal.offset if journal is not None else None
+            record_session(span, session_id=session_id, resumed=resumed)
 
-                session_id, resumed = await self._open_session(
-                    client,
-                    cwd=session_cwd,
-                    skey=skey,
-                    handle=handle,
-                    budget=budget,
-                    mcp_servers=mcp_servers,
-                    router=connection.router,
-                    mode=mode,
+            # Snapshotted before the prompt so the error below names what this
+            # turn ran into rather than what the connection has ever refused.
+            refused_before = client.refusal_count
+            sink = bounded_delta(on_delta, self.max_output_chars)
+            # From the live handshake, not the stored snapshot: this is the
+            # process actually answering, and a snapshot can be stale.
+            collector = _TurnCollector(sink, dialect_for(connection.initialize), prompt=task)
+            # Built here, in the turn's context, for the reason `_TurnCollector`
+            # documents: the read loop's ContextVars predate this run, and the
+            # asker is bound per turn.
+            elicitor = Elicitor(self.name, handle, dialect_for(connection.initialize))
+            # Built here for the same reason and bound to this connection's
+            # client, because the answer goes back as a request rather than as
+            # this frame's return value.
+            responder = AskUserResponder(self.name, handle, clarify_responder(client))
+            # Held across the whole turn, not just the send: see
+            # `_Connection.session_lock` for why two prompts cannot share one
+            # session id.
+            async with connection.session_lock(session_id):
+                await connection.router.take_over(session_id, collector)
+                # Once per connection, and here because this is where the pieces
+                # it needs are in hand. What it records is what the agent does
+                # when no run of raven's is attached -- an on-call wake, above
+                # all -- which before this was dropped at the router with a
+                # debug line. After the session's own take_over, so a turn that
+                # is starting owns the session before the resident sink exists.
+                self._ensure_unprompted_recorder(connection)
+                connection.elicitors.attach(session_id, elicitor)
+                connection.responders.attach(session_id, responder)
+                if self.can_steer or steer_offered(connection.initialize):
+                    activity.offer_steer(collector._run, self._steerer(client, session_id))
+                try:
+                    result = await client.request(
+                        "session/prompt",
+                        {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]},
+                        timeout=self.timeout,
+                        cancel_session=session_id,
+                    )
+                except asyncio.CancelledError:
+                    # An UNSETTLED cancel means the turn outlived its cancel
+                    # budget, so it is still running on the agent while this lock
+                    # is about to be released -- prompting the same session again
+                    # would collide with it. Dropping the binding is the same
+                    # recovery `_open_session` makes when a resume fails: the
+                    # instance keeps its handle and the next dispatch opens a
+                    # fresh session under it.
+                    # Evaluated in this order so take_unsettled_cancel -- a
+                    # consuming read -- always clears the flag; skipping it for a
+                    # stateless agent would leak it.
+                    if client.take_unsettled_cancel(session_id) and self.is_stateful:
+                        await self._registry.unbind(skey, self.name, handle)
+                    elif not resumed and self.is_stateful:
+                        # A cancel that SETTLED leaves a live session holding the
+                        # partial exchange, and the deferred commit below is
+                        # unreachable from here -- so an instance whose *first*
+                        # turn was interrupted was never bound, and the next
+                        # dispatch opened a fresh session. That reads as the
+                        # sub-agent having forgotten the conversation the user
+                        # just interrupted, which is the one moment they are
+                        # certain it happened.
+                        await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
+                    # The frames of a turn that was cut short are the ones worth
+                    # having, and this path returns no result to hang them off:
+                    # published here or the record of a timed-out call points at
+                    # nothing, while the journal holds the whole exchange.
+                    cancelled = self._frames(journal, connection, session_id, frames_start)
+                    activity.note_frames(cancelled)
+                    record_frames(span, cancelled)
+                    raise
+                finally:
+                    activity.offer_steer(collector._run, None)
+                    connection.router.detach(session_id, collector)
+                    connection.elicitors.detach(session_id, elicitor)
+                    connection.responders.detach(session_id, responder)
+                    # Detaching stops only the *next* request from routing here.
+                    # One already put to the user waits on a task of the
+                    # connection's, which no part of this teardown reaches --
+                    # the pooled connection stays open, so `AcpClient.close`
+                    # never cancels it either. Left standing it holds this
+                    # conversation's form lock and keeps a sheet up that answers
+                    # into a run that is gone.
+                    elicitor.cancel()
+                    # Same reason, and the same window: a question already put to
+                    # the user answers into a run that is gone, and holds this
+                    # conversation's lock against the next one while it waits.
+                    responder.cancel()
+
+            stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
+            text = collector.text
+            frames = self._frames(journal, connection, session_id, frames_start)
+            self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)
+
+            if not text:
+                tail = client.stderr_tail(1500)
+                span.error(f"empty turn (stopReason={stop_reason})")
+                # An agent that asked raven for something it does not serve --
+                # `fs/read_text_file` and its siblings, permission requests
+                # being answered now -- was told the method does not exist, and
+                # adapters answer that by ending the turn with nothing. The
+                # stderr tail says nothing about it, so name it here or it is
+                # unknowable.
+                refused = client.refusals_since(refused_before, session_id=session_id)
+                # Collapsed: one turn with three tool calls refuses the same
+                # method three times, and naming it three times says no more.
+                asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
+                raise AcpEmptyTurnError(
+                    f"acp agent {self.name!r} ended its turn with no content "
+                    f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
                 )
-                if journal is not None:
-                    # Inside the marked range on purpose, so the per-call copy of the
-                    # frames carries the line that says whose call they are.
-                    journal.bind(
-                        {
-                            "session": session_id,
-                            "agent": self.name,
-                            "instance": handle,
-                            "task_id": task_id,
-                            "session_key": skey,
-                            "resumed": resumed,
-                        }
-                    )
-                record_session(span, session_id=session_id, resumed=resumed)
 
-                # Snapshotted before the prompt so the error below names what this
-                # turn ran into rather than what the connection has ever refused.
-                refused_before = client.refusal_count
-                sink = bounded_delta(on_delta, self.max_output_chars)
-                # From the live handshake, not the stored snapshot: this is the
-                # process actually answering, and a snapshot can be stale.
-                collector = _TurnCollector(sink, dialect_for(connection.initialize), prompt=task)
-                # Built here, in the turn's context, for the reason `_TurnCollector`
-                # documents: the read loop's ContextVars predate this run, and the
-                # asker is bound per turn.
-                elicitor = Elicitor(self.name, handle, dialect_for(connection.initialize))
-                # Built here for the same reason and bound to this connection's
-                # client, because the answer goes back as a request rather than as
-                # this frame's return value.
-                responder = AskUserResponder(self.name, handle, clarify_responder(client))
-                # Held across the whole turn, not just the send: see
-                # `_Connection.session_lock` for why two prompts cannot share one
-                # session id.
-                async with connection.session_lock(session_id):
-                    await connection.router.take_over(session_id, collector)
-                    # Once per connection, and here because this is where the pieces
-                    # it needs are in hand. What it records is what the agent does
-                    # when no run of raven's is attached -- an on-call wake, above
-                    # all -- which before this was dropped at the router with a
-                    # debug line. After the session's own take_over, so a turn that
-                    # is starting owns the session before the resident sink exists.
-                    self._ensure_unprompted_recorder(connection)
-                    connection.elicitors.attach(session_id, elicitor)
-                    connection.responders.attach(session_id, responder)
-                    if self.can_steer or steer_offered(connection.initialize):
-                        activity.offer_steer(collector._run, self._steerer(client, session_id))
-                    try:
-                        result = await client.request(
-                            "session/prompt",
-                            {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]},
-                            timeout=self.timeout,
-                            cancel_session=session_id,
-                        )
-                    except asyncio.CancelledError:
-                        # An UNSETTLED cancel means the turn outlived its cancel
-                        # budget, so it is still running on the agent while this lock
-                        # is about to be released -- prompting the same session again
-                        # would collide with it. Dropping the binding is the same
-                        # recovery `_open_session` makes when a resume fails: the
-                        # instance keeps its handle and the next dispatch opens a
-                        # fresh session under it.
-                        # Evaluated in this order so take_unsettled_cancel -- a
-                        # consuming read -- always clears the flag; skipping it for a
-                        # stateless agent would leak it.
-                        if client.take_unsettled_cancel(session_id) and self.is_stateful:
-                            await self._registry.unbind(skey, self.name, handle)
-                        elif not resumed and self.is_stateful:
-                            # A cancel that SETTLED leaves a live session holding the
-                            # partial exchange, and the deferred commit below is
-                            # unreachable from here -- so an instance whose *first*
-                            # turn was interrupted was never bound, and the next
-                            # dispatch opened a fresh session. That reads as the
-                            # sub-agent having forgotten the conversation the user
-                            # just interrupted, which is the one moment they are
-                            # certain it happened.
-                            await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
-                        # The frames of a turn that was cut short are the ones worth
-                        # having, and this path returns no result to hang them off:
-                        # published here or the record of a timed-out call points at
-                        # nothing, while the journal holds the whole exchange.
-                        cancelled = self._frames(journal, connection, session_id, frames_start)
-                        activity.note_frames(cancelled)
-                        record_frames(span, cancelled)
-                        raise
-                    finally:
-                        activity.offer_steer(collector._run, None)
-                        connection.router.detach(session_id, collector)
-                        connection.elicitors.detach(session_id, elicitor)
-                        connection.responders.detach(session_id, responder)
-                        # Detaching stops only the *next* request from routing here.
-                        # One already put to the user waits on a task of the
-                        # connection's, which no part of this teardown reaches --
-                        # the pooled connection stays open, so `AcpClient.close`
-                        # never cancels it either. Left standing it holds this
-                        # conversation's form lock and keeps a sheet up that answers
-                        # into a run that is gone.
-                        elicitor.cancel()
-                        # Same reason, and the same window: a question already put to
-                        # the user answers into a run that is gone, and holds this
-                        # conversation's lock against the next one while it waits.
-                        responder.cancel()
+            if not resumed and self.is_stateful:
+                # Deferred commit, as the cli transport does it: binding a handle
+                # before the first turn succeeded would resume a session that
+                # never produced anything. A settled cancel binds it above
+                # instead -- that session did produce something, and is the one
+                # the next turn has to continue.
+                await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
-                stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
-                text = collector.text
-                frames = self._frames(journal, connection, session_id, frames_start)
-                self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)
-
-                if not text:
-                    tail = client.stderr_tail(1500)
-                    span.error(f"empty turn (stopReason={stop_reason})")
-                    # An agent that asked raven for something it does not serve --
-                    # `fs/read_text_file` and its siblings, permission requests
-                    # being answered now -- was told the method does not exist, and
-                    # adapters answer that by ending the turn with nothing. The
-                    # stderr tail says nothing about it, so name it here or it is
-                    # unknowable.
-                    refused = client.refusals_since(refused_before, session_id=session_id)
-                    # Collapsed: one turn with three tool calls refuses the same
-                    # method three times, and naming it three times says no more.
-                    asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
-                    raise AcpEmptyTurnError(
-                        f"acp agent {self.name!r} ended its turn with no content "
-                        f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
-                    )
-
-                if not resumed and self.is_stateful:
-                    # Deferred commit, as the cli transport does it: binding a handle
-                    # before the first turn succeeded would resume a session that
-                    # never produced anything. A settled cancel binds it above
-                    # instead -- that session did produce something, and is the one
-                    # the next turn has to continue.
-                    await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
-
-                reply = await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
-                if note := self._mcp_note(grant):
-                    notice = f"\n\n[raven] {note}."
-                    activity.append_closing(notice)
-                    if on_delta is not None:
-                        await on_delta(notice)
-                    reply += notice
-                return reply
+            return await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
 
     @property
     def can_steer(self) -> bool:
@@ -1148,7 +921,6 @@ class AcpAgentBackend:
         skey: str,
         handle: str,
         budget: float,
-        mcp_servers: list[dict[str, Any]],
         router: Any = None,
         mode: str | None = None,
     ) -> tuple[str, bool]:
@@ -1169,9 +941,7 @@ class AcpAgentBackend:
                     # immediately after.
                     async with _replay_dropped(router, known):
                         loaded = await client.request(
-                            "session/load",
-                            {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                            timeout=budget,
+                            "session/load", {"sessionId": known, "cwd": cwd, "mcpServers": []}, timeout=budget
                         )
                     self._relearn_modes(loaded)
                     await self._set_mode(client, known, mode, budget=budget)
@@ -1195,7 +965,7 @@ class AcpAgentBackend:
                     # pruned, so the binding is kept and the caller is told.
                     raise
 
-        result = await client.request("session/new", {"cwd": cwd, "mcpServers": mcp_servers}, timeout=budget)
+        result = await client.request("session/new", {"cwd": cwd, "mcpServers": []}, timeout=budget)
         self._relearn_modes(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:

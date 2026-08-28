@@ -61,7 +61,7 @@ the retraction is the only signal that the run behind the question has stopped
 listening."""
 
 
-# -- the extensions a raven serves over ACP -----------------------------------
+# -- the one extension a raven serves over ACP -------------------------------
 #
 # Schema 1.20.0 has no steering method: a prompt is the only way text reaches an
 # agent, and two prompts on one session are refused because ``session/update``
@@ -77,24 +77,6 @@ listening."""
 # make one side silently disagree with the other.
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
-
-# The other one, and a promise rather than a feature flag: a raven that declares
-# this says that ``mcpServers`` on ``session/new`` / ``session/load`` /
-# ``session/resume`` is really connected, and that the tools behind it are
-# visible to that session's turns alone -- neither the definitions nor the tools
-# outlive the session, and no sibling session on the same connection can reach
-# them.
-#
-# It has to be an extension because the spec has no field for either half.
-# stdio servers are the ACP baseline, so accepting them is not advertisable at
-# all, and ``mcpCapabilities`` carries nothing about isolation -- measured,
-# claude-agent-acp and opencode report the same ``{http, sse}`` object while only
-# claude isolates. So a raven that answers the field with ``-32602`` is
-# indistinguishable on the wire from one that honours it, and that gap is the
-# only thing this closes. It is not a gate on handing any agent a bridge: a
-# bridge stanza is an ordinary stdio server, and its per-session lifetime is the
-# host's socket lifetime, which needs no agreement from the far side.
-SESSION_MCP_CAPABILITY = "raven.mcp.session"
 
 
 class AcpError(Exception):

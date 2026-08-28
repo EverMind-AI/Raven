@@ -12,7 +12,6 @@ from raven.mcp.oauth import (
     FileTokenStorage,
     OAuthWaitTimeoutError,
     _Flow,
-    auth_wait_servers,
     is_auth_error,
     resolve_callback,
 )
@@ -228,48 +227,6 @@ async def test_background_flow_publishes_the_url_without_opening_a_browser(monke
     # The pending registration still happened, so a callback can still resolve it.
     matched, _ = resolve_callback({"state": "bg-1", "code": "c"})
     assert matched
-
-
-async def test_a_connect_that_cannot_wait_does_not_park_on_authorization():
-    """``can_park=False`` degrades at once instead of holding its caller.
-
-    A background flow is normally still worth waiting on -- the URL goes out on
-    ``oauth.pending``, something relays it, the click lands minutes later. This
-    is the other case: a batch pre-flight inside a short-lived command, where
-    nobody is standing by. It used to wait the full flow timeout, stalling a
-    playbook run 15 minutes per unauthorized server before degrading anyway.
-    """
-    events: list[tuple[str, dict]] = []
-    flow = _Flow("srv", lambda ev, p: events.append((ev, p)), can_park=False)
-    await flow.redirect("https://as.example/authorize?client_id=cid&state=nowait-1&code_challenge=x")
-
-    with pytest.raises(OAuthWaitTimeoutError) as excinfo:
-        await asyncio.wait_for(flow.callback(), timeout=2)
-
-    assert "cannot wait for it" in str(excinfo.value)
-    done = [p for ev, p in events if ev == "oauth.done"]
-    assert done and done[-1] == {"server": "srv", "ok": False, "error": "auth_required"}
-    # And it claims none of the waiting exemption the handshake watchdog grants.
-    assert auth_wait_servers(parkable_only=True) == set()
-
-
-async def test_a_relayed_background_flow_keeps_its_exemption():
-    """The other half of the rule: no browser opened is not no click coming.
-
-    The gateway and the agent's plugin tool both hand the URL to a person and
-    return; that flow is not interactive and must still be completable, or
-    relaying a link would stop working.
-    """
-    events: list[tuple[str, dict]] = []
-    flow = _Flow("srv-relay", lambda ev, p: events.append((ev, p)))
-    await flow.redirect("https://as.example/authorize?client_id=cid&state=relay-1&code_challenge=x")
-
-    assert "srv-relay" in auth_wait_servers(parkable_only=True)
-    waiter = asyncio.ensure_future(flow.callback())
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(asyncio.shield(waiter), timeout=0.2)
-    assert resolve_callback({"state": "relay-1", "code": "c"})[0]
-    assert await asyncio.wait_for(waiter, timeout=2) == ("c", "relay-1")
 
 
 async def test_callback_unknown_state_rejected():

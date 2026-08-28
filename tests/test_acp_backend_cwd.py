@@ -55,7 +55,7 @@ def test_session_new_carries_the_passed_workspace():
     backend = _backend(snapshot=None)  # no snapshot -> stateless -> always session/new
     client = _FakeClient()
     session_id, resumed = asyncio.run(
-        backend._open_session(client, cwd="/work/repo", skey="tui:s", handle="h", budget=5, mcp_servers=[])
+        backend._open_session(client, cwd="/work/repo", skey="tui:s", handle="h", budget=5)
     )
     assert (session_id, resumed) == ("acp:fresh", False)
     assert client.requests == [("session/new", {"cwd": "/work/repo", "mcpServers": []})]
@@ -66,7 +66,7 @@ def test_session_load_carries_the_passed_workspace_too():
     backend._registry = _FakeRegistry("acp:old")
     client = _FakeClient()
     session_id, resumed = asyncio.run(
-        backend._open_session(client, cwd="/work/repo", skey="tui:s", handle="h", budget=5, mcp_servers=[])
+        backend._open_session(client, cwd="/work/repo", skey="tui:s", handle="h", budget=5)
     )
     assert (session_id, resumed) == ("acp:old", True)
     assert client.requests == [("session/load", {"sessionId": "acp:old", "cwd": "/work/repo", "mcpServers": []})]

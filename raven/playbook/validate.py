@@ -24,66 +24,10 @@ import re
 from collections.abc import Iterable
 
 from raven.agent.subagent.dag_graph import _REQUIRED_NON_BLANK
-from raven.playbook.params import param_refs
 from raven.playbook.types import NodeSpec, PlaybookSpec
 
+_PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
 _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
-
-
-_REFERENCE_RULE = (
-    "a secret may only be referenced from an mcpServers env or headers value, "
-    "where the host substitutes it and nothing downstream sees it"
-)
-
-
-def unusable_mcp_servers(spec: PlaybookSpec, param_names: set[str] | None = None) -> dict[str, str]:
-    """The spec's own MCP server definitions that cannot be honoured, and why.
-
-    Notes, not errors, and the distinction is the whole point: ``mcpServers`` is
-    an optional section on top of a playbook that otherwise runs. A definition
-    this cannot use costs the run that server -- it must not cost the run. An
-    error here reaches :func:`raven.playbook.store.load_playbook` as a raised
-    ``ValueError``, and the runtime answers that by dropping the whole playbook
-    out of the library: a saved procedure stops existing because an optional
-    section was written wrong.
-
-    Three ways one is unusable, all silent otherwise:
-
-    * a reference to a param nobody declared substitutes to itself, so the server
-      is handed the literal ``{{ params.X }}`` text as its password;
-    * a definition with neither a command nor a url resolves to
-      ``invalid_transport`` at dispatch, a node or two after the file that caused
-      it;
-    * the section cannot be honoured in ``prompt`` mode at all. The definitions
-      reach a graph as a run-scoped hand-off the executor makes when *it*
-      dispatches; prompt mode never reaches that call -- the executor returns
-      composition guidance and the model submits its graph through the public
-      ``run_subagent_dag`` in a later turn, after the scope is gone and through a
-      signature that has no ``mcpServers`` parameter. That signature has none
-      deliberately: a definition a model can supply is a command line a model can
-      supply.
-
-    Keyed by server name so a caller can drop exactly those and keep the rest.
-    ``prompt`` mode drops every one of them, since the reason is the mode.
-    """
-    names = param_names if param_names is not None else set(spec.params or {})
-    unusable: dict[str, str] = {}
-    for name, cfg in (spec.mcp_servers or {}).items():
-        if spec.mode == "prompt":
-            unusable[name] = (
-                "a prompt-mode playbook cannot carry server definitions -- its graph is composed by the "
-                "caller in a later turn, which cannot be handed them. Use mode 'dag', where this playbook "
-                "dispatches the graph itself, or name only servers the host configures"
-            )
-            continue
-        for field_name, mapping in (("env", cfg.env), ("headers", cfg.headers)):
-            for key, value in (mapping or {}).items():
-                for ref in param_refs(value):
-                    if ref not in names:
-                        unusable[name] = f"{field_name}.{key}: params.{ref} names no declared param"
-        if name not in unusable and not cfg.command and not cfg.url:
-            unusable[name] = "needs a command (stdio) or a url (http/sse)"
-    return unusable
 
 
 def _fillable_fields() -> frozenset[str]:
@@ -124,26 +68,15 @@ def validate_structure(
     first question; the generator, which is producing a spec that has to run as
     written, wants both, so it keeps the default.
     """
-    param_names = set(spec.params)
-    # Not here: an unusable ``mcpServers`` entry is a note, not an error -- see
-    # :func:`unusable_mcp_servers` for why an optional section must not be able
-    # to take the whole playbook out of the library.
     errors: list[str] = []
+    param_names = set(spec.params)
     if spec.mode == "prompt":
-        for ref in param_refs(spec.prompts or ""):
+        for ref in _PARAM_REF_RE.findall(spec.prompts or ""):
             if ref not in param_names:
-                errors.append(f"prompts: params.{ref} names no declared param")
-        # A secret referenced here is not an error. It cannot be honoured -- see
-        # ``_REFERENCE_RULE`` -- and the reference is withheld at fill time with a
-        # log line (``params.fill_param_refs_without_secrets``). Refusing instead
-        # made the whole playbook fail to load, which drops it out of the library:
-        # an optional section, written wrong, costing a saved procedure.
+                errors.append(f"prompts: ${{params.{ref}}} names no declared param")
         return errors
     return errors + validate_graph_nodes(
-        spec.nodes or [],
-        param_names,
-        known_agents=known_agents,
-        allow_blank_fillable=allow_blank_fillable,
+        spec.nodes or [], param_names, known_agents=known_agents, allow_blank_fillable=allow_blank_fillable
     )
 
 
@@ -192,11 +125,9 @@ def validate_graph_nodes(
         for ref, _kind in _NODE_REF_RE.findall(node.prompt_template):
             if ref not in allowed:
                 errors.append(f"node {node.id!r}: {{{{ {ref}.* }}}} references a node not in its dependsOn")
-        for ref in param_refs(node.prompt_template):
+        for ref in _PARAM_REF_RE.findall(node.prompt_template):
             if ref not in param_names:
-                errors.append(f"node {node.id!r}: params.{ref} names no declared param")
-            # A secret here is withheld at fill time, not refused at the file --
-            # see the note in :func:`validate_structure`.
+                errors.append(f"node {node.id!r}: ${{params.{ref}}} names no declared param")
 
     # Rule 7: a handle on a stateless agent promises continuity the run cannot
     # deliver, and the author only finds out by reading a downstream node that
@@ -314,10 +245,7 @@ def check_assets(
     (agents are checked by :func:`validate_structure`); unknown skills/mcps
     degrade into notes so the playbook stays usable, just annotated."""
     skills = set(known_skills)
-    # A playbook that ships its own definition of a server is not naming an
-    # unknown one: the definition travels with the file, so the receiving
-    # machine's inventory is not the authority on it.
-    mcp = set(known_mcp) | set(spec.mcp_servers or {})
+    mcp = set(known_mcp)
     missing: list[str] = []
     for node in spec.nodes or []:
         for s in node.skills or []:

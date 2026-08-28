@@ -28,7 +28,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from raven.agent.subagent.dag_graph import DagNodeSpec
-from raven.config.schema import MCPServerConfig
 
 SPEC_VERSION = 1
 
@@ -87,17 +86,9 @@ class ParamSpec(CamelBase):
 
     ``description`` is required because it guides the model's extraction,
     supplies the missing-param follow-up wording and documents the stored
-    procedure.
+    procedure."""
 
-    ``type: secret`` is the one type that constrains where the *value* may go
-    rather than what it looks like: it may be referenced only from an
-    ``mcpServers`` ``env`` / ``headers`` entry, it carries no default, and it is
-    never rendered back to a caller. A playbook is a distribution unit, so a
-    credential that reached the file, a reply or a dispatched prompt would
-    travel with it.
-    """
-
-    type: Literal["string", "integer", "number", "boolean", "enum", "path", "secret"] = "string"
+    type: Literal["string", "integer", "number", "boolean", "enum", "path"] = "string"
     required: bool = False
     default: Any = None
     enum: list[str] | None = None
@@ -109,12 +100,6 @@ class ParamSpec(CamelBase):
             raise ValueError("type 'enum' requires a non-empty 'enum' list")
         if self.type != "enum" and self.enum:
             raise ValueError(f"'enum' given but type is {self.type!r}")
-        return self
-
-    @model_validator(mode="after")
-    def _secret_carries_no_value(self) -> "ParamSpec":
-        if self.type == "secret" and self.default is not None:
-            raise ValueError("type 'secret' must not carry a default: the value would live in the playbook file")
         return self
 
 
@@ -148,25 +133,6 @@ class PlaybookSpec(CamelBase):
     confirm: bool = True
     triggers: Triggers
     params: dict[str, ParamSpec] = Field(default_factory=dict)
-
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-    """MCP servers this playbook brings with it, keyed by the name a node's
-    ``mcps`` entry uses. ``dag`` mode only -- a prompt-mode graph is composed by
-    the caller in a later turn, which cannot be handed these definitions, so the
-    combination is refused in validation rather than silently dropped.
-
-    Without this, ``mcps: [deepwiki]`` in a distributed playbook works only
-    where the receiving machine happens to have a server of that name -- the
-    field is a local short name resolved against the host's own
-    ``tools.mcpServers``. A definition here travels with the file and is
-    resolved first, the host's config second.
-
-    The value shape is the host's own :class:`~raven.config.schema.MCPServerConfig`
-    rather than a second definition of the same thing, so the definition that
-    travels is the definition the host can connect. Secrets do not travel with
-    it: an ``env`` / ``headers`` value may reference a ``secret`` param
-    (``{{ params.PG_PASSWORD }}``) and the value arrives at run time."""
-
     nodes: list[NodeSpec] | None = None
     prompts: str | None = None
     """prompt mode: how to assemble the graph (layers, agents, per-node
@@ -200,14 +166,4 @@ class PlaybookSpec(CamelBase):
         data = self.model_dump(by_alias=True, exclude_none=True)
         for key in self.FRONTMATTER_FIELDS:
             data.pop(key, None)
-        # An MCP server config carries a full default set (transport, oauth,
-        # timeout), and ``exclude_none`` keeps every one of them -- so a
-        # three-line definition round-tripped as twenty. Dumped by what the
-        # author wrote instead; a dropped default reloads as the same default.
-        if self.mcp_servers:
-            data["mcpServers"] = {
-                name: cfg.model_dump(by_alias=True, exclude_defaults=True) for name, cfg in self.mcp_servers.items()
-            }
-        else:
-            data.pop("mcpServers", None)
         return data

@@ -37,16 +37,6 @@ from raven.agent.acp.protocol import (
     result_response,
 )
 
-SESSION_MCP_CAPABILITY = "raven.mcp.session"
-"""Declared under ``agentCapabilities._meta`` when a session may bring its own MCP servers.
-
-The spec has nowhere to say this: stdio servers are the ACP baseline, so
-accepting them cannot be advertised, and ``mcpCapabilities`` says nothing about
-isolation. A build that answers ``mcpServers`` with ``-32602`` is otherwise
-indistinguishable from one that honours it, so a client reading no declaration
-has to assume the refusal.
-"""
-
 PROTOCOL_VERSION = 1
 """The ACP major version this agent implements.
 
@@ -173,7 +163,6 @@ __all__ = [
     "PROTOCOL_VERSION",
     "REQUEST_CANCELLED",
     "RESOURCE_NOT_FOUND",
-    "SESSION_MCP_CAPABILITY",
     "STOP_REASONS",
     "AcpProtocolError",
     "decode",

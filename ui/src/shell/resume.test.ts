@@ -132,18 +132,13 @@ afterEach(() => {
 describe('opening a conversation after a reload', () => {
   it('opens the file windows again, in the order they were opened', async () => {
     openDeskFile('/workspace/a.ts')
-    openDeskFile('/workspace/b.ts', '/dl/b.ts')
+    openDeskFile('/workspace/b.ts')
     reload()
     expect(paneIds()).toEqual([])
 
     await resume('s1')
 
     expect(paneIds()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
-    /* The pane that came back has to be openable the same way, download path
-       included: a file the reader could save before the reload is one they can
-       still save after it. */
-    const back = deskState().panes[1]
-    expect(back!.kind === 'file' && back!.file.downloadPath).toBe('/dl/b.ts')
   })
 
   it('puts the reader back in front of the window they were looking at', async () => {

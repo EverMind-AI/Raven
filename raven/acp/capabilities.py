@@ -60,24 +60,11 @@ def agent_capabilities() -> dict[str, Any]:
             # failure -- see updates/prompt content handling.
             "embeddedContext": True,
         },
-        # A session may bring stdio servers of its own -- they are connected
-        # through a registry that session owns and are visible to its turns
-        # alone. http and sse stay false because raven has no use for them here:
-        # every server a dispatcher hands a sub-agent arrives as one stdio stanza
-        # pointing at a host endpoint, whatever the upstream transport is, and
-        # declaring a transport means honouring a definition (and its
-        # credentials) inside the sub-agent's own process.
+        # Per-session MCP servers are refused explicitly rather than declared:
+        # the agent loop connects MCP once per process, lazily, and there is no
+        # mechanism for a session to bring its own. Declaring http/sse here
+        # would invite exactly the request that has to be refused.
         "mcpCapabilities": {"http": False, "sse": False},
-        # A promise, not a feature flag, and the reason it exists is that the
-        # spec has nowhere to make it: stdio servers are the ACP baseline, so
-        # accepting them cannot be advertised, and ``mcpCapabilities`` says
-        # nothing about isolation. Declaring this says both halves are true here
-        # -- the servers a session brings really are connected, and the tools
-        # behind them are reachable from that session's turns and from no
-        # sibling session on this connection. A raven build that answers the
-        # field with ``-32602`` is otherwise indistinguishable from this one, and
-        # a client reading no declaration has to assume the refusal.
-        "_meta": {protocol.SESSION_MCP_CAPABILITY: {}},
         # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is
         # how the schema spells "supported". Each one is declared because the
         # method behind it exists and is honoured: ``_session_resume`` reopens a

@@ -3094,22 +3094,16 @@ class AgentLoop:
         if self._turns_in_flight == 0:
             self._adopt_pending_provider()
         self._turns_in_flight += 1
-        # The tools a session brought with it become visible here, because this
-        # is where the turn's task begins. The ACP handler that accepted them
-        # cannot open the scope itself -- it submits the turn onto the scheduler
-        # and the turn runs on a task that inherits nothing from it.
-        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
         try:
-            with self.tools.session_scope_for(session_key):
-                return await self._run_turn(
-                    req,
-                    emit,
-                    drain,
-                    stream=stream,
-                    inline_tool_stream=inline_tool_stream,
-                    usage_sink=usage_sink,
-                    text_sink=text_sink,
-                )
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
         finally:
             self._turns_in_flight -= 1
             if self._turns_in_flight == 0:

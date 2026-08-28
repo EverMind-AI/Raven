@@ -751,64 +751,6 @@ def test_the_node_that_opens_the_session_may_set_skills() -> None:
     assert validate_capabilities(spec, _FULL) == []
 
 
-def test_a_later_node_on_a_shared_instance_may_replace_its_mcps() -> None:
-    """A grant is resolved per dispatch, not stored in the session's prompt.
-
-    Every backend rebuilds its tool list from the grant *that* node resolved, and
-    an acp peer is handed the list as a replacement -- so unlike ``skills``, a
-    continuation node's ``mcps`` takes effect. Refusing it here would leave a
-    stateful group unable to change or clear its grant between turns, with the
-    replacement path unreachable from the graph tool.
-    """
-    for later_mcps in (["db"], ["other"], []):
-        spec = _spec(
-            {"id": "open", "subagent": "x", "prompt_template": "go", "instance": "s", "mcps": ["db"]},
-            {
-                "id": "later",
-                "subagent": "x",
-                "prompt_template": "go",
-                "instance": "s",
-                "depends_on": ["open"],
-                "mcps": later_mcps,
-            },
-        )
-        assert validate_capabilities(spec, _FULL) == [], f"refused mcps={later_mcps!r}"
-
-
-def test_mcps_alone_does_not_demand_a_dependency_chain() -> None:
-    """The chain requirement exists because only the node that *opens* a session
-    can set its skills, so which member opens it has to be decided. ``mcps`` has
-    no such first-node semantics -- each node's list applies to its own turn --
-    so an unchained group declaring only ``mcps`` is answerable as written."""
-    spec = _spec(
-        {"id": "a", "subagent": "x", "prompt_template": "go", "instance": "s", "mcps": ["db"]},
-        {"id": "b", "subagent": "x", "prompt_template": "go", "instance": "s", "mcps": []},
-    )
-    assert validate_capabilities(spec, _FULL) == []
-
-
-def test_skills_stays_restricted_when_mcps_travels_beside_it() -> None:
-    """The two fields split here, so a node carrying both is judged on ``skills``
-    alone -- neither exempted by the ``mcps`` beside it nor dragging it down."""
-    spec = _spec(
-        {"id": "open", "subagent": "x", "prompt_template": "go", "instance": "s", "skills": ["a"]},
-        {
-            "id": "later",
-            "subagent": "x",
-            "prompt_template": "go",
-            "instance": "s",
-            "depends_on": ["open"],
-            "skills": ["b"],
-            "mcps": ["db"],
-        },
-    )
-    with pytest.raises(DagValidationError) as exc:
-        validate_capabilities(spec, _FULL)
-    message = str(exc.value)
-    assert "['later']" in message
-    assert "'mcps'" not in message.split("(")[0]  # the refusal names skills, not mcps
-
-
 def test_an_undecided_order_is_refused_only_when_it_would_matter() -> None:
     """Which member opens the session is undecided without a chain.
 
@@ -852,22 +794,19 @@ def test_skills_for_an_agent_that_cannot_take_them_is_a_notice() -> None:
     assert "'a'" in notices[0]
 
 
-def test_mcp_injection_is_checked_per_agent_capability() -> None:
-    spec = _spec(
-        {"id": "supported", "subagent": "x", "prompt_template": "go", "mcps": ["github"]},
-        {"id": "unsupported", "subagent": "y", "prompt_template": "go", "mcps": ["github"]},
-    )
-    capabilities = {
-        "x": AgentCapabilities(injectable_mcps=True),
-        "y": AgentCapabilities(injectable_mcps=False),
-    }
+def test_declaring_mcps_always_downgrades_while_the_wiring_is_absent() -> None:
+    """Honest about the implementation, not about the declaration.
 
-    notices = validate_capabilities(spec, capabilities)
+    A built-in agent's row says it *could* take mcp servers, so reading the notice
+    off `injectable_mcps` would report success for something nothing implements.
+    One explicit flag drives it, and flipping that flag is what stops the notice.
+    """
+    spec = _spec({"id": "a", "subagent": "x", "prompt_template": "go", "mcps": ["github"]})
+
+    notices = validate_capabilities(spec, {"x": AgentCapabilities(injectable_mcps=True)})
 
     assert len(notices) == 1
-    assert "'unsupported'" in notices[0]
-    assert "agent 'y'" in notices[0]
-    assert "ignored" in notices[0]
+    assert "not implemented" in notices[0]
 
 
 def test_a_graph_that_asks_for_nothing_extra_gets_no_notices() -> None:
@@ -902,9 +841,12 @@ def test_a_shared_session_ordered_through_a_non_member_is_accepted() -> None:
 def test_the_model_is_not_offered_skills_or_mcps() -> None:
     """The graph tool's own parameters carry neither field.
 
-    They are playbook-only and the private playbook path passes them to the node
-    model directly. Asserted on the advertised schema rather than on the model,
-    since that is the half a re-addition would show up in.
+    They are playbook-only: the engine folds ``skills`` into the step's prompt
+    and reports ``mcps`` as unhonoured, so a model composing a graph has one
+    thing to write per step. The node model still accepts them, because a
+    playbook file is parsed into it -- what changed is what the model is told
+    exists. Asserted on the advertised schema rather than on the model, since
+    that is the half a re-addition would show up in.
     """
     assert set(_NODE_SCHEMA["properties"]) == {
         "id",

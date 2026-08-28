@@ -23,24 +23,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
 from raven.agent.subagent.backends import (
     AgentMeta,
     SubagentBackend,
-    acp_snapshot_for,
     agent_meta,
     build_third_party_backend,
     format_agent_listing,
-    session_mcp_effective,
 )
 from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
 from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
-
-if TYPE_CHECKING:
-    from raven.agent.subagent.mcp_grant import McpSource
 
 
 @dataclass(frozen=True)
@@ -112,20 +107,8 @@ BuiltinBuilder = Callable[[Any, Any], SubagentBackend]
 def _row_for(cfg: Any) -> AgentRow:
     """One config entry as a table row."""
     kind = getattr(cfg, "kind", None) or ""
+    meta = agent_meta(cfg)
     builtin = kind == "builtin"
-    snapshot = acp_snapshot_for(cfg) if kind == "acp" else None
-    meta = agent_meta(cfg, snapshot=snapshot)
-    if kind == "cli":
-        templates = [cfg.command, *([cfg.resume_command] if cfg.resume_command else [])]
-        injectable_mcps = all("{mcp_file}" in template for template in templates)
-    elif kind == "acp":
-        # The effective verdict, not the transport-level one. An acp peer that
-        # takes the field but is not isolated has its servers withheld at
-        # dispatch, and a row advertising injection is how the playbook generator
-        # comes to assign a required server to it (measured: the opencode preset).
-        injectable_mcps = session_mcp_effective(cfg, snapshot=snapshot)
-    else:
-        injectable_mcps = kind == "builtin"
     return AgentRow(
         name=meta.name,
         kind=kind,
@@ -137,7 +120,7 @@ def _row_for(cfg: Any) -> AgentRow:
             live_progress=meta.live_progress,
             modes=meta.modes,
         ),
-        injectable=Injectable(skills=builtin, mcps=injectable_mcps),
+        injectable=Injectable(skills=builtin, mcps=builtin),
         owns=meta.owns,
         config=cfg,
     )
@@ -162,7 +145,6 @@ class AgentRegistry:
         self._rows: dict[str, AgentRow] = {}
         self._order: list[str] = []
         self._backends: dict[str, SubagentBackend] = {}
-        self._mcp_source: "McpSource | None" = None
 
     def set_builtin_builder(self, build_builtin: BuiltinBuilder | None) -> None:
         """Late-bind the in-process backend factory.
@@ -174,14 +156,6 @@ class AgentRegistry:
         """
         self._build_builtin = build_builtin
         self._backends = {name: b for name, b in self._backends.items() if self._rows[name].kind != "builtin"}
-
-    def set_mcp_source(self, source: "McpSource | None") -> None:
-        """Late-bind the host MCP view into cached and future backends."""
-        self._mcp_source = source
-        for backend in self._backends.values():
-            setter = getattr(backend, "set_mcp_source", None)
-            if setter is not None:
-                setter(source)
 
     def apply(self, configs: Sequence[Any] | None) -> None:
         """(Re)build the whole table from config. The only write path.
@@ -219,11 +193,7 @@ class AgentRegistry:
                     # subprocess pool or an HTTP client that is meant to be shared
                     # across dispatches, and a build failure has to be visible here
                     # rather than at the first spawn.
-                    backend = build_third_party_backend(cfg)
-                    setter = getattr(backend, "set_mcp_source", None)
-                    if setter is not None:
-                        setter(self._mcp_source)
-                    backends[row.name] = backend
+                    backends[row.name] = build_third_party_backend(cfg)
                 rows[row.name] = row
                 order.append(row.name)
             except Exception as exc:  # noqa: BLE001 - a bad entry must not sink the table
@@ -309,9 +279,6 @@ class AgentRegistry:
         if build is None and (cached := self._backends.get(name)) is not None:
             return cached
         backend = self._build_builtin(row, narrowed)
-        setter = getattr(backend, "set_mcp_source", None)
-        if setter is not None:
-            setter(self._mcp_source)
         if build is None:
             self._backends[name] = backend
         return backend
