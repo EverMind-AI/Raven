@@ -26,7 +26,6 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.registry import (
     canonical_provider_name,
@@ -110,6 +109,42 @@ def session_affinity_headers() -> dict[str, str]:
     header, so a stable value per provider instance keeps prefix-cache hits warm.
     """
     return {"x-session-affinity": uuid.uuid4().hex}
+
+
+def _cache_tokens(usage: Any) -> tuple[int, int]:
+    """Cache read and write counts, out of whichever shape this response used.
+
+    LiteLLM normalises these across providers into more than one shape depending
+    on where the response came from:
+      - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
+      - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
+      - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
+      - OpenRouter:        usage.prompt_tokens_details.cached_tokens
+                           usage.prompt_tokens_details.cache_write_tokens
+
+    Shared by both response paths because only one of them used to do it. A
+    streamed response carries the OpenRouter shape, and the accounting above it
+    -- ``AgentLoop._build_usage_snapshot``, ``tracing.usage.normalize``, the
+    telemetry the UsageTracker writes -- reads only the Anthropic names. So a
+    streamed turn reported no cache activity at all and priced every cached
+    token as fresh: a warm turn measured at 7,383 read and 1,079 written came
+    out as 8,479 fresh, $0.008499 against an actual $0.002124. Wrong by 4x, on
+    the path the TUI, the served page and the streaming channels all take.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    read = (
+        getattr(usage, "cache_read_input_tokens", None)
+        or getattr(usage, "_cache_read_input_tokens", None)
+        or (getattr(details, "cached_tokens", None) if details else None)
+        or 0
+    )
+    write = (
+        getattr(usage, "cache_creation_input_tokens", None)
+        or getattr(usage, "_cache_creation_input_tokens", None)
+        or (getattr(details, "cache_write_tokens", None) if details else None)
+        or 0
+    )
+    return int(read), int(write)
 
 
 class LiteLLMProvider(LLMProvider):
@@ -314,16 +349,38 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies of messages and tools with cache_control injected."""
+        """Return copies of messages and tools with cache_control injected.
+
+        Two breakpoints land on the system message when it declares a stable
+        prefix (``prompt_cache.STABLE_PREFIX_KEY``), one when it does not.
+
+        The second one is the one that survives a turn. A breakpoint keys its
+        cache on every block up to and including itself, and the tail of this
+        message -- the memory recall, the skill router's hits, the Curator's
+        working state -- is rebuilt from whatever the user just said. So the
+        end-of-message breakpoint, the only one there used to be, changes key on
+        every new turn and re-bills the identity and bootstrap text in front of
+        it that never changed at all. Splitting at the boundary gives that head
+        a key of its own.
+
+        The end-of-message one is kept beside it rather than moved, because it
+        is what holds the whole message across the iterations *within* a turn:
+        the assembler builds this message once per turn and the tool loop only
+        appends after it.
+        """
         new_messages = []
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg["content"]
-                if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
+                blocks = prompt_cache.split_stable_prefix(content, int(msg.get(prompt_cache.STABLE_PREFIX_KEY) or 0))
+                if blocks is not None:
+                    blocks[0] = {**blocks[0], "cache_control": prompt_cache.cache_control()}
+                    new_content = blocks
+                elif isinstance(content, str):
+                    new_content = [{"type": "text", "text": content}]
                 else:
                     new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
+                new_content[-1] = {**new_content[-1], "cache_control": prompt_cache.cache_control()}
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
@@ -331,7 +388,7 @@ class LiteLLMProvider(LLMProvider):
         new_tools = tools
         if tools:
             new_tools = list(tools)
-            new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
+            new_tools[-1] = {**new_tools[-1], "cache_control": prompt_cache.cache_control()}
 
         return new_messages, new_tools
 
@@ -438,7 +495,11 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            if not self.disable_auto_cache_control:
+            # Asked of this request, not of the process. A strategy that placed
+            # marks upstream stamps them; every other caller in this process --
+            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # here without a strategy in front of it and still wants its own.
+            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -543,7 +604,11 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            if not self.disable_auto_cache_control:
+            # Asked of this request, not of the process. A strategy that placed
+            # marks upstream stamps them; every other caller in this process --
+            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # here without a strategy in front of it and still wants its own.
+            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -717,6 +782,11 @@ class LiteLLMProvider(LLMProvider):
                         "completion_tokens": getattr(usage, "completion_tokens", None),
                         "total_tokens": getattr(usage, "total_tokens", None),
                     }
+                cache_read, cache_write = _cache_tokens(usage)
+                if cache_read:
+                    usage_dict["cache_read_input_tokens"] = cache_read
+                if cache_write:
+                    usage_dict["cache_creation_input_tokens"] = cache_write
 
             if (
                 content is None
@@ -804,26 +874,7 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
-            # Cache token extraction. LiteLLM normalizes these across providers
-            # in different shapes depending on where the response came from:
-            #   - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
-            #   - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
-            #   - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
-            #   - OpenRouter:        usage.prompt_tokens_details.cached_tokens
-            #                        usage.prompt_tokens_details.cache_write_tokens
-            details = getattr(response.usage, "prompt_tokens_details", None)
-            cache_read = (
-                getattr(response.usage, "cache_read_input_tokens", None)
-                or getattr(response.usage, "_cache_read_input_tokens", None)
-                or (getattr(details, "cached_tokens", None) if details else None)
-                or 0
-            )
-            cache_write = (
-                getattr(response.usage, "cache_creation_input_tokens", None)
-                or getattr(response.usage, "_cache_creation_input_tokens", None)
-                or (getattr(details, "cache_write_tokens", None) if details else None)
-                or 0
-            )
+            cache_read, cache_write = _cache_tokens(response.usage)
             if cache_read:
                 usage["cache_read_input_tokens"] = int(cache_read)
             if cache_write:

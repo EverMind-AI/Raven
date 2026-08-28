@@ -744,6 +744,19 @@ class TokenWiseConfig(_Base):
     max_cache_breakpoints: int = 4
     """Anthropic API limit; kept configurable for forward-compat."""
 
+    cache_ttl: Literal["5m", "1h"] = "5m"
+    """How long a cached prefix survives without being read.
+
+    ``5m`` is the vendor's own default and asks for nothing. ``1h`` costs more
+    to write -- measured at 2.0x the uncached prompt rate against
+    `claude-haiku-4.5`, where ``5m`` costs 1.25x -- and reads back at the same
+    0.10x either way. So the hour pays for itself the first time a gap between
+    two turns lands past five minutes and inside it, and costs 0.75x extra
+    whenever it does not. Which of those describes a deployment is a fact about
+    how its users type, not something this default can know, so the cheaper
+    lifetime stays the default.
+    """
+
     skill_lazy_loading: bool = False
     """Only inject skill summaries relevant to the current message."""
 
