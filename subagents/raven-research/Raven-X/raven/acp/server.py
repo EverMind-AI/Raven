@@ -53,6 +53,7 @@ async def serve(
     loops: AcpLoops,
     channel: str = ACP_CHANNEL,
     user_pool: int = DEFAULT_USER_POOL,
+    modes: Any = None,
 ) -> None:
     """Serve ACP on one reader/writer pair until the client closes stdin.
 
@@ -60,6 +61,11 @@ async def serve(
     instead of standing up providers and a memory backend to exchange two
     frames; it also decides how many sessions this process holds engines for.
     Everything built here is torn down on the way out.
+
+    ``modes`` is the same :class:`raven.acp.modes.SessionModes` the caller built
+    ``loops`` around -- one object, because the registry rebuilds an engine
+    against the mode the methods layer recorded. Two would let a session be
+    told it had switched while its engine kept the old profile.
     """
 
     def emit(frame: dict[str, Any]) -> None:
@@ -117,6 +123,7 @@ async def serve(
         question_broker=question_broker,
         arm_ask_user=arm_ask_user,
         on_session_open=loops.get,
+        modes=modes,
     )
     logger.info("acp: engine ready on channel {}", channel)
 

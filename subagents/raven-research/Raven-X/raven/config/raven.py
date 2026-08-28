@@ -1657,6 +1657,32 @@ class DRFlowVerifyConfig(_Base):
     a dead pooled connection after the long draft stream (the call never
     errors, it just stalls); a fresh attempt completes in seconds, so the
     budget is spent as short attempts rather than one long wait."""
+    attempt_http_timeout_seconds: float | None = None
+    """Transport-level deadline for each reviewer call, forwarded to the
+    provider as a per-call HTTP timeout. Set it a few seconds inside
+    ``attempt_timeout_seconds`` so the transport fires before the wait_for
+    cancellation: a cancelled coroutine names nothing, while the transport's
+    own exception class says where the call hung (connect vs read) - the one
+    datum a stalled attempt can still yield. ``None`` (default) sends no
+    per-call deadline, byte-identical to every measured arm. A knob rather
+    than unconditional because it is not purely observational: a stall
+    surfaced early enough for the retry ladder to answer inside the same
+    slice can produce a verdict a cancelled attempt never could (0.2)."""
+    reasoning_effort: str | None = None
+    """Reasoning effort for the reviewer call.
+
+    The task is "check the draft's claims against the evidence", not "solve the
+    task again" - the same rationale as ``force_finalize.reasoning_effort`` and
+    ``sufficiency.reasoning_effort``, which both default to "low". This one
+    defaults to ``None`` because the reviewer has history at the inherited
+    effort: with the knob unset the call carries no reasoning_effort parameter
+    and ``chat_with_retry`` resolves it to the provider's generation default,
+    which is what every measured arm ran. ``None`` therefore means "inherit",
+    not "suppress" - the wiring passes the parameter only when this is set,
+    because an explicit ``None`` at the call site would suppress it instead
+    (a different request shape on every backend that distinguishes the two).
+    Product profiles set "low"; an arm that measures verify latency pins it
+    explicitly."""
     max_revisions: int = 1
     review_final_draft: bool = False
     """dr@3.0: review the draft that actually ships, even once the revision budget
@@ -1856,6 +1882,84 @@ class DRFlowFetchGateConfig(_Base):
     """Consecutive failed fetch attempts while closed that reopen search for the
     rest of the turn. A threshold that can strand a run is structurally a
     zero-score bucket only the treated arm can fall into."""
+
+
+class DRFlowSufficiencyConfig(_Base):
+    """First-round sufficiency gate: once the turn has searched and opened a page,
+    ask an independent context whether the evidence already answers the task, and
+    when it does, say so in history so the turn stops researching and writes.
+
+    Why this one is judged on retrieved evidence rather than on the question. Three
+    earlier candidates for "answer the easy ones quickly" were rejected for sharing a
+    defect: their gate was the model's prior confidence about whether it needed to look
+    something up - a query-text triage in front of the loop, a prompt clause exempting
+    "widely-known facts", and a plain-first arm holding an escalate tool. None of those
+    judgments can be checked against anything. This gate fires only after the contract's
+    grounding floor has already been paid (one search, one page opened), so its question
+    is "do these pages answer it", which the evidence in front of it either supports or
+    does not.
+
+    Fail-open direction is toward more research. Timeout, transport error, an unparsed
+    verdict, or a verdict of insufficient all leave the turn exactly as it was; only an
+    explicit sufficient verdict writes anything. A gate that fails toward stopping would
+    trade the one thing the flow exists to produce.
+
+    What catches a wrong "sufficient". The note is an instruction in history, not a
+    tool removal - the model may keep researching, and the draft it does write still
+    goes through ``verify``, whose rejection can buy a bounded retrieval round when
+    ``verify.evidence_round`` is on. So the failure path is early draft -> reviewer
+    reject -> revision, not an unreviewed shallow answer.
+
+    Off by default, and gated on the flow, so the anchor cannot reach it. On, it changes
+    which turns re-sample and therefore the generated distribution: it carries no label
+    of its own (under the launch convention labels advance when a batch finishes), so an
+    A/B arm that switches it on pins the current default version plus a ``-suff`` suffix
+    in its own config, the way ``dr@3.4-askuser`` did.
+
+    Unmeasured, and the direction of its risk is known from a smaller dose of the same
+    push: the four-line measured-guidance block's "correct runs are short" was read as
+    "commit early", and two same-config replicates differed by 5 items fixed and 9
+    broken, 5 of the 9 previously correct. This gate is a stronger version of that
+    pressure, applied once, at a point where evidence exists to justify it. It needs its
+    own arm pair before it goes on anywhere a number is published.
+    """
+
+    enabled: bool = False
+    model: str | None = None
+    """Judge model. ``None`` uses the provider's default model. A small fast model is
+    the point of the knob: this call sits inside every turn that opens a page, and on a
+    question the judge calls insufficient it is pure added latency."""
+    min_searches: int = 1
+    min_fetches: int = 1
+    """The trigger, spelled as two counts rather than "after the first round" so the
+    shape stays readable when a turn opens a page the user pasted without searching
+    first (set ``min_searches: 0`` for that surface). Fetches are counted only when the
+    result parsed as a successful open - a failed fetch gathered no evidence, and
+    counting it would fire the judge over a search listing."""
+    timeout_seconds: float = 60.0
+    attempt_timeout_seconds: float = 30.0
+    """Per-attempt slice of ``timeout_seconds``, same shape as ``verify``: a call
+    stalled on a dead pooled connection never errors and never returns, while a fresh
+    attempt completes in seconds. The judge's transport deadline is DERIVED from this
+    (5s inside the slice) rather than knobbed like ``verify.attemptHttpTimeoutSeconds``:
+    this whole gate is anchor-unreachable and unmeasured, so there is no byte-equivalence
+    to guard with a default-off switch."""
+    max_tokens: int = 2048
+    """Completion budget for a verdict that is one boolean and one short reason.
+
+    Sized against the conversation gate's history rather than against the payload: at
+    256 and again at 512 a reasoning model spent the whole budget on
+    ``reasoning_content`` and returned empty ``content``, so the verdict read as
+    unparsed. The cure is ``reasoning_effort`` below; this is headroom, not the fix."""
+    reasoning_effort: str | None = "low"
+    """The task is "does this evidence answer the question", not "answer it".
+    ``None`` leaves the provider default, for backends that reject the parameter."""
+    evidence_items: int = 4
+    evidence_item_chars: int = 2000
+    """How much of the turn's evidence the judge reads. Harness-authored bodies
+    (elision placeholders, the search-closed and fetch-gate notices) are skipped rather
+    than packed, because a judge shown a placeholder is being asked whether the harness's
+    own sentence answers the question."""
 
 
 class DRFlowFinalShapeConfig(_Base):
@@ -2542,6 +2646,14 @@ class DRFlowConfig(_Base):
     """dr@3.3. Off by default, and unlike the reactive clamp this one DOES carry a
     version bump: an arm that switches it on changes both what the model reads and
     which tools it can call, so the label has to be able to tell that arm apart."""
+    sufficiency: DRFlowSufficiencyConfig = Field(
+        default_factory=DRFlowSufficiencyConfig
+    )
+    """First-round sufficiency gate, off by default. No version bump, on the
+    reactive clamp's reasoning: structurally unreachable on every arm until its
+    own knob is switched on, and its action is an appended note the model may
+    disregard - it removes no tools, which is the line that separates it from
+    ``fetch_gate`` above."""
     final_shape: DRFlowFinalShapeConfig = Field(default_factory=DRFlowFinalShapeConfig)
     conversation: DRFlowConversationConfig = Field(default_factory=DRFlowConversationConfig)
     """dr@3.0 product surface: multi-turn. Off by default and turn-two-onwards

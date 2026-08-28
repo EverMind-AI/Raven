@@ -114,6 +114,21 @@ artifact from the **process appendix**, which is display-only and must never rea
 _Avoid_: "session memory" — the memo is per conversation and carries retrieval, not findings,
 and it is unrelated to the cross-session Memory Engine.
 
+**Sufficiency gate** (`agent/flow/sufficiency.py`, config `drFlow.sufficiency`, default off):
+The first-round release. Once a research turn has paid the grounding floor — `min_searches`
+searches and `min_fetches` successful page opens, counted from `turn_base` so an earlier
+turn's research cannot pay it — an independent-context judge reads the turn's own fenced
+evidence pack once and answers one boolean: do these pages already decide the task. A
+sufficient verdict appends `sufficiency_notice()` (`agent/harness_text.py`) to the newest
+tool result — in-history, the budget-line channel; every other outcome (insufficient,
+timeout, transport error, unparsed verdict) leaves the turn exactly as it was, so the gate
+fails open toward research. The note releases rather than restricts: the model may keep
+researching, and the draft it writes still passes the verify gate.
+_Avoid_: "triage" — triage classifies the question before any evidence exists, which is the
+rejected design this gate replaces; the sufficiency judge reads retrieved pages. Also not
+the **conversation gate** (turn two's classifier deciding whether research runs at all) and
+not **verify** (which judges a finished draft, not an open round).
+
 **Clarify turn** (`agent/flow/ask_user.py`, config `drFlow.askUser`):
 A turn that ends in an `ask_user` handoff and deliberately produces no answer: the model's
 questions become the turn's reply and the user's next message carries the answer. Nothing

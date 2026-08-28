@@ -185,6 +185,27 @@ class SpawnTool(Tool):
                 "enum": names,
                 "description": "Which agent runs this task. Required: pick one from the list.",
             }
+        # One enum over every agent's modes, because the schema has one `subagent`
+        # property and JSON Schema cannot make one property's enum depend on
+        # another's value. Which ids belong to which agent is therefore said in
+        # the description, and a mode aimed at an agent that does not have it is
+        # refused at dispatch rather than by the schema.
+        by_agent = [(a.name, a.modes) for a in agents if a.modes]
+        if by_agent:
+            props["mode"] = {
+                "type": "string",
+                "enum": sorted({m.id for _name, modes in by_agent for m in modes}),
+                "description": (
+                    "Optional: how much effort the agent spends. Omit it and the agent's own "
+                    "default is used, which is the right choice unless the request says otherwise. "
+                    + " ".join(
+                        f"{name}: "
+                        + "; ".join(f"{m.id} - {(m.description or m.name or m.id).rstrip('.')}" for m in modes)
+                        + "."
+                        for name, modes in by_agent
+                    )
+                ),
+            }
         stateful_names = sorted(a.name for a in agents if a.stateful)
         props["instance"] = {
             "type": "string",
@@ -208,6 +229,26 @@ class SpawnTool(Tool):
                 ["task_summary", "prompt_template", "subagent"] if names else ["task_summary", "prompt_template"]
             ),
         }
+
+    def _mode_refusal(self, agent: str | None, mode: str | None) -> str:
+        """Why this agent cannot be run in ``mode``, or ``""`` when it can.
+
+        The schema's enum is the union over every agent's modes (one property
+        cannot depend on another's value), so the per-agent check is here. Said
+        as a refusal the model can act on rather than passed down to fail at the
+        agent: a mode it will not accept is a fact this side already knows.
+        """
+        if not mode:
+            return ""
+        meta = next((a for a in self._agents() if a.name == agent), None)
+        if meta is None:
+            return ""
+        offered = [m.id for m in meta.modes]
+        if mode in offered:
+            return ""
+        if not offered:
+            return f"Error: `{agent}` offers no modes. Call spawn again without `mode`."
+        return f"Error: `{agent}` has no mode `{mode}`. Its modes are: {', '.join(offered)}."
 
     def _is_stateful(self, agent: str | None) -> bool:
         """Whether this target can continue a handle handed back to it.
@@ -319,6 +360,7 @@ class SpawnTool(Tool):
         subagent: str | None = None,
         instance: str | None = None,
         inputs: dict[str, Any] | None = None,
+        mode: str | None = None,
         **kwargs: Any,
     ) -> str:
         """Spawn a subagent to execute the given task.
@@ -395,9 +437,12 @@ class SpawnTool(Tool):
         minted = not instance and self._is_stateful(subagent)
         if minted:
             instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
+        if refusal := self._mode_refusal(subagent, mode):
+            return refusal
         result = await self._manager.spawn(
             task=task,
             task_summary=task_summary,
+            mode=mode,
             origin_channel=org.channel,
             origin_chat_id=org.chat_id,
             session_key=org.session_key,

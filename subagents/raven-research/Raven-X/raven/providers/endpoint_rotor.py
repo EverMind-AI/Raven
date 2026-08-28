@@ -215,6 +215,7 @@ class EndpointRotorProvider(LLMProvider):
         temperature: object,
         reasoning_effort: object,
         tool_choice: str | dict[str, Any] | None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Run the retry ladder against each healthy endpoint in turn.
 
@@ -241,6 +242,7 @@ class EndpointRotorProvider(LLMProvider):
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
+                timeout=timeout,
             )
             if response.finish_reason != "error":
                 self._mark_success(i)

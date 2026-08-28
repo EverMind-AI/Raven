@@ -15,6 +15,7 @@ import {
   leaveDirect,
   MAIN_VIEW_KEY,
   markRunning,
+  panelInTarget,
   patchDirectChat,
   recallScroll,
   rememberScroll,
@@ -22,6 +23,7 @@ import {
   rowsOf,
   sendingPausedReason,
   setDirectTranscript,
+  sysInTarget,
   visibleRows
 } from '../app/directChatStore.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
@@ -402,7 +404,7 @@ describe('/new-instance', () => {
       {
         gateway: { rpc },
         guarded:
-          <T,>(fn: (r: T) => void) =>
+          <T>(fn: (r: T) => void) =>
           (r: null | T) => {
             if (r !== null) {
               fn(r)
@@ -458,7 +460,11 @@ describe('/new-instance', () => {
   })
 
   it('refuses without a session rather than calling the gateway', () => {
-    const { rpc, said } = run('Raven-PPT', vi.fn(() => Promise.resolve({ instance: row })), null)
+    const { rpc, said } = run(
+      'Raven-PPT',
+      vi.fn(() => Promise.resolve({ instance: row })),
+      null
+    )
 
     expect(rpc).not.toHaveBeenCalled()
     expect(said.join('\n')).toContain('no active session')
@@ -480,7 +486,9 @@ describe('rowsOf', () => {
 
   it('answers for an instance that is not on screen', () => {
     expect(getDirectChat().active).toBeNull()
-    expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual(['reading this instance\u2019s conversation\u2026'])
+    expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual([
+      'reading this instance\u2019s conversation\u2026'
+    ])
 
     setDirectTranscript(directKey('A', 'one'), [])
     expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual([
@@ -515,5 +523,75 @@ describe('isTargetWorking', () => {
     expect(isTargetWorking(getDirectChat(), target)).toBe(true)
     expect(isTargetWorking(getDirectChat(), { agent: 'A', handle: 'two' })).toBe(false)
     expect(isTargetWorking(getDirectChat(), null)).toBe(false)
+  })
+})
+
+describe('routing slash output to the chat it was typed in', () => {
+  beforeEach(() => {
+    resetDirectChat()
+  })
+
+  it('sends a line to the main transcript when the command was typed there', () => {
+    const main: string[] = []
+
+    sysInTarget(t => main.push(t), null, 'session cleared')
+
+    expect(main).toEqual(['session cleared'])
+  })
+
+  it('sends a line to the instance it was typed in instead', () => {
+    // The property that had to hold for all 159 `ctx.transcript.sys` call sites
+    // at once: `/lang zh` in a direct chat used to print the command and no
+    // answer, which reads as a hang rather than as nothing having happened.
+    const main: string[] = []
+    enterDirect('Researcher', 'h1')
+
+    sysInTarget(t => main.push(t), getDirectChat().active, 'locale set to zh')
+
+    expect(main).toEqual([])
+    expect(getDirectTranscript(directKey('Researcher', 'h1')).map(m => m.text)).toContain('locale set to zh')
+  })
+
+  it('routes a panel the same way, which the shared renderer draws either side', () => {
+    const main: string[] = []
+    const sections = [{ rows: [['k', 'v']], title: 'Session' }]
+    enterDirect('Researcher', 'h1')
+
+    panelInTarget(t => main.push(t), getDirectChat().active, 'status', sections as never)
+
+    expect(main).toEqual([])
+    const rows = getDirectTranscript(directKey('Researcher', 'h1'))
+    expect(rows.at(-1)?.kind).toBe('panel')
+    expect(rows.at(-1)?.panelData?.title).toBe('status')
+  })
+
+  it('delivers to the chat that asked even when the view moved while it was in flight', () => {
+    // The reason the target is a parameter. `/mode` answers from an RPC, and
+    // its text names the instance captured at dispatch -- so routing it by
+    // whatever is on screen when the reply lands puts an answer about h1 into
+    // h2's chat, and leaves h1 showing the bare echo.
+    const main: string[] = []
+    enterDirect('Researcher', 'h1')
+    const target = getDirectChat().active
+
+    enterDirect('Researcher', 'h2')
+    sysInTarget(t => main.push(t), target, 'Researcher/h1 is now on deep')
+
+    expect(main).toEqual([])
+    expect(getDirectTranscript(directKey('Researcher', 'h1')).map(m => m.text)).toContain(
+      'Researcher/h1 is now on deep'
+    )
+    expect(getDirectTranscript(directKey('Researcher', 'h2'))).toEqual([])
+  })
+
+  it('keeps a main-view command in the main transcript after entering an instance', () => {
+    const main: string[] = []
+    const target = getDirectChat().active
+
+    enterDirect('Researcher', 'h1')
+    sysInTarget(t => main.push(t), target, 'session cleared')
+
+    expect(main).toEqual(['session cleared'])
+    expect(getDirectTranscript(directKey('Researcher', 'h1'))).toEqual([])
   })
 })

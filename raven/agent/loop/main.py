@@ -1225,6 +1225,7 @@ class AgentLoop:
                 is_paused=lambda: self.subagents.paused,
                 state_for=self.subagents.instance_state,
                 everos_for=self.subagents.everos_identity,
+                mode_for=self.subagents.resolve_mode,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
@@ -1439,6 +1440,7 @@ class AgentLoop:
             # Missing here before because a playbook step could not carry a handle
             # at all -- the executor dropped the field on the way to dispatch.
             state_for=self.subagents.instance_state,
+            mode_for=self.subagents.resolve_mode,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,

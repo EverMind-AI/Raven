@@ -48,6 +48,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from loguru import logger
 
@@ -67,13 +68,19 @@ from loguru import logger
 # rather than causing it: the research memo hands later turns more URLs to cite, so
 # what used to be a rare line became four flagged citations in an eight-turn run.
 #
-# CJK ideographs are excluded along with the punctuation: a raw ideograph inside a URL
-# would be percent-encoded in anything a reader service hands back, so a literal one is
-# the sentence continuing, never the link.
+# CJK ideographs are NOT excluded. They were until 2026-08-26, on the theory that a
+# reader service hands back percent-encoded paths so a literal ideograph must be prose.
+# The theory ignored the citing side: models decode the escapes for readability, so
+# ``https://zh.wikipedia.org/wiki/李彦宏`` is a routine citation of a page fetched as
+# ``.../wiki/%E6%9D%8E...``. Truncating at the ideograph made every such citation a
+# false "never opened" - and two different pages truncate to the SAME prefix, so the
+# accusation multiplied. The residual ambiguity runs the other way now: prose glued
+# directly onto a URL without punctuation is swallowed into it and fails the match.
+# That stays a false alarm rather than a false pass, which is the direction this
+# check must fail in (see the prefix-matching note in ``build_trail``).
 _CJK = (
     "　-〿"  # CJK punctuation: , . ; : and the bracket family
     "＀-￯"  # fullwidth forms: ( ) , : ; ! ?
-    "一-鿿"  # ideographs - a URL that reaches one has already ended
     "—…·"  # em dash, ellipsis, middle dot: outside both blocks
 )
 _URL_RE = re.compile(r"https?://[^\s<>\"'\)\]`" + _CJK + r"]+", re.I)
@@ -98,15 +105,68 @@ def _norm(url: str) -> str:
 
     Scheme, host case and one trailing slash: a page fetched as ``https://X/a/``
     and cited as ``http://x/a`` is the same page. Query strings and fragments are
-    kept, because ``?id=2`` is a different document.
+    kept, because ``?id=2`` is a different document. Percent-escapes are decoded
+    on both sides, because a page is fetched as ``.../wiki/%E6%9D%8E...`` and
+    cited in its decoded form - raw equality would accuse every such citation.
+    Decoding does fold ``a%2Fb`` with ``a/b`` (and ``%23`` with ``#``), a known
+    tension with keeping query/fragment distinctions; accepted because a false
+    fold marks a real citation opened, the harmless direction.
     """
-    u = _clean(url).strip()
+    u = unquote(_clean(url).strip())
     for prefix in ("https://", "http://"):
         if u.lower().startswith(prefix):
             u = u[len(prefix):]
             break
     host, _, rest = u.partition("/")
     return f"{host.lower().removeprefix('www.')}/{rest}".rstrip("/")
+
+
+def _match_form(url: str, known: set[str]) -> str | None:
+    """The form of ``url`` that ``known`` holds, or ``None``.
+
+    Tried as written first. On a miss, trailing ideographs come off one at a time:
+    the extractor keeps ideographs (a model cites ``.../wiki/李彦宏`` in decoded
+    form), so prose glued straight onto a URL is swallowed into the match, and the
+    only way to tell glue from path is whether a fetch record exists for the
+    shorter form. Never trims an ASCII character on that pass, so the extraction
+    every published reading was measured on cannot move.
+
+    Two more recoveries run after that, both set-aware (they rewrite the cited
+    form only when a fetch record exists for the result, so they cannot invent a
+    match):
+
+    * a ``,``/``;`` tail comes off whole - a model citing ``(url,2026-01-09)`` or
+      gluing two citations with ``;`` hands the extractor a comma-joined string,
+      and both separators are rare inside real paths but routine in citation
+      prose;
+    * a cited URL that is a strict prefix of exactly ONE opened page matches that
+      page - observed live as a long ideograph path the model truncated when
+      citing. Unique-prefix only: two opened pages sharing the prefix leave the
+      citation ambiguous, and the check must accuse rather than guess. A path
+      floor keeps bare-domain and short-segment citations out - a string prefix
+      is not a path prefix, and the fabrication this check exists to catch lives
+      in the short segments.
+    """
+    u = url
+    while True:
+        if _norm(u) in known:
+            return u
+        if u and "一" <= u[-1] <= "鿿":
+            u = u[:-1]
+            continue
+        break
+    clipped = re.split(r"[,;]", url, maxsplit=1)[0]
+    if clipped != url and _norm(clipped) in known:
+        return clipped
+    n = _norm(clipped)
+    host, _, path = n.partition("/")
+    # The path floor keeps this out of short-segment territory, where a string
+    # prefix is not a path prefix ("/a" would absolve itself against "/about").
+    if len(path) >= 8:
+        prefixed = [k for k in known if k.startswith(n) and k != n]
+        if len(prefixed) == 1:
+            return clipped
+    return None
 
 
 @dataclass
@@ -119,6 +179,11 @@ class ResearchTrail:
     zero_hit: int = 0
     pages: list[tuple[str, int, bool]] = field(default_factory=list)  # url, chars, ok
     verify_outcome: str | None = None
+    salvaged: bool = False
+    """The shipped answer is a salvage synthesis, which the reviewer never sees
+    (observer order, ``dr.py``). Rendered so an unreviewed answer does not wear
+    the same trail as a reviewed one, and counted so the salvage share of any
+    arm is measurable next to ``verify`` outcomes."""
     unsupported: list[str] = field(default_factory=list)
     cited: list[str] = field(default_factory=list)
     cited_not_opened: list[str] = field(default_factory=list)
@@ -158,6 +223,7 @@ class ResearchTrail:
             "opened_earlier": self.opened_earlier,
             "verify_outcome": self.verify_outcome,
             "verify_open_points": len(self.unsupported),
+            "salvaged": self.salvaged,
         }
 
     def render(self) -> str:
@@ -171,6 +237,16 @@ class ResearchTrail:
             if self.unsupported:
                 head += f" ({len(self.unsupported)} open point"
                 head += "s)" if len(self.unsupported) > 1 else ")"
+            if self.salvaged:
+                # The common salvage path runs THROUGH a verdict: reject ->
+                # revision -> empty visible answer -> salvage. The verdict was
+                # about a draft that never shipped, so it must not wear the
+                # trail alone.
+                head += ", shipped answer: salvaged (not reviewed)"
+        elif self.salvaged:
+            # A salvaged answer never reaches the reviewer (observer order). Saying
+            # nothing here would let it wear the same trail as a reviewed turn.
+            head += ", reviewer: skipped (salvaged answer)"
         lines = ["", "---", "", f"**Research trail** — {head}", ""]
 
         # The grounding line, stated in both directions. Until dr@3.3 only the
@@ -212,8 +288,9 @@ class ResearchTrail:
             # the turn are not the same measurement, and a reader comparing two
             # answers has no way to tell them apart from the fraction alone.
             lines.append(
-                f"> ({self.opened_earlier} of those were opened on an earlier turn "
-                "of this conversation.)"
+                f"> ({self.opened_earlier} of the cited links "
+                f"{'were' if self.opened_earlier > 1 else 'was'} opened on an "
+                "earlier turn of this conversation.)"
             )
             lines.append("")
 
@@ -330,28 +407,47 @@ def build_trail(
             claims = r.get("unsupported_claims")
             if isinstance(claims, list):
                 t.unsupported = [str(c) for c in claims]
+        elif op == "force_finalize" and r.get("event") == "salvage":
+            t.salvaged = True
 
-    cited = []
+    raw_cited = []
     for m in _URL_RE.finditer(answer or ""):
         u = _clean(m.group(0))
-        if u not in cited:
-            cited.append(u)
-    t.cited = cited
+        if u not in raw_cited:
+            raw_cited.append(u)
     # Normalise both sides, then compare exactly. A reader service can hand back a
     # canonicalised URL, so raw equality would report a correctly-read page as
     # fabricated - a false alarm on the one line here that accuses the answer.
     #
-    # Prefix matching was the first fix and it is wrong in the worse direction: it
+    # Prefix matching in the DEEPER direction was the first fix and it is wrong: it
     # absolves any deep link sitting under an opened page, so a citation to
     # ``/one/appendix-c`` invented on top of a real ``/one`` would pass silently.
     # This check exists to catch fabricated citations; a rule that fails open on
-    # the most plausible fabrication is not that check.
+    # the most plausible fabrication is not that check. ``_match_form`` carves the
+    # bounded exceptions the extractor's own behavior requires - trailing
+    # ideographs, a ``,``/``;`` citation tail, and a cited form that is a strict
+    # prefix of exactly one opened page (the model truncated a long path when
+    # citing; the SHALLOWER direction, which invents nothing deeper than what was
+    # actually read).
     norm_opened = {_norm(o) for o in opened}
+    # ``opened_earlier`` counts CITED links accepted on an earlier turn's authority,
+    # not every page an earlier turn read. The first implementation counted set
+    # growth - memo pages nobody cited inflated it, and the rendered "(N of those)"
+    # then named a number with no relation to the links listed beside it.
+    norm_earlier: set[str] = set()
     if opened_earlier:
-        before = len(norm_opened)
-        norm_opened |= {_norm(_clean(str(u))) for u in opened_earlier if u}
-        t.opened_earlier = len(norm_opened) - before
-    t.cited_not_opened = [u for u in cited if _norm(u) not in norm_opened]
+        norm_earlier = {_norm(_clean(str(u))) for u in opened_earlier if u} - norm_opened
+    for u in raw_cited:
+        this_turn = _match_form(u, norm_opened)
+        earlier = None if this_turn else _match_form(u, norm_earlier)
+        form = this_turn or earlier or u
+        if form in t.cited:
+            continue
+        t.cited.append(form)
+        if earlier:
+            t.opened_earlier += 1
+        elif this_turn is None:
+            t.cited_not_opened.append(form)
     return t
 
 

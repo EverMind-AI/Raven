@@ -412,6 +412,7 @@ class LiteLLMProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -422,6 +423,11 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            timeout: Per-call deadline overriding ``generation.timeout``. A gate
+                that slices its budget into short attempts passes one so the
+                transport raises a classifiable exception (connect vs read)
+                instead of hanging until the caller's cancellation, which names
+                nothing.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -451,7 +457,7 @@ class LiteLLMProvider(LLMProvider):
             # cannot bound a backend that trickles bytes forever (the read timer
             # resets on every chunk), so the awaited call is also wrapped in an
             # asyncio.wait_for wall-clock cap below.
-            "timeout": self.generation.timeout,
+            "timeout": timeout or self.generation.timeout,
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -491,7 +497,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         try:
-            response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
+            response = await asyncio.wait_for(acompletion(**kwargs), timeout or self.generation.timeout)
             return self._parse_response(response)
         except Exception as e:
             # Return error as content for graceful handling, but classify the
