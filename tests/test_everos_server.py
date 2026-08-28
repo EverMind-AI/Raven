@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -567,6 +568,7 @@ class TestThePrimitivesAgainstTheRealOS:
 
         assert ome_lock_held(tmp_path / "never-started") is False
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="inotify is Linux-only")
     def test_zero_watch_instances_count_against_the_cap(self) -> None:
         import ctypes
 
