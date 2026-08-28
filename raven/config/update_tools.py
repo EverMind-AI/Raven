@@ -14,7 +14,6 @@ parallel snake_case key.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -23,16 +22,9 @@ from pydantic import BaseModel, ValidationError
 
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
 from raven.config.schema import DeepResearchToolConfig, MediaToolConfig, WebSearchConfig, WebToolsConfig
+from raven.utils.atomic_io import atomic_update
 
 _SECTION = "deepResearch"  # camelCase alias of ToolsConfig.deep_research
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write: temp-file then os.replace. Preserves indent=2, UTF-8."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _current(path: Path) -> DeepResearchToolConfig:
@@ -56,15 +48,18 @@ def set_deep_research(fields: dict[str, Any], *, config_path: Path | None = None
         raise KeyError(f"Unknown deep_research field(s) {unknown}. Available: {sorted(valid)}")
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    working = _current(path).model_dump()
-    prev = {k: working.get(k) for k in fields}
-    working.update(fields)
-    validated = DeepResearchToolConfig.model_validate(working)
 
-    data.setdefault("tools", {})[_SECTION] = validated.model_dump(by_alias=True)
-    _write_atomic(path, data)
-    return prev
+    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
+        data = read_raw_or_raise(path)
+        working = _current(path).model_dump()
+        prev = {k: working.get(k) for k in fields}
+        working.update(fields)
+        validated = DeepResearchToolConfig.model_validate(working)
+
+        data.setdefault("tools", {})[_SECTION] = validated.model_dump(by_alias=True)
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    return atomic_update(path, _apply)
 
 
 def get_deep_research(*, redact: bool = True, config_path: Path | None = None) -> dict[str, Any]:
@@ -81,9 +76,13 @@ def get_deep_research(*, redact: bool = True, config_path: Path | None = None) -
 def reset_deep_research(*, config_path: Path | None = None) -> None:
     """Reset ``tools.deepResearch`` to schema defaults (clears the key)."""
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    data.setdefault("tools", {})[_SECTION] = DeepResearchToolConfig().model_dump(by_alias=True)
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        data.setdefault("tools", {})[_SECTION] = DeepResearchToolConfig().model_dump(by_alias=True)
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
     logger.info("update_tools: deep_research reset to defaults")
 
 
@@ -143,23 +142,26 @@ def _patch_subtree(
         raise KeyError(f"Unknown {label} field(s) {unknown}. Available: {sorted(valid)}")
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    working = _current_subtree(data, keys, cls).model_dump()
-    prev = {k: working.get(k) for k in fields}
-    working.update(fields)
-    validated = cls.model_validate(working)
 
-    node = data.setdefault("tools", {})
-    if not isinstance(node, dict):  # a non-mapping "tools" cannot be patched into
-        node = data["tools"] = {}
-    for key in keys[:-1]:
-        child = node.get(key)
-        if not isinstance(child, dict):
-            child = node[key] = {}
-        node = child
-    node[keys[-1]] = validated.model_dump(by_alias=True)
-    _write_atomic(path, data)
-    return prev
+    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
+        data = read_raw_or_raise(path)
+        working = _current_subtree(data, keys, cls).model_dump()
+        prev = {k: working.get(k) for k in fields}
+        working.update(fields)
+        validated = cls.model_validate(working)
+
+        node = data.setdefault("tools", {})
+        if not isinstance(node, dict):  # a non-mapping "tools" cannot be patched into
+            node = data["tools"] = {}
+        for key in keys[:-1]:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = node[key] = {}
+            node = child
+        node[keys[-1]] = validated.model_dump(by_alias=True)
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    return atomic_update(path, _apply)
 
 
 def set_web_search(fields: dict[str, Any], *, config_path: Path | None = None) -> dict[str, Any]:
@@ -206,17 +208,20 @@ def set_jina_api_key(key: str, *, config_path: Path | None = None) -> str:
     """
     validated = WebToolsConfig(jina_api_key=key).jina_api_key
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    tools = data.setdefault("tools", {})
-    if not isinstance(tools, dict):
-        tools = data["tools"] = {}
-    web = tools.get("web")
-    if not isinstance(web, dict):
-        web = tools["web"] = {}
-    prev = web.get(_JINA_KEY)
-    web[_JINA_KEY] = validated
-    _write_atomic(path, data)
-    return prev if isinstance(prev, str) else ""
+
+    def _apply(_text: str | None) -> tuple[str, str]:
+        data = read_raw_or_raise(path)
+        tools = data.setdefault("tools", {})
+        if not isinstance(tools, dict):
+            tools = data["tools"] = {}
+        web = tools.get("web")
+        if not isinstance(web, dict):
+            web = tools["web"] = {}
+        prev = web.get(_JINA_KEY)
+        web[_JINA_KEY] = validated
+        return json.dumps(data, indent=2, ensure_ascii=False), prev if isinstance(prev, str) else ""
+
+    return atomic_update(path, _apply)
 
 
 def get_jina_api_key(*, redact: bool = True, config_path: Path | None = None) -> str:

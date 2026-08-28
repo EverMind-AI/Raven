@@ -17,6 +17,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.utils.atomic_io import atomic_replace
+
 
 @dataclass(frozen=True)
 class DeliverableRecord:
@@ -72,10 +74,7 @@ class DeliverableStore:
         payload = {
             token: {k: v for k, v in asdict(rec).items() if k != "token"} for token, rec in self._by_token.items()
         }
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self._path)
+        atomic_replace(self._path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def prune_missing(self) -> int:
         """Drop entries whose file is gone. Returns how many were dropped."""

@@ -22,7 +22,7 @@ reachable from the page instead of being a switch nothing acts on. Where a
 gateway already holds the instance lock (channels there, page separate --
 ``gateway.page.enabled = false``), the child is `serve` instead, since a second
 gateway cannot start at all; the page then reaches those adapters over
-``channels.live_probe``. A page whose engine is gone is worse than one that never opened -- the tab
+``gateway.live_probe``. A page whose engine is gone is worse than one that never opened -- the tab
 is still there, still looks live, and every send fails. `raven web --stop` is how
 you end it, and `--foreground` is the old behaviour for someone debugging.
 
@@ -147,28 +147,23 @@ def _write_serve_state(port: int, token: str, cookie: str = "") -> Optional[Path
     instance. ``cookie`` is what keeps an open tab signed in across a restart;
     see :func:`adopt_stored_cookie`.
 
-    The mode is applied by ``os.open``, not by a chmod afterwards: writing the
-    token first and narrowing the mode second leaves it world-readable for the
-    span in between, which is exactly long enough for anything watching the
-    directory.
+    The mode is applied at the temp file's creation, not by a chmod afterwards:
+    writing the token first and narrowing the mode second leaves it
+    world-readable for the span in between, which is exactly long enough for
+    anything watching the directory. ``atomic_replace(mode=0o600)`` holds that
+    guarantee and additionally makes the swap tear-proof.
     """
     import json
     import os
 
+    from raven.utils.atomic_io import atomic_replace
+
     try:
         path = _state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {"port": port, "token": token, "pid": os.getpid()}
         if cookie:
             state["cookie"] = cookie
-        payload = json.dumps(state)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, payload.encode("utf-8"))
-        finally:
-            os.close(fd)
-        # An existing file keeps its old mode through O_CREAT; narrow it too.
-        os.chmod(path, 0o600)
+        atomic_replace(path, json.dumps(state), mode=0o600)
         return path
     except OSError:
         return None
@@ -644,10 +639,10 @@ def _write_web_state(port: int) -> None:
     import json
     import os
 
+    from raven.utils.atomic_io import atomic_replace
+
     try:
-        path = _web_state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pid": os.getpid(), "port": port}), encoding="utf-8")
+        atomic_replace(_web_state_path(), json.dumps({"pid": os.getpid(), "port": port}))
     except OSError as exc:
         typer.echo(f"warning: could not record the supervisor at {_web_state_path()}: {exc}")
 
@@ -722,7 +717,7 @@ def _gateway_argv(port: int) -> list[str]:
     run: a second gateway exits on the lock, and a supervisor would spend its
     crash budget discovering that. ``gateway.page.enabled = false`` is a
     supported way to run -- channels in the gateway, page separate -- and in it
-    the page reaches the adapters over ``channels.live_probe``, which finds the
+    the page reaches the adapters over ``gateway.live_probe``, which finds the
     incumbent through the same lock. So this is not a downgrade: it is the shape
     that configuration asked for.
 

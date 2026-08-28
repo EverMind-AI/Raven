@@ -38,6 +38,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
+from raven.utils.atomic_io import atomic_replace
 from raven.utils.helpers import safe_path_segment
 
 _HISTORY_DIRNAME = "subagents"
@@ -281,4 +282,6 @@ class SpawnRecord:
             return {}
 
     def _write_meta(self, meta: dict[str, Any]) -> None:
-        (self.dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Rewritten by `open` and again by `finish` while the panel polls it on
+        # every redraw; the locked replace keeps a poller from reading a torn file.
+        atomic_replace(self.dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=2))

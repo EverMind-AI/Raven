@@ -30,6 +30,7 @@ from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
 from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id
+from raven.utils.atomic_io import atomic_replace
 from raven.utils.helpers import safe_path_segment
 
 _DIRECT_DIRNAME = "direct"
@@ -205,7 +206,9 @@ class DirectChatRecord:
             return {}
 
     def _write_meta(self, meta: dict[str, Any]) -> None:
-        (self.dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Same reason SpawnRecord._write_meta locks: the panel polls this file
+        # while `open` and `finish` each rewrite it.
+        atomic_replace(self.dir / "meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
 
 # "activity" rather than "chats": the block also reports an instance the user

@@ -632,29 +632,21 @@ def test_migration_preserves_the_config_file_mode(tmp_path: Path) -> None:
     assert p.stat().st_mode & 0o777 == 0o600
 
 
-def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
-    """Two processes migrating at once must not share one temp path: the
-    second's truncating write would be visible as an empty config.json to
-    anyone loading between it and the replace."""
-    from raven.config import loader
-
+def test_migration_rewrite_is_locked_and_leaves_no_residue(tmp_path: Path) -> None:
+    """The persist pass rides the locked atomic door (``raven.utils.atomic_io``):
+    concurrent migrators serialize on the config's sidecar lock, so the
+    process-scoped ``config.json.migrating.<pid>`` temp name the old hand-rolled
+    replace needed is gone. Only the config, its stamp and the lock anchors may
+    be left behind."""
     p = tmp_path / "config.json"
     _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
-    seen: list[str] = []
-    original = Path.write_text
 
-    def _spy(self: Path, *args: object, **kwargs: object) -> int:
-        seen.append(self.name)
+    load_config(p)
 
-        return original(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    loader.Path.write_text = _spy  # type: ignore[method-assign]
-    try:
-        load_config(p)
-    finally:
-        loader.Path.write_text = original  # type: ignore[method-assign]
-
-    assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert "contextWindowTokens" not in data.get("agents", {}).get("defaults", {})
+    leftovers = sorted(f.name for f in tmp_path.iterdir())
+    assert leftovers == [".lock", "config.json", "config.migrations.json"]
 
 
 def test_save_config_writes_only_what_differs_from_the_defaults(tmp_path: Path) -> None:

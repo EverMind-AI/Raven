@@ -12,7 +12,6 @@ with, so a removal is expressible.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from pydantic import ValidationError
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import MCPServerConfig
+from raven.utils.atomic_io import atomic_update
 
 _FIELDS = ("type", "command", "args", "env", "url", "headers", "toolTimeout", "enabled", "auth")
 # Both spellings of every field. ``MCPServerConfig`` accepts snake_case and
@@ -47,13 +47,6 @@ _CANONICAL_KEY = {
 #: without being listed here fails rather than quietly starting to leak.
 MCP_RUNTIME_KEYS = frozenset({"connected", "state", "tools"})
 _NEVER_PERSISTED = MCP_RUNTIME_KEYS | {"name", "error"}
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _raw_config(path: Path) -> dict[str, Any]:
@@ -109,55 +102,61 @@ def set_mcp_servers(servers: list[dict], *, config_path: Path | None = None) -> 
     carry-through: it is live state, not configuration.
     """
     path = config_path or get_config_path()
-    data = _raw_config(path)
-    if not isinstance(servers or [], list):
-        raise ValueError("servers must be a list")
-    existing = _raw_block(data)
 
-    block: dict[str, Any] = {}
-    for item in servers or []:
-        if not isinstance(item, dict):
-            raise ValueError(f"each MCP server must be an object, got {type(item).__name__}")
-        name = str(item.get("name") or "").strip()
-        if not name:
-            raise ValueError("every MCP server needs a name")
-        if name in block:
-            raise ValueError(f"duplicate MCP server name: {name!r}")
-        # A stored value the caller did not mention AT ALL is carried through,
-        # whether or not the schema knows the key. Restricting this to unknown
-        # keys left a gap that a no-op save fell into: the panel round-trips the
-        # response it was given, that response never carried ``auth`` or
-        # ``enabled``, and neither did the carry-through -- so saving anything
-        # dropped ``auth: oauth`` (orphaning a plugin's stored tokens, with no
-        # way to re-authorize) and dropped ``enabled: false`` (silently turning
-        # a shelved server back on).
-        stored = existing.get(name) or {}
-        mentioned = {_CANONICAL_KEY.get(k, k) for k in item}
-        carried = {
-            k: v for k, v in stored.items() if _CANONICAL_KEY.get(k, k) not in mentioned and k not in _NEVER_PERSISTED
-        }
-        sent = {k: v for k, v in item.items() if k in _KNOWN_KEYS and k not in _NEVER_PERSISTED and v is not None}
-        raw = {**{k: v for k, v in carried.items() if k in _KNOWN_KEYS}, **sent}
-        cfg = MCPServerConfig.model_validate(raw)  # raises on a bad type / field
-        if not cfg.command and not cfg.url:
-            raise ValueError(f"MCP server {name!r} needs a command (stdio) or a url (http/sse)")
-        # Scrubbed on the way out of the file too, not just on the way in: a
-        # config an earlier build already polluted heals on its next save
-        # instead of carrying the stale state forward forever.
-        unknown = {k: v for k, v in carried.items() if k not in _KNOWN_KEYS}
-        unknown.update({k: v for k, v in item.items() if k not in _KNOWN_KEYS and k not in _NEVER_PERSISTED})
-        block[name] = {**unknown, **cfg.model_dump(by_alias=True, exclude_defaults=True)}
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = _raw_config(path)
+        if not isinstance(servers or [], list):
+            raise ValueError("servers must be a list")
+        existing = _raw_block(data)
 
-    tools = dict(data.get("tools") or {})
-    # Write under whichever spelling the file already uses, so a config written
-    # in snake_case does not silently gain a second, shadowing camelCase block.
-    key = "mcp_servers" if "mcp_servers" in tools and "mcpServers" not in tools else "mcpServers"
-    tools[key] = block
-    # Drop the other spelling: leaving it behind means the servers just deleted
-    # here come back the moment someone removes the block that shadows them.
-    tools.pop("mcp_servers" if key == "mcpServers" else "mcpServers", None)
-    data["tools"] = tools
-    _write_atomic(path, data)
+        block: dict[str, Any] = {}
+        for item in servers or []:
+            if not isinstance(item, dict):
+                raise ValueError(f"each MCP server must be an object, got {type(item).__name__}")
+            name = str(item.get("name") or "").strip()
+            if not name:
+                raise ValueError("every MCP server needs a name")
+            if name in block:
+                raise ValueError(f"duplicate MCP server name: {name!r}")
+            # A stored value the caller did not mention AT ALL is carried through,
+            # whether or not the schema knows the key. Restricting this to unknown
+            # keys left a gap that a no-op save fell into: the panel round-trips the
+            # response it was given, that response never carried ``auth`` or
+            # ``enabled``, and neither did the carry-through -- so saving anything
+            # dropped ``auth: oauth`` (orphaning a plugin's stored tokens, with no
+            # way to re-authorize) and dropped ``enabled: false`` (silently turning
+            # a shelved server back on).
+            stored = existing.get(name) or {}
+            mentioned = {_CANONICAL_KEY.get(k, k) for k in item}
+            carried = {
+                k: v
+                for k, v in stored.items()
+                if _CANONICAL_KEY.get(k, k) not in mentioned and k not in _NEVER_PERSISTED
+            }
+            sent = {k: v for k, v in item.items() if k in _KNOWN_KEYS and k not in _NEVER_PERSISTED and v is not None}
+            raw = {**{k: v for k, v in carried.items() if k in _KNOWN_KEYS}, **sent}
+            cfg = MCPServerConfig.model_validate(raw)  # raises on a bad type / field
+            if not cfg.command and not cfg.url:
+                raise ValueError(f"MCP server {name!r} needs a command (stdio) or a url (http/sse)")
+            # Scrubbed on the way out of the file too, not just on the way in: a
+            # config an earlier build already polluted heals on its next save
+            # instead of carrying the stale state forward forever.
+            unknown = {k: v for k, v in carried.items() if k not in _KNOWN_KEYS}
+            unknown.update({k: v for k, v in item.items() if k not in _KNOWN_KEYS and k not in _NEVER_PERSISTED})
+            block[name] = {**unknown, **cfg.model_dump(by_alias=True, exclude_defaults=True)}
+
+        tools = dict(data.get("tools") or {})
+        # Write under whichever spelling the file already uses, so a config written
+        # in snake_case does not silently gain a second, shadowing camelCase block.
+        key = "mcp_servers" if "mcp_servers" in tools and "mcpServers" not in tools else "mcpServers"
+        tools[key] = block
+        # Drop the other spelling: leaving it behind means the servers just deleted
+        # here come back the moment someone removes the block that shadows them.
+        tools.pop("mcp_servers" if key == "mcpServers" else "mcpServers", None)
+        data["tools"] = tools
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
 
 
 __all__ = ["MCP_RUNTIME_KEYS", "get_mcp_servers", "set_mcp_servers"]

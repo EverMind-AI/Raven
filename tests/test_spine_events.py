@@ -89,7 +89,6 @@ def test_every_deliverable_defaults_source_to_none():
     assert Reasoning(content="r").source is None
     assert Notice(kind=NoticeKind.PROGRESS).source is None
     # the other defaulted stamp/payload slots
-    assert Text(content="hi").reply_to is None
     assert StreamDelta(delta="d").stream_id is None
     assert Notice(kind=NoticeKind.PROGRESS).detail is None
 

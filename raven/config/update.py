@@ -2,16 +2,15 @@
 
 Unlike ``save_config`` which re-serializes the entire Pydantic model (and
 would bake every runtime default back into the file), these helpers read
-the raw JSON, patch a small set of fields, and atomically rewrite via
-temp-file + rename. Used by ``raven cron config set`` and the
-onboarding wizard so the change persists across restarts without
-touching unrelated fields.
+the raw JSON, patch a small set of fields, and rewrite through the locked
+read-modify-write transaction in ``raven.utils.atomic_io``. Used by
+``raven cron config set`` and the onboarding wizard so the change persists
+across restarts without touching unrelated fields.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
+from raven.utils.atomic_io import atomic_update
 
 # Shared Skill Hub endpoint seeded into a fresh config's skillForge.router.hub.
 # Kept here (not as the HubSourceConfig schema default) so non-onboard /
@@ -32,13 +32,6 @@ _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 # plugins.config["everos-memory"]. Kept in sync with
 # raven.plugins.memory.everos._server.DEFAULT_EVEROS_BASE_URL.
 _DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def update_cron_config(
@@ -57,12 +50,16 @@ def update_cron_config(
     if key not in CronConfig.model_fields:
         raise KeyError(f"Unknown cron config key: {key!r}. Supported: {sorted(CronConfig.model_fields)}")
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cron_section = data.setdefault("cron", {})
-    camel_key = to_camel(key)
-    prev = cron_section.get(camel_key)
-    cron_section[camel_key] = value
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        cron_section = data.setdefault("cron", {})
+        camel_key = to_camel(key)
+        prev = cron_section.get(camel_key)
+        cron_section[camel_key] = value
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     logger.info("config/update: cron.{} set to {!r} (was {!r})", key, value, prev)
     return prev
 
@@ -75,9 +72,13 @@ def reset_cron_config(*, config_path: Path | None = None) -> None:
     disk" principle.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    removed = data.pop("cron", None)
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        removed = data.pop("cron", None)
+        return json.dumps(data, indent=2, ensure_ascii=False), removed
+
+    removed = atomic_update(path, _apply)
     logger.info("config/update: cron section reset (was {!r})", removed)
 
 
@@ -95,16 +96,21 @@ def set_sentinel_enabled(
     on a running process.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    section = data.setdefault("sentinel", {})
-    prev = section.get("enabled")
-    # No-op when already in the desired state (absent defaults to False) —
-    # don't rewrite the file just to set the same value.
-    if bool(prev) == enabled:
-        return prev
-    section["enabled"] = enabled
-    _write_atomic(path, data)
-    logger.info("config/update: sentinel.enabled set to {!r} (was {!r})", enabled, prev)
+
+    def _apply(_text: str | None) -> tuple[str | None, tuple[Any, bool]]:
+        data = read_raw_or_raise(path)
+        section = data.setdefault("sentinel", {})
+        prev = section.get("enabled")
+        # No-op when already in the desired state (absent defaults to False) —
+        # don't rewrite the file just to set the same value.
+        if bool(prev) == enabled:
+            return None, (prev, False)
+        section["enabled"] = enabled
+        return json.dumps(data, indent=2, ensure_ascii=False), (prev, True)
+
+    prev, wrote = atomic_update(path, _apply)
+    if wrote:
+        logger.info("config/update: sentinel.enabled set to {!r} (was {!r})", enabled, prev)
     return prev
 
 
@@ -128,36 +134,42 @@ def set_sentinel_nudge_quota(
             raise ValueError(f"{label} must be >= 1 (got {val})")
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    sentinel = data.setdefault("sentinel", {})
-    np_key = "nudge_policy" if "nudge_policy" in sentinel else "nudgePolicy"
-    np = sentinel.setdefault(np_key, {})
-    snake_block = np_key == "nudge_policy"
 
-    def _patch(camel: str, snake: str, value: int, changed: dict) -> None:
-        # Reuse an existing key as-is; for a new field follow the block's
-        # casing convention so we never mix snake + camel within one block.
-        if snake in np:
-            key = snake
-        elif camel in np:
-            key = camel
-        else:
-            key = snake if snake_block else camel
-        prev = np.get(key)
-        if prev == value:
-            return  # already at the target — leave it out of `changed`
-        np[key] = value
-        changed[snake] = (prev, value)
+    def _apply(_text: str | None) -> tuple[str | None, dict[str, tuple[Any, int]]]:
+        data = read_raw_or_raise(path)
+        sentinel = data.setdefault("sentinel", {})
+        np_key = "nudge_policy" if "nudge_policy" in sentinel else "nudgePolicy"
+        np = sentinel.setdefault(np_key, {})
+        snake_block = np_key == "nudge_policy"
 
-    changed: dict[str, tuple[Any, int]] = {}
-    if per_hour is not None:
-        _patch("maxNudgesPerHour", "max_nudges_per_hour", per_hour, changed)
-    if per_day is not None:
-        _patch("maxNudgesPerDay", "max_nudges_per_day", per_day, changed)
+        def _patch(camel: str, snake: str, value: int, changed: dict) -> None:
+            # Reuse an existing key as-is; for a new field follow the block's
+            # casing convention so we never mix snake + camel within one block.
+            if snake in np:
+                key = snake
+            elif camel in np:
+                key = camel
+            else:
+                key = snake if snake_block else camel
+            prev = np.get(key)
+            if prev == value:
+                return  # already at the target — leave it out of `changed`
+            np[key] = value
+            changed[snake] = (prev, value)
 
-    # Only touch the file when something actually changed.
+        changed: dict[str, tuple[Any, int]] = {}
+        if per_hour is not None:
+            _patch("maxNudgesPerHour", "max_nudges_per_hour", per_hour, changed)
+        if per_day is not None:
+            _patch("maxNudgesPerDay", "max_nudges_per_day", per_day, changed)
+
+        # Only touch the file when something actually changed.
+        if not changed:
+            return None, changed
+        return json.dumps(data, indent=2, ensure_ascii=False), changed
+
+    changed = atomic_update(path, _apply)
     if changed:
-        _write_atomic(path, data)
         logger.info("config/update: sentinel nudge quota patched {!r}", changed)
     return changed
 
@@ -177,23 +189,31 @@ def set_skill_blocked(
     start, not on a running process.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    section = data.setdefault("skillForge", {})
-    current = [str(x) for x in (section.get("blocklist") or [])]
-    lowered = {x.casefold() for x in current}
-    if blocked:
-        if name.casefold() in lowered:
-            return current
-        current.append(name)
-    else:
-        if name.casefold() not in lowered:
-            return current
-        current = [x for x in current if x.casefold() != name.casefold()]
-    section["blocklist"] = current
-    _write_atomic(path, data)
-    logger.info(
-        "config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name
-    )
+
+    def _apply(_text: str | None) -> tuple[str | None, tuple[list[str], bool]]:
+        data = read_raw_or_raise(path)
+        section = data.setdefault("skillForge", {})
+        current = [str(x) for x in (section.get("blocklist") or [])]
+        lowered = {x.casefold() for x in current}
+        if blocked:
+            if name.casefold() in lowered:
+                return None, (current, False)
+            current.append(name)
+        else:
+            if name.casefold() not in lowered:
+                return None, (current, False)
+            current = [x for x in current if x.casefold() != name.casefold()]
+        section["blocklist"] = current
+        return json.dumps(data, indent=2, ensure_ascii=False), (current, True)
+
+    current, wrote = atomic_update(path, _apply)
+    if wrote:
+        logger.info(
+            "config/update: skillForge.blocklist now {!r} ({} {!r})",
+            current,
+            "blocked" if blocked else "unblocked",
+            name,
+        )
     return current
 
 
@@ -209,10 +229,14 @@ def set_language(
     chosen language.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    prev = data.get("language")
-    data["language"] = language
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        prev = data.get("language")
+        data["language"] = language
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     logger.info("config/update: language set to {!r} (was {!r})", language, prev)
     return prev
 
@@ -237,13 +261,17 @@ def set_default_model(
     not know which provider serves the model pass None and leave it alone.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    defaults = data.setdefault("agents", {}).setdefault("defaults", {})
-    prev = defaults.get("model")
-    defaults["model"] = model
-    if provider is not None:
-        defaults["provider"] = provider
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        defaults = data.setdefault("agents", {}).setdefault("defaults", {})
+        prev = defaults.get("model")
+        defaults["model"] = model
+        if provider is not None:
+            defaults["provider"] = provider
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     logger.info("config/update: default model set to {} (was {}), provider={}", model, prev, provider)
     return prev
 
@@ -260,14 +288,18 @@ def set_sandbox_backend(
     the loader validates on next read.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    # sandbox lives under tools (Config.tools.sandbox), not at the root — the
-    # root Config forbids extras, so a top-level "sandbox" key fails schema
-    # validation on the next load.
-    section = data.setdefault("tools", {}).setdefault("sandbox", {})
-    prev = section.get("backend")
-    section["backend"] = backend
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        # sandbox lives under tools (Config.tools.sandbox), not at the root — the
+        # root Config forbids extras, so a top-level "sandbox" key fails schema
+        # validation on the next load.
+        section = data.setdefault("tools", {}).setdefault("sandbox", {})
+        prev = section.get("backend")
+        section["backend"] = backend
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     logger.info("config/update: tools.sandbox.backend set to {!r} (was {!r})", backend, prev)
     return prev
 
@@ -316,44 +348,48 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     )
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
 
-    mem = MemoryConfig()
-    memory = data.setdefault("memory", {})
-    memory.setdefault("backend", mem.backend)
-    memory.setdefault("userId", mem.user_id)
-    memory.setdefault("agentId", mem.agent_id)
-    memory.setdefault("memoryTopK", mem.memory_top_k)
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
 
-    plugins = data.setdefault("plugins", {})
-    plugins.setdefault("disabled", list(PluginsConfig().disabled))
-    # snake_case keys: plugins.config is handed to the plugin factory verbatim.
-    # Identity is not seeded here — it comes from ServiceLocator, sourced from
-    # memory.userId / memory.agentId at plugin activation, not duplicated.
-    plugins.setdefault("config", {}).setdefault(
-        "everos-memory",
-        {"base_url": _DEFAULT_EVEROS_BASE_URL},
-    )
+        mem = MemoryConfig()
+        memory = data.setdefault("memory", {})
+        memory.setdefault("backend", mem.backend)
+        memory.setdefault("userId", mem.user_id)
+        memory.setdefault("agentId", mem.agent_id)
+        memory.setdefault("memoryTopK", mem.memory_top_k)
 
-    router_defaults = SkillForgeRouterConfig()
-    skill_forge = data.setdefault("skillForge", {})
-    skill_forge.setdefault("enabled", True)
-    # Onboard turns per-turn extraction ON (schema default is off for
-    # non-onboard programmatic use).
-    skill_forge.setdefault("everos", {}).setdefault("enabled", True)
-    router = skill_forge.setdefault("router", {})
-    router.setdefault("enabled", router_defaults.enabled)
-    router.setdefault("weights", dict(router_defaults.weights))
-    hub = router.setdefault("hub", {})
-    # Default the Hub source ON, pointed at the shared Skill Hub. apiKey stays
-    # null — the user fills in their own Bearer token; a baked placeholder would
-    # be sent verbatim as auth. timeoutS / minSafety surface the tunable knobs.
-    hub.setdefault("endpoint", _DEFAULT_SKILL_HUB_ENDPOINT)
-    hub.setdefault("apiKey", router_defaults.hub.api_key)
-    hub.setdefault("timeoutS", router_defaults.hub.timeout_s)
-    hub.setdefault("minSafety", router_defaults.hub.min_safety)
+        plugins = data.setdefault("plugins", {})
+        plugins.setdefault("disabled", list(PluginsConfig().disabled))
+        # snake_case keys: plugins.config is handed to the plugin factory verbatim.
+        # Identity is not seeded here — it comes from ServiceLocator, sourced from
+        # memory.userId / memory.agentId at plugin activation, not duplicated.
+        plugins.setdefault("config", {}).setdefault(
+            "everos-memory",
+            {"base_url": _DEFAULT_EVEROS_BASE_URL},
+        )
 
-    _write_atomic(path, data)
+        router_defaults = SkillForgeRouterConfig()
+        skill_forge = data.setdefault("skillForge", {})
+        skill_forge.setdefault("enabled", True)
+        # Onboard turns per-turn extraction ON (schema default is off for
+        # non-onboard programmatic use).
+        skill_forge.setdefault("everos", {}).setdefault("enabled", True)
+        router = skill_forge.setdefault("router", {})
+        router.setdefault("enabled", router_defaults.enabled)
+        router.setdefault("weights", dict(router_defaults.weights))
+        hub = router.setdefault("hub", {})
+        # Default the Hub source ON, pointed at the shared Skill Hub. apiKey stays
+        # null — the user fills in their own Bearer token; a baked placeholder would
+        # be sent verbatim as auth. timeoutS / minSafety surface the tunable knobs.
+        hub.setdefault("endpoint", _DEFAULT_SKILL_HUB_ENDPOINT)
+        hub.setdefault("apiKey", router_defaults.hub.api_key)
+        hub.setdefault("timeoutS", router_defaults.hub.timeout_s)
+        hub.setdefault("minSafety", router_defaults.hub.min_safety)
+
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
     logger.info("config/update: seeded memory/plugins/skillForge extension defaults")
 
 
@@ -378,12 +414,16 @@ def set_plugin_config_fields(
     to leave alone.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
-    slice_.update(fields)
-    for key in remove or ():
-        slice_.pop(key, None)
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
+        slice_.update(fields)
+        for key in remove or ():
+            slice_.pop(key, None)
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
     logger.info(
         "config/update: plugins.config.{} updated ({}{})",
         plugin_id,
@@ -408,15 +448,20 @@ def set_playbook_disabled(
     applies to the next one rather than to the next process.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    section = data.setdefault("playbooks", {})
-    deny = list(section.get("disabled") or [])
-    if disabled == (name in deny):
-        return False
-    section["disabled"] = sorted(set(deny) | {name}) if disabled else [n for n in deny if n != name]
-    _write_atomic(path, data)
-    logger.info("config/update: playbooks.disabled {} {!r}", "added" if disabled else "removed", name)
-    return True
+
+    def _apply(_text: str | None) -> tuple[str | None, bool]:
+        data = read_raw_or_raise(path)
+        section = data.setdefault("playbooks", {})
+        deny = list(section.get("disabled") or [])
+        if disabled == (name in deny):
+            return None, False
+        section["disabled"] = sorted(set(deny) | {name}) if disabled else [n for n in deny if n != name]
+        return json.dumps(data, indent=2, ensure_ascii=False), True
+
+    wrote = atomic_update(path, _apply)
+    if wrote:
+        logger.info("config/update: playbooks.disabled {} {!r}", "added" if disabled else "removed", name)
+    return wrote
 
 
 def set_memory_backend(
@@ -433,11 +478,15 @@ def set_memory_backend(
     and flips this flag here.
     """
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    section = data.setdefault("memory", {})
-    prev = section.get("backend")
-    section["backend"] = backend
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        section = data.setdefault("memory", {})
+        prev = section.get("backend")
+        section["backend"] = backend
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     logger.info("config/update: memory.backend set to {!r} (was {!r})", backend, prev)
     return prev
 

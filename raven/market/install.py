@@ -13,12 +13,12 @@ camelCase key shape the file already uses (``tools.mcpServers``).
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from raven.utils.atomic_io import atomic_update
 
 
 class PlugInstallError(Exception):
@@ -35,28 +35,27 @@ def _config_path() -> Path:
     return get_config_path()
 
 
-def _read_config_raw() -> dict:
-    try:
-        return json.loads(_config_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
+def _parse_config(current: str | None) -> dict:
+    if current is None:
         return {}
+    try:
+        return json.loads(current)
     except json.JSONDecodeError as e:
         # Refuse the read-modify-write: continuing would clobber whatever the
         # user has in the malformed file.
         raise PlugInstallError(f"config.json is not valid JSON ({e}); fix it before installing plugins") from e
 
 
-def _write_config_raw(payload: dict) -> None:
-    path = _config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+def _read_config_raw() -> dict:
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True, ensure_ascii=False)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        current = _config_path().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = None
+    return _parse_config(current)
+
+
+def _dump_config(payload: dict) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
 
 
 def _servers(payload: dict) -> dict:
@@ -112,12 +111,20 @@ def _build_mcp_config(contrib: dict, form: dict) -> dict:
 
 
 def _install_mcp_piece(entry_id: str, contrib: dict, form: dict) -> tuple[dict, Any]:
-    payload = _read_config_raw()
-    servers = _servers(payload)
-    if entry_id in servers:
-        raise PlugInstallError(f"an MCP server named '{entry_id}' already exists in tools.mcpServers; remove it first")
-    servers[entry_id] = _build_mcp_config(contrib, form)
-    _write_config_raw(payload)
+    # The collision check and the write share one locked transaction: checked
+    # against a config another installer already changed, the check answers for
+    # a file that no longer exists.
+    def _add(current: str | None) -> tuple[str | None, None]:
+        payload = _parse_config(current)
+        servers = _servers(payload)
+        if entry_id in servers:
+            raise PlugInstallError(
+                f"an MCP server named '{entry_id}' already exists in tools.mcpServers; remove it first"
+            )
+        servers[entry_id] = _build_mcp_config(contrib, form)
+        return _dump_config(payload), None
+
+    atomic_update(_config_path(), _add)
     piece = {"kind": "mcp", "server": entry_id}
     return piece, None
 
@@ -126,11 +133,16 @@ def _undo_mcp_piece(piece: dict) -> None:
     from raven.mcp.oauth import delete_credentials
 
     server = piece["server"]
-    payload = _read_config_raw()
-    servers = _servers(payload)
-    if server in servers:
+
+    def _drop(current: str | None) -> tuple[str | None, None]:
+        payload = _parse_config(current)
+        servers = _servers(payload)
+        if server not in servers:
+            return None, None
         del servers[server]
-        _write_config_raw(payload)
+        return _dump_config(payload), None
+
+    atomic_update(_config_path(), _drop)
     delete_credentials(server)
 
 
@@ -242,12 +254,16 @@ async def uninstall_plugin(name: str) -> dict:
 
 def toggle_server(name: str, enabled: bool) -> None:
     """Flip the enabled flag of one configured MCP server (config only)."""
-    payload = _read_config_raw()
-    servers = _servers(payload)
-    if name not in servers:
-        raise PlugInstallError(f"no MCP server named '{name}'")
-    servers[name]["enabled"] = bool(enabled)
-    _write_config_raw(payload)
+
+    def _set(current: str | None) -> tuple[str | None, None]:
+        payload = _parse_config(current)
+        servers = _servers(payload)
+        if name not in servers:
+            raise PlugInstallError(f"no MCP server named '{name}'")
+        servers[name]["enabled"] = bool(enabled)
+        return _dump_config(payload), None
+
+    atomic_update(_config_path(), _set)
 
 
 __all__ = ["PlugInstallError", "install_plugin", "toggle_server", "uninstall_plugin"]

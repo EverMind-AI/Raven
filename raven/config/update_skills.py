@@ -9,7 +9,6 @@ non-whitelisted key is preserved verbatim.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -17,15 +16,9 @@ from loguru import logger
 
 from raven.config.loader import get_config_path, load_config, read_raw_or_raise
 from raven.config.raven import EverOSConfig, SkillForgeConfig
+from raven.utils.atomic_io import atomic_update
 
 _WEIGHTS = ("local", "everos", "hub")
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _raw_config(path: Path) -> dict[str, Any]:
@@ -64,75 +57,79 @@ def get_skillforge(*, config_path: Path | None = None) -> dict:
 
 def set_skillforge(fields: dict, *, config_path: Path | None = None) -> None:
     path = config_path or get_config_path()
-    data = _raw_config(path)
-    sf = _raw_block(data)
 
-    if "enabled" in fields:
-        sf["enabled"] = bool(fields["enabled"])
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = _raw_config(path)
+        sf = _raw_block(data)
 
-    rin = fields.get("router") or {}
-    if rin:
-        router = dict(sf.get("router") or {})
-        if "weights" in rin:
-            w = dict(router.get("weights") or {})
-            for k in _WEIGHTS:
-                if k in (rin["weights"] or {}):
-                    v = float(rin["weights"][k])
-                    if not 0.0 <= v <= 1.0:
-                        raise ValueError(f"weight {k}={v} out of range [0, 1]")
-                    w[k] = v
-            router["weights"] = w
-        if "hub" in rin:
-            h = dict(router.get("hub") or {})
-            hin = rin["hub"] or {}
-            if "endpoint" in hin:
-                ep = hin["endpoint"]
-                if ep and not str(ep).startswith(("http://", "https://")):
-                    raise ValueError(f"hub endpoint must be an http(s) URL: {ep!r}")
-                h["endpoint"] = ep
-            for k in ("apiKey", "minSafety", "timeoutS"):
-                if k in hin:
-                    h[k] = hin[k]
-            router["hub"] = h
-        sf["router"] = router
+        if "enabled" in fields:
+            sf["enabled"] = bool(fields["enabled"])
 
-    if "everos" in fields:
-        evin = fields["everos"] or {}
-        ev = dict(sf.get("everos") or {})
-        if "enabled" in evin:
-            ev["enabled"] = bool(evin["enabled"])
-        # Ranges are declared on EverOSConfig, so the model_validate at the end
-        # rejects an out-of-range value here the same way it does for a
-        # hand-edited config.json. Only the coercion belongs in this layer.
-        for k in ("maxSkillsTopK", "complexTaskToolCallThreshold"):
-            if k in evin:
-                ev[k] = int(evin[k])
-        for k in ("retireConfidence", "minQualityForSkillExtract"):
-            if k in evin:
-                ev[k] = float(evin[k])
-        sf["everos"] = ev
+        rin = fields.get("router") or {}
+        if rin:
+            router = dict(sf.get("router") or {})
+            if "weights" in rin:
+                w = dict(router.get("weights") or {})
+                for k in _WEIGHTS:
+                    if k in (rin["weights"] or {}):
+                        v = float(rin["weights"][k])
+                        if not 0.0 <= v <= 1.0:
+                            raise ValueError(f"weight {k}={v} out of range [0, 1]")
+                        w[k] = v
+                router["weights"] = w
+            if "hub" in rin:
+                h = dict(router.get("hub") or {})
+                hin = rin["hub"] or {}
+                if "endpoint" in hin:
+                    ep = hin["endpoint"]
+                    if ep and not str(ep).startswith(("http://", "https://")):
+                        raise ValueError(f"hub endpoint must be an http(s) URL: {ep!r}")
+                    h["endpoint"] = ep
+                for k in ("apiKey", "minSafety", "timeoutS"):
+                    if k in hin:
+                        h[k] = hin[k]
+                router["hub"] = h
+            sf["router"] = router
 
-    if "localDirs" in fields:
-        out = []
-        for d in fields["localDirs"] or []:
-            p = str((d or {}).get("path") or "").strip()
-            if not p:
-                raise ValueError("localDirs entry needs a non-empty path")
-            out.append(
-                {
-                    "path": p,
-                    "enabled": bool(d.get("enabled", True)),
-                    "name": d.get("name"),
-                    "alwaysEnabled": bool(d.get("alwaysEnabled", True)),
-                }
-            )
-        sf["localDirs"] = out
+        if "everos" in fields:
+            evin = fields["everos"] or {}
+            ev = dict(sf.get("everos") or {})
+            if "enabled" in evin:
+                ev["enabled"] = bool(evin["enabled"])
+            # Ranges are declared on EverOSConfig, so the model_validate at the end
+            # rejects an out-of-range value here the same way it does for a
+            # hand-edited config.json. Only the coercion belongs in this layer.
+            for k in ("maxSkillsTopK", "complexTaskToolCallThreshold"):
+                if k in evin:
+                    ev[k] = int(evin[k])
+            for k in ("retireConfidence", "minQualityForSkillExtract"):
+                if k in evin:
+                    ev[k] = float(evin[k])
+            sf["everos"] = ev
 
-    SkillForgeConfig.model_validate(sf)  # raises ValidationError if illegal; nothing written yet
+        if "localDirs" in fields:
+            out = []
+            for d in fields["localDirs"] or []:
+                p = str((d or {}).get("path") or "").strip()
+                if not p:
+                    raise ValueError("localDirs entry needs a non-empty path")
+                out.append(
+                    {
+                        "path": p,
+                        "enabled": bool(d.get("enabled", True)),
+                        "name": d.get("name"),
+                        "alwaysEnabled": bool(d.get("alwaysEnabled", True)),
+                    }
+                )
+            sf["localDirs"] = out
 
-    data.pop("skill_forge", None)
-    data["skillForge"] = sf
-    _write_atomic(path, data)
+        SkillForgeConfig.model_validate(sf)  # raises ValidationError if illegal; nothing written yet
+
+        data.pop("skill_forge", None)
+        data["skillForge"] = sf
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
     logger.info("update_skills: wrote skillForge block")
 
 

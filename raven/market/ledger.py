@@ -21,13 +21,13 @@ Layout (``~/.raven/plugins/<catalog_id>.json``):
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
+
+from raven.utils.atomic_io import atomic_replace
 
 
 def _plugins_dir() -> Path:
@@ -107,14 +107,7 @@ def write_ledger(catalog_id: str, catalog_version: str, pieces: list[dict]) -> N
         "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "pieces": pieces,
     }
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic_replace(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def delete_ledger(catalog_id: str) -> None:

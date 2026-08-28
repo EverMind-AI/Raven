@@ -9,7 +9,6 @@ the channels section is forbidden -- see plan rule.
 from __future__ import annotations
 
 import json
-import os
 import typing
 from pathlib import Path
 from typing import Any, Union
@@ -20,18 +19,11 @@ from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ChannelsConfig
+from raven.utils.atomic_io import atomic_update
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write: temp-file then os.replace. Preserves indent=2, UTF-8."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _unwrap_optional(annotation: Any) -> Any:
@@ -394,11 +386,15 @@ def reset_channel(
     """
     cls = _channel_schema_cls(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    data.setdefault("channels", {})
-    instance = cls()
-    data["channels"][name] = instance.model_dump(by_alias=True)
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        data.setdefault("channels", {})
+        instance = cls()
+        data["channels"][name] = instance.model_dump(by_alias=True)
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
     logger.info("update_channels: {} reset to defaults", name)
 
 
@@ -421,29 +417,32 @@ def _patch_channel(
         raise KeyError(f"Unknown field(s) {unknown} for channel '{name}'. Available fields: {sorted(specs.keys())}")
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    raw_section = (data.get("channels") or {}).get(name) or {}
 
-    try:
-        current = cls.model_validate(raw_section)
-    except ValidationError:
-        current = cls()
+    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
+        data = read_raw_or_raise(path)
+        raw_section = (data.get("channels") or {}).get(name) or {}
 
-    working = current.model_dump()
+        try:
+            current = cls.model_validate(raw_section)
+        except ValidationError:
+            current = cls()
 
-    prev: dict[str, Any] = {}
-    for path_key, raw_val in fields.items():
-        leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
-        leaf_info = leaf_cls.model_fields[leaf_field]
-        coerced = _coerce_value(raw_val, leaf_info.annotation)
-        prev[path_key] = _set_nested(path_key, coerced, working)
+        working = current.model_dump()
 
-    validated = cls.model_validate(working)
+        prev: dict[str, Any] = {}
+        for path_key, raw_val in fields.items():
+            leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
+            leaf_info = leaf_cls.model_fields[leaf_field]
+            coerced = _coerce_value(raw_val, leaf_info.annotation)
+            prev[path_key] = _set_nested(path_key, coerced, working)
 
-    data.setdefault("channels", {})
-    data["channels"][name] = validated.model_dump(by_alias=True)
-    _write_atomic(path, data)
-    return prev
+        validated = cls.model_validate(working)
+
+        data.setdefault("channels", {})
+        data["channels"][name] = validated.model_dump(by_alias=True)
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    return atomic_update(path, _apply)
 
 
 __all__ = [
