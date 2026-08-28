@@ -148,22 +148,16 @@ class TestInotifyGate:
         cap.write_text("128\n", encoding="ascii")
         monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap)
         proc = tmp_path / "proc"
-        (proc / "111" / "fdinfo").mkdir(parents=True)
-        (proc / "111" / "fdinfo" / "3").write_text(
-            "pos:\t0\nflags:\t02004000\ninotify wd:1 ino:1 mask:80c\n", encoding="ascii"
-        )
-        (proc / "111" / "fdinfo" / "4").write_text("pos:\t0\nflags:\t02004000\n", encoding="ascii")
-        (proc / "222" / "fdinfo").mkdir(parents=True)
-        (proc / "222" / "fdinfo" / "5").write_text(
-            "pos:\t0\ninotify wd:1 ino:2 mask:80c\ninotify wd:2 ino:3 mask:80c\n",
-            encoding="ascii",
-        )
-        (proc / "111" / "fdinfo" / "9").symlink_to(proc / "vanished")
+        (proc / "111" / "fd").mkdir(parents=True)
+        (proc / "111" / "fd" / "3").symlink_to("anon_inode:inotify")
+        (proc / "111" / "fd" / "4").symlink_to("socket:[123]")
+        (proc / "222" / "fd").mkdir(parents=True)
+        (proc / "222" / "fd" / "5").symlink_to("anon_inode:inotify")
+        (proc / "111" / "fd" / "9").symlink_to(proc / "vanished")
         (proc / "333").symlink_to(proc / "vanished")
-        (proc / "notaproc" / "fdinfo").mkdir(parents=True)
+        (proc / "notaproc" / "fd").mkdir(parents=True)
         monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
 
-        # One instance per fd with an inotify line, whatever the watch count.
         assert everos_server._inotify_usage() == (2, 128)
 
     def test_usage_ignores_other_users_instances(self, monkeypatch, tmp_path) -> None:
@@ -171,8 +165,8 @@ class TestInotifyGate:
         cap.write_text("128\n", encoding="ascii")
         monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap)
         proc = tmp_path / "proc"
-        (proc / "111" / "fdinfo").mkdir(parents=True)
-        (proc / "111" / "fdinfo" / "3").write_text("inotify wd:1 ino:1\n", encoding="ascii")
+        (proc / "111" / "fd").mkdir(parents=True)
+        (proc / "111" / "fd" / "3").symlink_to("anon_inode:inotify")
         monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
         monkeypatch.setattr(everos_server.os, "getuid", lambda: 424242)
 
@@ -570,6 +564,30 @@ class TestThePrimitivesAgainstTheRealOS:
         from raven.plugin.memory.everos._server import ome_lock_held
 
         assert ome_lock_held(tmp_path / "never-started") is False
+
+    def test_zero_watch_instances_count_against_the_cap(self) -> None:
+        import ctypes
+
+        from raven.plugin.memory.everos import _server
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.inotify_init.restype = ctypes.c_int
+        before = _server._inotify_usage()
+        assert before is not None
+        fds = []
+        try:
+            for _ in range(2):
+                fd = libc.inotify_init()
+                if fd < 0:
+                    pytest.skip("per-user inotify cap is exhausted on this host")
+                fds.append(fd)
+            after = _server._inotify_usage()
+        finally:
+            for fd in fds:
+                libc.close(fd)
+        assert after is not None
+        assert after[0] >= before[0] + 2
+        assert after[1] == before[1]
 
     def test_a_held_ome_lock_is_detected(self, tmp_path) -> None:
         """The signal the whole "served elsewhere" state rests on.

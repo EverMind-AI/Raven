@@ -102,10 +102,12 @@ def _inotify_usage() -> tuple[int, int] | None:
     """(inotify instances held by this user, the kernel cap), or ``None``.
 
     ``max_user_instances`` limits instances per real user id, and the spawned
-    server inherits this process's uid, so only same-uid instances count.
-    ``/proc/<pid>/fdinfo`` marks an inotify instance with a line starting with
-    ``inotify``; when procfs is absent or unreadable (non-Linux), ``None`` lets
-    callers skip the check rather than guess.
+    server inherits this process's uid, so only same-uid instances count. An
+    instance is an fd whose ``/proc/<pid>/fd`` link reads ``anon_inode:inotify``;
+    fdinfo cannot be the marker because a freshly created instance carries no
+    ``inotify`` lines until its first watch, yet still consumes the cap. When
+    procfs is absent or unreadable (non-Linux), ``None`` lets callers skip the
+    check rather than guess.
     """
     try:
         limit = int(_INOTIFY_LIMIT_PATH.read_text(encoding="ascii").strip())
@@ -117,16 +119,15 @@ def _inotify_usage() -> tuple[int, int] | None:
         try:
             if pid_dir.stat().st_uid != me:
                 continue
-            entries = (pid_dir / "fdinfo").iterdir()
+            entries = (pid_dir / "fd").iterdir()
         except OSError:
             continue
         for entry in entries:
             try:
-                blob = entry.read_bytes()
+                if os.readlink(entry) == "anon_inode:inotify":
+                    used += 1
             except OSError:
                 continue
-            if any(line.startswith(b"inotify") for line in blob.splitlines()):
-                used += 1
     return used, limit
 
 
