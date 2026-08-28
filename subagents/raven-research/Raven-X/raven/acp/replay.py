@@ -127,6 +127,11 @@ def _tool_call(call: Any, *, cwd: str | None) -> dict[str, Any] | None:
         "kind": tool_kind(name),
         "status": "pending",
     }
+    # The tool's own name, on the same terms the live path sends it: ``kind``
+    # is ten values wide and the title is whatever the runtime chose to show a
+    # person, so neither is a name a client can read back.
+    if isinstance(name, str) and name:
+        update["_meta"] = {"raven.toolName": name}
     found = locations(arguments, cwd)
     if found:
         update["locations"] = found

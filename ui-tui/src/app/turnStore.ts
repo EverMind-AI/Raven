@@ -17,6 +17,7 @@ const buildTurnState = (): TurnState => ({
   dagRuns: [],
   episodes: [],
   foldId: '',
+  notice: '',
   outcome: '',
   reasoning: '',
   reasoningActive: false,
@@ -89,6 +90,11 @@ export interface TurnState {
   // the same string, which is what keeps a fold the reader opened mid-turn open
   // once the turn lands (see `turnFoldScope`).
   foldId: string
+  // The runtime's own closing line for this turn (a blocked action, today),
+  // shown under the live turn until the turn commits it as its last row. Held
+  // here rather than appended on arrival because the turn's steps are not in
+  // the transcript yet -- see `turnController.recordNotice`.
+  notice: string
   outcome: string
   reasoning: string
   reasoningActive: boolean

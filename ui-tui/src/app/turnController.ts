@@ -165,6 +165,7 @@ class TurnController {
   statusTimer: Timer = null
   toolTokenAcc = 0
   turnTools: string[] = []
+  private turnNotice = ''
 
   private activeTools: ActiveTool[] = []
   private activeReasoningText = ''
@@ -215,6 +216,7 @@ class TurnController {
     this.segmentMessages = []
     this.episodes = []
     this.lastEpisodeStartMs = 0
+    this.turnNotice = ''
 
     patchTurnState(state => ({
       ...state,
@@ -231,6 +233,7 @@ class TurnController {
       // stays for the frames still coming.
       spawnRuns: state.spawnRuns.filter(run => !spawnRunSettled(run)),
       episodes: [],
+      notice: '',
       streamPendingTools: [],
       streamSegments: [],
       streaming: '',
@@ -279,6 +282,9 @@ class TurnController {
     const segments = this.segmentMessages
     const partial = this.bufRef.trimStart()
     const tools = this.pendingSegmentTools
+    // Captured with the rest, for the same reason: idle() drops it, and a turn
+    // the runtime stopped is exactly the turn most likely to carry one.
+    const notice = this.turnNotice
     // Capture the accrued episodes before idle() drops them, so an interrupt in
     // episodes mode commits the same collapsed one-message view as a normal
     // completion instead of dumping the raw, fully-expanded segment stream.
@@ -299,6 +305,15 @@ class TurnController {
       return
     }
 
+    // Called at every exit below rather than once at the end, because each
+    // branch returns. It must go last wherever it runs: it is the runtime's
+    // closing word on the turn (see `recordNotice`).
+    const closeNotice = () => {
+      if (notice) {
+        appendMessage({ role: 'system', text: notice })
+      }
+    }
+
     const interruptedText = partial ? `${partial}\n\n*[${marker}]*` : `*[${marker}]*`
 
     // Episodes mode: never dump the raw expanded segments. Commit the accrued
@@ -313,6 +328,8 @@ class TurnController {
           role: 'assistant',
           text: interruptedText
         })
+
+        closeNotice()
 
         return
       }
@@ -332,6 +349,8 @@ class TurnController {
           ...(tools.length && { tools })
         })
 
+        closeNotice()
+
         return
       }
 
@@ -342,6 +361,8 @@ class TurnController {
           sys?.('interrupted')
         }
       }
+
+      closeNotice()
 
       return
     }
@@ -365,6 +386,8 @@ class TurnController {
         sys?.('interrupted')
       }
     }
+
+    closeNotice()
   }
 
   interruptTurn({ appendMessage, gw, sid, sys }: InterruptDeps) {
@@ -476,6 +499,30 @@ class TurnController {
       this.reasoningStreamingTimer = null
       patchTurnState({ reasoningStreaming: false })
     }, REASONING_PULSE_MS)
+  }
+
+  /**
+   * The runtime's own line about what it did to this turn -- today, that it
+   * blocked an action and stopped.
+   *
+   * Held on the turn instead of appended to the transcript on arrival, which is
+   * the whole point: it arrives mid-turn, and this turn's steps are not in the
+   * transcript yet (they land as one message at `message.complete`), so a row
+   * appended here sat above every step it was reporting on. The turn commits it
+   * as its last row, and the store copy draws it under the live turn until then.
+   *
+   * The text is already rendered: the caller owns the wording, so the live
+   * stream and a resumed transcript say it the same way (`noticeLine`).
+   */
+  recordNotice(text: string) {
+    const line = text.trim()
+
+    if (this.interrupted || !line) {
+      return
+    }
+
+    this.turnNotice = line
+    patchTurnState({ notice: line })
   }
 
   recordTodos(value: unknown) {
@@ -677,6 +724,13 @@ class TurnController {
       if (finalText) {
         finalMessages.push({ role: 'assistant', text: finalText })
       }
+    }
+
+    // Last, after the steps and the answer: it is the runtime's closing word on
+    // the turn. A separate row rather than text folded into the message, because
+    // it is not the assistant speaking -- see `recordNotice`.
+    if (this.turnNotice) {
+      finalMessages.push({ role: 'system', text: this.turnNotice })
     }
 
     const wasInterrupted = this.interrupted
@@ -1081,11 +1135,13 @@ class TurnController {
     this.turnTools = []
     this.toolTokenAcc = 0
     this.interrupted = false
+    this.turnNotice = ''
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
     patchTurnState({
       activity: [],
       foldId: this.turnFoldId,
+      notice: '',
       outcome: '',
       subagents: [],
       toolTokens: 0,

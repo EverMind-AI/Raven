@@ -53,6 +53,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
     composerState,
     gw,
     maybeGoodVibes,
+    revealLatest,
     setLastUserMsg,
     slashRef,
     submitRef,
@@ -360,6 +361,13 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return
       }
 
+      // Sending is the one act that means "I am done reading back there". A
+      // reader scrolled up has broken the transcript's stickiness, and every
+      // path below writes to the bottom of it -- the prompt echo, the slash
+      // output, the queued-message list -- so without this the answer to what
+      // was just typed lands off-screen.
+      revealLatest?.()
+
       if (looksLikeSlashCommand(full)) {
         // Echoed where `send` echoes a prompt, and for the same reason: a direct
         // chat renders its own rows and never the main transcript, so an echo
@@ -459,6 +467,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       composerRefs,
       handleBusyInput,
       interpolate,
+      revealLatest,
       send,
       sendQueued,
       notifyHere,
@@ -531,6 +540,9 @@ export interface UseSubmissionOptions {
   composerState: ComposerState
   gw: GatewayClient
   maybeGoodVibes: (text: string) => void
+  /** Pin the transcript back to its bottom, so a submission is not sent into
+   *  a view the reader has scrolled away from. */
+  revealLatest?: () => void
   setLastUserMsg: (value: string) => void
   slashRef: MutableRefObject<(cmd: string) => boolean>
   submitRef: MutableRefObject<(value: string) => void>

@@ -36,6 +36,7 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const activeTools = useTurnSelector(state => state.tools)
   const episodes = useTurnSelector(state => state.episodes)
   const foldId = useTurnSelector(state => state.foldId)
+  const notice = useTurnSelector(state => state.notice)
   const directChat = useStore($directChat)
   const showStreamingArea = Boolean(streaming)
 
@@ -48,26 +49,44 @@ export const StreamingAssistant = memo(function StreamingAssistant({
     return null
   }
 
-  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length) {
+  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length && !notice) {
     return null
   }
+
+  // Drawn as the plain system row the turn will commit, so the line does not
+  // move or change shape when the turn lands -- only the row above it settles.
+  const noticeRow = notice ? (
+    <MessageLine
+      cols={cols}
+      compact={compact}
+      detailsMode={detailsMode}
+      detailsModeCommandOverride={detailsModeCommandOverride}
+      msg={{ role: 'system', text: notice }}
+      sections={sections}
+      t={ui.theme}
+    />
+  ) : null
 
   // Episodes mode: one live, drilldown view of the running turn instead of the
   // flat segment/tool/stream stack.
   if (ui.transcript === 'episodes') {
     return (
-      <EpisodeView
-        cols={cols}
-        compact={compact}
-        episodes={episodes}
-        live
-        // The scope this turn's own history row will read (`EpisodeMessage`),
-        // named here rather than defaulted, so a call the reader opened while it
-        // ran is still open once the turn lands.
-        scope={turnFoldScope(viewKeyOf(directChat.active), foldId)}
-        t={ui.theme}
-        text={streaming || undefined}
-      />
+      <>
+        <EpisodeView
+          cols={cols}
+          compact={compact}
+          episodes={episodes}
+          live
+          // The scope this turn's own history row will read (`EpisodeMessage`),
+          // named here rather than defaulted, so a call the reader opened while
+          // it ran is still open once the turn lands.
+          scope={turnFoldScope(viewKeyOf(directChat.active), foldId)}
+          t={ui.theme}
+          text={streaming || undefined}
+        />
+
+        {noticeRow}
+      </>
     )
   }
 
@@ -129,6 +148,8 @@ export const StreamingAssistant = memo(function StreamingAssistant({
           t={ui.theme}
         />
       )}
+
+      {noticeRow}
     </>
   )
 })
