@@ -1,4 +1,15 @@
-"""Web tools: web_search and web_fetch."""
+"""Web tools: web_search and web_fetch.
+
+Every client here is built ``trust_env=True``, where the rest of this fork's ppt
+package turns it off. The reason the others turn it off is that what they read is
+written into a deck; nothing here is, and these two have to reach the internet by
+whatever route the host has. On a host that only gets out through a proxy, with
+``tools.web.proxy`` unset, ignoring ``HTTP(S)_PROXY`` made every ``web_fetch`` a
+30s timeout carrying no message -- 46 of 46 across the recorded runs. Written out
+rather than left to the default so a later sync reads it as a decision and not an
+omission. ``raven/ppt/tools/fetch.py`` still ignores the environment on purpose,
+and its own hint says so.
+"""
 
 import json
 import os
@@ -63,7 +74,7 @@ class WebSearchTool(Tool):
         caller has two judgements to make and needs both -- whether it will hold up
         on screen, and whether its origin can be cited.
         """
-        async with httpx.AsyncClient(proxy=self.proxy, trust_env=False) as client:
+        async with httpx.AsyncClient(proxy=self.proxy, trust_env=True) as client:
             response = await client.post(
                 "https://google.serper.dev/images",
                 json={"q": query, "num": 20},
@@ -130,8 +141,11 @@ class WebSearchTool(Tool):
                     max(min_width or _MIN_IMAGE_WIDTH, 1),
                 )
             n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
-            async with httpx.AsyncClient(proxy=self.proxy, trust_env=False) as client:
+            logger.debug(
+                "WebSearch: {}",
+                "proxy enabled" if self.proxy else "no explicit proxy (environment proxies may apply)",
+            )
+            async with httpx.AsyncClient(proxy=self.proxy, trust_env=True) as client:
                 r = await client.post(
                     "https://google.serper.dev/search",
                     json={"q": query, "num": n},
@@ -227,7 +241,7 @@ class WebFetchTool(Tool):
 
     async def _reader_get(self, url: str) -> httpx.Response:
         headers = {"Accept": "text/plain"}
-        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, trust_env=False) as client:
+        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, trust_env=True) as client:
             if self.api_key:
                 response = await client.get(
                     f"https://r.jina.ai/{url}",
@@ -301,7 +315,7 @@ class WebFetchTool(Tool):
             "User-Agent": "Mozilla/5.0 AppleWebKit/537.36 Chrome/122.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml",
         }
-        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=False, trust_env=True) as client:
             try:
                 response, refused = await self._get_checked_redirects(client, url, headers, timeout=20.0)
                 if refused:
@@ -399,7 +413,10 @@ class WebFetchTool(Tool):
                 return json.dumps({"error": f"{type(exc).__name__}: {exc}", "url": url}, ensure_ascii=False)
 
         try:
-            logger.debug("WebFetch: {}", "proxy enabled" if self.proxy else "direct connection")
+            logger.debug(
+                "WebFetch: {}",
+                "proxy enabled" if self.proxy else "no explicit proxy (environment proxies may apply)",
+            )
             r = await self._reader_get(url)
 
             text = r.text
