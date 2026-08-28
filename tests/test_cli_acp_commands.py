@@ -239,26 +239,17 @@ class TestOpenStdin:
 
 
 class TestCallback:
-    """The callback's own arguments are passed explicitly here.
-
-    ``acp`` is called directly rather than through Typer, and its
-    ``typer.Option`` defaults are ``OptionInfo`` sentinels that only Typer
-    resolves -- an omitted one arrives as an object that reads as a value the
-    caller supplied. ``commands.py`` carries the same note for ``raven``'s own
-    delegation to ``tui``.
-    """
-
     def test_it_serves_when_no_subcommand_was_given(self, monkeypatch):
         served = []
 
-        async def _fake_serve(*, verbose: bool = False) -> None:
-            served.append(verbose)
+        async def _fake_serve() -> None:
+            served.append(True)
 
         monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None))
 
-        assert served == [False]
+        assert served == [True]
 
     def test_a_crash_is_reported_briefly_rather_than_as_a_rich_traceback(self, monkeypatch):
         """Typer's own handler renders a rich traceback with ``show_locals`` on --
@@ -266,13 +257,13 @@ class TestCallback:
         frame, on the stream an ACP client displays. The full traceback goes to
         the log file, where the sink is configured not to annotate it."""
 
-        async def _explode(*, verbose: bool = False) -> None:
+        async def _explode() -> None:
             raise RuntimeError("engine failed")
 
         monkeypatch.setattr(acp_commands, "_serve", _explode)
 
         with pytest.raises(typer.Exit) as caught:
-            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
+            acp_commands.acp(SimpleNamespace(invoked_subcommand=None))
 
         assert caught.value.exit_code == 1
 
@@ -280,200 +271,10 @@ class TestCallback:
         """``acp`` is a Typer group, so a future ``raven acp <something>`` must
         not also start the server."""
 
-        async def _must_not_run(*, verbose: bool = False) -> None:
+        async def _must_not_run() -> None:
             raise AssertionError("serving despite an explicit subcommand")
 
         monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
 
         with contextlib.suppress(RuntimeWarning):
-            acp_commands.acp(SimpleNamespace(invoked_subcommand="future-subcommand"), config=None, verbose=False)
-
-
-class TestConfigOption:
-    """``--config`` is what lets one host serve several of these at once.
-
-    Without it every child comes up on the host's own config -- a different
-    model, a different provider, a different identity than the one the caller
-    meant to spawn.
-    """
-
-    @staticmethod
-    def _dont_serve(monkeypatch):
-        async def _fake_serve(*, verbose: bool = False) -> None:
-            pass
-
-        monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
-
-    def test_it_points_the_process_at_the_given_config(self, monkeypatch, tmp_path):
-        cfg = tmp_path / "elsewhere" / "config.json"
-        cfg.parent.mkdir()
-        cfg.write_text("{}", encoding="utf-8")
-        seen = []
-        monkeypatch.setattr(acp_commands, "set_config_path", seen.append)
-        self._dont_serve(monkeypatch)
-
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
-
-        assert seen == [cfg.resolve()]
-
-    def test_the_default_leaves_the_process_on_its_own_config(self, monkeypatch):
-        seen = []
-        monkeypatch.setattr(acp_commands, "set_config_path", seen.append)
-        self._dont_serve(monkeypatch)
-
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
-
-        assert seen == []
-
-    def test_it_is_applied_before_the_server_starts(self, monkeypatch, tmp_path):
-        """Order, not just effect: ``get_logs_dir`` hangs off the config's own
-        directory, so a path set after the redirect would leave this instance's
-        log in the default home while it served from somewhere else."""
-        cfg = tmp_path / "config.json"
-        cfg.write_text("{}", encoding="utf-8")
-        order = []
-        monkeypatch.setattr(acp_commands, "set_config_path", lambda p: order.append("config"))
-
-        async def _fake_serve(*, verbose: bool = False) -> None:
-            order.append("serve")
-
-        monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
-
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
-
-        assert order == ["config", "serve"]
-
-    def test_a_missing_config_exits_2_rather_than_1(self, monkeypatch, tmp_path):
-        """Exit 2 is a mistake in the spawn command; exit 1 is the agent having
-        crashed. A client that can tell them apart can say so instead of
-        retrying."""
-
-        async def _must_not_run(*, verbose: bool = False) -> None:
-            raise AssertionError("served despite a missing config")
-
-        monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
-
-        with pytest.raises(typer.Exit) as caught:
-            acp_commands.acp(
-                SimpleNamespace(invoked_subcommand=None),
-                config=str(tmp_path / "absent.json"),
-                verbose=False,
-            )
-
-        assert caught.value.exit_code == 2
-
-    def test_the_real_loader_resolves_to_it(self, monkeypatch, tmp_path):
-        """Driven against the real loader, not the stub above.
-
-        What the flag has to move is ``get_config_path``, because every runtime
-        directory is derived from it -- including the log this command writes,
-        which is the one a person goes looking for when an instance misbehaves.
-        """
-        from raven.config import loader
-        from raven.config.paths import get_logs_dir
-
-        cfg = tmp_path / "instance" / "config.json"
-        cfg.parent.mkdir()
-        cfg.write_text("{}", encoding="utf-8")
-        monkeypatch.setattr(loader, "_current_config_path", None)
-        self._dont_serve(monkeypatch)
-
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
-
-        assert loader.get_config_path() == cfg
-        assert get_logs_dir() == cfg.parent / "logs"
-
-    def test_a_directory_is_not_a_config(self, monkeypatch, tmp_path):
-        async def _must_not_run(*, verbose: bool = False) -> None:
-            raise AssertionError("served despite being handed a directory")
-
-        monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
-
-        with pytest.raises(typer.Exit) as caught:
-            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(tmp_path), verbose=False)
-
-        assert caught.value.exit_code == 2
-
-
-class TestFileLogLevel:
-    def test_it_defaults_to_info(self, monkeypatch):
-        monkeypatch.delenv("RAVEN_ACP_LOG_LEVEL", raising=False)
-
-        assert acp_commands._file_log_level() == "INFO"
-
-    def test_the_environment_can_raise_it(self, monkeypatch):
-        monkeypatch.setenv("RAVEN_ACP_LOG_LEVEL", "debug")
-
-        assert acp_commands._file_log_level() == "DEBUG"
-
-    def test_verbose_outranks_the_environment(self, monkeypatch):
-        """The flag is set per spawn by whoever is debugging this run; the
-        variable is whatever the environment happened to carry in."""
-        monkeypatch.setenv("RAVEN_ACP_LOG_LEVEL", "WARNING")
-
-        assert acp_commands._file_log_level(verbose=True) == "DEBUG"
-
-    async def test_verbose_reaches_the_sink(self, monkeypatch, tmp_path):
-        TestServe._stub(monkeypatch, tmp_path, b"")
-        levels = []
-
-        def _redirect(_name, *, file_level, **_kw):
-            levels.append(file_level)
-            return tmp_path / "acp.log"
-
-        monkeypatch.setattr(acp_commands, "redirect_loguru_to_file", _redirect)
-
-        async def _serve(reader, out):
-            pass
-
-        monkeypatch.setattr(acp_commands, "serve", _serve)
-
-        await acp_commands._serve(verbose=True)
-
-        assert levels == ["DEBUG"]
-
-
-class TestHelp:
-    """The help text is the only place this command explains itself.
-
-    A client spawns it, so there is no interactive surface to discover any of
-    this from: what is not in ``--help`` is not anywhere the caller will look.
-    """
-
-    @staticmethod
-    def _rendered() -> str:
-        from typer.testing import CliRunner
-
-        from raven.cli.commands import app
-
-        result = CliRunner().invoke(app, ["acp", "--help"])
-        assert result.exit_code == 0
-        return result.output
-
-    def test_it_does_not_promise_subcommands_it_has_none_of(self):
-        """The group shape is deliberate -- see ``test_it_defers_to_a_subcommand``
-        -- but Click's default metavar advertises a ``raven acp <command>`` that
-        does not exist."""
-
-        assert "COMMAND [ARGS]" not in self._rendered()
-
-    def test_it_names_every_variable_that_changes_its_behaviour(self):
-        out = self._rendered()
-
-        for name in ("RAVEN_ACP_LOG_LEVEL", "RAVEN_CLI_DEBUG", "RAVEN_HOME"):
-            assert name in out, f"{name} changes how this command behaves and is not in its help"
-
-    def test_it_names_every_method_that_requires_a_cwd(self):
-        """All three take one. A reader who took the working directory to be
-        session/new's alone would omit it from load or resume and get -32602 --
-        and this help is written to be driven by hand, so that reader is the one
-        it exists for."""
-        flowed = " ".join(self._rendered().split())
-
-        assert "session/new, session/load and session/resume each require one" in flowed
-
-    def test_it_offers_the_flags_a_caller_needs_to_place_an_instance(self):
-        out = self._rendered()
-
-        assert "--config" in out
-        assert "--verbose" in out
+            acp_commands.acp(SimpleNamespace(invoked_subcommand="future-subcommand"))

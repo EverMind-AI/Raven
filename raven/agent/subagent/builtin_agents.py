@@ -41,8 +41,6 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.config.loader import get_config_path
-
 if TYPE_CHECKING:
     from raven.config.schema import BuiltinAgentConfig
 
@@ -310,23 +308,9 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     config and provider the host does, and a blank ``description`` gets the
     host-raven line rather than leaving the roster entry with the in-process
     description that no longer applies.
-
-    ``RAVEN_HOME`` alone does not carry a host started with ``--config``: that
-    flag sets a path inside the loader and never touches the environment, so the
-    child derived its config from a home the host was not using and came up on a
-    different model and provider than the row promises.
-
-    Two things stop that from overriding a choice somebody made. The flag is
-    appended only to a command this function generated -- a row that brought its
-    own command line chose it, and is not somewhere to inject arguments -- and
-    only when the row named no ``RAVEN_HOME`` of its own. An explicit one is the
-    row asking for a different instance, and ``--config`` outranks ``RAVEN_HOME``
-    in the child, so propagating regardless would serve that row the host's model
-    and provider under its own name.
     """
     home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
     env = dict(getattr(cfg, "env", None) or {})
-    row_named_its_own_home = "RAVEN_HOME" in env
     env.setdefault("RAVEN_HOME", home)
     command = str(getattr(cfg, "command", "") or "").strip()
     if not command:
@@ -337,8 +321,6 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
                 "could not be resolved; the row will fail at dispatch",
                 name,
             )
-        elif not row_named_its_own_home and (config_path := get_config_path()) != Path(home) / "config.json":
-            command = f"{command} --config {shlex.quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:
         description = _ACP_HOST_DESCRIPTION

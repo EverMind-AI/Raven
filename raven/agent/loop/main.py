@@ -1325,25 +1325,32 @@ class AgentLoop:
         # searches covers every built-in/plugin tool above; MCP tools join
         # later (registered in ``_connect_mcp``) and the strategy picks them up
         # since it re-reads the registry each turn.
-        cfg = self._tool_search_config
-        if cfg is not None and cfg.enabled:
-            from raven.agent.tools.tool_search import (
-                DEFAULT_ALWAYS_VISIBLE,
-                ToolCallTool,
-                ToolSearchController,
-                ToolSearchStrategy,
-                ToolSearchTool,
-            )
+        #
+        # ``tool_call`` is registered whatever the config says, because folding
+        # is not the only thing that keeps a tool out of the schema: every
+        # ``hide_from_schema`` tool above (the DAG controls) is dispatchable and
+        # unnameable without it, and this feature is off by default. Only
+        # ``tool_search`` and the fold itself turn on with the switch.
+        from raven.agent.tools.tool_search import (
+            DEFAULT_ALWAYS_VISIBLE,
+            ToolCallTool,
+            ToolSearchController,
+            ToolSearchStrategy,
+            ToolSearchTool,
+        )
+        from raven.config.schema import ToolSearchConfig
 
-            always = set(DEFAULT_ALWAYS_VISIBLE) | set(cfg.always_visible)
-            self.tool_search_controller = ToolSearchController(
-                self.tools,
-                always_visible=always,
-                search_result_limit=cfg.search_result_limit,
-                compaction_threshold=cfg.compaction_threshold,
-            )
+        cfg = self._tool_search_config or ToolSearchConfig()
+        always = set(DEFAULT_ALWAYS_VISIBLE) | set(cfg.always_visible)
+        self.tool_search_controller = ToolSearchController(
+            self.tools,
+            always_visible=always,
+            search_result_limit=cfg.search_result_limit,
+            compaction_threshold=cfg.compaction_threshold,
+        )
+        self.tools.register(ToolCallTool(self.tool_search_controller))
+        if cfg.enabled:
             self.tools.register(ToolSearchTool(self.tool_search_controller))
-            self.tools.register(ToolCallTool(self.tool_search_controller))
             # ``first=True``: filter the tool list before CacheOptimizer marks
             # the final tool with ``cache_control`` (else the marked tool may be
             # filtered out and the breakpoint lost).

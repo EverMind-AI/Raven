@@ -932,7 +932,13 @@ class ToolSearchConfig(Base):
     on demand through the ``tool_search`` / ``tool_call`` meta-tools, so context
     cost stops scaling with tool count and the per-turn tool list (and thus the
     prompt cache) stays stable. At or below the threshold every tool is exposed
-    directly (unchanged behavior) and the meta-tools are omitted.
+    directly (unchanged behavior) and ``tool_search`` is omitted.
+
+    This switch does not govern ``tool_call``, which the host registers either
+    way: a tool can also be absent from the schema because its owner hid it
+    there (``ToolRegistry.hide_from_schema``), and that has nothing to do with
+    catalog size. Turning this off folds nothing; it does not take the name
+    route away.
     """
 
     enabled: bool = False

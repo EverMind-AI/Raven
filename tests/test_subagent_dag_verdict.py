@@ -178,3 +178,17 @@ async def test_describe_failure_uses_the_models_categorisation():
     assert verdict.category == "missing_credential"
     assert verdict.what_is_missing == "an API token for the billing endpoint"
     assert verdict.evidence == "401 Unauthorized"
+
+
+async def test_judge_is_told_a_negative_finding_can_accomplish_a_task():
+    provider = _Provider(_accomplished())
+    await judge(provider, prompt="p", output="o", evidence="e", evidence_complete=True)
+    instruction = provider.calls[0]["messages"][0]["content"]
+    assert "A negative finding can accomplish a task" in instruction
+    assert "never actually investigated" in instruction
+
+
+def test_verdict_tool_schema_separates_a_negative_answer_from_undone_work():
+    outcome = verdict_tool_schema()[0]["function"]["parameters"]["properties"]["outcome"]
+    assert "could not be done is 'not_accomplished'" in outcome["description"]
+    assert "the answer is negative is 'accomplished'" in outcome["description"]
