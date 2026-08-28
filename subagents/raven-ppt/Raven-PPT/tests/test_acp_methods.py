@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from raven.acp import protocol
+from raven.acp import materials, protocol
 from raven.acp.capabilities import ClientCapabilities, agent_capabilities
-from raven.acp.methods import UNIMPLEMENTED_METHODS, AcpMethods
+from raven.acp.methods import UNIMPLEMENTED_METHODS, AcpMethodError, AcpMethods, sanitise_error_data
+from raven.acp.redact import REPLACEMENT
 from raven.acp.session import SessionTable
 from raven.acp.spine import AcpOutlet
 
@@ -322,6 +323,36 @@ async def test_loading_a_session_replays_its_turns_oldest_first(harness):
         ("user_message_chunk", "build me a deck about convolution"),
         ("agent_message_chunk", "eighteen pages, published"),
     ]
+
+
+async def test_a_replayed_turn_is_scrubbed_like_a_live_one(harness):
+    """A reopen republishes the transcript, so a credential a past turn quoted
+    would be re-published by every reopen from here on."""
+    session_id = await harness.new_session()
+    root = harness.jobs_root / session_id.split(":", 1)[1]
+    from raven.session.manager import SessionManager
+
+    stored = SessionManager(root).get_or_create(session_id)
+    stored.add_message("user", "fetch it with curl -H 'Authorization: Bearer sk-proj-abcdefghijklmnop'")
+    stored.add_message("assistant", "done; the key AKIAIOSFODNN7EXAMPLE is in ~/.aws/credentials")
+    SessionManager(root).save(stored)
+    await harness.methods._sessions.release(session_id)
+    harness.frames.clear()
+
+    result = await harness.call("session/load", {"cwd": str(harness.cwd), "sessionId": session_id})
+
+    assert "error" not in result
+    replayed = " ".join(
+        u["content"]["text"]
+        for u in harness.updates()
+        if u["sessionUpdate"] in {"user_message_chunk", "agent_message_chunk"}
+    )
+    assert "sk-proj-abcdefghijklmnop" not in replayed
+    assert "AKIAIOSFODNN7EXAMPLE" not in replayed
+    # The shape survives, so the reader can still tell what was run and that a
+    # credential file was read -- only the values are gone.
+    assert "Authorization: Bearer [redacted]" in replayed
+    assert "~/.aws/credentials" in replayed
 
 
 async def test_a_session_never_started_here_is_refused_rather_than_minted(harness):
@@ -965,6 +996,109 @@ async def test_a_handler_bug_becomes_an_error_frame(harness, monkeypatch):
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
     assert result["error"]["code"] == protocol.INTERNAL_ERROR
     assert result["error"]["data"] == {"reason": "unexpected"}
+
+
+# -- credentials do not leave the process ------------------------------------
+
+
+async def test_an_error_data_never_carries_a_traceback(harness, monkeypatch):
+    """A traceback tail names the filesystem it ran on and sometimes argument
+    values, and an error frame is kept in the client's transcript."""
+    await harness.handshake()
+
+    def _boom(_params):
+        raise AcpMethodError(
+            protocol.INTERNAL_ERROR,
+            "the build failed",
+            {"traceback_tail": '  File "/home/me/.config/raven.toml", line 3', "stage": "render"},
+        )
+
+    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    result = await harness.call("session/new", {"cwd": str(harness.cwd)})
+
+    assert result["error"]["data"] == {"stage": "render"}
+
+
+async def test_an_error_whose_data_is_only_private_carries_none_at_all(harness, monkeypatch):
+    """Absent rather than an empty object: ``data`` is optional, and ``{}`` reads
+    as "there is detail and it is empty"."""
+    await harness.handshake()
+
+    def _boom(_params):
+        raise AcpMethodError(protocol.INTERNAL_ERROR, "the build failed", {"stack": "..."})
+
+    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    result = await harness.call("session/new", {"cwd": str(harness.cwd)})
+
+    assert "data" not in result["error"]
+
+
+async def test_an_error_message_and_its_data_are_both_redacted(harness, monkeypatch):
+    await harness.handshake()
+
+    def _boom(_params):
+        raise AcpMethodError(
+            protocol.INVALID_REQUEST,
+            "GET /v1 refused api_key=sk-proj-abcdefghijklmnop",
+            {"env": {"OPENAI_API_KEY": "sk-proj-abcdefghijklmnop"}},
+        )
+
+    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    result = await harness.call("session/new", {"cwd": str(harness.cwd)})
+
+    assert "sk-proj-abcdefghijklmnop" not in str(result)
+    assert REPLACEMENT in result["error"]["message"]
+    # The key stays: the reader needs to know which credential was set.
+    assert result["error"]["data"]["env"] == {"OPENAI_API_KEY": REPLACEMENT}
+
+
+async def test_a_handler_bugs_reason_is_redacted(harness, monkeypatch):
+    await harness.handshake()
+
+    def _boom(_params):
+        raise ValueError("cannot reach https://user:hunter2secret@db:5432/app")
+
+    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    result = await harness.call("session/new", {"cwd": str(harness.cwd)})
+
+    assert "hunter2secret" not in str(result)
+    assert result["error"]["data"]["reason"] == f"cannot reach https://user:{REPLACEMENT}@db:5432/app"
+
+
+async def test_an_engine_build_failures_reason_is_redacted(harness):
+    await harness.handshake()
+    harness.fail_build = "no provider key; tried api_key=sk-proj-abcdefghijklmnop"
+
+    result = await harness.call("session/new", {"cwd": str(harness.cwd), "mcpServers": []})
+
+    assert "sk-proj-abcdefghijklmnop" not in str(result)
+    assert REPLACEMENT in result["error"]["data"]["reason"]
+
+
+async def test_a_staging_failure_is_said_redacted(harness, monkeypatch):
+    """This one never passes the dispatcher's error path: a prompt is answered
+    with message content, so it has to be redacted where it is said."""
+    session_id = await harness.new_session()
+
+    def _boom(_session, _text):
+        raise materials.StagingError("cannot stage /run/secrets/token=ghp_ABCDEFGHIJKLMNOPQRSTUV")
+
+    monkeypatch.setattr(harness.methods, "_stage_for", _boom)
+    result = await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "x"}]})
+
+    assert result["result"] == {"stopReason": "end_turn"}
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUV" not in harness.said()
+    assert REPLACEMENT in harness.said()
+    # The path stays: that the agent read a credential file is the one thing the
+    # reader most needs to see.
+    assert "/run/secrets/" in harness.said()
+
+
+def test_a_non_mapping_data_is_still_walked():
+    """``data`` is typed as any JSON value, and a list of arguments is a shape a
+    handler may reasonably send."""
+    assert sanitise_error_data(["--token", "ghp_ABCDEFGHIJKLMNOPQRSTUV"]) == ["--token", REPLACEMENT]
+    assert sanitise_error_data(None) is None
 
 
 async def test_a_response_frame_is_not_mistaken_for_a_request(harness):
