@@ -11,7 +11,7 @@
  * is pure and unit-testable without touching a real machine.
  */
 
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 
 export interface RavenCommand {
   command: string
@@ -20,7 +20,6 @@ export interface RavenCommand {
 }
 
 export interface ResolutionContext {
-  platform: NodeJS.Platform
   env: NodeJS.ProcessEnv
   configExecutablePath: string
   extraArgs: string[]
@@ -39,6 +38,9 @@ function expandHome(filePath: string, homeDir: string): string {
   }
   if (filePath.startsWith('~/')) {
     return join(homeDir, filePath.slice(2))
+  }
+  if (filePath.startsWith('~\\')) {
+    return win32.join(homeDir, filePath.slice(2))
   }
   return filePath
 }
