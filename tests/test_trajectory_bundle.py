@@ -19,7 +19,10 @@ def _write_log(path, spans):
 
 
 def _span(trace_id, *, attempt_id=None, session_key=None, name="session.turn", start=None, end=None, attrs=None):
-    attributes = {"attempt.id": attempt_id or trace_id, "session.key": session_key}
+    """Span in the current format; pass ``attempt_id`` for a legacy-format span."""
+    attributes = {"session.key": session_key}
+    if attempt_id is not None:
+        attributes["attempt.id"] = attempt_id
     if attrs:
         attributes.update(attrs)
     return {
@@ -298,11 +301,11 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(state))
     _spans._store = None
     try:
-        aid = trace.begin_attempt("cli:e2e")
-        with trace.span("session.turn", session_key="cli:e2e"):
+        # A single turn is addressed by its trace id (attempt id = trace id).
+        with trace.span("session.turn", session_key="cli:e2e") as root:
             with trace.span("tool.call") as s:
                 s.artifact("tool.output", {"result": "ok", "items": list(range(50))})
-        trace.end_attempt("cli:e2e")
+        aid = root.trace_id
 
         bundle_dir = tbundle.collect_bundle(aid, state_dir=state, workspace=workspace)
 
@@ -318,3 +321,107 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
         assert tstore.pins(state)[aid]["reason"] == "bundled"
     finally:
         _spans._store = None
+
+
+def test_bundle_tolerates_non_string_legacy_id(state, workspace):
+    """save by trace id still bundles when the span carries a list attempt.id
+    (unvalidated history must degrade, not crash the collector)."""
+    span = _span("trace-1", session_key="cli:chat1")
+    span["attributes"]["attempt.id"] = ["not", "a", "string"]
+    _write_log(state / "logs" / "audit-spans.log", [span])
+
+    bundle_dir = tbundle.collect_bundle("trace-1", state_dir=state, workspace=workspace)
+
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == "trace-1"
+    assert manifest["span_count"] == 1
+    assert "trace-1" in tstore.pins(state)
+
+
+def test_bundle_of_merged_attempt_survives_bad_neighbor_record(state):
+    """A list-traceId record elsewhere in the log must not break bundling a
+    merged attempt (the member filter is a set lookup)."""
+    bad = {"schemaVersion": "audit.span.v1", "traceId": ["x"], "attributes": {}}
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:chat1"), bad, _span("trace-2", session_key="cli:chat1")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    bundle_dir = tbundle.collect_bundle("trace-1", state_dir=state)
+
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == aid
+    assert manifest["span_count"] == 2
+
+
+def test_bundle_of_merged_attempt_tolerates_malformed_verdict_lines(state):
+    """The alias-set verdict filter must skip a list attempt_id line instead
+    of failing the whole collection."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:chat1"), _span("trace-2", session_key="cli:chat1")],
+    )
+    tverdict.record_verdict("trace-1", "fail", source="user", state_dir=state)
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    with (state / "verdicts.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"attempt_id": ["bad"], "status": "fail", "source": "user", "ts": "now"}) + "\n")
+
+    bundle_dir = tbundle.collect_bundle(aid, state_dir=state)
+
+    verdicts = _read_lines(bundle_dir / "verdicts.jsonl")
+    assert {v["attempt_id"] for v in verdicts} == {"trace-1"}
+
+
+def test_bundle_of_merged_attempt_collects_all_member_traces(state):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:chat1", start="2026-08-20T10:00:00+00:00"),
+            _span("trace-2", session_key="cli:chat1", start="2026-08-20T11:00:00+00:00"),
+        ],
+    )
+    tverdict.record_verdict("trace-1", "fail", source="user", state_dir=state)
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    tverdict.record_verdict(aid, "pass", source="user", state_dir=state)
+
+    bundle_dir = tbundle.collect_bundle("trace-2", state_dir=state)
+
+    assert bundle_dir == (state / "bundles" / aid).resolve()
+    spans = _read_lines(bundle_dir / "spans.jsonl")
+    assert [s["traceId"] for s in spans] == ["trace-1", "trace-2"]
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempt_id"] == aid
+    assert manifest["span_count"] == 2
+    verdicts = _read_lines(bundle_dir / "verdicts.jsonl")
+    assert {v["attempt_id"] for v in verdicts} == {"trace-1", aid}
+
+
+def test_bundle_of_definition_with_purged_members_raises_lookup_error(state):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1"), _span("trace-2")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+    (state / "logs" / "audit-spans.log").unlink()
+
+    with pytest.raises(LookupError, match="no spans found for attempt"):
+        tbundle.collect_bundle(aid, state_dir=state)
+
+
+def test_bundle_pin_falls_back_to_member_traces_when_attempt_vanishes(state, monkeypatch):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1"), _span("trace-2")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    def vanished(id_, *, reason="", state_dir=None):
+        raise LookupError(f"no spans found for id {id_!r}")
+
+    monkeypatch.setattr(tbundle, "pin_attempt", vanished)
+    tbundle.collect_bundle(aid, state_dir=state)
+
+    registry = tstore.pins(state)
+    assert registry["trace-1"]["reason"] == "bundled"
+    assert registry["trace-2"]["reason"] == "bundled"

@@ -827,7 +827,7 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
         assert result is not None and result[0] == "all done"
         assert marker.read_text(encoding="utf-8") == "hi", "recording must have run the real tool"
 
-        attempt_id = next(iter(tstore.iter_spans(traces)))["attributes"]["attempt.id"]
+        attempt_id = next(iter(tstore.iter_spans(traces)))["traceId"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
         marker.unlink()
         spans_before = (traces / "logs" / "audit-spans.log").read_text(encoding="utf-8")
@@ -879,7 +879,7 @@ async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeyp
             ),
             session_key="cli:e2e-div",
         )
-        attempt_id = next(iter(tstore.iter_spans(traces)))["attributes"]["attempt.id"]
+        attempt_id = next(iter(tstore.iter_spans(traces)))["traceId"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
 
         # Rewrite the recorded turn input so the live request diverges.
@@ -943,7 +943,7 @@ async def test_end_to_end_streamed_recording_replays_through_the_stream_path(tmp
         recorded_spans = list(tstore.iter_spans(traces))
         assert any(s["attributes"].get("llm.stream") for s in recorded_spans), "recording must be streamed"
 
-        attempt_id = recorded_spans[0]["attributes"]["attempt.id"]
+        attempt_id = recorded_spans[0]["traceId"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
         marker.unlink()
 
@@ -1025,7 +1025,7 @@ async def test_end_to_end_replay_restores_pre_attempt_history(tmp_path, monkeypa
 
         # The second turn is its own single-turn attempt; bundle only it.
         last_span = list(tstore.iter_spans(traces))[-1]
-        bundle = collect_bundle(last_span["attributes"]["attempt.id"], state_dir=traces)
+        bundle = collect_bundle(last_span["traceId"], state_dir=traces)
         assert (bundle / "session.jsonl").is_file()
         marker.unlink()
 
@@ -1088,7 +1088,7 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
         await loop._process_message(req(), session_key="cli:e2e-rep")
 
         last_span = list(tstore.iter_spans(traces))[-1]
-        bundle = collect_bundle(last_span["attributes"]["attempt.id"], state_dir=traces)
+        bundle = collect_bundle(last_span["traceId"], state_dir=traces)
         marker.unlink()
 
         report = await run_replay(bundle, mode="strict")
