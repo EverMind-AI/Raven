@@ -56,7 +56,6 @@ class OpenAICodexProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
-        timeout: float | None = None,
     ) -> LLMResponse:
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
@@ -92,7 +91,7 @@ class OpenAICodexProvider(LLMProvider):
 
         url = DEFAULT_CODEX_URL
 
-        timeout = timeout or self.generation.timeout
+        timeout = self.generation.timeout
         try:
             try:
                 content, tool_calls, finish_reason = await _request_codex(

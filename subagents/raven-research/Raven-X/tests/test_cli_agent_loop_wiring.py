@@ -136,17 +136,8 @@ def test_the_dr_surfaces_pass_the_configured_flow_not_a_fresh_default():
 
     from raven.cli import acp_commands, agent_commands, gateway_commands
 
-    for mod in (agent_commands, gateway_commands):
+    for mod in (acp_commands, agent_commands, gateway_commands):
         src = inspect.getsource(mod)
         assert "dr_flow=ec_config.dr_flow" in src, (
             f"{mod.__name__} must pass the configured flow, not a fresh DRFlowConfig()"
         )
-
-    # The ACP surface resolves the flow per session (raven/acp/modes.py): a mode
-    # is the config's own flow with an overlay merged over it, so the literal
-    # above is not the spelling there. What still has to hold is the same thing
-    # it was pinning -- the configured flow is the source, and no
-    # default-constructed one is anywhere on the path.
-    acp_src = inspect.getsource(acp_commands)
-    assert "ec_config.dr_flow" in acp_src, "acp_commands must derive the flow from the config"
-    assert "DRFlowConfig(" not in acp_src, "acp_commands must not construct a flow of its own"

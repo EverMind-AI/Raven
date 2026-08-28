@@ -90,12 +90,8 @@ def _wire_serve_stubs(monkeypatch, events: list[str], backend) -> None:
     async def fake_open_stdin():
         yield object()
 
-    async def fake_serve(reader, out, *, loops, user_pool, modes):
+    async def fake_serve(reader, out, *, loops, user_pool):
         events.append("serve")
-        # One table, shared: the registry rebuilds an engine against the mode
-        # the methods layer recorded, so two would let a session be told it had
-        # switched while its engine kept the old profile.
-        assert modes is not None and not modes.enabled
         # The registry serves the shared pieces _serve already built and started
         # the backend on, and builds one engine per session on top of them.
         assert loops.session_manager is shared.session_manager
@@ -106,19 +102,13 @@ def _wire_serve_stubs(monkeypatch, events: list[str], backend) -> None:
         assert await loops.get("acp:one") is first
 
     built: list[str | None] = []
-    from raven.config.raven import DRFlowConfig
-    from raven.config.schema import AcpConfig
-
-    acp = AcpConfig(user_pool=2, max_loops=8)
     shared = SimpleNamespace(
         backend=backend,
         session_manager=object(),
-        acp=acp,
-        config=SimpleNamespace(acp=acp, agents=SimpleNamespace(defaults=SimpleNamespace(max_tool_iterations=40))),
-        ec_config=SimpleNamespace(dr_flow=DRFlowConfig()),
+        acp=SimpleNamespace(user_pool=2, max_loops=8),
     )
 
-    def fake_build_loop(_shared, conversation=None, profile=None):
+    def fake_build_loop(_shared, conversation=None):
         built.append(conversation)
         return SimpleNamespace(workspace=None)
 
@@ -377,69 +367,3 @@ def test_a_rejected_id_still_maps_to_one_stable_directory(tmp_path):
     other = _session_file_root(tmp_path, "acp:../../var")
     assert first == second
     assert first != other
-
-
-async def test_a_declared_mode_reaches_the_engine_and_a_switch_rebuilds_it(monkeypatch):
-    """The whole wiring in one pass: the profile a session is in decides what
-    ``build_loop`` is handed, and changing it rebuilds that session's engine on
-    its next turn. Without the tag the switch would be recorded and then ignored
-    for the life of the resident engine, which is a mode that lies."""
-    import io
-    from types import SimpleNamespace
-
-    from raven.cli import acp_commands
-    from raven.config.raven import DRFlowConfig
-    from raven.config.schema import AcpConfig
-
-    acp = AcpConfig.model_validate(
-        {
-            "modes": {
-                "fast": {"name": "Fast", "drFlow": {}, "maxToolIterations": 40},
-                "deep": {"name": "Deep", "drFlow": {"maxIterations": 30}, "maxToolIterations": 60},
-            },
-            "defaultMode": "fast",
-        }
-    )
-    shared = SimpleNamespace(
-        backend=None,
-        session_manager=object(),
-        acp=acp,
-        config=SimpleNamespace(acp=acp, agents=SimpleNamespace(defaults=SimpleNamespace(max_tool_iterations=40))),
-        ec_config=SimpleNamespace(dr_flow=DRFlowConfig(enabled=True, max_iterations=20)),
-    )
-    built: list[tuple[str | None, int, int | None]] = []
-
-    def fake_build_loop(_shared, conversation=None, profile=None):
-        built.append((conversation, profile.max_iterations, profile.dr_flow.max_iterations))
-        return SimpleNamespace(workspace=None)
-
-    async def fake_serve(reader, out, *, loops, user_pool, modes):
-        await loops.get("acp:one")
-        assert built[-1] == ("acp:one", 40, 20), "a fresh session runs the declared default"
-
-        modes.set("acp:one", "deep")
-        await loops.get("acp:one")
-        assert built[-1] == ("acp:one", 60, 30), "the next turn runs the mode that was asked for"
-
-        await loops.get("acp:one")
-        assert len(built) == 2, "and is not rebuilt again while the mode holds"
-
-    import contextlib as _ctx
-
-    @_ctx.contextmanager
-    def fake_claim_stdout():
-        yield io.BytesIO()
-
-    @_ctx.asynccontextmanager
-    async def fake_open_stdin():
-        yield object()
-
-    monkeypatch.setattr(acp_commands, "redirect_loguru_to_file", lambda *a, **k: "acp.log")
-    monkeypatch.setattr(acp_commands, "install_crash_handlers", lambda: None)
-    monkeypatch.setattr(acp_commands, "claim_stdout", fake_claim_stdout)
-    monkeypatch.setattr(acp_commands, "_open_stdin", fake_open_stdin)
-    monkeypatch.setattr(acp_commands, "serve", fake_serve)
-    monkeypatch.setattr(acp_commands, "build_shared", lambda config=None: shared)
-    monkeypatch.setattr(acp_commands, "build_loop", fake_build_loop)
-
-    await acp_commands._serve(None)

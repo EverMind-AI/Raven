@@ -1692,106 +1692,6 @@ export interface KnowledgeHit {
   text: string;
 }
 /**
- * Just enough of one step to draw the graph: which step it is, and what it
- * waits for. The library page draws a concept diagram per card, and shipping
- * the prompts and per-node config the detail view needs would be the whole
- * library on page open.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookNodeShape".
- */
-export interface PlaybookNodeShape {
-  id: string;
-  depends_on: string[];
-}
-/**
- * One playbook as the library list needs it. ``error`` is empty unless the
- * file would not parse, in which case it carries the reason and ``nodes`` is
- * empty -- one unreadable file in a directory of user-edited text must not
- * take the page down with it. ``disabled`` lives in config rather than in the
- * file, because the file is the distribution unit and the switch is local to
- * this machine.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookRow".
- */
-export interface PlaybookRow {
-  name: string;
-  description: string;
-  task_summary: string;
-  mode: 'dag' | 'prompt';
-  confirm: boolean;
-  origin: string;
-  disabled: boolean;
-  nodes: PlaybookNodeShape[];
-  error: string;
-}
-/**
- * One runtime input. ``description`` is the sentence the caller is asked when
- * the value is missing, so a form built from this uses it as the label.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookParam".
- */
-export interface PlaybookParam {
-  type: string;
-  required: boolean;
-  default?: JsonValue;
-  enum?: string[];
-  description: string;
-}
-/**
- * One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may
- * be empty: those three are the fields an author may leave blank for the
- * caller to fill at run time. ``skills`` / ``mcps`` are three-state -- null
- * means the author said nothing, ``[]`` means the author wrote an empty list,
- * and a list names what to consider.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookNode".
- */
-export interface PlaybookNode {
-  id: string;
-  subagent: string;
-  node_summary: string;
-  prompt_template: string;
-  depends_on: string[];
-  skills?: string[];
-  mcps?: string[];
-  instance: string;
-  inputs: {
-    [k: string]: JsonValue;
-  };
-}
-/**
- * One whole playbook: its identity, its runtime inputs, and either the graph
- * (``mode: dag``) or the assembly guidance a model turns into one
- * (``mode: prompt``). ``path`` is the file this was read from.
- *
- * ``version`` is the spec format version the file declares, not a revision of
- * the playbook's content.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookDetail".
- */
-export interface PlaybookDetail {
-  name: string;
-  description: string;
-  task_summary: string;
-  version: number;
-  mode: 'dag' | 'prompt';
-  confirm: boolean;
-  origin: string;
-  disabled: boolean;
-  path: string;
-  keywords: string[];
-  params: {
-    [k: string]: PlaybookParam;
-  };
-  nodes: PlaybookNode[];
-  prompts: string;
-}
-/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
@@ -2709,32 +2609,6 @@ export interface SubagentsInstanceSteerParams {
  */
 export interface SubagentsInstanceSteerResult {
   status: 'injected' | 'no_turn' | 'unsupported';
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentsInstanceSetModeParams".
- */
-export interface SubagentsInstanceSetModeParams {
-  session_key: string;
-  agent: string;
-  handle: string;
-  mode?: string;
-  clear?: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentsInstanceSetModeResult".
- */
-export interface SubagentsInstanceSetModeResult {
-  /**
-   * The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error.
-   */
-  mode?: string | null;
-  availableModes?: {
-    id: string;
-    name?: string;
-    description?: string;
-  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3784,32 +3658,6 @@ export interface MemoryDeleteResult {
    * Deleting an episode also drops its derived facts and foresight.
    */
   removed: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksListParams".
- */
-export interface PlaybooksListParams {}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksListResult".
- */
-export interface PlaybooksListResult {
-  playbooks: PlaybookRow[];
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksGetParams".
- */
-export interface PlaybooksGetParams {
-  name: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksGetResult".
- */
-export interface PlaybooksGetResult {
-  playbook: PlaybookDetail;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

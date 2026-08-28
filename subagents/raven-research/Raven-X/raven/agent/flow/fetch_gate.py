@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from raven.agent.fetch_gate import FetchGate
-from raven.agent.harness_text import SUFFICIENCY_PREFIX, fetch_gate_notice
+from raven.agent.harness_text import fetch_gate_notice
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.tools.web import fetch_result_ok
 from raven.security.trust import unwrap_untrusted
@@ -136,20 +136,10 @@ class FetchGateObserver(AgentHook):
             # newest message is not a tool result there is nothing to hang it on,
             # and advancing anyway would skip the explanation for this firing
             # instead of deferring it to the next iteration that can carry it.
-            #
-            # A body already carrying the sufficiency release note defers the same
-            # way: that note says "stop opening pages, write" and this one says
-            # "open a page" - two harness sentences pointing opposite ways on one
-            # body. This is the only seam that can see the stack (the release is
-            # written in after_iteration, this notice in the NEXT before_iteration,
-            # both onto the same newest tool result), and the condition can only be
-            # true with the sufficiency knob on, so every measured arm is
-            # byte-identical.
             if messages and messages[-1].get("role") == "tool":
+                state["notice_at"] = self._gate.fired
                 body = messages[-1].get("content") or ""
-                if SUFFICIENCY_PREFIX not in body:
-                    state["notice_at"] = self._gate.fired
-                    messages[-1]["content"] = f"{body}\n\n{fetch_gate_notice()}"
+                messages[-1]["content"] = f"{body}\n\n{fetch_gate_notice()}"
             logger.warning(
                 "fetch-gate: closed web_search after %d unread searches (fire %d)",
                 self._gate.streak,

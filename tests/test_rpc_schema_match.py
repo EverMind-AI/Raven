@@ -15,11 +15,7 @@ For each method declared in the schema:
     field-level invariants.
 
 We deliberately do NOT compare every nested key (titles, descriptions, Pydantic
-"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Nullability is
-therefore NOT checked here: both sides are stripped of their null branch before
-the diff, so a nullable Pydantic field over a non-nullable schema one passes.
-Pin that per method against real handler output instead -- see
-``test_every_set_mode_answer_satisfies_the_published_result_schema``.  Instead we
+"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Instead we
 *normalize* both sides to a canonical ``{name → field_descriptor}`` shape and
 diff those.  This gives a readable assertion message on drift while staying
 robust to Pydantic's stylistic choices.
@@ -110,17 +106,9 @@ def _normalize_oas_type(
         return expanded
     out: dict[str, Any] = {}
     if "type" in node:
+        # OpenRPC declares JsonValue as a multi-typed primitive node; collapse.
         if isinstance(node["type"], list):
-            # Two shapes share this spelling. ``[T, "null"]`` is a nullable T --
-            # the schema's way of writing what Pydantic emits as
-            # ``anyOf: [T, null]`` and ``_strip_null_anyof`` reduces to T, so
-            # reduce it the same way or the two sides can never agree. Anything
-            # wider is JsonValue's multi-typed primitive node; collapse that.
-            non_null = [t for t in node["type"] if t != "null"]
-            if len(non_null) == 1:
-                out["type"] = non_null[0]
-            else:
-                out["any"] = True
+            out["any"] = True
         else:
             out["type"] = node["type"]
     if "enum" in node:

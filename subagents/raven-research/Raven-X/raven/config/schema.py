@@ -733,28 +733,6 @@ class GatewayConfig(Base):
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
 
 
-class AcpModeConfig(Base):
-    """One operating profile a client may switch a session to.
-
-    The ACP spec's session modes: a named profile a session runs in, switched
-    over ``session/set_mode``. What varies here is research effort, so the
-    overlay carries only the two engine inputs an effort profile moves -- the
-    DR flow and the tool-iteration ceiling. Everything else about the agent is
-    the connection's, identically, in every mode.
-
-    ``dr_flow`` is a DIFF over the config's own ``drFlow``, not a complete
-    block, and that is load-bearing: a complete block would carry
-    ``identityOverride`` -- the whole identity prompt -- once per mode, which
-    is the drift the one-prompt-one-place rule exists to prevent.
-    """
-
-    name: str
-    description: str = ""
-    dr_flow: dict[str, Any] = Field(default_factory=dict)
-    max_tool_iterations: int | None = None
-    """``None`` inherits ``agents.defaults.maxToolIterations``."""
-
-
 class AcpConfig(Base):
     """The ACP surface's own sizing.
 
@@ -774,29 +752,6 @@ class AcpConfig(Base):
     # mid-turn is never evicted, so the count sits above this until that turn
     # ends, which is when reclamation is retried.
     max_loops: int = Field(default=8, ge=1)
-
-    modes: dict[str, AcpModeConfig] = Field(default_factory=dict)
-    """The profiles ``session/set_mode`` may switch a session between.
-
-    Empty is the normal state and means this build declares no modes: the
-    session response carries no ``modes`` object and ``session/set_mode`` stays
-    method-not-found, which is what every deployment that has not opted in
-    already sees.
-    """
-
-    default_mode: str | None = None
-    """Which of ``modes`` a session starts in. ``None`` with modes declared
-    takes the first, so a catalogue can be declared without also naming an
-    entry point."""
-
-    @model_validator(mode="after")
-    def _check_default_mode(self) -> "AcpConfig":
-        if self.default_mode is not None and self.default_mode not in self.modes:
-            raise ValueError(
-                f"acp.defaultMode {self.default_mode!r} names no entry in acp.modes "
-                f"({', '.join(sorted(self.modes)) or 'none declared'})"
-            )
-        return self
 
 
 class WebProviderKey(Base):

@@ -36,33 +36,6 @@ HERE = Path(__file__).resolve().parent
 # The checkout lives beside this launcher, per the subagents/ convention.
 RAVEN_X = HERE / "Raven-X"
 DEFAULT_CONFIG = HERE / "config.json"
-# Budget overlays over the baseline config. `config.json` is the complete
-# default (fast) profile; each overlay carries only the knobs that differ, so
-# the identity prompt and provider wiring exist in exactly one place.
-MODES_DIR = HERE / "modes"
-
-# What a client's mode picker shows. The name and blurb live here rather than in
-# the overlay files because they are product copy about the choice, not config
-# the agent reads; the overlay beside each one carries the knobs.
-MODE_LABELS = {
-    "fast": (
-        "Fast",
-        "Bounded budget; converges as soon as the evidence answers the question. "
-        "The default, and right for an ordinary question.",
-    ),
-    "deep": (
-        "Deep",
-        "Keeps searching for longer before the early-convergence gate is consulted. "
-        "For a multi-faceted topic one pass of evidence will not settle.",
-    ),
-    "ultra": (
-        "Ultra",
-        "No early-convergence gate; exhaustive retrieval. "
-        "Only when the user has explicitly asked for exhaustive research.",
-    ),
-}
-# The baseline IS the fast profile, so it needs no overlay file; the others do.
-BASELINE_MODE = "fast"
 
 
 def env_value(name: str) -> str | None:
@@ -199,54 +172,6 @@ def put(data: dict, path: tuple, value: str) -> None:
     node[path[-1]] = value
 
 
-OVERLAY_KEYS = frozenset({"drFlow", "agents"})
-"""What a `modes/*.json` overlay may carry at its top level.
-
-Only these two are read below, so anything else would be dropped in silence --
-the failure `AcpModeConfig` promises not to have. Widening the pair means
-teaching the reader the new key in the same change.
-"""
-
-
-def mode_catalogue() -> dict:
-    """The `acp.modes` block: one entry per mode, each carrying its own diff.
-
-    Declared rather than applied. The overlays used to be merged here, which
-    fixed a connection's budget at launch; the agent composes them per session
-    now, so the same three files become a catalogue a client picks from over
-    `session/set_mode` and `--mode` becomes only which entry a session starts
-    in. Diffs, not merged blocks: a merged one would carry `identityOverride`,
-    the whole identity prompt, once per mode.
-
-    An empty dict when this folder ships no `modes/` directory, which leaves the
-    rendered config without an `acp.modes` key and the agent's `session/set_mode`
-    method-not-found - the pre-modes behaviour, unchanged.
-    """
-    if not MODES_DIR.is_dir():
-        return {}
-    catalogue = {}
-    for mode, (name, description) in MODE_LABELS.items():
-        overlay = {}
-        if mode != BASELINE_MODE:
-            overlay_file = MODES_DIR / f"{mode}.json"
-            if not overlay_file.is_file():
-                continue
-            overlay = json.loads(overlay_file.read_text(encoding="utf-8"))
-            unknown = sorted(set(overlay) - OVERLAY_KEYS)
-            if unknown:
-                raise SystemExit(
-                    f"{overlay_file}: unsupported top-level key(s) {', '.join(unknown)}; "
-                    f"an overlay carries only {', '.join(sorted(OVERLAY_KEYS))}"
-                )
-        catalogue[mode] = {
-            "name": name,
-            "description": description,
-            "drFlow": overlay.get("drFlow", {}),
-            "maxToolIterations": (overlay.get("agents") or {}).get("defaults", {}).get("maxToolIterations"),
-        }
-    return catalogue
-
-
 def recommended_llm() -> str:
     """What this folder's manifest says this agent is tuned for."""
     try:
@@ -373,7 +298,7 @@ def require_fetch(config: dict) -> None:
         )
 
 
-def render_config(source: Path, mode: str | None = None) -> Path:
+def render_config(source: Path) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
 
     The location is the whole mechanism, not a detail. Raven-X derives
@@ -385,16 +310,6 @@ def render_config(source: Path, mode: str | None = None) -> Path:
     wholesale on every upstream zip, so a patch would not survive.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
-    catalogue = mode_catalogue()
-    if mode and mode not in catalogue:
-        raise SystemExit(f"error: no overlay for mode {mode!r} at {MODES_DIR / f'{mode}.json'}")
-    if catalogue:
-        # The source stays the baseline every mode diffs against, so nothing is
-        # merged into it here: `defaultMode` is the whole of what `--mode` does.
-        acp = config.setdefault("acp", {})
-        acp["modes"] = catalogue
-        acp["defaultMode"] = mode or BASELINE_MODE
-        log(f"[run] modes: {', '.join(catalogue)} (default {acp['defaultMode']})")
     host = host_config()
 
     # Each optional key falls back on its own: a missing Jina key is a
@@ -454,13 +369,6 @@ def render_config(source: Path, mode: str | None = None) -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Serve the Raven-X research agent over ACP on stdio.")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
-    ap.add_argument(
-        "--mode",
-        choices=("fast", "deep", "ultra"),
-        default=None,
-        help="Which profile sessions start in; a client may switch a live "
-        "session with session/set_mode. `fast` is the baseline as-is.",
-    )
     ap.add_argument("--raven-x", default=str(RAVEN_X))
     args = ap.parse_args()
 
@@ -471,8 +379,7 @@ def main() -> int:
     if not raven_bin.is_file():
         raise SystemExit(f"error: Raven-X venv missing at {raven_bin}; run `uv sync` in {root}")
 
-    mode = None if args.mode == "fast" else args.mode
-    rendered = render_config(Path(args.config).resolve(), mode=mode)
+    rendered = render_config(Path(args.config).resolve())
     log(f"[run] exec {raven_bin} acp (config {rendered}, state under {STATE_ROOT})")
     os.chdir(root)
     os.execv(str(raven_bin), [str(raven_bin), "acp", "--config", str(rendered)])

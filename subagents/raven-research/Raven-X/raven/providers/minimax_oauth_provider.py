@@ -44,12 +44,9 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
-        timeout: float | None = None,
     ) -> LLMResponse:
         await self._prepare_token()
-        return await super().chat(
-            messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice, timeout=timeout
-        )
+        return await super().chat(messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice)
 
     async def chat_stream(
         self,

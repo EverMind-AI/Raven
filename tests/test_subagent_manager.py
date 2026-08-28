@@ -969,16 +969,12 @@ class _BindingBackend:
     def __init__(self) -> None:
         self.resolver: Any = None
         self.sink: Any = None
-        self.caps_listener: Any = None
 
     def bind_session_dir(self, resolver: Any) -> None:
         self.resolver = resolver
 
     def bind_event_sink(self, sink: Any) -> None:
         self.sink = sink
-
-    def bind_caps_listener(self, listener: Any) -> None:
-        self.caps_listener = listener
 
 
 class _PlainBackend:
@@ -1008,11 +1004,6 @@ def test_dispatch_hands_a_binding_backend_the_session_dir_rule(tmp_path: Path) -
     # every attribute access.
     assert backend.resolver == mgr.session_dir_for
     assert backend.sink == mgr._emit_event
-    # An acp agent re-advertises its modes on every route into a session, so a
-    # dispatch is where a reworded menu is first seen. Without this hand-over the
-    # store learns it and the agent table -- which is what the spawn schema is
-    # built from -- keeps offering the old wording until the next restart.
-    assert backend.caps_listener == mgr.refresh_agents
 
 
 def test_the_bound_rule_answers_for_a_manager_built_without_a_resolver(tmp_path: Path) -> None:

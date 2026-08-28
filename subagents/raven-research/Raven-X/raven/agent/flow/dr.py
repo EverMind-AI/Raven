@@ -31,7 +31,6 @@ from raven.agent.flow.fetch_gate import FetchGateObserver
 from raven.agent.flow.finalize import ForcedFinalizeGate
 from raven.agent.flow.report_shape import ReportShapeGate
 from raven.agent.flow.spin_breaker import SpinEntryBreaker
-from raven.agent.flow.sufficiency import SufficiencyGate
 from raven.agent.flow.verify import DraftReviewerGate
 from raven.agent.search_saturation import SearchSaturation
 from raven.context_engine.base import AssemblyContext, Segment
@@ -886,27 +885,6 @@ def build_dr_flow(
                 )
             )
         )
-    if config.sufficiency.enabled:
-        # Ordered after the two fetch rules and before the terminal gates, which is
-        # the order the turn reads them in: those two act on a turn that has not
-        # opened a page, this one on the first turn that has, and verify / finalize
-        # act on a draft. Nothing here depends on that order - each rule keys on its
-        # own predicate - but a reader tracing "what can touch this iteration"
-        # follows the list.
-        observers.append(
-            SufficiencyGate(
-                provider,
-                model=config.sufficiency.model,
-                min_searches=config.sufficiency.min_searches,
-                min_fetches=config.sufficiency.min_fetches,
-                timeout_seconds=config.sufficiency.timeout_seconds,
-                attempt_timeout_seconds=config.sufficiency.attempt_timeout_seconds,
-                max_tokens=config.sufficiency.max_tokens,
-                reasoning_effort=config.sufficiency.reasoning_effort,
-                evidence_items=config.sufficiency.evidence_items,
-                evidence_item_chars=config.sufficiency.evidence_item_chars,
-            )
-        )
     if config.spin_breaker.enabled:
         observers.append(
             SpinEntryBreaker(
@@ -946,11 +924,9 @@ def build_dr_flow(
             model=config.verify.model,
             timeout_seconds=config.verify.timeout_seconds,
             attempt_timeout_seconds=config.verify.attempt_timeout_seconds,
-            attempt_http_timeout_seconds=config.verify.attempt_http_timeout_seconds,
             max_revisions=config.verify.max_revisions,
             review_final_draft=config.verify.review_final_draft,
             max_tokens=config.verify.max_tokens,
-            reasoning_effort=config.verify.reasoning_effort,
             constraint_rubric=config.verify.constraint_rubric,
             strict_reject_only=config.verify.strict_reject_only,
             fail_open_on_elided_evidence=config.verify.fail_open_on_elided_evidence,

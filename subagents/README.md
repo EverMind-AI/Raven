@@ -17,7 +17,7 @@ multi-turn semantics are per-agent and only documented there.
 | `<Checkout>/` | The agent's own source tree. Ships as source; its `.venv` does **not** |
 | `run.py` | Host-side launcher - what the host raven actually spawns. Standard library only |
 | `install.py` | Resolves the entry's placeholders and writes it into the host raven's config |
-| `subagent.json` | The roster entry, with `{SUBAGENT_DIR}` and `{PYTHON}` left unresolved. A folder may add `subagent.<mode>.json` variants beside it - each is a discovered roster row of its own over the same checkout (raven-research ships deep/ultra) |
+| `subagent.json` | The roster entry, with `{SUBAGENT_DIR}` and `{PYTHON}` left unresolved |
 | `config.json` | The agent's run config. Holds **no** secrets, and no absolute path |
 | `.env.example` | Template for the secrets and the path knobs |
 | `.env` | The real secrets. Mode 600, never committed |

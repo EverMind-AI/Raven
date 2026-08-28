@@ -51,7 +51,6 @@ const composerState = {
 
 interface Harness {
   actions: ReturnType<typeof composerActions>
-  appendMessage: ReturnType<typeof vi.fn>
   request: ReturnType<typeof vi.fn>
   send: ReturnType<typeof vi.fn>
   submit: (value: string) => void
@@ -59,9 +58,8 @@ interface Harness {
 }
 
 /** Mount `useSubmission` with stub collaborators and hand back its submit. */
-const mounted = (slash: (cmd: string) => boolean = () => false): Harness => {
+const mounted = (): Harness => {
   const actions = composerActions()
-  const appendMessage = vi.fn()
   const request = vi.fn().mockResolvedValue({ matched: false })
   const send = vi.fn().mockResolvedValue(undefined)
   const sys = vi.fn()
@@ -69,7 +67,7 @@ const mounted = (slash: (cmd: string) => boolean = () => false): Harness => {
 
   const Probe = () => {
     useSubmission({
-      appendMessage,
+      appendMessage: vi.fn(),
       chatStreamRef: ref<{ send: (content: string) => Promise<unknown> } | null>({ send }),
       composerActions: actions as never,
       composerRefs: {
@@ -83,7 +81,7 @@ const mounted = (slash: (cmd: string) => boolean = () => false): Harness => {
       gw: { request } as never,
       maybeGoodVibes: vi.fn(),
       setLastUserMsg: vi.fn(),
-      slashRef: ref<(cmd: string) => boolean>(slash),
+      slashRef: ref<(cmd: string) => boolean>(() => false),
       submitRef,
       sys
     })
@@ -94,7 +92,7 @@ const mounted = (slash: (cmd: string) => boolean = () => false): Harness => {
   const stdout = new PassThrough()
   renderSync(<Probe />, { stdout: stdout as never })
 
-  return { actions, appendMessage, request, send, submit: (value: string) => submitRef.current(value), sys }
+  return { actions, request, send, submit: (value: string) => submitRef.current(value), sys }
 }
 
 describe('submitting while a turn is in flight', () => {
@@ -158,36 +156,5 @@ describe('submitting while a turn is in flight', () => {
 
     expect(h.sys).not.toHaveBeenCalledWith(expect.stringContaining('is still replying'))
     expect(h.actions.clearIn).toHaveBeenCalled()
-  })
-})
-
-describe('echoing a slash command', () => {
-  beforeEach(() => {
-    resetUiState()
-    resetDirectChat()
-    patchUiState({ sid: 'sess-1' })
-  })
-
-  it('echoes into the instance transcript while a direct chat is open', () => {
-    // The view renders `visibleRows`, which in a direct chat is the instance's
-    // own rows -- an echo on the main transcript is invisible here, and shows up
-    // in a conversation that never ran the command.
-    enterDirect('Researcher', 'h1')
-
-    const ran: string[] = []
-    const h = mounted(cmd => (ran.push(cmd), true))
-    h.submit('/mode deep')
-
-    expect(getDirectTranscript(directKey('Researcher', 'h1')).map(m => m.text)).toContain('/mode deep')
-    expect(h.appendMessage).not.toHaveBeenCalled()
-    expect(ran).toEqual(['/mode deep'])
-  })
-
-  it('echoes into the main transcript on the main view', () => {
-    const h = mounted(() => true)
-    h.submit('/status')
-
-    expect(h.appendMessage).toHaveBeenCalledWith({ kind: 'slash', role: 'system', text: '/status' })
-    expect(getDirectTranscript(directKey('Researcher', 'h1'))).toEqual([])
   })
 })

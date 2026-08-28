@@ -1,6 +1,6 @@
 # Example configs
 
-Seven configs, copied from the ones the evaluation harness actually runs, with endpoints and
+Four configs, copied from the ones the evaluation harness actually runs, with endpoints and
 keys replaced by placeholders. Copy one, fill in the placeholders, pass it with `--config`.
 
 | File | What it is | Needs |
@@ -10,8 +10,6 @@ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with 
 | `dr_pinned_corpus.json` | DR Flow over a fixed corpus instead of the live web. Reproduces our controlled measurements. | LLM endpoint, a corpus service on `:8765` |
 | `anchor_flow_off.json` | The **measurement anchor** (`drFlow.enabled=false`). Not a product configuration — see README "Measurement anchor". | same as above |
 | `everos_memory.json` | **Memory, not DR.** Wiring the EverOS backend so captured turns land. Recall ships off; one key turns it on. | LLM key, an EverOS service on `:8000` |
-| `dr_ask_user.json` | `dr_multi_turn.json` plus the **ask_user clarify round**: on a conversation's first turn the agent may ask up to 3 questions (tool delivery) before researching. | same as `dr_live_web.json` |
-| `dr_shallow.json` | **A product profile, not a measured arm.** `dr_multi_turn.json` with the priced convergence gates on and the deep report template off - "simple questions get less research". | same as `dr_live_web.json` |
 
 **Name the real gateway in `providers`, not `custom`.** The two OpenRouter configs use a
 `providers.openrouter` slot; the two self-hosted ones use `custom`, which is the correct slot for an
@@ -96,33 +94,6 @@ Four knobs deserve a warning:
   benchmarked reached 31 real web pages out of a pinned corpus using `exec` plus `curl`. Note
   that `toolsAllowlist` only applies when the flow is **on**, so for `anchor_flow_off.json`
   the denylist is the only fence there is.
-
-### `dr_shallow.json`: five deltas, and which of them are depth
-
-This one is not copied from a harness arm. It is the product profile for "simple questions get
-less research", and it differs from `dr_multi_turn.json` in exactly five values - two of which are
-depth and three of which are hygiene:
-
-| Value | | Why |
-|---|---|---|
-| `budgetNote.warnRatio` | 0.8 -> **0.6** | *depth.* Contract rule 2 turns the budget line's warning into an instruction ("stop opening new leads, verify what you have, draft the answer"). It fires at `iteration / maxIterations >= warnRatio`, so at `maxIterations: 20` this moves the converge push from turn 16 to turn 12. It never fires on a question that finishes in five turns - this knob shapes the tail, not the floor. |
-| `finalShape.reportDepth` | true -> **false** | *depth.* Back to the dr@3.4 template byte for byte. The deep clause asks for a causal narrative, a per-datum as-of date and disagreements adjudicated in the open; on a one-fact question that is the bulk of the reply. |
-| `search.saturation.k` | 8 -> **5** | *hygiene.* 5 and 10 are the two points that were priced (33% of searches removed at <=0.66pp, and 27% at 0.00pp); 8 is an interpolation with no reading behind it. |
-| `fetchGate` | off -> **on, k=15** | *hygiene.* Withholds `web_search` from the iteration after 15 searches with no page opened. The action-space channel rather than the advisory one, because a refusal in a return value was re-requested 195 times on one question. |
-| `forceFinalize` | off -> **on** | *hygiene.* A terminal turn whose visible answer is empty gets re-sampled instead of shipping blank. |
-
-**To go deep, flip the two depth values back** (`reportDepth: true`, `warnRatio: 0.8`) and keep the
-three hygiene ones. They remove pathologies, not depth, so a deep profile should carry them too -
-which is why this file exists rather than a "shallow" patch against `dr_multi_turn.json`.
-
-Depth is fixed when the process starts: `drFlow` is read once per entry point
-(`agent_commands.py`, `acp_commands.py`, `gateway_commands.py`) and passed into
-`AgentLoop.__init__`. There is no CLI override, no environment override and no runtime reload, so
-switching depth means a different `--config` on a different process.
-
-What it does **not** buy: a fast answer. The contract's grounding rule is untouched, so a simple
-question still costs one search, one or two fetches and a reviewer call. This profile makes a
-short question's reply shorter and a long question's tail shorter; it does not remove the floor.
 
 ## Wiring the memory backend (`everos_memory.json`)
 

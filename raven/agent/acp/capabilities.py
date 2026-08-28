@@ -63,21 +63,6 @@ _AUTH_HINTS = ("auth", "unauthor", "credential", "api key", "apikey", "login", "
 
 
 @dataclass(frozen=True)
-class AcpMode:
-    """One operating profile an agent offers, from its session response.
-
-    The spec's ``SessionMode``. Carried whole rather than reduced to an id
-    because the description is what the dispatching model reads when it picks
-    one -- an enum of bare ids ("fast", "deep") invites a choice made on the
-    name, which is how a mode gets picked for a difference it does not have.
-    """
-
-    id: str
-    name: str = ""
-    description: str = ""
-
-
-@dataclass(frozen=True)
 class CapabilitySnapshot:
     """One handshake's worth of measured facts about an acp agent."""
 
@@ -101,12 +86,6 @@ class CapabilitySnapshot:
     instance mid-turn can be merged into that turn or has to wait for it."""
     prompt_modalities: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
-    available_modes: tuple[AcpMode, ...] = ()
-    """The profiles ``session/set_mode`` can switch a session between.
-
-    Measured here rather than declared on the roster row so the menu the model
-    picks from is the one the agent actually serves: a row that named its own
-    would drift the first time the agent gained or dropped a mode."""
     auth_methods: tuple[str, ...] = ()
     elapsed_ms: int = 0
     stale: bool = False
@@ -138,9 +117,6 @@ class CapabilitySnapshot:
             "canSteer": self.can_steer,
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
-            "availableModes": [
-                {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
-            ],
             "authMethods": list(self.auth_methods),
             "elapsedMs": self.elapsed_ms,
         }
@@ -170,16 +146,6 @@ class CapabilitySnapshot:
             value = row.get(key)
             return tuple(v for v in value if isinstance(v, str)) if isinstance(value, list) else ()
 
-        def _modes(key: str) -> tuple[AcpMode, ...]:
-            value = row.get(key)
-            if not isinstance(value, list):
-                return ()
-            return tuple(
-                AcpMode(id=m["id"], name=str(m.get("name") or ""), description=str(m.get("description") or ""))
-                for m in value
-                if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
-            )
-
         return cls(
             agent=agent,
             fingerprint=fingerprint,
@@ -195,7 +161,6 @@ class CapabilitySnapshot:
             can_steer=bool(row.get("canSteer")),
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
-            available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
             elapsed_ms=int(row.get("elapsedMs") or 0),
         )
@@ -311,7 +276,6 @@ class _Handshake:
     prompt_modalities: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
-    available_modes: tuple["AcpMode", ...] = ()
     warnings: list[str] = field(default_factory=list)
 
 
@@ -373,77 +337,14 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
     Shape measured against ``hermes acp``:
     ``models.availableModels[] = {modelId, name, description}``. Anything that
     does not match is read as "not reported" rather than guessed at -- an invented
-    model id would be shown to the operator as fact. See ``_read_session_modes``
-    for the sibling ``modes`` key, whose shape this docstring used to defer.
+    model id would be shown to the operator as fact. The sibling ``modes`` key is
+    left alone for the same reason: it is present, but its shape was not measured
+    and nothing here needs it.
     """
     models = _dict(_dict(result).get("models")).get("availableModels")
     if not isinstance(models, list):
         return ()
     return tuple(str(m["modelId"]) for m in models if isinstance(m, dict) and isinstance(m.get("modelId"), str))
-
-
-def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
-    """The operating profiles a ``session/new`` result advertises.
-
-    The spec's ``SessionModeState``: ``modes.availableModes[] = {id, name,
-    description}``, beside ``modes.currentModeId``. The current id is
-    deliberately not recorded -- it is the state of the throwaway session this
-    probe opened, not a fact about the agent, and storing it would advertise a
-    default the next session need not start in.
-
-    Same tolerance as the model reader: an entry without a string ``id`` is
-    dropped rather than guessed at, because an invented id is one the
-    dispatching model would be offered and the agent would then refuse.
-    """
-    modes = _dict(_dict(result).get("modes")).get("availableModes")
-    if not isinstance(modes, list):
-        return ()
-    return tuple(
-        AcpMode(id=m["id"], name=str(m.get("name") or ""), description=str(m.get("description") or ""))
-        for m in modes
-        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
-    )
-
-
-def relearn_session_modes(
-    snapshot: CapabilitySnapshot | None,
-    result: Any,
-    *,
-    store: SnapshotStore | None = None,
-) -> CapabilitySnapshot | None:
-    """Re-record an agent's modes from a live session response, if they moved.
-
-    The menu is measured once at probe time and cached, but the agent
-    re-advertises it on every route into a session (``_with_modes`` in the
-    fork's ACP methods), so the response a dispatch already holds is newer
-    evidence than the snapshot. Without this the cache only ever moves when
-    someone presses Test: ``snapshot_fingerprint`` covers how the agent is
-    LAUNCHED, and an agent that reworded its own modes launches identically, so
-    nothing marks the stored text stale and the dispatching model goes on
-    reading a menu the agent no longer serves.
-
-    The stored fingerprint is kept rather than recomputed. Only the modes were
-    re-measured here, and claiming a fresh handshake would clear a staleness
-    flag the rest of the snapshot has not earned.
-
-    ``None`` when there was nothing to learn, which includes a response carrying
-    no modes at all. That is read as "this route did not report them", never as
-    "the agent dropped them": erasing the menu takes the ``mode`` argument out
-    of the spawn schema entirely, and a stale description is the smaller harm.
-    """
-    if snapshot is None:
-        return None
-    modes = _read_session_modes(result)
-    if not modes or modes == snapshot.available_modes:
-        return None
-    updated = replace(snapshot, available_modes=modes)
-    (store or SnapshotStore()).record(updated)
-    logger.info(
-        "acp agent {!r}: re-recorded {} mode(s) from a session response",
-        snapshot.agent,
-        len(modes),
-    )
-    return updated
 
 
 def _looks_like_auth(text: str) -> bool:
@@ -487,7 +388,6 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             can_steer=hs.can_steer,
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
-            available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
@@ -535,7 +435,6 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
                 return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
 
         handshake.available_models = _read_session_models(session)
-        handshake.available_modes = _read_session_modes(session)
         caps = ", ".join(
             [
                 *(["resume"] if handshake.can_resume else []),
@@ -548,7 +447,6 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             f"connected to {label} over ACP v{handshake.protocol_version}"
             f"; sessions: {caps or 'one-shot only'}"
             f"; models: {len(handshake.available_models)}"
-            + (f"; modes: {', '.join(m.id for m in handshake.available_modes)}" if handshake.available_modes else "")
         )
         return done("ready", detail, handshake)
     except AcpError as exc:
@@ -569,7 +467,6 @@ __all__ = [
     "SnapshotStatus",
     "SnapshotStore",
     "default_snapshot_path",
-    "relearn_session_modes",
     "snapshot_fingerprint",
     "steer_offered",
     "verify_agent",

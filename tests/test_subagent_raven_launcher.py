@@ -28,7 +28,6 @@ def mod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(launcher, "HERE", tmp_path)
     monkeypatch.setattr(launcher, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(launcher, "HOST_CONFIG", tmp_path / "host-config.json")
-    monkeypatch.setattr(launcher, "MODES_DIR", tmp_path / "modes")
     for name in (
         "RESEARCH_API_KEY",
         "RESEARCH_SERPER_API_KEY",
@@ -356,131 +355,6 @@ def test_the_default_fetch_provider_needs_no_key(mod, searchable, tmp_path: Path
     assert mod.render_config(_source(tmp_path)).exists()
 
 
-def test_the_modes_are_declared_for_the_agent_to_compose(
-    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The overlays used to be merged here, which fixed a connection's budget at
-    launch. They are declared now: the agent composes a profile per session, so
-    the same files become a catalogue `session/set_mode` picks from, and the
-    source config stays the baseline every entry diffs against."""
-    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
-    source = tmp_path / "config.json"
-    source.write_text(
-        json.dumps(
-            {
-                "providers": {"custom": {"apiBase": "https://example.invalid/v1"}},
-                "agents": {"defaults": {"provider": "custom", "model": "own-model", "maxToolIterations": 40}},
-                "drFlow": {"maxIterations": 20, "identityOverride": "the one prompt"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    mod.MODES_DIR.mkdir()
-    (mod.MODES_DIR / "deep.json").write_text(
-        json.dumps({"agents": {"defaults": {"maxToolIterations": 80}}, "drFlow": {"maxIterations": 40}}),
-        encoding="utf-8",
-    )
-    (mod.MODES_DIR / "ultra.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
-
-    rendered = mod.render_config(source, mode="deep")
-
-    data = json.loads(rendered.read_text(encoding="utf-8"))
-    assert data["acp"]["defaultMode"] == "deep"
-    assert set(data["acp"]["modes"]) == {"fast", "deep", "ultra"}
-    assert data["acp"]["modes"]["deep"]["drFlow"] == {"maxIterations": 40}
-    assert data["acp"]["modes"]["deep"]["maxToolIterations"] == 80
-    # The baseline is untouched, and IS the fast entry - which is why fast needs
-    # no overlay file and carries an empty diff.
-    assert data["drFlow"]["maxIterations"] == 20
-    assert data["agents"]["defaults"]["maxToolIterations"] == 40
-    assert data["acp"]["modes"]["fast"]["drFlow"] == {}
-
-
-def test_an_explicit_null_in_an_overlay_survives_into_the_catalogue(
-    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Ultra clears the baseline's iteration cap by writing null, which the
-    schema reads as "back to the built-in default" - so the null has to reach
-    the agent rather than be dropped as an absent key on the way."""
-    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
-    mod.MODES_DIR.mkdir()
-    (mod.MODES_DIR / "ultra.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
-
-    rendered = mod.render_config(_source(tmp_path), mode="ultra")
-
-    ultra = json.loads(rendered.read_text(encoding="utf-8"))["acp"]["modes"]["ultra"]["drFlow"]
-    assert "maxIterations" in ultra and ultra["maxIterations"] is None
-
-
-def test_the_identity_prompt_is_written_once_however_many_modes_there_are(
-    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Why the catalogue carries diffs rather than merged blocks: a merged one
-    would hold the whole identity prompt per mode, which is the drift the
-    one-prompt-one-place rule exists to prevent."""
-    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
-    source = tmp_path / "config.json"
-    source.write_text(
-        json.dumps(
-            {
-                "providers": {"custom": {"apiBase": "https://example.invalid/v1"}},
-                "agents": {"defaults": {"provider": "custom", "model": "own-model"}},
-                "drFlow": {"identityOverride": "UNIQUE-IDENTITY-MARKER"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    mod.MODES_DIR.mkdir()
-    for name in ("deep", "ultra"):
-        (mod.MODES_DIR / f"{name}.json").write_text(json.dumps({"drFlow": {"maxIterations": 40}}), encoding="utf-8")
-
-    rendered = mod.render_config(source, mode=None)
-
-    assert rendered.read_text(encoding="utf-8").count("UNIQUE-IDENTITY-MARKER") == 1
-
-
-def test_a_folder_with_no_modes_directory_declares_none(
-    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The degradation path: no catalogue in the rendered config, which leaves
-    the agent's session/set_mode method-not-found."""
-    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
-
-    rendered = mod.render_config(_source(tmp_path))
-
-    assert "acp" not in json.loads(rendered.read_text(encoding="utf-8"))
-
-
-def test_a_mode_without_an_overlay_file_refuses_to_launch(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
-    with pytest.raises(SystemExit, match="no overlay for mode"):
-        mod.render_config(_source(tmp_path), mode="deep")
-
-
-def test_the_shipped_overlays_carry_only_budget_knobs() -> None:
-    """The real modes/ files must stay diffs: an overlay that re-declares the
-    identity prompt or the provider block forks the agent, which is the drift
-    the overlay design exists to prevent."""
-    for name in ("deep", "ultra"):
-        overlay = json.loads((_LAUNCHER.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
-        assert set(overlay) <= {"agents", "drFlow"}, name
-        assert "identityOverride" not in overlay.get("drFlow", {}), name
-        assert "toolsAllowlist" not in overlay.get("drFlow", {}), name
-
-
-def test_the_report_template_is_the_baseline_s_and_no_overlay_moves_it() -> None:
-    """`finalShape.reportDepth` selects the report the product ships, so it
-    belongs to the baseline every mode inherits. An overlay that set it would
-    make the deep entry differ from the default in the shape of its report
-    rather than in how hard it looks for evidence - and the routing text sells
-    the modes on the latter."""
-    baseline = json.loads((_LAUNCHER.parent / "config.json").read_text(encoding="utf-8"))
-    assert baseline["drFlow"]["finalShape"]["reportDepth"] is True
-    for name in ("deep", "ultra"):
-        overlay = json.loads((_LAUNCHER.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
-        assert "reportDepth" not in overlay.get("drFlow", {}).get("finalShape", {}), name
-
-
 def test_sweep_removes_only_files_whose_pid_is_gone(mod) -> None:
     state = mod.STATE_ROOT
     state.mkdir(parents=True)
@@ -501,66 +375,11 @@ def test_the_manifest_registers_the_acp_transport() -> None:
     """What discovery reads: kind acp, the launcher as the server command, and
     the cwd pinned so the pool's launch key cannot churn with the task
     workspace. The cli declaration fields must be gone -- an acp entry
-    negotiates them in the initialize handshake instead.
-
-    One row, not one per mode: the effort level is a `session/set_mode` on the
-    session the spawn opens, so three near-identical rows would be three names
-    for one agent and three uncoordinated connection pools against one provider
-    quota."""
+    negotiates them in the initialize handshake instead."""
     manifest = json.loads((_LAUNCHER.parent / "subagent.json").read_text(encoding="utf-8"))
     assert manifest["kind"] == "acp"
     assert manifest["command"].endswith("run.py")
     assert manifest["cwd"] == "{SUBAGENT_DIR}"
     assert manifest["readyTimeoutMs"] > 0
-    assert manifest["timeout"] is None
-    assert manifest["everos"]["agentId"] == "raven-research"
     for field in ("resumeCommand", "idSource", "transcriptFormat", "readsLocalFiles", "stateful"):
         assert field not in manifest
-    # No sibling agents to route between -- and no mode instructions either. The
-    # roster row exists as soon as the folder is installed, while the `mode`
-    # property appears only once the probe has measured the agent's modes, so a
-    # routing line naming them here would advertise, on a fresh install, an
-    # argument the schema does not yet offer. The guidance rides on each mode's
-    # own description instead, where it shares that predicate.
-    # Positive first: an `owns` that lost its routing claim would satisfy both
-    # `not in` checks below, and moving the mode guidance out of this field is
-    # exactly the edit that could empty it.
-    assert manifest["owns"].startswith("owns research:")
-    assert "Do not research it yourself" in manifest["owns"]
-    assert "Raven-Research-Deep" not in manifest["owns"]
-    assert "mode=" not in manifest["owns"] and "`mode`" not in manifest["owns"]
-
-
-def test_the_choice_guidance_travels_with_the_modes_that_offer_it() -> None:
-    """One predicate behind the route and the advertisement. The launcher's mode
-    blurbs reach the model through the spawn schema's `mode` property, which is
-    built only from modes the probe actually measured -- so guidance written here
-    cannot outlive the argument it tells the model to pass.
-
-    Asserted on the rendered catalogue rather than on the source text: the block
-    `mode_catalogue` emits is what lands in `acp.modes`, what the agent then
-    advertises on every session response, and what the probe records. A test
-    that greps MODE_LABELS passes even when nothing carries the text onward.
-
-    Loaded without the `mod` fixture on purpose -- that fixture repoints
-    MODES_DIR at a tmp dir, and the shipped overlays are the artefact here.
-    """
-    spec = importlib.util.spec_from_file_location("raven_research_launcher_real", _LAUNCHER)
-    assert spec and spec.loader
-    launcher = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launcher)
-
-    catalogue = launcher.mode_catalogue()
-
-    assert set(catalogue) == {"fast", "deep", "ultra"}
-    blurbs = {mode: entry["description"] for mode, entry in catalogue.items()}
-    # Each mode has to say when it is the right pick, not only what it does.
-    assert "default" in blurbs["fast"].lower()
-    assert "multi-faceted" in blurbs["deep"]
-    assert "explicitly asked" in blurbs["ultra"]
-
-
-def test_the_folder_ships_exactly_one_roster_manifest() -> None:
-    """The collapse itself. A leftover `subagent.<mode>.json` would be
-    rediscovered as its own row on every start and quietly restore the split."""
-    assert sorted(p.name for p in _LAUNCHER.parent.glob("subagent*.json")) == ["subagent.json"]

@@ -15,10 +15,10 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X, branch `feat/dr_sufficiency_gate`, commit `0a09f07` |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `4447f4d4` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
-| Local patches | **four**, recorded as `git apply`-able diffs under `./patches/` - see the `Local patches` section below |
-| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-27 from upstream `0a09f07`, the tip of `feat/dr_sufficiency_gate` rather than `main`, which added the first-round sufficiency gate, verify stall observability, appendix grounding accuracy and a per-call provider timeout. The gate is off by default and takes no version bump - it removes no tools - so `config.json` still loads as `dr@3.5-filetools-askuser` and needed no new key. The step before it took `4447f4d4` on 2026-08-26, which added the `ask_user` broker round trip and the deep report template - see the section below; the same day's earlier step took `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Local patches | **none** - the tree is that commit byte for byte, and the command that proves it is below |
+| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-26 from upstream `4447f4d4`, which added the `ask_user` broker round trip and the deep report template - see the section below; the same day's earlier step took `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -99,138 +99,19 @@ config is rendered at launch and the server lives across turns.
 With no key here and no provider key in the host config either, the launcher
 refuses rather than starting something that cannot answer.
 
-## Research modes
-
-Three research budgets over one checkout. `config.json` is the complete
-baseline and *is* the fast profile; `modes/deep.json` and `modes/ultra.json`
-are diffs over it. One identity prompt, one provider block, one `.env` - the
-overlays carry budget knobs and nothing else, which a unit test pins
-(`test_the_shipped_overlays_carry_only_budget_knobs`).
-
-**A mode is per session, not per connection** (changed 2026-08-28). `run.py`
-no longer merges an overlay at render time; it writes the three of them into
-the rendered config as `acp.modes`, and the agent composes a profile per
-session from the baseline plus that mode's diff. So:
-
-- `session/new` answers with the ACP spec's `modes` object - `currentModeId`
-  plus the catalogue - and `session/set_mode` moves a live session between
-  them. This is the spec's own session-mode surface, not the
-  `session/set_config_option` channel the main repo's ACP agent uses for its
-  model picker: that one exists there because `session/set_model` is *not* in
-  the stable schema, and session modes are;
-- `--mode {fast,deep,ultra}` now only says which profile a session **starts**
-  in, and lands as `acp.defaultMode`;
-- diffs, not merged blocks, is load-bearing: a merged block would carry
-  `identityOverride` - the whole identity prompt - once per mode, which is the
-  drift the one-prompt-one-place rule exists to prevent. A launcher test pins
-  that the rendered file holds it exactly once;
-- a switch **never interrupts a running turn**. The engine is resolved once per
-  turn, at its start, so the turn in flight keeps the profile it began with and
-  the next one gets what was asked for. `AcpLoops` does it by comparing each
-  session's mode against the one its resident engine was built under -
-  releasing at the moment of the switch would take the tools out from under
-  whatever was running;
-- a mode is **not persisted with the transcript**. A stored session reopened
-  later starts at `defaultMode` again: how much effort a question deserves is
-  the caller's judgement at the time of asking, not a property of the
-  conversation.
-
-`session/set_mode` stays method-not-found when a deployment declares no
-`acp.modes` - which is every other folder here - so nothing about them changed.
-
-**One roster row, not three** (changed 2026-08-28). The modes were briefly
-three entries - `Raven-Research`, `-Deep`, `-Ultra` - over this one folder.
-They are one entry again now that the host can name a mode per call:
-
-- the main agent picks with the `spawn` tool's `mode` parameter, whose enum is
-  **measured, not declared**: the capability probe already opened a throwaway
-  `session/new` to read the model list, and it reads the mode catalogue from the
-  same reply. A row that named its own modes would drift the first time this
-  folder gained or dropped one;
-- a person picks with `subagents.instance.set_mode` on a direct chat, which is
-  the case three rows could never serve: switching effort mid-conversation
-  meant abandoning it and starting a new one against a different agent;
-- three rows were three names for one agent, three connection pools against one
-  provider quota, and three roster entries the dispatching model had to tell
-  apart on description alone.
-
-| | `fast` (default) | `deep` | `ultra` |
-|---|---|---|---|
-| For | factual / single-topic questions | multi-faceted topics one pass of evidence does not settle | explicit requests for exhaustive research |
-| `drFlow.maxIterations` | 20 | 30 | unset (falls back to the cap below) |
-| `agents.defaults.maxToolIterations` | 40 | 60 | 150 |
-| `budgetNote.warnRatio` | 0.3 | 0.8 | 0.8 |
-| sufficiency gate | on, minSearches 1 / minFetches 2, timeouts 30/15 | on, minSearches 5 / minFetches 2, default timeouts | off |
-| `verify` timeouts | 120/40 | default 360/120 | default 360/120 |
-| `fetchGate` | on, k=15 | on, k=15 | on, k=15 |
-| `search.saturation` | on, k=5, widen | on, k=10, widen | on, k=10, widen |
-| `finalShape.reportDepth` | on | on | on |
-| `finalShape.reportBounce` | off | on | on |
-| `askUser` | on, `when_needed` | inherited | inherited |
-
-`agents.defaults.requestTimeoutSeconds` is deliberately **not** on that list.
-It is the only knob the three profiles used to differ on that a session cannot
-own: it is consumed once, at provider construction (`cli/_helpers.py`), and the
-provider is process-wide. It is uniform at 600s now - which costs a fast turn
-nothing, because it is a hang guard on a single request rather than a budget:
-what bounds a fast turn is `maxIterations` and the sufficiency gate.
-
-Points a reader should not have to re-derive:
-
-- **The default changed behaviour on 2026-08-27.** The single `Raven-Research`
-  entry used to run what is now the ultra budget; existing callers now get the
-  fast profile - 20 DR iterations, the sufficiency judge consulted from the
-  first search - unless they name a deeper mode. What they do *not* give up is
-  the report: `reportDepth` is on in all three, so the deep template is the
-  product's one report shape and never a reason to pick a mode.
-- **Sufficiency floors are trigger floors, not strictness.** `minSearches: 5`
-  on deep means the judge is not even consulted before five searches have been
-  invested; it makes the gate *later*, not harsher. On ultra the gate is off:
-  exhaustive is the request. Fail-open direction is always "keep researching".
-- **The hygiene breakers (`fetchGate`, `saturation`) are on in all three
-  modes**, ultra included: they cut pathologies (search-without-fetch spirals,
-  saturated query families), not depth - `onSaturate: widen` broadens instead
-  of stopping. Their pricing numbers were measured on the bench arms, not on
-  this model/profile; watch the `fetch_gate` / `saturation` ledger counters
-  before retuning `k`.
-- **No mode is a benchmark entry.** The sufficiency gate is unmeasured
-  (upstream requires its own A/B arm), and the breakers change the measured
-  distribution. A benchmark wants its own config, pinned byte-for-byte,
-  not any of these three.
-- **`askUser` is identical in all three modes on purpose**, so the overlays
-  carry no delta for it and the identity prompt's "you may ask once" promise
-  holds everywhere. `when_needed` asks only when the question is genuinely
-  undecidable without the user, so a clear factual question on the fast mode
-  pays no clarify round trip.
-- One `everos.agentId` for every mode: one research memory, whichever budget
-  retrieved it. This was already true when the modes were separate rows, and it
-  is why collapsing them lost nothing.
-- One pooled ACP connection for the whole folder, launched lazily. Every mode
-  is served by it, so the sessions of a fast call and an ultra call share one
-  process, one provider credential and one `acp.userPool` - which is the point:
-  three rows were three uncoordinated pools against one provider quota.
-
-Routing lives in `owns`, and routes the agent rather than the mode: the identity
-segment renders every owning agent, and there is one of those now instead of
-three equal claimants. Which mode a call runs in is the spawn tool's `mode`
-argument, whose menu is built from what the probe measured - so the guidance for
-choosing between them rides on each mode's own description (`MODE_LABELS` in
-`run.py`) rather than on a roster line that exists from the moment the folder is
-installed, probe or no probe.
-
 ## Updating to a newer upstream
 
-The checkout carries **four local patches**, all under `./patches/`, so an update
-is a replacement of `Raven-X/` followed by re-applying them. Everything else
-adapts from beside the checkout (`run.py`, `config.json`, `subagent.json`, this
-file) and needs no touching.
+The checkout carries **no local patches** - every adaptation lives beside it
+(`run.py`, `config.json`, `subagent.json`, this file), so an update is a straight
+replacement of `Raven-X/`.
 
-Patch-free is the state to get back to, not the state to assume. It has been both:
-the tree was `a958b837` plus six locally patched files during the `ask_user` step,
-went patch-free when upstream took five of the six back in `ed4a866` and declined
-the sixth for the reason we had written down against it, and then picked up the
-`web_search` gate. The check below is what settles which it is - read it rather
-than this paragraph, because a paragraph goes stale and a diff does not.
+That is true again rather than true by default. For one day it was not: the tree
+was `a958b837` plus six locally patched files, carried because the `ask_user`
+fixes had to run here before upstream had them. It is patch-free again because
+upstream took five of the six back in `ed4a866` and declined the sixth for the
+reason we had already written down against it - a test tightening, not a fix. So
+the swap that brought the everos work also retired the patch set, and the check
+below settles the whole question in one command again.
 
 Check it before replacing, rather than assuming it: the base commit is whichever
 one whose tree the checkout matches, found by diffing trees since no file records
@@ -261,75 +142,6 @@ coercion was carried here, dropped in an upstream swap, and survived only as a r
 in the `dr@3.3` table below, because there was no patch file to re-apply it from.
 Upstream has since rebuilt it (`backend.py:321`, now parsing ISO-8601 as well),
 which closes that particular hole but not the one in the process.
-
-## Local patches
-
-Four, each `-p1` from the `Raven-X/` root. Their file sets are **disjoint**, so
-the order below is documentation rather than a constraint - applying all four to
-a pristine `0a09f07` reproduces this checkout byte for byte, in any order:
-
-| Patch | Files | What it is |
-|---|---|---|
-| `patches/acp_per_session_loops.patch` | 2 source, 5 test, 1 doc | Serves each ACP session from its own `AgentLoop` (`raven/acp/loops.py`), so two sessions against one agent process stop sharing an engine |
-| `patches/web_search_providers.patch` | 6 source, 13 test, 4 doc | The pluggable web search and fetch providers, and with them the gate that withholds `web_search` unless a provider key or a corpus endpoint resolves. That gate is the trunk invariant `web-search-gated-on-its-key`, which `scripts/check_vendored_invariants.py` asserts on this fork every CI run - so this one is not optional, and a swap that drops it fails the build rather than reaching a user |
-| `patches/prompt_cache_provider_probe.patch` | 6 source, 3 test | Gives the provider objects the `supports_prompt_caching` method the three `AgentLoop` construction sites already read off them. Without it every site resolved to `None` and `CacheOptimizer` fell back to the id-only lookup, silently, because the fallback answers |
-| `patches/acp_session_modes.patch` | 6 source, 4 test | Reads `acp.modes` from the config, advertises them on every session response, and answers `session/set_mode`, with `AcpLoops` rebuilding a session's engine at the next turn boundary when its mode moves. What makes fast, deep and ultra one agent process rather than three roster rows |
-
-The last is ours; the first three are the trunk's, carried here because this
-checkout is downstream of them. `prompt_cache_provider_probe` is in flight on the
-trunk side and should be dropped from here the moment upstream carries it. None
-has been offered upstream yet, though session modes are stable ACP and so are
-offerable.
-
-**Six files are touched by more than one of the four**, and each is carried whole
-by exactly one patch rather than split across them - a split cannot be re-applied
-independently, and pretending otherwise is how a patch set silently stops
-reproducing its tree:
-
-| File | Carried by | Also changed by |
-|---|---|---|
-| `raven/agent/loop/main.py` | `web_search_providers` | per-session loops |
-| `CONTEXT.md` | `web_search_providers` | per-session loops |
-| `raven/cli/agent_commands.py` | `prompt_cache_provider_probe` | web search providers |
-| `raven/cli/gateway_commands.py` | `prompt_cache_provider_probe` | web search providers |
-| `raven/cli/acp_commands.py` | `acp_session_modes` | the other three |
-| `raven/config/schema.py` | `acp_session_modes` | per-session loops, web search providers |
-
-So dropping a patch because upstream took its feature does not remove that
-feature from these six files. Check them by hand when a patch is retired.
-
-Re-applying after a swap, and proving the result:
-
-```bash
-mkdir /tmp/up && git -C <upstream clone> archive <commit> | tar -x -C /tmp/up
-rm -rf subagents/raven-research/Raven-X && mkdir subagents/raven-research/Raven-X
-cp -a /tmp/up/. subagents/raven-research/Raven-X/     # replace, do not overlay:
-                                                      # an overlay keeps files the
-                                                      # swap deleted upstream
-cd subagents/raven-research/Raven-X
-git apply -p1 ../patches/acp_per_session_loops.patch
-git apply -p1 ../patches/web_search_providers.patch
-git apply -p1 ../patches/prompt_cache_provider_probe.patch
-git apply -p1 ../patches/acp_session_modes.patch
-uv sync          # the replacement took .venv/ with it; seconds to rebuild
-```
-
-Then run the `diff -rq` above: it must name **nothing at all**. The patches carry
-every file this fork changes, so a path it names is drift no patch records - the
-state this folder was in when the patch set claimed three patches and the tree
-carried four concerns.
-
-Prove it both ways, because a forward-only check passes on a patch set that has
-quietly grown a second copy of a hunk:
-
-```bash
-# forward: pristine + all four == this checkout
-# reverse: this checkout - all four (reverse order) == pristine
-git apply --reverse -p1 ../patches/acp_session_modes.patch
-git apply --reverse -p1 ../patches/prompt_cache_provider_probe.patch
-git apply --reverse -p1 ../patches/web_search_providers.patch
-git apply --reverse -p1 ../patches/acp_per_session_loops.patch
-```
 
 Now that the repo clones, the swap comes from its objects rather than an archive:
 
@@ -408,7 +220,7 @@ the swap exists for, and this folder turns both on.
 | **`drFlow.askUser.delivery: "tool"`** | Asking now happens INSIDE the turn: the questions leave over the question broker, the answers come back as the tool's return value, and the same turn researches on them. The old `handoff` - questions as the turn's reply, answers as the next prompt - stays the fallback. The prompt clause, the tool description and the schema all switch with the knob, and the outline goes with them: the broker round trip carries questions and answers only, so `outline: true` is effective-off under this delivery |
 | **Both sides must opt in, and our host does not yet** | Upstream arms the broker only when the ACP client declares `clientCapabilities._meta.raven.askUser` at `initialize`, and answers over the `_raven/clarify_respond` extension method. Raven's own ACP client (`raven/agent/acp/protocol.py`) declares `fs` and `elicitation.form` and nothing else, so today the tool reads `round_trip_ready` False and the handoff short circuit is still the transport that runs. That degradation is by design - a question frame must never go to a client with no UI to answer it, because the broker's 600s fail-safe would answer every mandated clarify with its default - and what it costs meanwhile is one paragraph of prompt: the model is told to ask by calling and never to repeat the questions into its reply, while the reply it gets handed back IS the rendered questions. `render_handoff` writes that text, not the model, so the caller sees exactly what it saw before |
 | **`drFlow.finalShape.reportDepth: true`** | Selects the deep report clause in place of the `dr@3.4` template. Same three sections, `## Findings` upgraded from a findings list to an argued report: causal narrative, per-datum source and as-of date, disagreements adjudicated in the open, established facts separated from forward-looking judgments, tracking signals inside `## Limitations`. Upstream ships it off and unmeasured - a bundle of prompt commitments priced together - and says product profiles that want it should set it explicitly rather than inherit a default, which is what this file now does |
-| **The rest of `finalShape` is pinned explicitly** | `reportStructure`, `reportFormatOverride`, `reportReminder` and `processAppendix` all matched their defaults and were being inherited silently; `reportBounce` is turned **on** against its default, in the deep and ultra modes only - the extra generation it spends is exactly the kind of cost the fast mode exists to decline. It re-samples a terminal draft that is missing a template section, once, deterministically - upstream leaves it off until someone prices it, and `record: true` here is what makes that possible (`report_shape_gate.bounces` against `report_shape_gate.shipped_malformed`). Pinning the other four costs nothing and stops a future default flip from moving this profile without a commit saying so |
+| **The rest of `finalShape` is pinned explicitly** | `reportStructure`, `reportFormatOverride`, `reportReminder` and `processAppendix` all matched their defaults and were being inherited silently; `reportBounce` is turned **on** against its default. It re-samples a terminal draft that is missing a template section, once, deterministically - upstream leaves it off until someone prices it, and `record: true` here is what makes that possible (`report_shape_gate.bounces` against `report_shape_gate.shipped_malformed`). Pinning the other four costs nothing and stops a future default flip from moving this profile without a commit saying so |
 | **`identityOverride`'s reply rule went back to answer-first** | Upstream applies four of its five no-user rewrites under `delivery: "tool"` and deliberately skips the fifth, because under the round trip the reply shape never changes. Our override owns the identity, so nothing applies those rewrites for us - the reconciliation is by hand, and the sentence "If you are asking the user, the questions are the whole reply" now contradicts the clause it sits next to. Reverted to "One message, plain text. First line: the answer itself and nothing else." |
 
 Verified on this build 2026-08-26: the vendored tree is byte-identical to
@@ -805,30 +617,23 @@ Raven-X inherits `http_proxy` / `https_proxy` (its fetch client keeps
 
 ## Installed as
 
-One third-party subagent over this folder, `kind: "acp"`: `Raven-Research`
-(`subagent.json`). The effort level is not a second entry - it is the `mode`
-the caller names on the call, see `Research modes` above.
+A third-party subagent named `Raven-Research`, `kind: "acp"`.
 
 On a host that carries the `subagents/` tree nothing needs installing: the
 host raven discovers every folder's `subagent.json` at startup, resolves
 `{SUBAGENT_DIR}` / `{PYTHON}` (and, new with the acp entry, the same
 placeholder in `cwd`), and puts the row on the table - enabled only when the
-venv is built and a credential is reachable. A discovered row bakes in no path
-and follows the folder, so a move or upgrade heals it.
-
-`install.py` also covers one migration this transport switch created: a
-stored row from an earlier install that still says `kind: "cli"` overrides
-the discovered acp row, because config beats discovery by name. Re-run it (or
-delete the stored row) on any host that ever registered this agent by hand.
+venv is built and a credential is reachable. `install.py` exists for writing
+the resolved entry into the host's config instead, and for exactly one
+migration this switch created: **a stored row from an earlier install still
+says `kind: "cli"` and overrides the discovered acp row**, because config beats
+discovery by name. Re-run `install.py` (or delete the stored row) on any host
+that ever registered this agent by hand.
 
 ```bash
 python3 install.py --dry-run   # print the resolved entry, change nothing
-python3 install.py             # register it
+python3 install.py             # back up the current list, then register
 ```
-
-Prefer discovery: a stored row bakes in this folder's absolute path and
-outranks the discovered row, so `install.py` is for a host that cannot see
-this tree, not a step of normal setup.
 
 The cli entry's interlocking declaration set (`command` + `resumeCommand` +
 `idSource`, all agreeing about `{agent_id}`) is gone, and nothing replaced it:
@@ -848,7 +653,6 @@ What the entry does carry:
 | `readyTimeoutMs` | `60000` | The `initialize` budget. The real handshake measures ~3s (a full engine import plus config render); 60s is headroom, not hope |
 | `timeout` | `null` | No ceiling on a `session/prompt`: a long run is ended by a manual stop, not a timer. `run.py` defines no watchdog of its own, so this field was the only clock on the path |
 | `maxOutputChars` | `30000` | The host tail-truncates the reply here - see the research-trail note above for what that costs |
-| `owns` | routes the agent, not the mode | The identity segment renders every owning agent, and one row now owns research - see `Research modes`. Mode guidance deliberately lives on the modes themselves, because this line is read from the moment the folder is installed while the `mode` argument appears only once the probe has measured them |
 
 `run.py` still mints nothing and names nothing: sessions are the server's own
 (`acp:<timestamp>_<nonce>`), and one instance handle maps to one of them in the
@@ -880,11 +684,10 @@ different agent with a different mechanism, hence a distinct name.
 
 | File | | Published |
 |---|---|---|
-| `run.py` | Host-side launcher: renders the config (mode catalogue, then `.env` secrets), then execs `raven acp` | yes |
-| `install.py` | Resolves the manifest placeholders and registers the entry over the RPC | yes |
-| `config.json` | Raven-X run config, complete baseline = the fast profile. Holds **no** secrets | yes |
-| `modes/deep.json` `modes/ultra.json` | Budget-knob diffs, declared to the agent as `acp.modes` and composed per session | yes |
-| `subagent.json` | The subagent entry, with install-time placeholders | yes |
+| `run.py` | Host-side launcher: renders the config with the `.env` secrets, then execs `raven acp` | yes |
+| `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC | yes |
+| `config.json` | Raven-X run config. Holds **no** secrets | yes |
+| `subagent.json` | The third-party subagent entry, with install-time placeholders | yes |
 | `.env.example` | Template for the secrets and the state-root knob | yes |
 | `README.md` `.gitignore` | This file, and the exclusion list below | yes |
 | `.env` | The real secrets, mode 600 | **no** |

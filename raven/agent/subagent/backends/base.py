@@ -184,12 +184,6 @@ class SubagentBackend(Protocol):
     the manager catches it and announces an error turn. Progress/announcement,
     the spawn semaphore, and rate limiting are the manager's concern, not the
     backend's.
-
-    ``mode`` is the operating profile to run under, for a transport that has
-    one. Only ``acp`` does; the others accept it and ignore it, the way they
-    already do with ``provider`` / ``model`` -- the manager passes one keyword
-    set to whichever backend it resolved, so a backend missing the parameter
-    fails the dispatch with a TypeError before the agent is ever contacted.
     """
 
     streams: bool = False
@@ -216,6 +210,5 @@ class SubagentBackend(Protocol):
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-        mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str: ...

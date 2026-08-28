@@ -28,7 +28,6 @@ import typer
 from loguru import logger
 
 from raven.acp.loops import AcpLoops
-from raven.acp.modes import build_session_modes
 from raven.acp.server import install_crash_handlers, serve
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.agent.tools.web import (
@@ -91,22 +90,14 @@ async def _serve(config: str | None = None) -> None:
         logger.info("acp: serving on stdio, logs at {}", log_path)
         shared = build_shared(config)
         await _start_backend(shared.backend)
-        # Resolved before the first frame: an overlay that does not validate has
-        # to kill the process here, not the session/set_mode that first reaches
-        # it -- by then a client has already been shown the mode as available.
-        modes = build_session_modes(shared.config, shared.ec_config)
         loops = AcpLoops(
-            lambda conversation: build_loop(shared, conversation, modes.profile(conversation)),
+            lambda conversation: build_loop(shared, conversation),
             session_manager=shared.session_manager,
             max_loops=shared.acp.max_loops,
-            # The rebuild trigger: a session whose recorded mode no longer
-            # matches the one its engine was built under is rebuilt at the start
-            # of its next turn.
-            tag_for=modes.current,
         )
         try:
             async with _open_stdin() as reader:
-                await serve(reader, out, loops=loops, user_pool=shared.acp.user_pool, modes=modes)
+                await serve(reader, out, loops=loops, user_pool=shared.acp.user_pool)
             logger.info("acp: exiting")
         finally:
             await _stop_backend(shared.backend)
@@ -247,12 +238,8 @@ def build_shared(config_path: str | None = None) -> AcpShared:
     )
 
 
-def build_loop(shared: AcpShared, conversation: str | None = None, profile: Any = None):
+def build_loop(shared: AcpShared, conversation: str | None = None):
     """Build one session's engine on top of ``shared``.
-
-    ``profile`` is the session's mode (:mod:`raven.acp.modes`), carrying the two
-    inputs an effort profile moves. ``None`` -- every caller before session
-    modes -- takes the config's own, which is what this passed before.
 
     ``conversation`` roots the session's file tools in a subtree of their own,
     so two concurrent turns writing ``report.md`` do not overwrite each other.
@@ -269,8 +256,6 @@ def build_loop(shared: AcpShared, conversation: str | None = None, profile: Any 
 
     config = shared.config
     ec_config = shared.ec_config
-    dr_flow = profile.dr_flow if profile is not None else ec_config.dr_flow
-    max_iterations = profile.max_iterations if profile is not None else config.agents.defaults.max_tool_iterations
     agent_loop = AgentLoop(
         provider=shared.provider,
         strategies=shared.strategies,
@@ -279,7 +264,7 @@ def build_loop(shared: AcpShared, conversation: str | None = None, profile: Any 
         store_inflight=shared.store_inflight,
         pending_recovery=shared.pending_recovery,
         model=config.agents.defaults.model,
-        max_iterations=max_iterations,
+        max_iterations=config.agents.defaults.max_tool_iterations,
         empty_recovery=limits_from_defaults(config.agents.defaults),
         context_window_tokens=config.agents.defaults.context_window_tokens,
         context_window_authoritative=config.agents.defaults.context_window_authoritative,
@@ -310,7 +295,7 @@ def build_loop(shared: AcpShared, conversation: str | None = None, profile: Any 
         # The whole point of this surface: raven-research's config pins drFlow
         # on, and a construction site that drops this kwarg silently serves
         # stock Raven (tests/test_cli_agent_loop_wiring.py holds the contract).
-        dr_flow=dr_flow,
+        dr_flow=ec_config.dr_flow,
         memory_config=ec_config.memory,
         backend=shared.backend,
         plugin_tools=shared.plugin_tools,

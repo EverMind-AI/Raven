@@ -275,11 +275,8 @@ class _FakeExec:
         executor,
         session_key: str | None = None,
         instance: str | None = None,
-        mode: str | None = None,
     ) -> str:
-        self.calls.append(
-            {"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task, "mode": mode}
-        )
+        self.calls.append({"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task})
         if task_id in self.fail_ids:
             raise RuntimeError(f"boom {task_id}")
         if self.reply is not None:
@@ -584,7 +581,7 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     reaped: list[str] = []
 
     class _BlockingExec:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
             if task_id == "b":
                 b_running.set()
                 try:
@@ -656,7 +653,7 @@ async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
     peak = 0
 
     class _Tracking:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
             nonlocal live, peak
             live += 1
             peak = max(peak, live)
@@ -2781,7 +2778,7 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
     release = asyncio.Event()
 
     class _Slow:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
             started.set()
             await release.wait()
             return "slow"
@@ -2955,7 +2952,7 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
     started, release = asyncio.Event(), asyncio.Event()
 
     class _Slow:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
             started.set()
             await release.wait()
             return "eventually"
@@ -3253,7 +3250,7 @@ class _SuspendingBackend(_InMemBackend):
 
 
 class _Yielding:
-    async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+    async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
         for _ in range(10):
             await asyncio.sleep(0)
         return f"OUT[{task_id}]"
@@ -5616,72 +5613,3 @@ async def test_an_empty_attempt_does_not_inherit_the_previous_transcript(tmp_pat
     second = await store.read_text(store.attempt_transcript_path("a", 2))
     assert "attempt 1" in first, "the earlier attempt's own evidence stays readable"
     assert second.strip() == "", "the promised attempt-2 archive exists and is honestly empty"
-
-
-async def test_a_node_that_names_an_instance_runs_at_that_instance_s_mode() -> None:
-    """The effort level a user set on an instance reaches the graph, on the same
-    terms the message list does: a node naming an `instance` is asking to
-    continue that conversation, and the mode is part of what it continues."""
-    execu = _FakeExec()
-    spec = parse_dag_spec(
-        {
-            "task_summary": "run the graph under test",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "continue the researcher",
-                    "prompt_template": "hello",
-                    "instance": "researcher",
-                },
-                {"id": "b", "subagent": "x", "node_summary": "a fresh session", "prompt_template": "hello"},
-            ],
-        }
-    )
-
-    await run_dag(
-        spec,
-        resolve=_by_name({"x": execu}),
-        backend=_InMemBackend(),
-        workdir="/w",
-        run_root="/hist/mas_dag",
-        session_key="cli:direct",
-        mode_for=lambda skey, agent, instance: {"researcher": "deep"}.get(instance),
-    )
-
-    by_id = {call["task_id"]: call for call in execu.calls}
-    assert by_id["a"]["mode"] == "deep"
-    # An unnamed node is asked about no instance, so there is nothing to inherit:
-    # its handle is its own node id, which is not a conversation anyone named.
-    assert by_id["b"]["mode"] is None
-
-
-async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
-    """The unwired host (tests, an offline entry point) is the pre-modes
-    behaviour unchanged, not a crash and not a guess."""
-    execu = _FakeExec()
-    spec = parse_dag_spec(
-        {
-            "task_summary": "run the graph under test",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "continue the researcher",
-                    "prompt_template": "hello",
-                    "instance": "researcher",
-                }
-            ],
-        }
-    )
-
-    await run_dag(
-        spec,
-        resolve=_by_name({"x": execu}),
-        backend=_InMemBackend(),
-        workdir="/w",
-        run_root="/hist/mas_dag",
-        session_key="cli:direct",
-    )
-
-    assert execu.calls[0]["mode"] is None

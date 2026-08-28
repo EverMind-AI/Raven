@@ -38,12 +38,6 @@ from raven.spine import ChatType, Origin, Source, TurnRequest
 # consuming raven never calls, plus spec surface with no consumer here.
 # Answered with method-not-found -- the same answer an unknown name gets; the
 # set exists so a reader can tell "not built" from "not in the protocol".
-#
-# ``session/set_mode`` is in the set and still served: the router answers it
-# before this check whenever the build declares modes, so membership here is
-# what a build that declares NONE falls through to. Dropping it from the set
-# would answer that build with "unknown method", which reads as a version
-# mismatch rather than as a surface this deployment did not turn on.
 UNIMPLEMENTED_METHODS = frozenset(
     {
         "session/list",
@@ -113,7 +107,6 @@ class AcpMethods:
         question_broker: Any = None,
         arm_ask_user: Callable[[bool], None] | None = None,
         on_session_open: Callable[[str], Awaitable[Any]] | None = None,
-        modes: Any = None,
     ) -> None:
         self._submit = submit
         self._sessions = sessions
@@ -128,10 +121,6 @@ class AcpMethods:
         # the server knows the tool, and neither should know the other's half.
         self._question_broker = question_broker
         self._arm_ask_user = arm_ask_user
-        # raven/acp/modes.py. ``None`` (a test, or a build declaring no modes)
-        # leaves session/set_mode method-not-found and every session response
-        # without a ``modes`` object, which is the pre-modes wire byte for byte.
-        self._modes = modes
         self.initialized = False
         self.client = ClientCapabilities()
 
@@ -222,8 +211,6 @@ class AcpMethods:
             return await self._session_prompt(params)
         if method == "session/cancel":
             return await self._session_cancel(params)
-        if method == "session/set_mode" and self._modes is not None and self._modes.enabled:
-            return self._session_set_mode(params)
         if method == CLARIFY_RESPOND_METHOD:
             return self._clarify_respond(params)
         if method in UNIMPLEMENTED_METHODS:
@@ -262,7 +249,7 @@ class AcpMethods:
         self._sessions.add(session)
         await self._open_session(session.session_id)
         logger.info("acp: session {} created", session.session_id)
-        return self._with_modes({"sessionId": session.session_id}, session.session_id)
+        return {"sessionId": session.session_id}
 
     async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session, replaying it as it is loaded.
@@ -278,7 +265,7 @@ class AcpMethods:
         for update in replay(stored.messages, cwd=None):
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
         logger.info("acp: loaded session {} ({} stored message(s))", session.session_id, len(stored.messages))
-        return self._with_modes({}, session.session_id)
+        return {}
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -293,7 +280,7 @@ class AcpMethods:
         _, session = self._reopen(params)
         await self._open_session(session.session_id)
         logger.info("acp: resumed session {}", session.session_id)
-        return self._with_modes({}, session.session_id)
+        return {}
 
     def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession]:
         """The stored session behind ``params`` and its live registry entry.
@@ -439,45 +426,6 @@ class AcpMethods:
             # idempotent against the sink's settle either way.
             self._sessions.settle_future(future, "cancelled")
         return None
-
-    def _session_set_mode(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Switch which profile this session's next turn runs on.
-
-        Nothing is refused for timing and nothing is interrupted: a switch
-        during a turn leaves that turn on the profile it started with and lands
-        on the next one. That is not leniency about a race -- the engine is
-        resolved once per turn, at its start, so "the next turn" is the only
-        moment at which a different profile can be applied without pulling a
-        running turn's tools out from under it.
-
-        The session is looked up first, so an unknown session is -32002 rather
-        than a mode error about a session that does not exist.
-        """
-        session = self._session_for(params)
-        mode_id = params.get("modeId")
-        if not isinstance(mode_id, str) or not mode_id:
-            raise AcpMethodError(protocol.INVALID_PARAMS, "modeId is required", {"field": "modeId"})
-        try:
-            self._modes.set(session.session_id, mode_id)
-        except KeyError as exc:
-            raise AcpMethodError(
-                protocol.INVALID_PARAMS,
-                f"unknown mode {mode_id!r}",
-                {"field": "modeId", "availableModes": list(self._modes.ids())},
-            ) from exc
-        return {}
-
-    def _with_modes(self, result: dict[str, Any], session_id: str) -> dict[str, Any]:
-        """Add the session's ``modes`` object to a session response, if any.
-
-        On all three routes in. A client that reconnects to a session it did not
-        open has no other way to learn which mode it is in, and a mode picker
-        drawn from ``session/new`` alone would be blank after a ``session/load``.
-        """
-        state = self._modes.state(session_id) if self._modes is not None else None
-        if state is not None:
-            result["modes"] = state
-        return result
 
     def _clarify_respond(self, params: dict[str, Any]) -> dict[str, Any]:
         """Resolve a pending ask_user question by requestId or sessionId.

@@ -281,7 +281,6 @@ class SubAgentDagTool(Tool):
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
         everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
-        mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
@@ -315,11 +314,6 @@ class SubAgentDagTool(Tool):
         # direct chat do. Injected for the same reason as `state_for`: this
         # tool is built from the same config as the manager but does not own one.
         self._everos_for = everos_for
-        # The manager's mode resolution, so a node that names an `instance` runs at
-        # the effort level a user set on that instance, on the same terms `spawn`
-        # and a direct chat do. Injected for the same reason as `state_for`: this
-        # tool is built from the same config as the manager but does not own one.
-        self._mode_for = mode_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -1105,7 +1099,6 @@ class SubAgentDagTool(Tool):
                 session_key=origin.conversation,
                 state_for=self._state_for,
                 everos_for=self._everos_for,
-                mode_for=self._mode_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,
                 cancel=cancel,

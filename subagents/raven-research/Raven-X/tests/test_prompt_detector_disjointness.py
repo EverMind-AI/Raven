@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent import harness_text
 from raven.agent.flow import (
     ask_user,
     ask_user_tool,
@@ -31,7 +30,6 @@ from raven.agent.flow import (
     finalize,
     report_shape,
     spin_breaker,
-    sufficiency,
     verify,
 )
 from raven.agent.loop import main as loop_main
@@ -62,12 +60,9 @@ from raven.context_engine.segments import render
 # ``ask_user`` (dr@3.4-askuser) alongside it: the handoff lead-in becomes the
 # turn's reply and then this session's HISTORY, and history is the strongest thing
 # a model echoes - which is what a detector then matches.
-# 20260826 added ``sufficiency``. Its judge system prompt is model-visible text, and
-# its release note lands in history appended to a tool result - the same channel the
-# budget line uses, i.e. persisted and echoed back on every later iteration.
 _PROMPT_MODULES = (
     dr, finalize, verify, fetch_floor, budget_note, web, tool_registry, render, report_shape,
-    ask_user_tool, ask_user, sufficiency,
+    ask_user_tool, ask_user,
 )
 
 # Detector vocabularies: every list of literals matched against text the model
@@ -98,14 +93,6 @@ def _prompt_texts() -> list[tuple[str, str]]:
     # Assembled from a body constant plus delimiters, so the constant scan sees the
     # body but not the block the model actually reads.
     out.append(("flow.report_shape.render_reminder()", report_shape.render_reminder()))
-    # ★ 20260826: the harness's own sentences. All three are model-visible - two ride
-    # on a tool result, one is a tool return value - and all three were built by a
-    # function in a module nothing here scanned, so a marker idiom in any of them was
-    # outside this guard. ``search_closed_notice`` takes ``k``; one value is enough,
-    # since the interpolation is a number.
-    out.append(("harness_text.search_closed_notice()", harness_text.search_closed_notice(10)))
-    out.append(("harness_text.fetch_gate_notice()", harness_text.fetch_gate_notice()))
-    out.append(("harness_text.sufficiency_notice()", harness_text.sufficiency_notice()))
     out.append(("segments.render.identity_text()", render.identity_text.__doc__ or ""))
     # The anchor still renders the product identity; a regression there would
     # re-bias the control arm, so it is in scope even though DR mode drops it.

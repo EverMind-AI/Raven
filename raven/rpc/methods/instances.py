@@ -40,7 +40,6 @@ from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent.tool_vocabulary import normalize_row
-from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.session import _wire_tool_calls
 
 if TYPE_CHECKING:
@@ -512,11 +511,7 @@ def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str) -> str |
     return None
 
 
-async def instances_forget(
-    params: dict[str, Any],
-    *,
-    agent_loop_factory: "AgentLoopFactory | None" = None,
-) -> dict[str, Any]:
+async def instances_forget(params: dict[str, Any]) -> dict[str, Any]:
     """Drop one instance's registry row.
 
     Both records where the row is a collapsed pair. A stateful DAG node is
@@ -535,11 +530,6 @@ async def instances_forget(
     raven's deletes the stored conversation and cancels a running turn first --
     so forgetting a busy instance stops its turn. The directories here stay
     either way.
-
-    Any mode override held against the handle goes with the row. The manager
-    keys it by ``(session_key, agent, handle)`` and a handle is reusable, so
-    leaving it behind would silently put a later instance of the same name at
-    an effort level nobody chose for it.
     """
     registry = get_registry()
     session_key = str(params.get("session_key") or "")
@@ -552,12 +542,6 @@ async def instances_forget(
     removed = await registry.forget(session_key, agent, handle)
     if paired is not None:
         removed = await registry.forget(session_key, agent, paired) or removed
-    if removed:
-        manager = _manager(agent_loop_factory)
-        if manager is not None:
-            manager.set_instance_mode(session_key, agent, handle, None)
-            if paired is not None:
-                manager.set_instance_mode(session_key, agent, paired, None)
     if removed and row is not None and row.get("kind") == "acp" and row.get("agentId"):
         await _delete_acp_session(agent, str(row["agentId"]))
     return {"removed": bool(removed)}
@@ -595,76 +579,6 @@ async def instances_steer(
     return {"status": status}
 
 
-async def instances_set_mode(
-    params: dict[str, Any],
-    *,
-    agent_loop_factory: "AgentLoopFactory | None" = None,
-) -> dict[str, Any]:
-    """Put one instance in an operating mode (``subagents.instance.set_mode``).
-
-    The user's own half of what the spawn call's ``mode`` does for the main
-    agent: a direct chat is a continuation, so the effort level has to be
-    changeable without abandoning the conversation to start a new one at a
-    different level -- which is the only thing the roster could offer while the
-    modes were separate agents.
-
-    Answers with the mode in force and the menu it came from, so a caller can
-    render the control from this one reply. An unknown mode is the manager's
-    ``ValueError``, surfaced as a refusal naming what the agent does offer,
-    never a silent no-op that would leave the next turn at the old effort with
-    the UI showing the new one.
-
-    Three calls, told apart by which fields are present rather than by a
-    sentinel mode id -- an agent is free to call one of its own modes
-    "default", and a sentinel would take that name away from it:
-
-    - neither field: **report** what is in force and what is on offer;
-    - ``clear: true``: drop the override, back to the agent's own default;
-    - ``mode: "<id>"``: switch, from the instance's next turn on.
-    """
-    manager = _manager(agent_loop_factory)
-    agent = str(params.get("agent") or "")
-    handle = str(params.get("handle") or "")
-    session_key = str(params.get("session_key") or "")
-    raw = params.get("mode")
-    mode = str(raw) if isinstance(raw, str) and raw else None
-    reading = mode is None and not params.get("clear")
-    if manager is None:
-        # A read degrades to empty, as every read in this module does. A write
-        # does not: answering a set with "no modes" is the silent no-op the
-        # docstring above argues against, and the caller would render the mode
-        # it asked for over an override that was never recorded.
-        if reading:
-            return {"mode": None, "availableModes": []}
-        raise ConfigValidationError("sub-agents are not configured, so an instance has no mode to set")
-    if reading:
-        return {
-            "mode": manager.instance_mode(session_key, agent, handle),
-            "availableModes": [
-                {"id": m.id, "name": m.name, "description": m.description} for m in manager.agent_modes(agent)
-            ],
-        }
-    rows = get_registry().list_instances(session_key)
-    if not any(r.get("agent") == agent and r.get("handle") == handle for r in rows):
-        # Checked only on the write path: a mode is held per instance, so one
-        # set against a handle that does not exist is stored where nothing will
-        # ever read it and echoed back as if it had landed.
-        raise ConfigValidationError(f"no instance {agent}/{handle} in this session")
-    try:
-        applied = manager.set_instance_mode(session_key, agent, handle, mode)
-    except ValueError as exc:
-        # The same code a rejected config value gets: this is a value the
-        # runtime will not accept, and flattening it to an internal error
-        # would leave a person retrying something that keeps failing.
-        raise ConfigValidationError(str(exc)) from exc
-    return {
-        "mode": applied,
-        "availableModes": [
-            {"id": m.id, "name": m.name, "description": m.description} for m in manager.agent_modes(agent)
-        ],
-    }
-
-
 def register_instance_methods(
     dispatcher: "Dispatcher",
     *,
@@ -684,18 +598,11 @@ def register_instance_methods(
     async def _steer(params: dict[str, Any]) -> dict[str, Any]:
         return await instances_steer(params, agent_loop_factory=agent_loop_factory)
 
-    async def _forget(params: dict[str, Any]) -> dict[str, Any]:
-        return await instances_forget(params, agent_loop_factory=agent_loop_factory)
-
-    async def _set_mode(params: dict[str, Any]) -> dict[str, Any]:
-        return await instances_set_mode(params, agent_loop_factory=agent_loop_factory)
-
     dispatcher.register("subagents.instances", _list)
     dispatcher.register("subagents.instance.create", _create)
     dispatcher.register("subagents.instance.history", _history)
-    dispatcher.register("subagents.instance.forget", _forget)
+    dispatcher.register("subagents.instance.forget", instances_forget)
     dispatcher.register("subagents.instance.steer", _steer)
-    dispatcher.register("subagents.instance.set_mode", _set_mode)
 
 
 __all__ = [
@@ -703,7 +610,6 @@ __all__ = [
     "instances_forget",
     "instances_history",
     "instances_list",
-    "instances_set_mode",
     "instances_steer",
     "register_instance_methods",
 ]

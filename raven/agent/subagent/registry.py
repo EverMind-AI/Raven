@@ -50,11 +50,6 @@ class AgentCaps:
     stateful: bool
     reads_local_files: bool
     live_progress: bool
-    modes: tuple[Any, ...] = ()
-    """The agent's operating profiles, when its transport has them (acp only).
-
-    A menu rather than a capability, so unlike the three above it is not
-    rendered as a roster tag -- see ``AgentMeta.modes``."""
 
 
 @dataclass(frozen=True)
@@ -94,7 +89,6 @@ class AgentRow:
             self.caps.reads_local_files,
             self.caps.live_progress,
             self.owns,
-            self.caps.modes,
         )
 
 
@@ -118,7 +112,6 @@ def _row_for(cfg: Any) -> AgentRow:
             stateful=meta.stateful,
             reads_local_files=meta.reads_local_files,
             live_progress=meta.live_progress,
-            modes=meta.modes,
         ),
         injectable=Injectable(skills=builtin, mcps=builtin),
         owns=meta.owns,

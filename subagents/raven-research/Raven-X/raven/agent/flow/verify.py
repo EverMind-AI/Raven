@@ -143,13 +143,11 @@ class DraftReviewerGate(AgentHook):
         model: str | None = None,
         timeout_seconds: float = 180.0,
         attempt_timeout_seconds: float = 60.0,
-        attempt_http_timeout_seconds: float | None = None,
         max_revisions: int = 1,
         review_final_draft: bool = False,
         evidence_items: int = 8,
         evidence_item_chars: int = 2000,
         max_tokens: int = 8192,
-        reasoning_effort: str | None = None,
         constraint_rubric: bool = False,
         strict_reject_only: bool = False,
         fail_open_on_elided_evidence: bool = True,
@@ -160,24 +158,11 @@ class DraftReviewerGate(AgentHook):
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._attempt_timeout_seconds = attempt_timeout_seconds
-        self._attempt_http_timeout_seconds = attempt_http_timeout_seconds
-        if attempt_http_timeout_seconds is not None and attempt_http_timeout_seconds >= attempt_timeout_seconds:
-            # Not clamped: a configured value is the operator's to own. But a
-            # transport deadline that cannot win the race against the wait_for
-            # slice silently reverts to the nameless-cancellation behavior the
-            # knob exists to fix, so say it once at construction.
-            logger.warning(
-                "verify-gate: attemptHttpTimeoutSeconds (%.0fs) >= attemptTimeoutSeconds (%.0fs); "
-                "the transport deadline can never fire before the slice cancels it",
-                attempt_http_timeout_seconds,
-                attempt_timeout_seconds,
-            )
         self._max_revisions = max_revisions
         self._review_final_draft = review_final_draft
         self._evidence_items = evidence_items
         self._evidence_item_chars = evidence_item_chars
         self._max_tokens = max_tokens
-        self._reasoning_effort = reasoning_effort
         self._strict_reject_only = strict_reject_only
         self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
         self._evidence_round = evidence_round
@@ -395,37 +380,10 @@ class DraftReviewerGate(AgentHook):
             if elided_skipped:
                 state["evidence_elided_skipped"] = state.get("evidence_elided_skipped", 0) + elided_skipped
         user = f"Task:\n{task}\n\nDraft answer:\n{draft}\n\nEvidence:\n{evidence or '(no tool evidence was gathered)'}"
-        # Passed only when configured. ``chat_with_retry`` resolves an ABSENT
-        # reasoning_effort to the provider's generation default (sentinel), but an
-        # explicit ``None`` suppresses the parameter entirely - two different
-        # behaviours, and only the first is what every measured arm ran. The
-        # conditional is what keeps the unset knob byte-identical to before it
-        # existed.
-        effort_kwargs = (
-            {"reasoning_effort": self._reasoning_effort}
-            if self._reasoning_effort is not None
-            else {}
-        )
         # The budget is spent as short attempts, not one long wait: a call
         # stalled on a dead pooled connection never errors and never
         # returns, while a fresh attempt completes in seconds.
-        #
-        # Passed only when configured, same conditional shape as the effort knob:
-        # an unset knob keeps the call byte-identical to every measured arm. Set
-        # it inside the wait_for slice so the transport wins the race: a cancelled
-        # coroutine names nothing, while the transport's own timeout raises an
-        # exception whose class says where the call hung (connect vs read) - the
-        # one datum a stalled attempt can still yield. Not unconditional because
-        # it is not purely observational: surfacing a stall early enough for the
-        # retry ladder to answer inside the same slice can produce a verdict a
-        # cancelled attempt never could (0.2 in AGENTS.md).
-        timeout_kwargs = (
-            {"timeout": self._attempt_http_timeout_seconds}
-            if self._attempt_http_timeout_seconds is not None
-            else {}
-        )
         deadline = asyncio.get_event_loop().time() + self._timeout_seconds
-        attempt = 0
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
@@ -433,7 +391,6 @@ class DraftReviewerGate(AgentHook):
                     "verify-gate: reviewer timed out after %.0fs budget; fail-open", self._timeout_seconds
                 )
                 return None
-            attempt += 1
             try:
                 response = await asyncio.wait_for(
                     self._provider.chat_with_retry(
@@ -444,60 +401,36 @@ class DraftReviewerGate(AgentHook):
                         model=self._model,
                         max_tokens=self._max_tokens,
                         temperature=0.0,
-                        **timeout_kwargs,
-                        **effort_kwargs,
                     ),
                     timeout=min(self._attempt_timeout_seconds, remaining),
                 )
                 break
             except asyncio.TimeoutError:
-                ledger_append({
-                    "ts": time.time(),
-                    "op": _LEDGER_OP_GATE,
-                    "event": "stall",
-                    "attempt": attempt,
-                    "slice_s": self._attempt_timeout_seconds,
-                })
                 logger.warning(
-                    "verify-gate: reviewer attempt %d stalled past %.0fs; retrying on a fresh call",
-                    attempt,
+                    "verify-gate: reviewer attempt stalled past %.0fs; retrying on a fresh call",
                     self._attempt_timeout_seconds,
                 )
                 continue
             except Exception as exc:
                 logger.warning("verify-gate: reviewer call failed (%s: %s); fail-open", type(exc).__name__, exc)
                 return None
-        # Which vendor served the failing call. Without it every fail-open below is
-        # unattributable, and an intermittent vendor flake cannot be pinned out.
-        upstream = getattr(response, "serving_upstream", None)
         if getattr(response, "finish_reason", "") == "length":
             logger.warning(
-                "verify-gate: reviewer generation truncated at max_tokens=%d (thinking overrun?; upstream=%s); fail-open",
+                "verify-gate: reviewer generation truncated at max_tokens=%d (thinking overrun?); fail-open",
                 self._max_tokens,
-                upstream,
             )
             return None
         text = visible_answer(getattr(response, "content", None) or "")
         if not text or getattr(response, "finish_reason", "") == "error":
-            # On an error the content IS the formatted exception - its head names
-            # the exception class, which localizes a transport hang.
-            logger.warning(
-                "verify-gate: reviewer returned no usable content (finish_reason=%s, upstream=%s, error=%s); fail-open",
-                getattr(response, "finish_reason", None),
-                upstream,
-                (getattr(response, "content", None) or "")[:160] or None,
-            )
+            logger.warning("verify-gate: reviewer returned no usable content; fail-open")
             return None
-        return self._parse_verdict(text, upstream)
+        return self._parse_verdict(text)
 
     @staticmethod
-    def _parse_verdict(text: str, upstream: str | None = None) -> dict | None:
+    def _parse_verdict(text: str) -> dict | None:
         parsed = parse_bool_verdict(text, "pass")
         if parsed is None:
-            logger.warning(
-                "verify-gate: reviewer output missing boolean 'pass' (upstream=%s); fail-open",
-                upstream,
-            )
+            logger.warning("verify-gate: reviewer output missing boolean 'pass'; fail-open")
             return None
         verdict, _ = parsed
         # The list fields are iterated without a type check downstream, so a

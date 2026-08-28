@@ -24,21 +24,12 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.agent.acp.capabilities import (
-    AcpMode,
-    CapabilitySnapshot,
-    SnapshotStore,
-    relearn_session_modes,
-    snapshot_fingerprint,
-    verify_agent,
-)
+from raven.agent.acp.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint, verify_agent
 from raven.agent.acp.pool import close_pool, get_pool
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import probe_one
-from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.subagent.test_state import fingerprint
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
@@ -161,10 +152,6 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
     # Only entries that actually carry a modelId are advertised; the third stub
     # entry has none and must not become an invented id.
     assert snapshot.available_models == ("stub:model-a", "stub:model-b")
-    # Same tolerance for the sibling key: the third stub entry carries no id and
-    # must not become one the model would be offered and the agent then refuse.
-    assert [m.id for m in snapshot.available_modes] == ["fast", "deep"]
-    assert snapshot.available_modes[1].description == "searches longer"
     assert snapshot.auth_methods == ("stub-auth",)
 
 
@@ -275,180 +262,6 @@ def test_snapshot_store_ignores_a_row_it_cannot_read(tmp_path: Path) -> None:
     path = tmp_path / "caps.json"
     path.write_text(json.dumps({"version": 1, "snapshots": [{"agent": "a"}, "not-a-dict"]}), encoding="utf-8")
     assert SnapshotStore(path=path).load([stub_config("a")]) == {}
-
-
-# ---- relearning the mode menu from a live session --------------------------
-
-
-def _with_modes(cfg: Any, *modes: AcpMode) -> CapabilitySnapshot:
-    return CapabilitySnapshot(
-        agent="a",
-        fingerprint=snapshot_fingerprint(cfg),
-        status="ready",
-        detail="",
-        measured_at_ms=1,
-        available_modes=modes,
-    )
-
-
-def _session_result(*modes: dict[str, str]) -> dict[str, Any]:
-    return {"sessionId": "s1", "modes": {"currentModeId": "fast", "availableModes": list(modes)}}
-
-
-def test_a_session_response_rewrites_a_mode_description_the_probe_missed(tmp_path: Path) -> None:
-    """The gap the launch fingerprint cannot see.
-
-    ``snapshot_fingerprint`` digests command / cwd / env / ready_timeout_ms, so an
-    agent that only reworded its own modes launches identically and nothing marks
-    the stored text stale. The dispatching model reads that text to pick a mode,
-    so it went on choosing against a menu the agent no longer served.
-    """
-    cfg = stub_config("a")
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="old wording"))
-    store.record(stored)
-
-    updated = relearn_session_modes(
-        stored, _session_result({"id": "fast", "name": "Fast", "description": "new"}), store=store
-    )
-
-    assert updated is not None
-    assert [m.description for m in updated.available_modes] == ["new"]
-    assert [m.description for m in store.load([cfg])["a"].available_modes] == ["new"]
-
-
-def test_relearning_keeps_the_fingerprint_it_was_measured_under(tmp_path: Path) -> None:
-    """Only the modes were re-measured. Stamping a fresh fingerprint would clear
-    a staleness flag the rest of the snapshot has not earned."""
-    cfg = stub_config("a")
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = CapabilitySnapshot(
-        agent="a",
-        fingerprint="measured-under-this",
-        status="ready",
-        detail="",
-        measured_at_ms=1,
-        available_modes=(AcpMode(id="fast", description="old"),),
-    )
-
-    updated = relearn_session_modes(stored, _session_result({"id": "fast", "description": "new"}), store=store)
-
-    assert updated is not None and updated.fingerprint == "measured-under-this"
-    assert store.load([cfg]) == {}
-
-
-def test_a_response_without_modes_leaves_the_menu_alone(tmp_path: Path) -> None:
-    """Read as "this route did not report them", never as "the agent dropped
-    them": an emptied menu takes `mode` out of the spawn schema altogether,
-    which is a worse outcome than a stale description."""
-    cfg = stub_config("a")
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = _with_modes(cfg, AcpMode(id="fast", description="kept"))
-    store.record(stored)
-
-    assert relearn_session_modes(stored, {"sessionId": "s1"}, store=store) is None
-    assert relearn_session_modes(stored, _session_result(), store=store) is None
-    assert [m.description for m in store.load([cfg])["a"].available_modes] == ["kept"]
-
-
-def test_an_unchanged_menu_is_not_rewritten(tmp_path: Path) -> None:
-    """Every session response carries the menu, so writing on each one would put
-    a file write in front of every dispatch."""
-    cfg = stub_config("a")
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="same"))
-
-    assert (
-        relearn_session_modes(
-            stored, _session_result({"id": "fast", "name": "Fast", "description": "same"}), store=store
-        )
-        is None
-    )
-    assert not (tmp_path / "caps.json").exists()
-
-
-def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None:
-    """A snapshot carries a fingerprint and a status this response cannot supply,
-    so there is nothing to update -- the probe is what creates one."""
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    assert relearn_session_modes(None, _session_result({"id": "fast"}), store=store) is None
-    assert not (tmp_path / "caps.json").exists()
-
-
-def test_the_backend_rebuilds_the_agent_table_when_the_menu_moved(tmp_path: Path) -> None:
-    """The store is only half of it: a row's caps are materialized at apply time,
-    so without the rebuild the spawn schema keeps offering the old wording until
-    the next restart."""
-    cfg = stub_config("a")
-    store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = _with_modes(cfg, AcpMode(id="fast", description="old"))
-    store.record(stored)
-
-    backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
-    rebuilds: list[int] = []
-    backend.bind_caps_listener(lambda: rebuilds.append(1))
-
-    with patch("raven.agent.subagent.backends.acp_agent.relearn_session_modes") as fake:
-        fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
-
-    assert rebuilds == [1]
-    assert [m.description for m in backend._snapshot.available_modes] == ["new"]
-
-
-def test_a_failed_rebuild_does_not_reach_the_turn() -> None:
-    """The menu is what the NEXT dispatch reads. Neither the write nor the table
-    rebuild may cost the turn that happened to carry the evidence."""
-    cfg = stub_config("a")
-    stored = _with_modes(cfg, AcpMode(id="fast", description="old"))
-    backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
-    backend.bind_caps_listener(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-
-    with patch("raven.agent.subagent.backends.acp_agent.relearn_session_modes") as fake:
-        fake.side_effect = RuntimeError("store is unwritable")
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
-
-    with patch("raven.agent.subagent.backends.acp_agent.relearn_session_modes") as fake:
-        fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
-
-    assert [m.description for m in backend._snapshot.available_modes] == ["new"]
-
-
-class _StubProvider:
-    def get_default_model(self) -> str:
-        return "stub-model"
-
-
-def test_the_relearned_menu_reaches_the_schema_the_model_picks_from(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The read-back that matters: not "was it recorded" but "can the consumer
-    use it". The spawn schema's `mode` description is built from the roster, and
-    a row's capabilities are materialized when the table is applied -- so the
-    store learning the new wording proves nothing on its own.
-    """
-    path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
-    cfg = stub_config("a")
-    stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="what it used to say"))
-    SnapshotStore(path=path).record(stored)
-
-    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
-    tool = SpawnTool(mgr)
-    assert "what it used to say" in tool.parameters["properties"]["mode"]["description"]
-
-    updated = relearn_session_modes(
-        stored,
-        _session_result({"id": "fast", "name": "Fast", "description": "what it says now"}),
-        store=SnapshotStore(path=path),
-    )
-    assert updated is not None
-    # What the backend's bound listener calls.
-    mgr.refresh_agents()
-
-    assert "what it says now" in tool.parameters["properties"]["mode"]["description"]
-    assert "what it used to say" not in tool.parameters["properties"]["mode"]["description"]
 
 
 # ---- the roster ------------------------------------------------------------
@@ -595,39 +408,6 @@ async def test_dispatch_returns_the_agents_answer(tmp_path: Path) -> None:
     backend = build_third_party_backend(stub_config("a"))
     reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
     assert reply == "pong"
-
-
-async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """End to end: the wire evidence reaches the store without anyone testing.
-
-    The launch fingerprint cannot see a reworded mode, so before this the cached
-    menu only moved when a person pressed Test. The agent re-advertises it on
-    every route into a session, and a dispatch is the first place that is seen.
-    """
-    path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
-    cfg = stub_config("a")
-    SnapshotStore(path=path).record(
-        CapabilitySnapshot(
-            agent="a",
-            fingerprint=snapshot_fingerprint(cfg),
-            status="ready",
-            detail="",
-            measured_at_ms=1,
-            available_modes=(AcpMode(id="fast", name="Fast", description="what it used to say"),),
-        )
-    )
-
-    backend = build_third_party_backend(cfg)
-    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
-
-    learned = SnapshotStore(path=path).load([cfg])["a"].available_modes
-    assert [(m.id, m.description) for m in learned] == [
-        ("fast", "converges early"),
-        ("deep", "searches longer"),
-    ]
 
 
 async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
@@ -3586,79 +3366,3 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
     assert closed == ["clean"]
     assert pool._connections == {}
     released.set()
-
-
-# ---- session modes ---------------------------------------------------------
-
-
-async def test_a_mode_reaches_the_session_before_it_is_prompted(tmp_path: Path) -> None:
-    cfg = stub_config("moder")
-    backend = build_third_party_backend(cfg)
-
-    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, mode="deep")
-
-    # After the run, and with the launch args the backend itself used: the pool
-    # keys on them, so acquiring with a different cwd replaces the connection
-    # and hands back a dead client whose stderr is empty.
-    connection = await get_pool().acquire(
-        name="moder", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
-    )
-    assert reply == "pong"
-    assert "session/set_mode deep" in connection.client.stderr_tail()
-
-
-async def test_no_mode_asked_for_sends_no_frame(tmp_path: Path) -> None:
-    """The agent's own default is the right answer when nothing was requested,
-    and an unrequested frame is a round trip on every single dispatch."""
-    cfg = stub_config("quiet")
-    backend = build_third_party_backend(cfg)
-
-    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
-
-    connection = await get_pool().acquire(
-        name="quiet", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
-    )
-    assert "session/set_mode" not in connection.client.stderr_tail()
-
-
-async def test_an_agent_that_serves_no_modes_still_runs_the_task(tmp_path: Path) -> None:
-    """Method-not-found is not a reason to fail a task: running it on the
-    agent's default is a better outcome than not running it at all."""
-    backend = build_third_party_backend(stub_config("old", mode="no_modes"))
-
-    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, mode="deep")
-
-    assert reply == "pong"
-
-
-async def test_a_mode_the_agent_refuses_still_runs_the_task(tmp_path: Path) -> None:
-    backend = build_third_party_backend(stub_config("picky"))
-
-    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, mode="turbo")
-
-    assert reply == "pong"
-
-
-async def test_a_resumed_session_is_put_back_in_its_mode(tmp_path: Path, monkeypatch) -> None:
-    """The agent holds the mode in memory keyed by session id, so it does not
-    survive a restart of the agent process -- and the pool relaunches that
-    process whenever the launch key changes. Re-asserting on the load route is
-    what keeps a resumed task from silently running on the agent's default."""
-    from raven.rpc.methods import instances as instances_rpc
-
-    registry = InstanceRegistry(path=tmp_path / "instances.json")
-    await registry.commit("s", "resumer", "work", "stub-session-1", kind="acp")
-    monkeypatch.setattr(instances_rpc, "get_registry", lambda: registry)
-
-    cfg = stub_config("resumer")
-    backend = build_third_party_backend(cfg)
-    backend._registry = registry
-
-    await backend.run(
-        "ping", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="work", mode="fast"
-    )
-
-    connection = await get_pool().acquire(
-        name="resumer", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
-    )
-    assert "session/set_mode fast" in connection.client.stderr_tail()

@@ -6,7 +6,7 @@
 import { atom } from 'nanostores'
 
 import type { InstanceRow } from '../rpc/generated.js'
-import type { Msg, PanelSection } from '../types.js'
+import type { Msg } from '../types.js'
 
 import { patchUiState } from './uiStore.js'
 
@@ -142,7 +142,8 @@ export const orderedTargets = (
   ...rows
     .filter(
       r =>
-        r.kind !== 'dag-node' && (r.resumable === true || isDirectTarget(active, { agent: r.agent, handle: r.handle }))
+        r.kind !== 'dag-node' &&
+        (r.resumable === true || isDirectTarget(active, { agent: r.agent, handle: r.handle }))
     )
     .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))
     .map(r => ({ agent: r.agent, handle: r.handle }))
@@ -177,53 +178,6 @@ export const appendDirectMessage = (key: string, msg: Msg) => {
   const transcripts = new Map($directChat.get().transcripts)
   transcripts.set(key, [...(transcripts.get(key) ?? []), msg])
   patchDirectChat({ transcripts })
-}
-
-/**
- * Write a slash command's output to the chat it was typed in.
- *
- * A direct chat renders `visibleRows` -- that instance's rows, never the main
- * list -- so a command run there had its answer written where it cannot be
- * read. Routing only the typed echo made that worse rather than better: the
- * command appeared with nothing under it, which reads as a hang rather than as
- * nothing having happened.
- *
- * `target` is passed in, not read here, and that is the whole point: most of
- * these answers arrive from an RPC, and by then the user may be looking at a
- * different instance. Reading the live store would deliver the reply to
- * whatever is on screen at that moment, leaving the chat that asked showing a
- * bare echo and an unrelated chat holding an answer naming someone else. The
- * caller captures it once per dispatch, exactly as it captures `sid`.
- *
- * Only slash output. The gateway and the turn stream also write through `sys`,
- * and what they report is about the main conversation, so it belongs there
- * whichever view happens to be open.
- */
-export const sysInTarget = (toMain: (text: string) => void, target: DirectTargetRef | null, text: string): void => {
-  if (target === null) {
-    return toMain(text)
-  }
-
-  appendDirectMessage(directKey(target.agent, target.handle), { kind: 'slash', role: 'system', text })
-}
-
-/** `sysInTarget` for a panel; the two views share one renderer, so it draws either side. */
-export const panelInTarget = (
-  toMain: (title: string, sections: PanelSection[]) => void,
-  target: DirectTargetRef | null,
-  title: string,
-  sections: PanelSection[]
-): void => {
-  if (target === null) {
-    return toMain(title, sections)
-  }
-
-  appendDirectMessage(directKey(target.agent, target.handle), {
-    kind: 'panel',
-    panelData: { sections, title },
-    role: 'system',
-    text: ''
-  })
 }
 
 /**

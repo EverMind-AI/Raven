@@ -63,20 +63,6 @@ class AgentMeta(NamedTuple):
     declaration here is what makes the rule available, not what makes it appear.
     """
 
-    modes: tuple[Any, ...] = ()
-    """The operating profiles this agent offers, or ``()`` when it offers none.
-
-    ``raven.agent.acp.capabilities.AcpMode`` records, measured at registration
-    from the agent's own session response -- only the acp transport has them.
-    Unlike the three capabilities above these are not a yes/no about the
-    transport but a menu the dispatching model picks from, so they reach the
-    spawn schema as an enum rather than the listing as a tag.
-
-    Last, and after ``owns``, because this is a NamedTuple several callers build
-    positionally: a field inserted ahead of ``owns`` moves the routing string
-    into this slot with nothing raising.
-    """
-
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -129,14 +115,10 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             True,
             getattr(cfg, "owns", None) or "",
         )
-    modes: tuple[Any, ...] = ()
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
         stateful = bool(snapshot is not None and snapshot.can_resume)
-        # Measured, never declared: the menu offered has to be the one the agent
-        # serves, or the model is handed a mode the agent then refuses.
-        modes = tuple(getattr(snapshot, "available_modes", ()) or ())
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
@@ -151,7 +133,6 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # than from anything the agent or the operator says.
         kind == "acp",
         getattr(cfg, "owns", None) or "",
-        modes,
     )
 
 

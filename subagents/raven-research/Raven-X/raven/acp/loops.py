@@ -84,7 +84,6 @@ class AcpLoops:
         session_manager: Any = None,
         max_loops: int = DEFAULT_MAX_LOOPS,
         per_session: bool = True,
-        tag_for: Callable[[str], Any] | None = None,
     ) -> None:
         if max_loops < 1:
             raise ValueError(f"max_loops must be at least 1, got {max_loops}")
@@ -92,9 +91,7 @@ class AcpLoops:
         self.session_manager = session_manager
         self._max_loops = max_loops
         self.per_session = per_session
-        self._tag_for = tag_for
         self._loops: OrderedDict[str, Any] = OrderedDict()
-        self._tags: dict[str, Any] = {}
         self._on_create: list[Callable[[Any], None]] = []
         self._busy: Callable[[str], bool] = lambda _conversation: False
         self._closing: set[asyncio.Task[None]] = set()
@@ -137,17 +134,6 @@ class AcpLoops:
         into a signature change at both call sites.
         """
         loop = self._loops.get(conversation)
-        if loop is not None and self._stale(conversation):
-            # The session's construction inputs changed under it (a mode
-            # switch). Rebuilt HERE and nowhere else: this runs at the start of
-            # a turn, before the engine has any in-flight tool state, so a
-            # switch mid-turn costs the running turn nothing and the next turn
-            # gets the profile that was asked for. Releasing at the moment of
-            # the switch would instead take the tools out from under whatever
-            # was running.
-            logger.info("acp: rebuilding the engine for session {}; its profile changed", conversation)
-            self.release(conversation)
-            loop = None
         if loop is not None:
             self._loops.move_to_end(conversation)
             # Also on the hit path: an earlier build that found every victim
@@ -157,8 +143,6 @@ class AcpLoops:
             return loop
         loop = self._factory(conversation)
         self._loops[conversation] = loop
-        if self._tag_for is not None:
-            self._tags[conversation] = self._tag_for(conversation)
         logger.info("acp: engine built for session {} ({} resident)", conversation, len(self._loops))
         for hook in self._on_create:
             try:
@@ -167,16 +151,6 @@ class AcpLoops:
                 logger.exception("acp: a session-engine create hook failed")
         self._evict_over_cap(keep=conversation)
         return loop
-
-    def _stale(self, conversation: str) -> bool:
-        """Whether the resident engine was built under a tag that has moved.
-
-        No tagger (every caller before session modes) means nothing is ever
-        stale, so the registry behaves exactly as it did.
-        """
-        if self._tag_for is None:
-            return False
-        return self._tags.get(conversation) != self._tag_for(conversation)
 
     def cwd_for(self, conversation: str) -> str | None:
         """The directory a tool call's relative paths resolve against.
@@ -242,7 +216,6 @@ class AcpLoops:
         to it. The task is tracked so :meth:`aclose` still waits for it.
         """
         loop = self._loops.pop(conversation, None)
-        self._tags.pop(conversation, None)
         if loop is None:
             return
         logger.info("acp: releasing the engine for session {}", conversation)
@@ -254,7 +227,6 @@ class AcpLoops:
         """Close every resident engine, and whatever is still being closed."""
         residents = tuple(self._loops.items())
         self._loops.clear()
-        self._tags.clear()
         if residents:
             await asyncio.gather(*(close_loop(loop) for _key, loop in residents), return_exceptions=True)
         pending = tuple(self._closing)

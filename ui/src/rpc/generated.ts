@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 147 methods, 88 component schemas.
+// 146 methods, 88 component schemas.
 
 /* eslint-disable */
 /**
@@ -1937,24 +1937,6 @@ export interface SubagentsInstanceSteerParams {
 export interface SubagentsInstanceSteerResult {
   status: 'injected' | 'no_turn' | 'unsupported';
 }
-export interface SubagentsInstanceSetModeParams {
-  session_key: string;
-  agent: string;
-  handle: string;
-  mode?: string;
-  clear?: boolean;
-}
-export interface SubagentsInstanceSetModeResult {
-  /**
-   * The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error.
-   */
-  mode?: string | null;
-  availableModes?: {
-    id: string;
-    name?: string;
-    description?: string;
-  }[];
-}
 export interface SystemHelloParams {
   client_version: string;
   client_capabilities?: string[];
@@ -3406,7 +3388,6 @@ export interface RpcMethods {
   'subagents.instance.history': { params: SubagentsInstanceHistoryParams; result: SubagentsInstanceHistoryResult };
   'subagents.instance.forget': { params: SubagentsInstanceForgetParams; result: SubagentsInstanceForgetResult };
   'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
-  'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
@@ -3638,7 +3619,6 @@ export const RPC_METHODS = [
   "subagents.instance.create",
   "subagents.instance.forget",
   "subagents.instance.history",
-  "subagents.instance.set_mode",
   "subagents.instance.steer",
   "subagents.instances",
   "subagents.list",

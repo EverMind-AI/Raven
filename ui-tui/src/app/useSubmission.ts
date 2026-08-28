@@ -361,19 +361,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       }
 
       if (looksLikeSlashCommand(full)) {
-        // Echoed where `send` echoes a prompt, and for the same reason: a direct
-        // chat renders its own rows and never the main transcript, so an echo
-        // written there is both invisible here and a line in a conversation that
-        // never ran the command.
-        const activeChat = getDirectChat().active
-        const echo: Msg = { kind: 'slash', role: 'system', text: full }
-
-        if (activeChat === null) {
-          appendMessage(echo)
-        } else {
-          appendDirectMessage(directKey(activeChat.agent, activeChat.handle), echo)
-        }
-
+        appendMessage({ kind: 'slash', role: 'system', text: full })
         composerActions.pushHistory(full)
         slashRef.current(full)
         composerActions.clearIn()
