@@ -1,7 +1,8 @@
 {
   "name": "Raven-Oncall",
   "kind": "acp",
-  "description": "A powerful on-call agent that can run a long job on a remote machine and keep watching it, deciding on its own when to look again, resubmit, kill it, or file a report. Use this agent when the work outlives the conversation. IMPORTANT: the spawn returns after the first turn, not when the job finishes.",
+  "runsOnMachines": true,
+  "description": "A powerful on-call agent that runs experiments and jobs, then keeps watching them: it decides on its own when to look again, judges each round against the owner's goal, resubmits with better parameters, kills what went bad, and files a report. Use it whenever work must be run AND watched to an outcome -- a solver case, a training run, a parameter sweep. The signals: a budget, a shared machine, \"tell me when it's done\", or an answer that takes more than one round of runs to reach. Where the work sits is irrelevant: a remote box over ssh or a directory on this very computer both count. IMPORTANT: the spawn returns after the first turn, not when the job finishes.",
   "owns": "owns long-running or remote jobs that outlive this conversation. Do not run one yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",

@@ -18,36 +18,28 @@ the owner, who is still sitting there, having just typed the task.
 
 Two decisions carry this file.
 
-**The agent's own installation answers.** Not a copy of the schema kept here:
-this repo has no ``raven/ops`` at all, so a second reader would be a second
-definition of what a machine is, and the two would drift the way ``name`` and
-``display_name`` already did. The sub-agent's checkout is asked instead, through
-the same command an owner runs, and its answer is whatever its own reader says.
-It is asked with no ``--config``, so it resolves the owner's registry in the
-host's raven home -- the one file ``raven ops connection add`` writes, rather
-than any per-install copy of it.
+**The host's own registry reader answers.** This used to shell out to the
+sub-agent checkout's binary, because this repo had no ``raven/ops`` and a second
+reader would have been a second definition of what a machine is. The registry
+has since been lifted into the host (``raven.ops.connections``), which makes the
+host the definition; the subprocess collapsed into one bit -- "does this agent
+run work on the owner's machines" -- and that bit is now declared in the
+manifest (``runsOnMachines``) rather than probed off a venv at 20 s a call.
 
-**Refuse on contradiction, never on uncertainty.** A refusal needs the doctor to
-have run, returned the JSON it promises, and said no machine is usable. A venv
-that is not built, a command that does not exist because that agent has nothing
-to do with machines, a timeout, output that will not parse -- none of those are
-evidence of anything, and each leaves the graph exactly as it was. The check can
-only ever add a refusal it can name.
+**Refuse on contradiction, never on uncertainty.** A refusal needs a reader to
+have run and said no machine is usable. An agent whose manifest does not claim
+machines, a folder that cannot be found, a manifest that will not parse -- none
+of those are evidence of anything, and each leaves the graph exactly as it was.
+The check can only ever add a refusal it can name.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
 from dataclasses import dataclass
 
 from loguru import logger
-
-# Long enough for a cold interpreter on a laptop, short enough that a wedged
-# venv does not hold up the turn the owner is waiting in.
-_TIMEOUT_S = 20.0
 
 
 @dataclass(frozen=True)
@@ -68,61 +60,46 @@ class Verdict:
         return next((m for m in self.machines if str(m.get("id")) == machine_id), None)
 
 
-def _raven_in(agent: str) -> str | None:
-    """The ``raven`` this agent runs as, or None when it is not a vendored one."""
+def runs_on_machines(agent: str) -> bool:
+    """Whether this agent's manifest declares it runs work on the owner's machines.
+
+    Read off the vendored folder's own ``subagent.json`` rather than the applied
+    config rows: the manifest is present before any config merge has happened,
+    and a flag misread as False only silences a check, never breaks a dispatch.
+    """
     try:
-        from raven.agent.subagent.vendored_agents import checkout_of, vendored_folder
+        from raven.agent.subagent.vendored_agents import vendored_folder
 
         folder = vendored_folder(agent)
-        checkout = checkout_of(folder) if folder else None
+        if folder is None:
+            return False
+        entry = json.loads((folder / "subagent.json").read_text(encoding="utf-8"))
+        return bool(entry.get("runsOnMachines") or entry.get("runs_on_machines"))
     except Exception as exc:  # noqa: BLE001 -- a roster that cannot be read refuses nothing
-        logger.debug("machines: cannot locate {}: {}", agent, exc)
-        return None
-    if checkout is None:
-        return None
-    binary = checkout / ".venv" / "bin" / "raven"
-    return str(binary) if binary.is_file() else None
+        logger.debug("machines: cannot read manifest for {}: {}", agent, exc)
+        return False
 
 
-def ask(agent: str, *, timeout: float = _TIMEOUT_S) -> Verdict | None:
-    """What this agent's own installation says about its machines, or None.
+def ask(agent: str) -> Verdict | None:
+    """The owner's registry, for an agent that runs work on machines, or None.
 
-    None means nothing was learned -- no vendored checkout, no venv, no such
-    command, a timeout, or output that would not parse. Every one of those is a
-    reason to leave the graph alone rather than to refuse it.
+    None means the question does not apply -- the agent's manifest does not
+    claim machines, or could not be read. Per the module contract that must
+    leave the graph exactly as it was.
     """
-    binary = _raven_in(agent)
-    if binary is None:
+    if not runs_on_machines(agent):
         return None
-    # Deliberately without --config: that resolves the registry beside the host's
-    # own config, which is the owner's list and the one `connection add` writes.
-    # RAVEN_CONNECTIONS is cleared for the same reason -- a launcher may have
-    # pointed this process at some other instance's file.
-    env = {k: v for k, v in os.environ.items() if k != "RAVEN_CONNECTIONS"}
-    try:
-        done = subprocess.run(
-            [binary, "ops", "connection", "doctor", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.debug("machines: {} could not be asked: {}", agent, exc)
-        return None
-    try:
-        payload = json.loads(done.stdout)
-        return Verdict(
-            agent=agent,
-            usable=int(payload["usable"]),
-            listed=int(payload["listed"]),
-            blocking=tuple(str(line) for line in payload.get("blocking", [])),
-            machines=tuple(m for m in payload.get("machines", []) if isinstance(m, dict)),
-        )
-    except (ValueError, KeyError, TypeError):
-        logger.debug("machines: {} answered nothing this understands", agent)
-        return None
+    from raven.ops.connections import problems, read, shown, usable
+
+    found = read()
+    fit = usable(found.rows)
+    return Verdict(
+        agent=agent,
+        usable=len(fit),
+        listed=len(found.rows),
+        blocking=tuple(str(f) for f in problems() if f.blocking),
+        machines=tuple(shown(r) for r in fit),
+    )
 
 
 def refusal(verdict: Verdict) -> str:
@@ -153,40 +130,31 @@ def refusal(verdict: Verdict) -> str:
     )
 
 
-def verdict_for(agents: list[str], *, timeout: float = _TIMEOUT_S) -> Verdict | None:
+def verdict_for(agents: list[str]) -> Verdict | None:
     """What the first machine-running agent in this graph reports, or None.
 
     One answer is enough. A graph with two such agents would be asking the owner
     the same question twice, and the registry they read is the same file.
     """
     for agent in dict.fromkeys(agents):
-        if (verdict := ask(agent, timeout=timeout)) is not None:
+        if (verdict := ask(agent)) is not None:
             return verdict
     return None
 
 
-async def ask_async(agent: str, *, timeout: float = _TIMEOUT_S) -> Verdict | None:
-    """Async wrapper of :func:`ask` that runs the subprocess off the event loop."""
-    return await asyncio.to_thread(ask, agent, timeout=timeout)
+async def ask_async(agent: str) -> Verdict | None:
+    """Async wrapper of :func:`ask` that keeps the file reads off the event loop."""
+    return await asyncio.to_thread(ask, agent)
 
 
-async def verdict_for_async(agents: list[str], *, timeout: float = _TIMEOUT_S) -> Verdict | None:
-    """Async wrapper of :func:`verdict_for` so an async caller pays no stalls.
-
-    ``ask`` shells out to a vendored agent's cold interpreter and can block for
-    the full 20 s timeout. Running it in a thread matches the pattern
-    ``login_shell_env`` uses in every other transport and keeps the event loop
-    free for concurrent turns.
-    """
-    for agent in dict.fromkeys(agents):
-        if (verdict := await ask_async(agent, timeout=timeout)) is not None:
-            return verdict
-    return None
+async def verdict_for_async(agents: list[str]) -> Verdict | None:
+    """Async wrapper of :func:`verdict_for` so an async caller pays no stalls."""
+    return await asyncio.to_thread(verdict_for, agents)
 
 
-def machineless(agents: list[str], *, timeout: float = _TIMEOUT_S) -> Verdict | None:
+def machineless(agents: list[str]) -> Verdict | None:
     """The first agent in the graph that has nowhere to run, or None."""
-    verdict = verdict_for(agents, timeout=timeout)
+    verdict = verdict_for(agents)
     return verdict if verdict is not None and verdict.usable == 0 else None
 
 

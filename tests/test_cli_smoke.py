@@ -43,6 +43,10 @@ def tmp_config(tmp_path: Path) -> Path:
 
 TOP_LEVEL_COMMANDS = [
     "onboard",
+    # The owner's machine registry (`raven ops connection add/list/doctor`),
+    # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
+    # what the host registers here is which machines exist and how to reach them.
+    "ops",
     "gateway",
     "agent",
     "status",
@@ -179,6 +183,10 @@ REGISTERED_COMMAND_NAMES = {
     "gateway",
     "import",
     "onboard",
+    # The owner's machine registry (`raven ops connection add/list/doctor`),
+    # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
+    # what the host registers here is which machines exist and how to reach them.
+    "ops",
     "playbook",
     # Singular: per-server actions (`plugin auth <server>`). Distinct from the
     # plural listing below, which answers "what is installed".

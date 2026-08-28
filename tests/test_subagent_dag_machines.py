@@ -7,130 +7,140 @@ afterwards, with the code already written -- and written for an imagined
 machine, since how much device memory there is decides the batch size and
 whether gradient checkpointing has to be on.
 
-The other half of what these pin is the silence. The check leaves this process
-to ask, so most of what can go wrong is not evidence of anything: an unbuilt
-venv, an agent that has nothing to do with machines, a timeout. Every one of
-those has to leave the graph exactly as it was.
+The other half of what these pin is the silence. An agent whose manifest does
+not claim machines, a folder that cannot be found, a manifest that will not
+parse: none of those are evidence of anything, and every one has to leave the
+graph exactly as it was.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 
 import pytest
 
-from raven.agent.subagent import dag_machines
+from raven.agent.subagent import dag_machines as _machines
 
 
 @pytest.fixture
-def installed(monkeypatch, tmp_path):
-    """An agent whose checkout has a built venv, ready to be asked."""
-    binary = tmp_path / ".venv" / "bin" / "raven"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("#!/bin/sh\n", encoding="utf-8")
-    monkeypatch.setattr(dag_machines, "_raven_in", lambda agent: str(binary))
-    return binary
+def oncall_flagged(monkeypatch):
+    """Raven-Oncall's manifest claims machines; nobody else's does."""
+    monkeypatch.setattr(_machines, "runs_on_machines", lambda agent: agent == "Raven-Oncall")
 
 
-def answers(monkeypatch, stdout: str, *, code: int = 0):
-    def fake(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, code, stdout, "")
+@pytest.fixture
+def registry(monkeypatch, tmp_path):
+    """A writable registry file the reader resolves through RAVEN_CONNECTIONS."""
+    path = tmp_path / "connections.json"
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
 
-    monkeypatch.setattr(subprocess, "run", fake)
+    def write(rows):
+        path.write_text(json.dumps({"connections": rows}), encoding="utf-8")
+
+    return write
 
 
-def test_a_graph_with_nowhere_to_run_is_refused(installed, monkeypatch):
-    answers(monkeypatch, json.dumps({"state": "ok", "listed": 0, "usable": 0, "blocking": []}))
+_GOOD_ROW = {
+    "id": "cpu-box",
+    "display_name": "CPU box",
+    "transport": "ssh",
+    "host": "10.0.0.1",
+    "port": 22,
+    "user": "root",
+    "key": "~/.ssh/id_rsa",
+    "software": "ccx",
+    "budget_unit": "minute",
+    "concurrency": 1,
+}
 
-    stranded = dag_machines.machineless(["Raven-Oncall"])
+
+def test_a_graph_with_nowhere_to_run_is_refused(oncall_flagged, registry):
+    registry([])
+
+    stranded = _machines.machineless(["Raven-Oncall"])
 
     assert stranded is not None and stranded.agent == "Raven-Oncall"
 
 
-def test_the_refusal_names_what_the_owner_has_to_supply(installed, monkeypatch):
+def test_a_missing_registry_is_also_nowhere_to_run(oncall_flagged, monkeypatch, tmp_path):
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "never-written.json"))
+
+    assert _machines.machineless(["Raven-Oncall"]) is not None
+
+
+def test_the_refusal_names_what_the_owner_has_to_supply(oncall_flagged, registry):
     """The loop cannot fill any of it in: the address and the key are outside
     what it can see, by design."""
-    answers(monkeypatch, json.dumps({"state": "ok", "listed": 1, "usable": 0, "blocking": ["gpu: 'key' is missing"]}))
+    registry([{"id": "gpu", "transport": "ssh", "host": "10.0.0.2"}])
 
-    text = dag_machines.refusal(dag_machines.machineless(["Raven-Oncall"]))
+    text = _machines.refusal(_machines.machineless(["Raven-Oncall"]))
 
     assert "Nothing was dispatched" in text
-    assert "'key' is missing" in text, "say which machine failed and why"
+    assert "'port' is missing" in text, "say which machine failed and why"
     for asked in ("port", "private key", "installed", "budget", "at once"):
         assert asked in text, asked
     assert "raven ops connection add" in text
 
 
-def test_a_machine_that_is_there_lets_the_graph_through(installed, monkeypatch):
-    answers(monkeypatch, json.dumps({"state": "ok", "listed": 2, "usable": 1, "blocking": []}))
+def test_a_machine_that_is_there_lets_the_graph_through(oncall_flagged, registry):
+    registry([_GOOD_ROW])
 
-    assert dag_machines.machineless(["Raven-Oncall"]) is None
-
-
-def test_an_agent_with_nothing_to_do_with_machines_is_not_asked_twice(monkeypatch):
-    """`_raven_in` returns None for a non-vendored agent, and that is the end of it."""
-    monkeypatch.setattr(dag_machines, "_raven_in", lambda agent: None)
-
-    assert dag_machines.ask("Raven-Code") is None
-    assert dag_machines.machineless(["Raven-Code", "Raven-Ppt"]) is None
+    assert _machines.machineless(["Raven-Oncall"]) is None
+    verdict = _machines.verdict_for(["Raven-Oncall"])
+    assert verdict.usable == 1 and verdict.machines[0]["id"] == "cpu-box"
 
 
-def test_a_checkout_whose_command_does_not_exist_refuses_nothing(installed, monkeypatch):
-    """An agent that has no `ops connection` surface says so by failing to parse.
-    That is not evidence the owner has no machines."""
-    answers(monkeypatch, "No such command 'connection'.", code=2)
+def test_what_the_verdict_carries_is_never_the_way_onto_the_machine(oncall_flagged, registry):
+    registry([_GOOD_ROW])
 
-    assert dag_machines.machineless(["Raven-Code"]) is None
+    machine = _machines.verdict_for(["Raven-Oncall"]).machines[0]
 
-
-def test_a_timeout_refuses_nothing(installed, monkeypatch):
-    def explode(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, 20.0)
-
-    monkeypatch.setattr(subprocess, "run", explode)
-
-    assert dag_machines.machineless(["Raven-Oncall"]) is None
+    assert "host" not in machine and "key" not in machine and "user" not in machine
 
 
-def test_output_that_will_not_parse_refuses_nothing(installed, monkeypatch):
-    answers(monkeypatch, "usable: none\n")
+def test_an_agent_whose_manifest_claims_nothing_refuses_nothing(oncall_flagged, registry):
+    registry([])
 
-    assert dag_machines.machineless(["Raven-Oncall"]) is None
-
-
-def test_a_payload_missing_the_field_it_promises_refuses_nothing(installed, monkeypatch):
-    answers(monkeypatch, json.dumps({"state": "ok"}))
-
-    assert dag_machines.machineless(["Raven-Oncall"]) is None
+    assert _machines.ask("Raven-Code") is None
+    assert _machines.machineless(["Raven-Code", "Raven-Ppt"]) is None
 
 
-def test_the_registry_it_asks_about_is_the_owners(installed, monkeypatch):
-    """Asked with no --config, so the sub-agent's reader resolves the host's raven
-    home -- the one file `raven ops connection add` writes. A launcher may have
-    pointed this process elsewhere, so that pointer is cleared."""
-    seen = {}
+def test_a_manifest_that_cannot_be_read_refuses_nothing(monkeypatch, registry):
+    from raven.agent.subagent import vendored_agents
 
-    def fake(argv, **kwargs):
-        seen["argv"] = argv
-        seen["env"] = kwargs.get("env") or {}
-        return subprocess.CompletedProcess(argv, 0, json.dumps({"listed": 1, "usable": 1}), "")
+    monkeypatch.setattr(vendored_agents, "vendored_folder", lambda agent: None)
+    registry([])
 
-    monkeypatch.setenv("RAVEN_CONNECTIONS", "/somewhere/else/connections.json")
-    monkeypatch.setattr(subprocess, "run", fake)
-
-    dag_machines.ask("Raven-Oncall")
-
-    assert "--config" not in seen["argv"]
-    assert seen["argv"][1:] == ["ops", "connection", "doctor", "--json"]
-    assert "RAVEN_CONNECTIONS" not in seen["env"]
+    assert _machines.machineless(["Raven-Oncall"]) is None
 
 
-def test_only_one_agent_is_reported_even_when_two_are_stranded(installed, monkeypatch):
+@pytest.mark.parametrize("spelling", ["runsOnMachines", "runs_on_machines"])
+def test_the_flag_is_read_off_the_manifest_in_either_spelling(monkeypatch, tmp_path, spelling):
+    """conftest points ``subagents_root`` at nothing, so the folder is stubbed;
+    what this pins is the read itself -- both manifest spellings count."""
+    folder = tmp_path / "raven-oncall"
+    folder.mkdir()
+    (folder / "subagent.json").write_text(json.dumps({"name": "Raven-Oncall", spelling: True}), encoding="utf-8")
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
+
+    assert _machines.runs_on_machines("Raven-Oncall") is True
+
+
+def test_a_manifest_without_the_flag_claims_nothing(monkeypatch, tmp_path):
+    folder = tmp_path / "raven-code"
+    folder.mkdir()
+    (folder / "subagent.json").write_text(json.dumps({"name": "Raven-Code"}), encoding="utf-8")
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
+
+    assert _machines.runs_on_machines("Raven-Code") is False
+
+
+def test_only_one_agent_is_reported_even_when_two_are_stranded(monkeypatch, registry):
     """The owner has to be asked either way; twice is the same question twice."""
-    answers(monkeypatch, json.dumps({"listed": 0, "usable": 0}))
+    monkeypatch.setattr(_machines, "runs_on_machines", lambda agent: True)
+    registry([])
 
-    stranded = dag_machines.machineless(["Raven-Oncall", "Raven-Sim"])
+    stranded = _machines.machineless(["Raven-Oncall", "Raven-Sim"])
 
     assert stranded.agent == "Raven-Oncall"
 
@@ -164,7 +174,7 @@ CPU = {"id": "conn_cpu", "display_name": "CPU box", "kind": "cpu", "cores": 32}
 
 
 def verdict(*machines):
-    return dag_machines.Verdict("Raven-Oncall", usable=len(machines), listed=len(machines), machines=tuple(machines))
+    return _machines.Verdict("Raven-Oncall", usable=len(machines), listed=len(machines), machines=tuple(machines))
 
 
 def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
@@ -173,7 +183,7 @@ def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
     somebody made."""
     nodes = [_Node("code", "Raven-Code"), _Node("watch", "Raven-Oncall")]
 
-    problem = dag_machines.unnamed_machine(nodes, verdict(GPU))
+    problem = _machines.unnamed_machine(nodes, verdict(GPU))
 
     assert "does not say which" in problem
     assert "conn_gpu" in problem, "the candidates have to be in front of it"
@@ -183,7 +193,7 @@ def test_a_node_that_runs_work_on_a_machine_has_to_say_which(monkeypatch):
 def test_a_machine_that_is_not_on_the_list_is_refused(monkeypatch):
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_typo"})]
 
-    problem = dag_machines.unnamed_machine(nodes, verdict(GPU))
+    problem = _machines.unnamed_machine(nodes, verdict(GPU))
 
     assert "conn_typo" in problem and "not one this installation can use" in problem
 
@@ -191,7 +201,7 @@ def test_a_machine_that_is_not_on_the_list_is_refused(monkeypatch):
 def test_a_named_machine_passes(monkeypatch):
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_gpu"})]
 
-    assert dag_machines.unnamed_machine(nodes, verdict(GPU)) == ""
+    assert _machines.unnamed_machine(nodes, verdict(GPU)) == ""
 
 
 def test_every_node_is_told_not_just_the_ones_before_the_work(monkeypatch):
@@ -204,7 +214,7 @@ def test_every_node_is_told_not_just_the_ones_before_the_work(monkeypatch):
         _Node("report", "Raven-Research", depends_on=["watch"]),
     ]
 
-    told = dag_machines.with_facts(nodes, verdict(GPU))
+    told = _machines.with_facts(nodes, verdict(GPU))
 
     for node in told:
         assert "A800" in node.prompt_template, f"{node.id} was not told"
@@ -216,7 +226,7 @@ def test_what_travels_is_what_the_machine_is_never_the_way_onto_it(monkeypatch):
     into a prompt even if the payload carried one."""
     nodes = [_Node("watch", "Raven-Oncall", inputs={"machine": "conn_gpu"})]
 
-    told = dag_machines.with_facts(nodes, verdict(GPU))
+    told = _machines.with_facts(nodes, verdict(GPU))
 
     assert "id" not in told[0].prompt_template.split("---")[1].split("\n")[1]
     assert "not reachable from here" in told[0].prompt_template
@@ -225,7 +235,7 @@ def test_what_travels_is_what_the_machine_is_never_the_way_onto_it(monkeypatch):
 def test_a_graph_that_names_no_machine_is_left_alone(monkeypatch):
     nodes = [_Node("a", "Raven-Code"), _Node("b", "Raven-Research")]
 
-    assert dag_machines.with_facts(nodes, verdict(GPU)) is nodes
+    assert _machines.with_facts(nodes, verdict(GPU)) is nodes
 
 
 def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
@@ -237,7 +247,32 @@ def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
         _Node("report", "Raven-Research"),
     ]
 
-    told = dag_machines.with_facts(nodes, verdict(GPU, CPU))
+    told = _machines.with_facts(nodes, verdict(GPU, CPU))
 
     for node in told:
         assert "GPU机器" in node.prompt_template and "CPU box" in node.prompt_template
+
+
+def test_two_rows_behind_one_id_strand_the_graph(monkeypatch, registry):
+    """Reproduced in review: two individually valid rows sharing an id kept
+    usable=2 while problems() reported a blocking defect, so dispatch went
+    ahead and Verdict.machine silently picked whichever row came first. The
+    id is what a campaign stores; an ambiguous one is nowhere to run."""
+    monkeypatch.setattr(_machines, "runs_on_machines", lambda agent: True)
+    registry([_GOOD_ROW, {**_GOOD_ROW, "display_name": "same id, other box", "host": "10.0.0.9"}])
+
+    stranded = _machines.machineless(["Raven-Oncall"])
+
+    assert stranded is not None and stranded.usable == 0
+
+
+def test_whitespace_equivalent_duplicate_ids_also_strand_the_graph(monkeypatch, registry):
+    """problems() strips ids before duplicate detection; usable() must strip the
+    same way, or `cpu` and ` cpu ` produce the blocking diagnostic while both
+    rows stay usable (reproduced in review)."""
+    monkeypatch.setattr(_machines, "runs_on_machines", lambda agent: True)
+    registry([_GOOD_ROW, {**_GOOD_ROW, "id": f" {_GOOD_ROW['id']} ", "host": "10.0.0.9"}])
+
+    stranded = _machines.machineless(["Raven-Oncall"])
+
+    assert stranded is not None and stranded.usable == 0

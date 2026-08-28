@@ -33,7 +33,7 @@ from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
+from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -2731,6 +2731,89 @@ class AgentLoop:
     # web config surface. Kept as a name only: both apply the whole list.
     apply_third_party_subagents = apply_agents
 
+    _WATCHED_TOOLS = {"list_dir": "path", "read_file": "path", "grep": "path", "find": "path", "exec": "command"}
+
+    async def _note_watch_work(self, state: Any, name: str, args: dict[str, Any], result: str, message: str) -> str:
+        """Add one line when a look landed on a path the owner asked about.
+
+        Ported from the on-call agent's ``_note_watched_path``, one step earlier
+        in the chain: there the line steers a loop that already is the on-call
+        agent toward ``ops_declare``; here it steers the main agent toward
+        spawning that agent. Lazily, and once per turn: a request that never
+        reaches for a path never pays for the judgement, and a turn that reaches
+        for twenty pays once.
+
+        Placed on the result rather than before the call because the result is
+        the only channel measured to change the next move: 2026-08-19 (and again
+        2026-08-27 on this loop, with the roster description carrying the same
+        fact), the same fact at the top of the turn was read, written into the
+        reasoning, and ignored, while a fact arriving in a tool result was acted
+        on.
+        """
+        # Only a real hand-off answers the question this line asks for the rest
+        # of the turn. The first cut treated every spawn as one and silenced the
+        # nudges on refusal too -- at exactly the moment the model chose to run
+        # trials by hand -- and an unrelated spawn of another agent silenced
+        # them just as well. A machineless refusal instead arms the sharper
+        # line; anything unrecognised keeps the nudges alive.
+        if name in ("spawn", "run_subagent_dag"):
+            from raven.agent.subagent import watch_work
+
+            try:
+                spawn_tool = self.tools.get("spawn")
+                agents = getattr(spawn_tool, "_agents", lambda: [])()
+                agent = await watch_work.oncall_agent([a.name for a in agents]) if agents else None
+            except Exception:  # noqa: BLE001 -- an unreadable roster attributes nothing
+                agent = None
+            if agent is None:
+                return result
+            try:
+                if "Nothing was dispatched" in str(result):
+                    state.machineless = True
+                elif watch_work.handed_over(name, args, str(result), agent):
+                    state.dispatched = True
+            except Exception:  # noqa: BLE001 -- a dispatch must not fail over a judgement
+                logger.debug("watch-work hand-off judgement skipped", exc_info=True)
+            return result
+        if state.dispatched:
+            return result
+        key = self._WATCHED_TOOLS.get(name)
+        if not key:
+            return result
+        subject = str(args.get(key) or "")
+        if not subject or not message:
+            return result
+        try:
+            # No agent on the roster keeps a ledger: the line would point at a
+            # spawn that cannot land, and per the prober's contract an answer
+            # that could not be established must change nothing.
+            spawn_tool = self.tools.get("spawn")
+            agents = getattr(spawn_tool, "_agents", lambda: [])()
+            if not agents:
+                return result
+            from raven.agent.subagent import watch_work
+
+            agent = await watch_work.oncall_agent([a.name for a in agents])
+            if not agent:
+                return result
+            verdict = state.verdict
+            if verdict is None:
+                verdict = state.verdict = watch_work.read_verdict(
+                    (await self._llm_call_stream(watch_work.build_prompt(message), None, self.model)).content
+                )
+            if not verdict.watched:
+                return result
+            import re as _re
+
+            hits = _re.findall(r"(/[^\s'\"|;&>]+)", subject) if key == "command" else [subject]
+            if any(verdict.claims(h) for h in hits):
+                if state.machineless:
+                    return result + watch_work.machineless_nudge(agent)
+                return result + watch_work.nudge(agent)
+        except Exception:  # noqa: BLE001 -- a look must not fail over a judgement
+            logger.debug("watch-work judgement skipped", exc_info=True)
+        return result
+
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
         """Remove <think>…</think> blocks that some models embed in content.
@@ -3073,6 +3156,14 @@ class AgentLoop:
         post_tool_nudges = 0
         prefill_retries = 0
         empty_retries = 0
+        # The watch-work judgement's state, owned by this turn: the loop is a
+        # singleton and turns from other sessions run concurrently, so anything
+        # on `self` here would let one session's dispatch silence another's
+        # nudge and one session's verdict answer for another's request.
+        from raven.agent.subagent import watch_work as _watch_work
+
+        watch_state = _watch_work.TurnWatch()
+        watch_request = _watch_work.asked_for(initial_messages)
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -3298,6 +3389,25 @@ class AgentLoop:
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
+                    # Only the model-facing text is annotated. Rebuilt rather
+                    # than replaced because a plain str here would drop the
+                    # transcript row's display string, the multimodal blocks and
+                    # the control flags with it.
+                    noted = await self._note_watch_work(
+                        watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
+                    )
+                    if noted != str(result):
+                        result = ToolOutput(
+                            noted,
+                            getattr(result, "display_text", None),
+                            retryable=getattr(result, "retryable", True),
+                            blocks_call=getattr(result, "blocks_call", False),
+                            continuation=getattr(result, "continuation", Continuation.CONTINUE),
+                            ok=getattr(result, "ok", True),
+                            blocks=getattr(result, "blocks", None),
+                            diff=getattr(result, "diff", None),
+                            file_change=getattr(result, "file_change", None),
+                        )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
