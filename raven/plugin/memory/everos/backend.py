@@ -421,6 +421,10 @@ class EverosBackend:
         self._probe_task: asyncio.Task | None = None
         self._last_probe_at: float = 0.0
         self._store_inflight: set[asyncio.Task] = set()
+        # Set once `stop` has closed the adapter. A write still on the wire then
+        # fails because we shut its transport, which says nothing about the
+        # service and must not be classified as if it did.
+        self._stopping = False
 
         if adapter is not None:
             self._adapter: _Adapter | None = adapter
@@ -782,6 +786,7 @@ class EverosBackend:
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")
+        self._stopping = True
         if self._probe_task is not None and not self._probe_task.done():
             self._probe_task.cancel()
         # Reporting a dropped write to the user is the AgentLoop's job now
@@ -994,6 +999,18 @@ class EverosBackend:
             )
             return False
         except Exception as e:
+            if self._stopping:
+                # Our own teardown closed the transport out from under a write
+                # that was still on the wire. The loss is still reported -- the
+                # False return is what StorePipeline counts -- but the service
+                # was never asked to answer for it, and demoting here would
+                # blame it for our exit, leaving the next session to open
+                # against a state this process invented.
+                self._logger.info(
+                    "EverosBackend.store abandoned at shutdown (%s); this turn was not indexed",
+                    type(e).__name__,
+                )
+                return False
             self._demote_from_exception(e)
             self._logger.warning(
                 "EverosBackend.store failed (%s); state=%s; this turn was not indexed",

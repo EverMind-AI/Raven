@@ -2115,3 +2115,29 @@ class TestRetriesShareOneFlushDecision:
 
         assert adapter.memorize_calls[0]["is_final"] is True
         assert "s" not in b._turn_counts
+
+
+@pytest.mark.asyncio
+async def test_a_write_failed_by_our_own_stop_does_not_demote_the_service(tmp_path: Path) -> None:
+    """`stop` closes the transport under writes that are still on the wire.
+
+    Classifying that as a service fault blames EverOS for this process's exit,
+    and leaves the next session opening against a state this one invented. The
+    The loss is still reported: `False` is what StorePipeline counts.
+    """
+
+    class _ClosedAdapter:
+        async def memorize(self, *_a: Any, **_kw: Any) -> None:
+            raise RuntimeError("client has been closed")
+
+        async def aclose(self) -> None:
+            return None
+
+    b = _backend(tmp_path, adapter=_ClosedAdapter())
+    b._state = ServiceState.READY
+    messages = [{"role": "user", "content": "hi"}]
+
+    await b.stop()
+    assert await b.store("s1", messages) is False
+
+    assert b._state is ServiceState.READY

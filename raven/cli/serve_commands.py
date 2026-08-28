@@ -46,6 +46,8 @@ from typing import Optional
 
 import typer
 
+from raven.utils import asyncio_runner as bounded_asyncio
+
 _UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui"
 _PACKAGED_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
@@ -488,7 +490,7 @@ def _refuse_incomplete_install() -> None:
 def _run(port: int, open_browser: bool) -> None:
     _refuse_incomplete_install()
     try:
-        asyncio.run(_serve_main(port, open_browser))
+        bounded_asyncio.run(_serve_main(port, open_browser))
     except KeyboardInterrupt:
         typer.echo("raven serve stopped")
 

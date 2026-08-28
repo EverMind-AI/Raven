@@ -40,6 +40,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.utils import asyncio_runner as bounded_asyncio
+
 _HEALTH_TIMEOUT_S = 2.0
 _WS_CONNECT_TIMEOUT_S = 3.0
 _TOKEN_LINE_TIMEOUT_S = 10.0
@@ -475,7 +477,7 @@ def run_subprocess_attached(
     handshake_ok = False
     relay_failed = False
     try:
-        handshake_ok, relay_failed = asyncio.run(_main())
+        handshake_ok, relay_failed = bounded_asyncio.run(_main())
     finally:
         try:
             server_sock.close()

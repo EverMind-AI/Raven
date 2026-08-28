@@ -24,6 +24,7 @@ from loguru import logger
 from raven.acp.server import install_crash_handlers, serve
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.cli._log_file import redirect_loguru_to_file
+from raven.utils import asyncio_runner as bounded_asyncio
 
 _THREAD_CHUNK = 64 * 1024
 
@@ -36,7 +37,7 @@ def acp(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
     try:
-        asyncio.run(_serve())
+        bounded_asyncio.run(_serve())
     except Exception as exc:
         # Kept away from Typer's own handler, which renders a rich traceback with
         # ``show_locals`` on -- measured at 228 lines of stderr, with the value of

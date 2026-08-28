@@ -2365,3 +2365,39 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
     content = mark.pop("content")
     assert SubagentDeliveredPayload(**mark, content=content).node_id == "survey"
     assert TranscriptDelegated(**mark).node_id == "survey"
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> None:
+    """A Ctrl-C must not last as long as the sub-agent's in-flight call.
+
+    `Task.cancel` only schedules the cancellation: a run parked in a shielded
+    provider call reaches its `finally` when that call returns, so the wait for
+    it is bounded and the stragglers are left to the process exit.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _deaf() -> None:
+        started.set()
+        while True:
+            try:
+                await release.wait()
+                return
+            except asyncio.CancelledError:
+                continue
+
+    stubborn = asyncio.create_task(_deaf())
+    await started.wait()
+    stub = SimpleNamespace(_running_tasks={"h1": stubborn}, _record_tasks=[])
+
+    with patch.object(manager_mod, "_CANCEL_DRAIN_TIMEOUT_S", 0.05):
+        elapsed = asyncio.get_running_loop().time()
+        cancelled = await SubagentManager.cancel_all(stub)
+        elapsed = asyncio.get_running_loop().time() - elapsed
+
+    assert cancelled == 1
+    assert elapsed < 1.0
+    assert not stubborn.done()
+    release.set()
+    await stubborn

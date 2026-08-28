@@ -42,6 +42,12 @@ _HANDSHAKE_TIMEOUT_S = 120.0
 # agent-side cleanup must not hold it up past a moment.
 _DELETE_TIMEOUT_S = 10.0
 
+# Backstop only: `AcpClient.close` bounds its own two waits, so reaching this is
+# pathology rather than a slow child. Cancelling a close from out here is what
+# leaves its subprocess transport unreleased, so the budget stays well clear of
+# the internal one instead of racing it.
+_CLOSE_TIMEOUT_S = 10.0
+
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
 
@@ -399,10 +405,31 @@ class AcpConnectionPool:
             await connection.client.close()
 
     async def close_all(self) -> None:
-        """Close every connection. For process shutdown and for tests."""
+        """Close every connection. For process shutdown and for tests.
+
+        Concurrent and individually bounded, because this is the shutdown path
+        and `AcpClient.close` gathers the connection's answer tasks: a handler
+        that ignores its cancellation blocks that gather for as long as its own
+        request runs. Serially and unbounded, one such connection held every
+        other one -- and the exit waiting behind them -- for that whole time.
+        """
         names = list(self._connections)
-        for name in names:
-            await self.drop(name)
+        if not names:
+            return
+        await asyncio.gather(*(self._drop_bounded(name) for name in names))
+
+    async def _drop_bounded(self, name: str) -> None:
+        """`drop` that gives up rather than raising or waiting out a stuck close."""
+        try:
+            await asyncio.wait_for(self.drop(name), timeout=_CLOSE_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "acp agent {!r}: close did not finish within {}s; abandoning it (SIGKILL already sent)",
+                name,
+                _CLOSE_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed close must not sink the rest
+            logger.warning("acp agent {!r}: close failed: {}", name, exc)
 
     def live_agents(self) -> list[str]:
         return [name for name, conn in self._connections.items() if conn.alive]

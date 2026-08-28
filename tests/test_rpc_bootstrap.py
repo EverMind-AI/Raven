@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from pathlib import Path
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
@@ -332,3 +333,13 @@ async def test_the_channel_defaults_to_the_one_both_sides_already_used() -> None
     assert inspect.signature(build_rpc_spine).parameters["channel"].default == "tui"
     assert inspect.signature(register_turn_methods).parameters["default_channel"].default == "tui"
     assert inspect.signature(bootstrap.build_rpc_stack).parameters["channel"].default == "tui"
+
+
+def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> None:
+    """Closing the memory adapter while a sub-agent run is still going fails
+    that run's next write for a reason the service had no part in."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "rpc" / "bootstrap.py").read_text(encoding="utf-8")
+    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    stop = src.index("await agent_loop.backend.stop()")
+
+    assert cancel < stop

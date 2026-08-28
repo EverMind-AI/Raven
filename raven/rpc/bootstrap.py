@@ -263,6 +263,20 @@ async def build_rpc_stack(
         # the ACP pool are the host process's to close, not this stack's.
         if not owns_loop:
             return
+        # Same order every host follows: drain, cancel, then close. Cancelling
+        # after the pool closed would report each in-flight turn as a connection
+        # failure instead of as the stop it is. Sub-agents also go before the
+        # memory backend: a run that is still going can hand the backend another
+        # write, and closing the adapter under it fails that write for a reason
+        # that has nothing to do with the service.
+        try:
+            from raven.agent.acp.client import begin_drain
+
+            begin_drain()
+            if agent_loop is not None:
+                await agent_loop.subagents.cancel_all()
+        except Exception:
+            logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:
@@ -272,17 +286,6 @@ async def build_rpc_stack(
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
-        # Same order every host follows: drain, cancel, then close. Cancelling
-        # after the pool closed would report each in-flight turn as a connection
-        # failure instead of as the stop it is.
-        try:
-            from raven.agent.acp.client import begin_drain
-
-            begin_drain()
-            if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
-        except Exception:
-            logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         # Chromium is a child process too, and a persistent-profile one: leaving
         # it running holds the profile lock the next launch needs.
         try:
