@@ -73,7 +73,7 @@ class CustomBuildHook(BuildHookInterface):
         reader what to run *before building a release wheel*, which an editable
         build is not, and a checkout missing an artifact is already told so by
         the command that needs it -- ``raven tui`` names both candidate paths
-        and the npm command, ``raven web`` names ``ui/build.py``.
+        and the npm command, ``raven web`` names ``ui-web/build.py``.
         """
         if version == "editable":
             return
@@ -93,14 +93,20 @@ class CustomBuildHook(BuildHookInterface):
         # The same conditional treatment for the served page. `raven serve` looks
         # for the packaged copy first (resolve_ui_dist), so without this a wheel
         # answers `/` with the placeholder even though the source tree has a page.
-        ui_dist = Path(self.root) / "ui" / "dist"
+        # The source tree is `ui-web/`; the path INSIDE the wheel stays
+        # `raven/ui/dist`. Two different names on purpose: the first is this
+        # repository's business, the second is the installed layout, which
+        # `_install_guard` reads out of the RECORD and which anything packaging
+        # or copying an installed raven may name. Renaming the source directory
+        # is not a reason to move a path that leaves this repository.
+        ui_dist = Path(self.root) / "ui-web" / "dist"
         if ui_dist.is_dir() and (ui_dist / "index.html").is_file():
             build_data.setdefault("force_include", {})[str(ui_dist)] = "raven/ui/dist"
         else:
             self.app.display_warning(
-                "ui/dist/index.html not found — building WITHOUT the bundled page. "
+                "ui-web/dist/index.html not found — building WITHOUT the bundled page. "
                 "`raven serve` from this wheel will answer / with the placeholder; "
-                "run `python ui/build.py` before building a release wheel."
+                "run `python ui-web/build.py` before building a release wheel."
             )
 
     def _include_vendored_subagents(self, build_data: dict, version: str) -> None:

@@ -110,15 +110,15 @@ jobs:
 
       # Stdlib only. The dedicated gate is the `page` job below; this step
       # keeps the build honest inside the test matrix too, because
-      # `ui/build.py` matches exact literal markers in the page sources and
+      # `ui-web/build.py` matches exact literal markers in the page sources and
       # hard-exits on a miss, so an edit that reflows a source or drops a
       # marker leaves CI green and blocks the release at `git push v1.2.3`.
       - name: Build served page
         run: |
-          npm ci --prefix ui
-          npm run --prefix ui build
-          python3 ui/build.py
-          test -f ui/dist/index.html
+          npm ci --prefix ui-web
+          npm run --prefix ui-web build
+          python3 ui-web/build.py
+          test -f ui-web/dist/index.html
 
       - name: Unit tests with line and branch coverage
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
@@ -230,11 +230,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: ui-web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: ui
+        working-directory: ui-web
 
       # generated.ts is committed; a schema edit without regeneration is the
       # drift this catches. Then the transport layer compiles against it and
@@ -244,7 +244,7 @@ jobs:
           npm run gen:check
           npm run type-check
           npm test
-        working-directory: ui
+        working-directory: ui-web
 
   page:
     name: page checks
@@ -265,12 +265,12 @@ jobs:
       # inline scripts, no leftover markers, scripts parse).
       - name: Build and check the served page
         run: |
-          npm ci --prefix ui
-          npm run --prefix ui build
-          python3 ui/build.py
-          node ui/scripts/check-page.mjs
-          node ui/scripts/count-shared-globals.mjs
-          node ui/scripts/check-css.mjs
+          npm ci --prefix ui-web
+          npm run --prefix ui-web build
+          python3 ui-web/build.py
+          node ui-web/scripts/check-page.mjs
+          node ui-web/scripts/count-shared-globals.mjs
+          node ui-web/scripts/check-css.mjs
 
   bridge:
     name: bridge checks

@@ -13,7 +13,7 @@
 ## Relationships
 
 - **TUI ↔ Runtime**: communicate exclusively over the RPC protocol (`raven/rpc/`); the TUI never imports Runtime internals
-- **UI ↔ Runtime**: `ui/` is the served page, over the same protocol via `raven serve`'s WebSocket. Not a second front end for the desktop window: that window is a browser view of this page
+- **UI ↔ Runtime**: `ui-web/` is the served page, over the same protocol via `raven serve`'s WebSocket. Not a second front end for the desktop window: that window is a browser view of this page
 - **bridge/ (WhatsApp TS)**: part of the Runtime context's channel boundary, not a separate context
 
 ## Terms under review

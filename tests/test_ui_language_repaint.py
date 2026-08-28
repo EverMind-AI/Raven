@@ -1,6 +1,6 @@
 """Every module page of the served page repaints when the language flips.
 
-``redrawAll()`` in the live layer (``ui/src/live/``) is the whole of the
+``redrawAll()`` in the live layer (``ui-web/src/live/``) is the whole of the
 language flip: the
 catalogue is re-run over the static markup by ``applyI18n()``, and everything
 drawn from JavaScript has to be redrawn by name from that one function. It is a
@@ -8,7 +8,7 @@ hand-written list, and a renderer missing from it is invisible -- the page keeps
 the DOM it was built with and comes back in the previous language, which is what
 the agents page, the memory page and the More rows did.
 
-``ui/`` is one concatenated script with no module system and no JS test harness
+``ui-web/`` is one concatenated script with no module system and no JS test harness
 (the prettier/eslint hooks in ``.pre-commit-config.yaml`` cover ``ui-tui/src``
 and ``bridge/src`` only), so the list is checked here, against the source. The
 convention it leans on is the one the markup already keeps: a module page is
@@ -18,7 +18,7 @@ convention it leans on is the one the markup already keeps: a module page is
 
 from __future__ import annotations
 
-# The page ships as ordered parts assembled by ui/build.py; read the texts
+# The page ships as ordered parts assembled by ui-web/build.py; read the texts
 # through its own manifests so this test cannot drift from what ships and
 # never pins a part filename (renderers move between parts freely).
 import importlib.util as _ilu
@@ -28,16 +28,18 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
-_spec = _ilu.spec_from_file_location("_ui_build", _ROOT / "ui" / "build.py")
+_spec = _ilu.spec_from_file_location("_ui_build", _ROOT / "ui-web" / "build.py")
 _build = _ilu.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(_build)
 
 try:
-    BASE = (_ROOT / "ui" / "src" / "page.html").read_text(encoding="utf-8") + _build._concat("demo", _build._DEMO_PARTS)
+    BASE = (_ROOT / "ui-web" / "src" / "page.html").read_text(encoding="utf-8") + _build._concat(
+        "demo", _build._DEMO_PARTS
+    )
     LIVE = _build._concat("live", _build._LIVE_PARTS)
 except SystemExit as exc:  # build.py's mismatch signal is not a test outcome
-    raise RuntimeError(f"ui/build.py rejected the part manifests: {exc}") from exc
+    raise RuntimeError(f"ui-web/build.py rejected the part manifests: {exc}") from exc
 
 _DEFINITION = re.compile(
     r"^\s*(?:(?:async\s+)?function\s+(?P<decl>\w+)\s*\(|(?P<assigned>\w+)\s*=\s*(?:async\s+)?function\s*\()"
