@@ -3,8 +3,8 @@
 Two invariants the resume story depends on:
 
 - Every JSON this layer persists goes through :func:`atomic_write_json`
-  (write tmp + rename), so a crash can never leave a half-written file that
-  poisons the next resume.
+  (locked write tmp + rename), so a crash can never leave a half-written
+  file that poisons the next resume.
 - ``run_meta.json`` carries the config snapshot (a run's configuration must
   not drift mid-run — SOP §0 discipline, enforced here rather than by memory)
   and the one-way ``unsealed_at`` stamp (once test numbers are revealed,
@@ -15,35 +15,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from raven.utils.atomic_io import atomic_replace
+
 META_FILENAME = "run_meta.json"
 
 
 def atomic_write_json(path: Path, obj: Any) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(obj, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_replace(Path(path), json.dumps(obj, indent=2, ensure_ascii=False))
 
 
 def load_json_or(path: Path, default: Any) -> Any:
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 

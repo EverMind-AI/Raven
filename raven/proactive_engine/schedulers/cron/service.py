@@ -3,18 +3,11 @@
 import asyncio
 import json
 import os
-import sys
 import time
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Iterator
+from typing import Any, Callable, Coroutine
 
 from loguru import logger
 
@@ -26,6 +19,8 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronStartupDrop,
     CronStore,
 )
+from raven.utils.atomic_io import atomic_replace
+from raven.utils.portable_lock import file_lock
 
 # Stale-claim TTL — if a claim is older than this, another process may steal
 # it (the original process likely crashed mid-job).
@@ -126,7 +121,7 @@ class CronService:
         they predate the channel attribution field.
         """
         self.store_path = store_path
-        # Sibling file for fcntl advisory locking (survives atomic rename of
+        # Sibling file for advisory locking (survives atomic rename of
         # the data file, lets concurrent processes coordinate claim ticks).
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
         self.on_job = on_job
@@ -145,8 +140,6 @@ class CronService:
         # not one per tick). Cleared per job on successful claim.
         self._skip_logged: set[str] = set()
         self._running = False
-        # Remember whether fcntl is usable — degrade to lock-less on Windows.
-        self._can_lock = sys.platform != "win32"
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, all internal time reads route through this callable
         # so newly created jobs' next_run_at_ms aligns with simulated time
@@ -163,19 +156,9 @@ class CronService:
             return int(self._now_fn().timestamp() * 1000)
         return int(time.time() * 1000)
 
-    @contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Exclusive advisory lock on the jobs-file sibling. No-op on Windows."""
-        if not self._can_lock:
-            yield
-            return
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a") as lock_fd:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+    def _locked(self):
+        """Exclusive cross-platform advisory lock on the jobs-file sibling."""
+        return file_lock(self.lock_path)
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
@@ -248,8 +231,6 @@ class CronService:
         if not self._store:
             return
 
-        self.store_path.parent.mkdir(parents=True, exist_ok=True)
-
         data = {
             "version": self._store.version,
             "jobs": [
@@ -290,14 +271,7 @@ class CronService:
             ],
         }
 
-        # Atomic write (temp + rename) so concurrent readers never see a
-        # partially-flushed file. The temp name is pid-unique: a shared name
-        # lets two processes steal each other's temp between write and rename
-        # (unlocked start() saves, and every save on Windows where the flock
-        # degrades to a no-op) — the loser crashes on FileNotFoundError.
-        tmp = self.store_path.with_name(f"{self.store_path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self.store_path)
+        atomic_replace(self.store_path, json.dumps(data, indent=2, ensure_ascii=False))
         self._last_mtime = self.store_path.stat().st_mtime_ns
 
     async def start(self) -> None:

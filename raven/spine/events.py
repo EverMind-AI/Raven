@@ -129,7 +129,6 @@ class ToolEvent:
 class Text:
     content: str
     source: Source | None = None
-    reply_to: str | None = None
     conversation_id: str | None = None
 
 

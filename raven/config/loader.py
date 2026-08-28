@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from raven.config.schema import Config
+from raven.utils.atomic_io import atomic_replace, atomic_update
 
 # Generation counter for the run-once config migrations below. Bump it, and add
 # the matching rule, when a migration must run exactly once per config rather
@@ -155,7 +156,7 @@ def drain_migration_notices() -> list[str]:
 
     Drained rather than read so that a process loading the config several times
     (status and doctor do; the TUI RPC server reloads every turn) tells the user
-    once. Callers own a console -- see ``cli._helpers``.
+    once. Callers own a console -- see ``core.helpers``.
     """
     notices = list(_migration_notices)
     _migration_notices.clear()
@@ -203,7 +204,7 @@ def _write_migration_version(config_path: Path) -> None:
     """
     stamp = _stamp_path(config_path)
     try:
-        stamp.write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n", encoding="utf-8")
+        atomic_replace(stamp, json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n")
     except OSError as exc:
         logging.getLogger(__name__).debug("Could not write the migration stamp %s: %s", stamp, exc)
 
@@ -333,43 +334,38 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
     this process correct, and the write only serves to keep the file from
     disagreeing with it.
     """
+
+    def _apply(_text: str | None) -> tuple[str | None, bool]:
+        # Re-read inside the transaction so the migrated content is exactly
+        # what is on disk while the lock is held -- an update_* writer cannot
+        # slip an edit in between this read and the replace.
+        try:
+            raw = read_raw_or_raise(path)
+        except ConfigReadError:
+            return None, False
+
+        changed = False
+        if raw:
+            # Gated on the same per-migration floors the in-memory pass used, so the
+            # file and the loaded config owe each other nothing: persisting a
+            # migration the load path skipped would write an edit this process is
+            # not running on.
+            if from_version < _CONTEXT_WINDOW_MIGRATION:
+                changed = _migrate_legacy_context_window(raw) or changed
+            if from_version < _AUTO_PROVIDER_MIGRATION:
+                changed = _migrate_auto_provider(raw) or changed
+        if not changed:
+            return None, True
+        return json.dumps(raw, indent=2, ensure_ascii=False), True
+
     try:
-        raw = read_raw_or_raise(path)
-    except ConfigReadError:
+        parsed = atomic_update(path, _apply)
+    except OSError as exc:
+        logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
         return
 
-    changed = False
-    if raw:
-        # Gated on the same per-migration floors the in-memory pass used, so the
-        # file and the loaded config owe each other nothing: persisting a
-        # migration the load path skipped would write an edit this process is
-        # not running on.
-        if from_version < _CONTEXT_WINDOW_MIGRATION:
-            changed = _migrate_legacy_context_window(raw) or changed
-        if from_version < _AUTO_PROVIDER_MIGRATION:
-            changed = _migrate_auto_provider(raw) or changed
-    if changed:
-        # PID in the name: two processes migrating at once would otherwise share
-        # one temp path, and the second's truncating write could be read as an
-        # empty config.json by anyone loading between it and the replace.
-        tmp = path.with_name(f"{path.name}.migrating.{os.getpid()}")
-        try:
-            tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-            # os.replace swaps the inode, so the original's mode is not carried
-            # over by anything: a config the user tightened to owner-only (it
-            # holds providers.*.apiKey) would come back world-readable. See
-            # config.paths.restrict_to_owner on why a replacing writer owns this.
-            try:
-                os.chmod(tmp, path.stat().st_mode & 0o7777)
-            except OSError:
-                pass
-            os.replace(tmp, path)
-        except OSError as exc:
-            logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
-            tmp.unlink(missing_ok=True)
-            return
-
-    _write_migration_version(path)
+    if parsed:
+        _write_migration_version(path)
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -461,12 +457,9 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         config_path: Optional path to save to. Uses default if not provided.
     """
     path = config_path or get_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     data = config.model_dump(by_alias=True, exclude_defaults=True)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_replace(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:

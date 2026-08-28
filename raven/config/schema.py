@@ -50,7 +50,7 @@ class TelegramConfig(ChannelBase):
     token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from @BotFather
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs or usernames; ['*'] = anyone
     proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    reply_to_message: bool = False  # If true, bot replies quote the original message
+    reply_to_message: bool = False  # Reserved: outbound quote-reply is not wired yet; no effect today
     group_policy: Literal["open", "mention"] = (
         "mention"  # "mention" responds when @mentioned or replied to, "open" responds to all
     )

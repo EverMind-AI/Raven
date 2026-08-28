@@ -39,15 +39,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import tempfile
 import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 from urllib.parse import parse_qs, urlparse
 
-import portalocker
 from loguru import logger
+
+from raven.utils.atomic_io import atomic_update
 
 OAUTH_FLOW_TIMEOUT = 900.0
 """How long a browser authorization may stay pending before the connect
@@ -285,27 +285,47 @@ class FileTokenStorage:
         self._redirect_uri = redirect_uri
         self._preregistered: Any = None
 
-    def _read(self) -> dict:
-        try:
-            return json.loads(self._path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+    def _parse(self, current: str | None) -> dict:
+        # Empty is what _transact's 0600 anchor leaves before the first real
+        # write lands: no credentials yet, not corruption worth a warning.
+        if current is None or not current.strip():
             return {}
-        except (OSError, json.JSONDecodeError) as e:
+        try:
+            return json.loads(current)
+        except json.JSONDecodeError as e:
             logger.warning("MCP OAuth: unreadable credentials at {} ({})", self._path, e)
             return {}
 
-    def _write(self, data: dict) -> None:
-        lock = self._path.with_suffix(".lock")
-        with portalocker.Lock(lock, mode="a+", timeout=30):
-            fd, tmp = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, ensure_ascii=True, indent=2)
-                os.chmod(tmp, 0o600)
-                os.replace(tmp, self._path)
-            except BaseException:
-                Path(tmp).unlink(missing_ok=True)
-                raise
+    def _read(self) -> dict:
+        try:
+            return self._parse(self._path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except OSError as e:
+            logger.warning("MCP OAuth: unreadable credentials at {} ({})", self._path, e)
+            return {}
+
+    def _transact(self, mutate: Callable[[dict], dict | None]) -> None:
+        """Locked read-modify-write; ``mutate`` returns None to skip the write.
+
+        The lock covers the read too: tokens and client_info land from
+        different tasks and processes, and an unlocked read-modify-write lets
+        one field's save resurrect the other's stale value. A missing file is
+        anchored at 0600 first -- atomic_update carries an existing target's
+        mode onto the replacement, and a token file must never exist with the
+        umask default.
+        """
+        if not self._path.exists():
+            os.close(os.open(self._path, os.O_CREAT, 0o600))
+
+        def _apply(current: str | None) -> tuple[str | None, bool]:
+            data = mutate(self._parse(current))
+            if data is None:
+                return None, False
+            return json.dumps(data, ensure_ascii=True, indent=2), True
+
+        if atomic_update(self._path, _apply):
+            os.chmod(self._path, 0o600)
 
     async def get_tokens(self):
         from mcp.shared.auth import OAuthToken
@@ -319,21 +339,25 @@ class FileTokenStorage:
             return None
 
     async def set_tokens(self, tokens) -> None:
-        data = self._read()
-        data["tokens"] = tokens.model_dump(mode="json", exclude_none=True)
-        # ``expires_in`` is relative to the moment the token was minted, and
-        # that moment dies with the process: the SDK restores the tokens on the
-        # next start but not their expiry, treats "no expiry" as "still valid",
-        # and rides the stale access token into a 401 -- whose handler is a full
-        # browser authorization, not the silent refresh the stored
-        # refresh_token was for. Anchor the deadline so provider_for can seed
-        # it back (see stored_token_expiry).
+        payload = tokens.model_dump(mode="json", exclude_none=True)
         expires_in = getattr(tokens, "expires_in", None)
-        if expires_in is not None:
-            data["expires_at"] = time.time() + float(expires_in)
-        else:
-            data.pop("expires_at", None)
-        self._write(data)
+
+        def _store(data: dict) -> dict:
+            data["tokens"] = payload
+            # ``expires_in`` is relative to the moment the token was minted, and
+            # that moment dies with the process: the SDK restores the tokens on the
+            # next start but not their expiry, treats "no expiry" as "still valid",
+            # and rides the stale access token into a 401 -- whose handler is a full
+            # browser authorization, not the silent refresh the stored
+            # refresh_token was for. Anchor the deadline so provider_for can seed
+            # it back (see stored_token_expiry).
+            if expires_in is not None:
+                data["expires_at"] = time.time() + float(expires_in)
+            else:
+                data.pop("expires_at", None)
+            return data
+
+        self._transact(_store)
 
     def stored_token_expiry(self) -> float | None:
         """Absolute expiry of the stored tokens, for re-seeding the SDK.
@@ -388,9 +412,13 @@ class FileTokenStorage:
         return info
 
     async def set_client_info(self, client_info) -> None:
-        data = self._read()
-        data["client_info"] = client_info.model_dump(mode="json", exclude_none=True)
-        self._write(data)
+        payload = client_info.model_dump(mode="json", exclude_none=True)
+
+        def _store(data: dict) -> dict:
+            data["client_info"] = payload
+            return data
+
+        self._transact(_store)
 
     def seed_disarmed(self, fingerprint: str) -> bool:
         """Whether these exact catalog facts already failed against this server."""
@@ -404,12 +432,14 @@ class FileTokenStorage:
         corrects the entry must be believed, and only the facts that actually
         failed stay distrusted.
         """
-        try:
-            data = self._read()
+        def _mark(data: dict) -> dict | None:
             if data.get("oauth_seed_stale") == fingerprint:
-                return
+                return None
             data["oauth_seed_stale"] = fingerprint
-            self._write(data)
+            return data
+
+        try:
+            self._transact(_mark)
         except Exception as e:  # noqa: BLE001 — losing the marker costs the optimization, not the connect
             logger.warning("MCP OAuth: could not record a stale catalog seed at {}: {}", self._path, e)
 

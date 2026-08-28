@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import tempfile
 import time
 from collections.abc import Sequence
@@ -38,6 +37,7 @@ from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
 from raven.agent.acp.permissions import auto_approver
 from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
+from raven.utils.atomic_io import atomic_update
 
 _FILENAME = "subagent_acp_capabilities.json"
 
@@ -249,26 +249,40 @@ class SnapshotStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or default_snapshot_path()
 
-    def _read(self) -> list[dict[str, Any]]:
+    @staticmethod
+    def _parse(text: str | None) -> list[dict[str, Any]]:
+        if text is None:
+            return []
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            raw = json.loads(text)
+        except json.JSONDecodeError:
             return []
         rows = raw.get("snapshots") if isinstance(raw, dict) else None
         return [row for row in rows or [] if isinstance(row, dict)]
 
-    def _write(self, rows: list[dict[str, Any]]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps({"version": 1, "snapshots": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self._path)
+    def _read(self) -> list[dict[str, Any]]:
+        try:
+            text = self._path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        return self._parse(text)
+
+    @staticmethod
+    def _dump(rows: list[dict[str, Any]]) -> str:
+        return json.dumps({"version": 1, "snapshots": rows}, indent=2, ensure_ascii=False)
 
     def record(self, snapshot: CapabilitySnapshot) -> None:
         """Store one snapshot, replacing any previous one for the same agent."""
-        rows = [r for r in self._read() if r.get("agent") != snapshot.agent]
-        rows.append(snapshot.to_row())
+
+        # Filter-then-append is a read-modify-write, done inside the file lock
+        # so two agents verified concurrently do not drop each other's row.
+        def merge(current: str | None) -> tuple[str, None]:
+            rows = [r for r in self._parse(current) if r.get("agent") != snapshot.agent]
+            rows.append(snapshot.to_row())
+            return self._dump(rows), None
+
         try:
-            self._write(rows)
+            atomic_update(self._path, merge)
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
@@ -307,9 +321,11 @@ class SnapshotStore:
         return found
 
     def forget(self, agent: str) -> None:
-        rows = [r for r in self._read() if r.get("agent") != agent]
+        def drop(current: str | None) -> tuple[str, None]:
+            return self._dump([r for r in self._parse(current) if r.get("agent") != agent]), None
+
         try:
-            self._write(rows)
+            atomic_update(self._path, drop)
         except OSError as exc:  # noqa: BLE001 - see record()
             logger.warning("acp capability snapshot delete failed: {}", exc)
 

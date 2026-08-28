@@ -11,8 +11,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
-from raven.agent.acp.asker import AskViaTool, start_ask_turn
-from raven.agent.acp.resolver import Autofill
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.ask_user import AskUserTool
 from raven.gateway.outlet import ChannelOutletAdapter
@@ -76,6 +74,12 @@ class GatewayTurnRunner(AgentTurnRunner):
         # routes the reply back), while a CRON or otherwise background turn has
         # no reader and must decline rather than wait on nobody. Without this the
         # gateway's sub-agents saw no asker and no autofill at all.
+        # Function-level on purpose: the acp client family is future shelf
+        # cargo and must not be named at this module's import time
+        # (binding-time debt).
+        from raven.agent.acp.asker import AskViaTool, start_ask_turn
+        from raven.agent.acp.resolver import Autofill
+
         tools = getattr(self._loop, "tools", None)
         ask_tool = tools.get("ask_user") if tools is not None else None
         interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)

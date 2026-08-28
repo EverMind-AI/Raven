@@ -377,10 +377,10 @@ async def test_a_config_that_cannot_be_written_is_a_refusal(_isolated, monkeypat
     """A read-only home is a condition of the machine, not a raven fault: the
     transaction rolls back and the caller hears why."""
 
-    def _boom(payload):
+    def _boom(path, update):
         raise OSError(30, "Read-only file system")
 
-    monkeypatch.setattr(install_mod, "_write_config_raw", _boom)
+    monkeypatch.setattr(install_mod, "atomic_update", _boom)
     _patch_catalog(monkeypatch, _entry("none", "svc"))
 
     with pytest.raises(ConfigValidationError, match="could not be written"):

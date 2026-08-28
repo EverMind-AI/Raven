@@ -36,6 +36,7 @@ log line.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from typing import Any
 from loguru import logger
 
 from raven.utils.helpers import safe_path_segment
+from raven.utils.portable_lock import file_lock
 
 _INSTANCES_DIRNAME = "instances"
 
@@ -101,11 +103,17 @@ def _append(path: Path, records: list[dict[str, Any]], *, header: dict[str, Any]
     lines = [json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in records]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        exists = path.exists()
-        with path.open("a", encoding="utf-8") as handle:
-            if not exists:
-                handle.write(json.dumps(header, ensure_ascii=False) + "\n")
-            handle.writelines(lines)
+        # The header-only-on-a-new-file check must sit inside the cross-process
+        # lock, or two first writers both prepend a header. Same sidecar
+        # convention as atomic_io's helpers.
+        with file_lock(path.parent / ".lock" / (path.name + ".lock")):
+            exists = path.exists()
+            with path.open("a", encoding="utf-8") as handle:
+                if not exists:
+                    handle.write(json.dumps(header, ensure_ascii=False) + "\n")
+                handle.writelines(lines)
+                handle.flush()
+                os.fsync(handle.fileno())
     except OSError as exc:
         logger.warning("Subagent instance log {} could not be appended: {}", path, exc)
 

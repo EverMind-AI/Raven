@@ -40,6 +40,7 @@ from raven.rpc.errors import (
     ConfigValidationError,
     ModelNotAvailableError,
 )
+from raven.utils.atomic_io import atomic_replace
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -221,16 +222,18 @@ def _save_config(payload: dict[str, Any]) -> None:
     from raven.config.loader import load_config
 
     path = _config_path()
-    previous = path.read_bytes() if path.exists() else None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    # The write and the rollback both go through the locked atomic replace:
+    # the load-back check proves the content, the replace makes each swap
+    # tear-proof against a concurrent reader.
+    atomic_replace(path, json.dumps(payload, indent=2, sort_keys=True))
     try:
         load_config(path)
     except Exception as exc:
         if previous is None:
             path.unlink(missing_ok=True)
         else:
-            path.write_bytes(previous)
+            atomic_replace(path, previous)
         raise ConfigValidationError(
             f"refusing this write: the config would no longer load ({exc}). Nothing was changed.",
             data={"reason": str(exc)},

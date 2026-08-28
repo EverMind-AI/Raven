@@ -41,6 +41,7 @@ from raven.providers.registry import (
     names_same_provider,
     normalize_provider_name,
 )
+from raven.utils.atomic_io import atomic_update
 
 
 def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -58,14 +59,6 @@ def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write: temp-file then os.replace. Preserves indent=2, UTF-8."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _unwrap_optional(annotation: Any) -> Any:
@@ -753,38 +746,41 @@ def set_provider_fields(
             )
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    raw_section = _raw_section(data, name)
 
-    try:
-        current = cls.model_validate(raw_section)
-    except ValidationError:
-        current = cls()
+    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
+        data = read_raw_or_raise(path)
+        raw_section = _raw_section(data, name)
 
-    working = current.model_dump()
+        try:
+            current = cls.model_validate(raw_section)
+        except ValidationError:
+            current = cls()
 
-    prev: dict[str, Any] = {}
-    for path_key, raw_val in fields.items():
-        leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
-        leaf_info = leaf_cls.model_fields[leaf_field]
-        coerced = _coerce_value(raw_val, leaf_info.annotation)
-        if path_key == "models" and isinstance(coerced, list):
-            # The third way a model id gets written down, and the one that used
-            # to skip the contract: `provider set --models x` stored a bare id
-            # while the picker and the wizard stored a qualified one. Identity
-            # still matched, so nothing broke -- which is exactly how the two
-            # spellings coexisted last time, until a delete silently matched
-            # neither.
-            from raven.providers.wire import stored_model_id
+        working = current.model_dump()
 
-            coerced = [stored_model_id(name, str(m)) for m in coerced]
-        prev[path_key] = _set_nested(path_key, coerced, working)
+        prev: dict[str, Any] = {}
+        for path_key, raw_val in fields.items():
+            leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
+            leaf_info = leaf_cls.model_fields[leaf_field]
+            coerced = _coerce_value(raw_val, leaf_info.annotation)
+            if path_key == "models" and isinstance(coerced, list):
+                # The third way a model id gets written down, and the one that used
+                # to skip the contract: `provider set --models x` stored a bare id
+                # while the picker and the wizard stored a qualified one. Identity
+                # still matched, so nothing broke -- which is exactly how the two
+                # spellings coexisted last time, until a delete silently matched
+                # neither.
+                from raven.providers.wire import stored_model_id
 
-    validated = cls.model_validate(working)
+                coerced = [stored_model_id(name, str(m)) for m in coerced]
+            prev[path_key] = _set_nested(path_key, coerced, working)
 
-    _write_raw_section(data, name, validated.model_dump(by_alias=True))
-    _write_atomic(path, data)
-    return prev
+        validated = cls.model_validate(working)
+
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    return atomic_update(path, _apply)
 
 
 def serves_default_model(name: str, *, config_path: Path | None = None) -> bool:
@@ -834,9 +830,13 @@ def reset_provider(
     spec = _provider_spec(name)
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    _write_raw_section(data, name, cls().model_dump(by_alias=True))
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        _write_raw_section(data, name, cls().model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
 
     if spec and spec.is_oauth:
         try:
@@ -881,19 +881,23 @@ def add_provider_model(
 
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, models = _load_provider_models(name, data)
-    # By identity, not by string: the same model written two ways used to land
-    # in the list twice, and neither entry could then be removed by the other's
-    # spelling.
-    if merge_key(name, model) not in {merge_key(name, m) for m in models}:
-        models.append(model)
-        section = _raw_section(data, name)
-        section["models"] = models
-        validated = cls.model_validate(section)
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return models
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, models = _load_provider_models(name, data)
+        # By identity, not by string: the same model written two ways used to land
+        # in the list twice, and neither entry could then be removed by the other's
+        # spelling.
+        if merge_key(name, model) not in {merge_key(name, m) for m in models}:
+            models.append(model)
+            section = _raw_section(data, name)
+            section["models"] = models
+            validated = cls.model_validate(section)
+            _write_raw_section(data, name, validated.model_dump(by_alias=True))
+            return json.dumps(data, indent=2, ensure_ascii=False), models
+        return None, models
+
+    return atomic_update(path, _apply)
 
 
 def remove_provider_model(
@@ -910,19 +914,23 @@ def remove_provider_model(
 
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, models = _load_provider_models(name, data)
-    # Whatever spelling the caller holds removes every spelling of that model:
-    # the write paths used to disagree, so a list could hold one model twice.
-    target = merge_key(name, model)
-    if target in {merge_key(name, m) for m in models}:
-        models = [m for m in models if merge_key(name, m) != target]
-        section = _raw_section(data, name)
-        section["models"] = models
-        validated = cls.model_validate(section)
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return models
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, models = _load_provider_models(name, data)
+        # Whatever spelling the caller holds removes every spelling of that model:
+        # the write paths used to disagree, so a list could hold one model twice.
+        target = merge_key(name, model)
+        if target in {merge_key(name, m) for m in models}:
+            remaining = [m for m in models if merge_key(name, m) != target]
+            section = _raw_section(data, name)
+            section["models"] = remaining
+            validated = cls.model_validate(section)
+            _write_raw_section(data, name, validated.model_dump(by_alias=True))
+            return json.dumps(data, indent=2, ensure_ascii=False), remaining
+        return None, models
+
+    return atomic_update(path, _apply)
 
 
 def _load_provider_endpoints(name: str, data: dict[str, Any]) -> tuple[type, list[ProviderEndpoint]]:
@@ -976,20 +984,23 @@ def add_provider_endpoint(
             f"{name} needs an api_key -- only a local, keyless deployment can add an endpoint without one"
         )
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, endpoints = _load_provider_endpoints(name, data)
 
-    new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
-    updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
-    if not any(ep.label == label for ep in endpoints):
-        updated.append(new_endpoint)
+    def _apply(_text: str | None) -> tuple[str, list[ProviderEndpoint]]:
+        data = read_raw_or_raise(path)
+        cls, endpoints = _load_provider_endpoints(name, data)
 
-    section = _raw_section(data, name)
-    section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
-    validated = cls.model_validate(section)
-    _write_raw_section(data, name, validated.model_dump(by_alias=True))
-    _write_atomic(path, data)
-    return updated
+        new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
+        updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
+        if not any(ep.label == label for ep in endpoints):
+            updated.append(new_endpoint)
+
+        section = _raw_section(data, name)
+        section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), updated
+
+    return atomic_update(path, _apply)
 
 
 def remove_provider_endpoint(
@@ -1004,17 +1015,21 @@ def remove_provider_endpoint(
     """
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, endpoints = _load_provider_endpoints(name, data)
 
-    remaining = [ep for ep in endpoints if ep.label != label]
-    if len(remaining) != len(endpoints):
+    def _apply(_text: str | None) -> tuple[str | None, list[ProviderEndpoint]]:
+        data = read_raw_or_raise(path)
+        cls, endpoints = _load_provider_endpoints(name, data)
+
+        remaining = [ep for ep in endpoints if ep.label != label]
+        if len(remaining) == len(endpoints):
+            return None, remaining
         section = _raw_section(data, name)
         section["endpoints"] = [ep.model_dump(by_alias=True) for ep in remaining]
         validated = cls.model_validate(section)
         _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return remaining
+        return json.dumps(data, indent=2, ensure_ascii=False), remaining
+
+    return atomic_update(path, _apply)
 
 
 def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> list[dict[str, Any]]:

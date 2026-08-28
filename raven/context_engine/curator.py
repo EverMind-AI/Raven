@@ -25,6 +25,7 @@ from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.utils.atomic_io import atomic_replace
 from raven.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -145,7 +146,7 @@ class CuratorArchiveStore:
             "decisions": _limit_str_list(state.get("decisions", []), 20),
             "updated_at": self._now_fn().isoformat(),
         }
-        self.state_path(session_key).write_text(json.dumps(compact, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_replace(self.state_path(session_key), json.dumps(compact, ensure_ascii=False, indent=2))
         return compact
 
     def load_relevance(self, session_key: str) -> dict[int, dict[str, Any]]:
@@ -169,7 +170,7 @@ class CuratorArchiveStore:
             "updated_at": self._now_fn().isoformat(),
             "items": [asdict(item) for item in manifest],
         }
-        self.manifest_path(session_key).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_replace(self.manifest_path(session_key), json.dumps(payload, ensure_ascii=False, indent=2))
 
     def build_manifest(self, session_key: str, messages: list[dict[str, Any]]) -> list[ManifestItem]:
         previous = self.load_relevance(session_key)
