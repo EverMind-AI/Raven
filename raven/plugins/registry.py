@@ -275,6 +275,7 @@ class PluginRegistry:
         from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_memory_backend_factory(name)
+        config = self._admit(self._memory_backends[name], config)
         ctx = PluginContext(
             config=config,
             services=services,
@@ -302,12 +303,26 @@ class PluginRegistry:
         from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_tool_factory(name)
+        config = self._admit(self._tools[name], config)
         ctx = PluginContext(
             config=config,
             services=services,
             logger=logger or logging.getLogger(f"raven.plugins.{name}"),
         )
         return factory(ctx)
+
+    def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
+        """Admit a config slice against the owning manifest's declaration.
+
+        A manifest with no ``config_schema`` keeps the verbatim pass-through
+        this registry always had; a declaring manifest gets defaults applied
+        and declared keys type-checked before its factory boards.
+        """
+        from raven.core.admission import admit_slice
+
+        mf = self._manifests.get(entry.plugin_id)
+        schema = mf.config_schema if mf is not None else {}
+        return admit_slice(schema, config, plugin_id=entry.plugin_id)
 
 
 # Forward import for the type hint above. Kept at module-bottom so the

@@ -29,7 +29,7 @@ from typer.testing import CliRunner
 from raven.cli import onboard_channels, onboard_commands, onboard_everos, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
-from raven.plugins.memory.everos import _discover as _discover_mod
+from raven.plugins.memory.everos import roots as _discover_mod
 
 runner = CliRunner()
 
@@ -985,7 +985,7 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # this a developer box with an everos of its own decides which branch these
     # tests take -- and probes its /health while doing it. Tests about a found
     # root install their own candidate, afterwards.
-    monkeypatch.setattr(_discover_mod, "discover", list)
+    monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
     return root / "everos.toml"
 
 
@@ -1762,7 +1762,7 @@ def test_change_port_asks_even_when_the_port_tests_free(
 
 
 def _root_state(root: Path, **kw: Any) -> Any:
-    from raven.plugins.memory.everos._discover import RootState
+    from raven.plugins.memory.everos.roots import RootState
 
     defaults = {
         "root": root,
@@ -1776,9 +1776,9 @@ def _root_state(root: Path, **kw: Any) -> Any:
 
 
 def _found(monkeypatch: pytest.MonkeyPatch, state: Any) -> None:
-    from raven.plugins.memory.everos import _discover
+    from raven.plugins.memory.everos import roots as _discover
 
-    monkeypatch.setattr(_discover, "discover", lambda: [state])
+    monkeypatch.setattr(_discover, "discover", lambda **_kw: [state])
 
 
 class TestTakingOverAFoundRoot:
@@ -5994,7 +5994,7 @@ class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
             "_config_everos_role",
             lambda **_kw: pytest.fail("configured a managed model after the user chose self-managed"),
         )
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         answers = iter(["self", "skip"])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
@@ -6016,7 +6016,7 @@ class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
         self._seed(tmp_env)
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
         monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         answers = iter(["self", "skip"])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
@@ -6118,7 +6118,7 @@ class TestARefusalDoesNotAnnounceAnythingItDidNotDo:
         tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
         monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         answers = iter(["self", "skip"])
         # One snapshot per question, so what follows the refusal can be read on
         # its own instead of being mixed with the closing lines of the step.
@@ -6279,7 +6279,7 @@ class TestTheLaneDecidesOwnership:
         from raven.cli import onboard_everos
 
         self._self_managed(tmp_env)
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
         monkeypatch.setattr(
             onboard_everos,
@@ -6299,7 +6299,7 @@ class TestTheLaneDecidesOwnership:
         from raven.cli import onboard_everos
 
         self._self_managed(tmp_env)
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -6342,7 +6342,7 @@ class TestTheLaneDecidesOwnership:
         )
         assert onboard_everos._memory_enabled() is True
 
-        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("managed"))
         monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_kw: None)
         monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)

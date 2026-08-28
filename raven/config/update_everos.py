@@ -470,3 +470,15 @@ def set_everos_api(*, host: str, port: int) -> None:
     where its server lives, with no second place to drift out of sync.
     """
     set_everos_section("api", {"host": host, "port": int(port)})
+
+
+def recorded_slice() -> dict:
+    """Public read of the recorded everos slice -- the wizard's input to
+    discovery.
+
+    The cargo-side describer (``roots``) takes its candidate roots as
+    parameters now and imports nothing from the host; the wizard reads the
+    record here and passes it in. Public because a caller outside this module
+    (onboard) legitimately consumes it -- no one imports the private form.
+    """
+    return _recorded_slice()

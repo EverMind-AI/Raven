@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugins.memory.everos import _discover
+from raven.plugins.memory.everos import roots
 
 
 def _write_root(root: Path, *, api: tuple[str, int] | None = ("127.0.0.1", 18791), key: str = "k") -> None:
@@ -26,8 +26,8 @@ def _write_root(root: Path, *, api: tuple[str, int] | None = ("127.0.0.1", 18791
 @pytest.fixture
 def _quiet_probes(monkeypatch: pytest.MonkeyPatch):
     """Default every observation to "nothing there"; tests opt into each fact."""
-    monkeypatch.setattr(_discover, "_probe_health", lambda _u: False)
-    monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: False)
+    monkeypatch.setattr(roots, "_probe_health", lambda _u: False)
+    monkeypatch.setattr(roots, "ome_lock_held", lambda _r: False)
     return monkeypatch
 
 
@@ -36,7 +36,7 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root)
 
-        state = _discover._describe(root)
+        state = roots._describe(root)
 
         assert state.declared_url == "http://127.0.0.1:18791"
         assert state.configured is True
@@ -48,7 +48,7 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root, api=None)
 
-        state = _discover._describe(root)
+        state = roots._describe(root)
 
         assert state.declared_url is None
         assert state.alive is False
@@ -59,10 +59,10 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root, key="")
 
-        assert _discover._describe(root).configured is False
+        assert roots._describe(root).configured is False
 
     def test_an_absent_root_is_described_without_raising(self, tmp_path: Path, _quiet_probes) -> None:
-        state = _discover._describe(tmp_path / "nope")
+        state = roots._describe(tmp_path / "nope")
 
         assert state.exists is False
         assert state.configured is False
@@ -73,7 +73,7 @@ class TestDescribeOneRoot:
         root.mkdir()
         (root / "everos.toml").write_text("this is not toml {{{", encoding="utf-8")
 
-        assert _discover._describe(root).configured is False
+        assert roots._describe(root).configured is False
 
     def test_locked_but_silent_is_its_own_state(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Data served somewhere other than where it says -- the state that
@@ -81,10 +81,10 @@ class TestDescribeOneRoot:
         engine."""
         root = tmp_path / "everos"
         _write_root(root)
-        monkeypatch.setattr(_discover, "_probe_health", lambda _u: False)
-        monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: True)
+        monkeypatch.setattr(roots, "_probe_health", lambda _u: False)
+        monkeypatch.setattr(roots, "ome_lock_held", lambda _r: True)
 
-        state = _discover._describe(root)
+        state = roots._describe(root)
 
         assert state.busy_elsewhere is True
         assert state.serving is False
@@ -92,10 +92,10 @@ class TestDescribeOneRoot:
     def test_serving_means_reachable_where_it_declares(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = tmp_path / "everos"
         _write_root(root)
-        monkeypatch.setattr(_discover, "_probe_health", lambda _u: True)
-        monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: True)
+        monkeypatch.setattr(roots, "_probe_health", lambda _u: True)
+        monkeypatch.setattr(roots, "ome_lock_held", lambda _r: True)
 
-        state = _discover._describe(root)
+        state = roots._describe(root)
 
         assert state.serving is True
         assert state.busy_elsewhere is False
@@ -114,9 +114,20 @@ class TestDiscoveryOrder:
         # have created it; these cases are about ordering, so say which we are.
         monkeypatch.setattr(ue, "_is_default_installation", lambda: True)
         monkeypatch.setattr(ue, "_recorded_slice", dict)
-        monkeypatch.setattr(_discover, "_probe_health", lambda _u: False)
-        monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: False)
+        monkeypatch.setattr(roots, "_probe_health", lambda _u: False)
+        monkeypatch.setattr(roots, "ome_lock_held", lambda _r: False)
         return monkeypatch
+
+    def _discover_as_the_wizard_does(self):
+        """Mirror the wizard's derivation: discover() takes the candidate list
+        from its caller now, so the test supplies it the same way onboard does."""
+        from raven.config import update_everos as ue
+
+        recorded = ue.recorded_slice().get("root")
+        return roots.discover(
+            recorded_root=Path(str(recorded)).expanduser() if recorded else None,
+            fallback_roots=(ue.default_everos_root(), ue.applicable_legacy_root()),
+        )
 
     def test_the_recorded_root_comes_first(self, tmp_path: Path, _isolate) -> None:
         """Switching roots behind the user's back would change which memories
@@ -128,24 +139,24 @@ class TestDiscoveryOrder:
         _write_root(self.default)
         _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(recorded), "owned": True})
 
-        assert _discover.discover()[0].root == recorded
-        assert _discover.pick(_discover.discover()).root == recorded
+        assert self._discover_as_the_wizard_does()[0].root == recorded
+        assert roots.pick(self._discover_as_the_wizard_does()).root == recorded
 
     def test_the_legacy_root_is_found_when_the_new_default_is_empty(self, _isolate) -> None:
         _write_root(self.legacy)
 
-        picked = _discover.pick(_discover.discover())
+        picked = roots.pick(self._discover_as_the_wizard_does())
 
         assert picked is not None
         assert picked.root == self.legacy
 
     def test_nothing_configured_picks_nothing(self, _isolate) -> None:
-        assert _discover.pick(_discover.discover()) is None
+        assert roots.pick(self._discover_as_the_wizard_does()) is None
 
     def test_a_half_built_root_is_not_picked(self, _isolate) -> None:
         _write_root(self.default, key="")
 
-        assert _discover.pick(_discover.discover()) is None
+        assert roots.pick(self._discover_as_the_wizard_does()) is None
 
     def test_the_users_own_root_is_never_offered(self, _isolate) -> None:
         """Discovery scans raven's own roots and nothing else.
@@ -160,16 +171,16 @@ class TestDiscoveryOrder:
         bare = self.legacy.parent
         _write_root(bare)
 
-        assert not [s for s in _discover.discover() if s.root == bare]
+        assert not [s for s in self._discover_as_the_wizard_does() if s.root == bare]
 
         _write_root(self.default)
-        assert not [s for s in _discover.discover() if s.root == bare]
+        assert not [s for s in self._discover_as_the_wizard_does() if s.root == bare]
 
     def test_every_discovered_root_is_ravens_own(self, _isolate) -> None:
         _write_root(self.default)
         _write_root(self.legacy)
 
-        roots = {s.root for s in _discover.discover()}
+        roots = {s.root for s in self._discover_as_the_wizard_does()}
         assert roots <= {self.default, self.legacy}
 
     def test_discovery_says_nothing_about_ownership(self, tmp_path: Path, _isolate) -> None:
@@ -186,7 +197,7 @@ class TestDiscoveryOrder:
         _write_root(recorded)
         _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(recorded), "owned": False})
 
-        state = _discover.discover()[0]
+        state = self._discover_as_the_wizard_does()[0]
 
         assert state.root == recorded
         assert not hasattr(state, "owned")
@@ -197,7 +208,7 @@ class TestDiscoveryOrder:
         _write_root(self.default)
         _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(self.default), "owned": True})
 
-        roots = [s.root for s in _discover.discover()]
+        roots = [s.root for s in self._discover_as_the_wizard_does()]
         assert len(roots) == len(set(roots))
 
 
@@ -205,4 +216,4 @@ def test_a_new_root_does_not_declare_the_everos_default_port() -> None:
     """8000 is among the most commonly occupied ports on a developer machine; it
     only ever appeared in raven's roots because raven overrode it on the command
     line and never wrote the file."""
-    assert "8000" not in _discover.default_new_root_url()
+    assert "8000" not in roots.default_new_root_url()

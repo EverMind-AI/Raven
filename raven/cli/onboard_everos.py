@@ -1924,7 +1924,7 @@ def _step4_memory(
 
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
-    from raven.plugins.memory.everos import _discover
+    from raven.plugins.memory.everos import roots
 
     while True:
         source = _memory_source_menu()
@@ -1958,7 +1958,18 @@ def _step4_memory(
                 "  [dim]正在查找 Raven 可以接管的记忆目录...[/dim]",
             )
         )
-        found = _discover.pick(_discover.discover())
+        from raven.config.update_everos import applicable_legacy_root, default_everos_root, recorded_slice
+
+        # The wizard owns the candidate list: it reads the config record and the
+        # host defaults and hands them to the cargo-side describer, which
+        # imports nothing from the host.
+        recorded = recorded_slice().get("root")
+        found = roots.pick(
+            roots.discover(
+                recorded_root=Path(str(recorded)).expanduser() if recorded else None,
+                fallback_roots=(default_everos_root(), applicable_legacy_root()),
+            )
+        )
         if found is None:
             break
 

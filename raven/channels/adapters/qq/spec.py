@@ -16,4 +16,11 @@ SPEC = ChannelSpec(
     display_name="QQ",
     factory=_make,
     capabilities=Capabilities(),
+    # Cargo declaration (config-with-cargo): the fields only this adapter
+    # consumes. Socket fields (enabled / allow_from / workspace) stay with the
+    # host. Defaults stay in the central model until the storage handover.
+    config_schema={
+        "app_id": {"type": "string", "required": True},
+        "secret": {"type": "string", "required": True},
+    },
 )

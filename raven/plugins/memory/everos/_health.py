@@ -98,9 +98,9 @@ def configured_base_url(config: Any) -> str:
     A caller that probes the default while the backend reads the configured
     value reports on a server nobody is using: someone who moved everos off port
     18791 is told it is not running. Key order mirrors
-    ``_plugin_stack._resolve_plugin_config_slice`` (plugin id, then contribution
-    name) without building a registry, which the callers -- ``raven doctor`` and
-    the wizard -- have no other reason to do.
+    ``raven.core.plugin_stack._resolve_plugin_config_slice`` (plugin id, then
+    contribution name) without building a registry, which the callers --
+    ``raven doctor`` and the wizard -- have no other reason to do.
     """
     slices = getattr(getattr(config, "plugins", None), "config", None) or {}
     for key in ("everos-memory", "everos"):

@@ -55,6 +55,13 @@ class ChannelSpec:
     display_name: str
     factory: Callable[[Any], Channel]  # (config) -> Channel
     capabilities: Capabilities = field(default_factory=Capabilities)
+    # The cargo-consumed slice of this channel's config, declared where the
+    # consumer lives (config-with-cargo): flat key -> {type, default?,
+    # required?}, the same vocabulary plugin manifests use. Empty = undeclared,
+    # today's behaviour. Storage and validation stay with the central model for
+    # now; a guard keeps this declaration and that model coherent until the
+    # handover.
+    config_schema: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # Each capability flag must agree with its matching opt-in protocol. Adding a
