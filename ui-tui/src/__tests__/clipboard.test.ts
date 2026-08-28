@@ -391,9 +391,9 @@ describe('createCopyOnSelectReporter', () => {
     // paste that silently came up empty.
     const report = createCopyOnSelectReporter()
 
-    expect(report(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
-    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
-    expect(report(42, 'osc52', 's2')).toBe(copyResultNotice(42, 'osc52'))
+    expect(report(42, 'osc52', 's1')).toEqual({ text: copyResultNotice(42, 'osc52'), firstOfSession: true })
+    expect(report(42, 'osc52', 's1')).toEqual({ text: 'sent 42 characters', firstOfSession: false })
+    expect(report(42, 'osc52', 's2')).toEqual({ text: copyResultNotice(42, 'osc52'), firstOfSession: true })
   })
 
   it('does not repeat the caveat when a session is returned to', () => {
@@ -404,13 +404,19 @@ describe('createCopyOnSelectReporter', () => {
     report(42, 'osc52', 's1')
     report(42, 'osc52', 's2')
 
-    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
+    expect(report(42, 'osc52', 's1')).toEqual({ text: 'sent 42 characters', firstOfSession: false })
   })
 
   it('keeps its own tally per reporter', () => {
     // Two TUI processes must not share the fact that one of them has reported.
-    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
-    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toEqual({
+      text: copyResultNotice(42, 'osc52'),
+      firstOfSession: true
+    })
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toEqual({
+      text: copyResultNotice(42, 'osc52'),
+      firstOfSession: true
+    })
   })
 })
 

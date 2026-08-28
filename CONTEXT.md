@@ -576,10 +576,23 @@ writes completed/failed (never unknown) into `HISTORY.md`.
 
 **Attempt**:
 One task try, possibly spanning several turns — the stable address of a trajectory.
-Every span carries `attempt.id` (`raven/tracing/spans.py`); without an explicitly
-opened attempt (`trace.begin_attempt(session_key)`) each turn is its own single-turn
-attempt whose id equals the trace id, so every trace is addressable as an attempt.
+At read time an attempt id equals the trace id unless an Attempt Definition in
+`attempts.json` groups several traces under one minted id, so every trace is
+addressable as an attempt. Legacy logs may carry a span-level `attempt.id`
+attribute, which read paths keep resolving; new spans never carry it
+(`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
 _Avoid_: "run id" / "task id" — neither is bound to span records.
+
+**Attempt Definition** (`raven/trajectory/store.py`):
+The mutable sidecar record in `attempts.json` (trace state dir) mapping a minted
+`att-*` id to its member trace ids plus the historical ids it absorbed (`aliases`),
+so attempt grouping stays editable while span logs stay append-only. `merge_attempts`
+creates one (absorbing prior definitions and legacy groups into `aliases`, migrating
+member pins up); `split_attempt` deletes one (migrating its pin down to the members,
+merged verdicts do not transfer). A legacy attempt (span-attribute grouping) can be
+merged but not split. Read paths resolve definition, alias, or member to the
+definition id; verdicts/pins recorded under absorbed ids stay visible through it.
+_Avoid_: "attempt group" — the canonical term is Attempt Definition.
 
 **Trajectory Verdict** (`raven/trajectory/verdict.py`):
 The task-outcome label for one Attempt: `pass` / `fail` (agent failure) / `infra`
