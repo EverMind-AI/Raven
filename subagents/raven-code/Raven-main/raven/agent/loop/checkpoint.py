@@ -30,6 +30,7 @@ no-op (return ``None``) so the checkpoint layer can never break a turn.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 from loguru import logger
@@ -91,6 +92,12 @@ venv/
 # Credentials & dotenv (defense in depth — usually in user's .gitignore too)
 .env
 .env.*
+# The agent's own state, when the work-tree IS the agent home (no bound
+# workdir): rendered provider configs and session stores never enter a
+# snapshot.
+.config.rendered*
+sessions/
+memory/
 *.key
 *.pem
 *.crt
@@ -131,8 +138,32 @@ _GIT_TIMEOUT_SECONDS = 30.0
 class CheckpointService:
     """Shadow-git working-tree snapshots, one commit per turn."""
 
-    def __init__(self, workspace: Path, shadow_dir: str = ".raven/shadow.git") -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        shadow_dir: str = ".raven/shadow.git",
+        *,
+        shadow_base: Path | None = None,
+    ) -> None:
         self._workspace = Path(workspace).expanduser().resolve()
+        if shadow_base is not None:
+            # State-partition mode: the WORK-TREE stays the effective working
+            # directory, but the shadow git data lives under the agent's own
+            # state partition, bucketed by a stable hash of the canonical
+            # workdir - one bucket per checkout, so a primary binding and each
+            # worktree keep isolated histories, and the checkout itself gains
+            # NO runtime files (no .raven/, no NOTICE, no gitignore).
+            base = Path(shadow_base).expanduser().resolve()
+            if base == self._workspace or base.is_relative_to(self._workspace):
+                raise ValueError(
+                    f"shadow_base={shadow_base!r} must live outside the workspace it snapshots ({self._workspace})"
+                )
+            bucket = hashlib.sha256(str(self._workspace).encode("utf-8")).hexdigest()[:16]
+            self._git_dir = base / bucket / "shadow.git"
+            self._shadow_rel = None
+            self._ready = False
+            self._commit_count = 0
+            return
         candidate = (self._workspace / shadow_dir).resolve()
         # Containment is a load-bearing invariant: per-workspace recovery
         # isolation (Bug2) breaks if the shadow git lands outside its

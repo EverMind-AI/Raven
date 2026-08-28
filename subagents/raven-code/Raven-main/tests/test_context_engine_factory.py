@@ -453,3 +453,168 @@ class TestMemoryOffLeavesNoTrace:
             turn=TurnContext(current_message="hi"),
         )
         assert list(tmp_path.iterdir()) == []
+
+
+class TestLayeredBootstrap:
+    """Segment 2's three layers: machine-global → agent home → workdir chain."""
+
+    def test_workdir_chain_injected_root_first(self, tmp_path: Path) -> None:
+        """Split deployment: agent home holds no rules, the checkout does —
+        every level between git root and workdir speaks, root first."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        state = tmp_path / "state"
+        state.mkdir()
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("team rules", encoding="utf-8")
+        sub = repo / "pkg"
+        sub.mkdir()
+        (sub / "CLAUDE.md").write_text("pkg rules", encoding="utf-8")
+
+        with workdir.bind(sub):
+            text = render.load_bootstrap_files(state)
+        assert "team rules" in text and "pkg rules" in text
+        assert text.index("team rules") < text.index("pkg rules")
+        # Non-workspace layers carry their origin directory in the heading.
+        assert f"## AGENTS.md ({repo.resolve()})" in text
+        assert f"## CLAUDE.md ({sub.resolve()})" in text
+
+    def test_workspace_equals_workdir_renders_byte_identical(self, tmp_path: Path) -> None:
+        """The eval shape (workspace *is* the checkout) must not shift a byte."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("repo rules", encoding="utf-8")
+        baseline = render.load_bootstrap_files(tmp_path)
+        with workdir.bind(tmp_path):
+            bound = render.load_bootstrap_files(tmp_path)
+        assert bound == baseline == "## AGENTS.md\n\nrepo rules"
+
+    def test_workdir_outside_any_checkout_reads_only_itself(self, tmp_path: Path) -> None:
+        """No .git anywhere up the chain: never walk toward the filesystem root."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        (tmp_path / "AGENTS.md").write_text("stray parent rules", encoding="utf-8")
+        wd = tmp_path / "scratch"
+        wd.mkdir()
+        (wd / "CLAUDE.md").write_text("scratch rules", encoding="utf-8")
+        state = tmp_path / "state"
+        state.mkdir()
+
+        with workdir.bind(wd):
+            text = render.load_bootstrap_files(state)
+        assert "scratch rules" in text
+        assert "stray parent rules" not in text
+
+    def test_global_rules_prefer_raven_over_claude(self, tmp_path: Path, monkeypatch) -> None:
+        """Same layer, first hit wins — and it lands before every other layer."""
+        from raven.context_engine.segments import render
+
+        home = tmp_path / "home"
+        (home / ".raven").mkdir(parents=True)
+        (home / ".claude").mkdir()
+        (home / ".raven" / "AGENTS.md").write_text("raven personal", encoding="utf-8")
+        (home / ".claude" / "CLAUDE.md").write_text("claude personal", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("RAVEN_GLOBAL_RULES", "1")
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "AGENTS.md").write_text("workspace rules", encoding="utf-8")
+
+        text = render.load_bootstrap_files(ws)
+        assert "raven personal" in text
+        assert "claude personal" not in text
+        assert text.index("raven personal") < text.index("workspace rules")
+        assert "## AGENTS.md (~/.raven)" in text
+
+    def test_global_rules_fall_back_to_claude_md(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.context_engine.segments import render
+
+        home = tmp_path / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "CLAUDE.md").write_text("claude personal", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("RAVEN_GLOBAL_RULES", "1")
+
+        text = render.load_bootstrap_files(tmp_path)
+        assert "claude personal" in text
+        assert "## CLAUDE.md (~/.claude)" in text
+
+    def test_global_rules_follow_attended_when_env_unset(self, tmp_path: Path, monkeypatch) -> None:
+        """Default gate: on for a person at the machine, off for eval runs —
+        an unattended benchmark must not inherit the operator's own rules."""
+        from raven.agent import profile as run_profile
+        from raven.context_engine.segments import render
+
+        home = tmp_path / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "CLAUDE.md").write_text("personal rules", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("RAVEN_GLOBAL_RULES", raising=False)
+
+        monkeypatch.setattr(run_profile, "_current", run_profile.PROFILES["interactive"])
+        assert "personal rules" in render.load_bootstrap_files(tmp_path)
+
+        monkeypatch.setattr(run_profile, "_current", run_profile.PROFILES["eval_coding"])
+        assert render.load_bootstrap_files(tmp_path) == ""
+
+    def test_total_size_cap_across_layers(self, tmp_path: Path, monkeypatch) -> None:
+        """Per-file caps alone cannot bound a deep chain; the total cap does."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        level = repo
+        for name in ("a", "b", "c"):
+            (level / "AGENTS.md").write_text("x" * 30_000, encoding="utf-8")
+            level = level / name
+            level.mkdir()
+        (level / "AGENTS.md").write_text("x" * 30_000, encoding="utf-8")
+        state = tmp_path / "state"
+        state.mkdir()
+
+        with workdir.bind(level):
+            text = render.load_bootstrap_files(state)
+        assert len(text) < render.BOOTSTRAP_TOTAL_MAX_CHARS + 2_000
+        assert "truncated" in text
+
+    def test_context_builder_estimation_matches_renderer(self, tmp_path: Path, monkeypatch) -> None:
+        """The token-estimation mirror must see the same layered result."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("checkout rules", encoding="utf-8")
+        state = tmp_path / "state"
+        state.mkdir()
+
+        with workdir.bind(repo):
+            estimated = ContextBuilder(workspace=state)._load_bootstrap_files()
+            rendered = render.load_bootstrap_files(state)
+        assert estimated == rendered
+        assert "checkout rules" in estimated
+
+    def test_unreadable_rules_file_degrades_to_skip(self, tmp_path: Path) -> None:
+        """One bad file (here: not UTF-8) must not fail the whole assembly."""
+        from raven.agent import workdir
+        from raven.context_engine.segments import render
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_bytes(b"\xff\xfe not utf-8 \x9c")
+        sub = repo / "pkg"
+        sub.mkdir()
+        (sub / "CLAUDE.md").write_text("still injected", encoding="utf-8")
+        state = tmp_path / "state"
+        state.mkdir()
+
+        with workdir.bind(sub):
+            text = render.load_bootstrap_files(state)
+        assert "still injected" in text
+        assert "AGENTS.md" not in text

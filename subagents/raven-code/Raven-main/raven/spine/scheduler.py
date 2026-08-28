@@ -103,24 +103,6 @@ class Lane:
             self._worker = loop.create_task(self._run_worker())
         return fut
 
-    def steer(self, req: TurnRequest) -> bool:
-        """Merge ``req`` into the running turn, or refuse. Never starts a turn.
-
-        No await between the liveness check and the mailbox append: that is what
-        makes the answer true at the moment it is given. A check-then-``submit``
-        pair leaves a gap in which the turn can end, and INJECT's fallback then
-        promotes the message to a turn of its own -- the one thing a steer must
-        not do. Returns False when no turn is running (the caller keeps the
-        text); True when the text is in the mailbox, to be merged at the next
-        tool-loop gap or dropped by the worker if the turn ends first.
-        """
-        running = self._run_task is not None and not self._run_task.done()
-        if not running:
-            return False
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._inject_mailbox.append((replace(req, busy=BusyPolicy.STEER), fut))
-        return True
-
     def _enqueue(self, req: TurnRequest, fut: asyncio.Future, *, front: bool = False) -> None:
         # The single entry for every _pending growth — APPEND (tail), INTERRUPT
         # (front), and the worker's inject fallback — so the depth check sees each
@@ -240,13 +222,6 @@ class Lane:
                 # silent "why didn't my inject inject" is debuggable.
                 while self._inject_mailbox:
                     inject_req, inject_fut = self._inject_mailbox.popleft()
-                    if inject_req.busy is BusyPolicy.STEER:
-                        # A steer that missed its turn is dropped, not promoted:
-                        # the sender was told it was merged into *this* turn,
-                        # and a fresh turn would answer a question nobody asked.
-                        logger.info("steer dropped: the turn ended before it was merged")
-                        inject_fut.set_result(None)
-                        continue
                     if inject_req.origin is Origin.USER:
                         logger.info(
                             "inject fell back to append (not merged): origin={}",
@@ -295,7 +270,14 @@ class Lane:
                 await self._sink(TurnStarted(conversation_id=self._conversation_id))
                 started = True
                 run_start = time.monotonic()
-                outcome = await self._runner.run(req, self._make_emit(req), drain)
+                # The turn's working directory, bound task-locally so lanes
+                # running concurrently in one process (an ACP server
+                # multiplexing sessions) each see their own. A no-op unless a
+                # resolver is registered AND this session pinned a workdir.
+                from raven.agent import workdir
+
+                with workdir.bind_for(self._conversation_id):
+                    outcome = await self._runner.run(req, self._make_emit(req), drain)
         except asyncio.CancelledError:
             if started:  # only pair a TurnStarted; a pre-start cancel emits nothing
                 await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
@@ -374,21 +356,6 @@ class Scheduler:
         if self._reaper is None or self._reaper.done():
             self._reaper = self._loop.create_task(self._reap_loop())
         return handle
-
-    def steer(self, req: TurnRequest) -> bool:
-        """Merge ``req`` into the turn its conversation is running, or refuse.
-
-        USER-only, like INJECT and INTERRUPT: a proactive origin steering a
-        person's turn is refused outright rather than demoted, because a
-        demoted steer would start a turn -- the exact thing this exists not to
-        do. ``.get`` on the lane map, never creating one: a lane with no turn
-        cannot be steered, and creating it would only make the refusal cost a
-        worker. A draining scheduler refuses too; nothing new is accepted.
-        """
-        if self._draining or req.origin is not Origin.USER:
-            return False
-        lane = self._lanes.get(self._conversation_id(req))
-        return lane is not None and lane.steer(req)
 
     def cancel_conversation(self, conversation_id: str) -> int:
         """/stop: cancel the running turn and drain the queue for a conversation's

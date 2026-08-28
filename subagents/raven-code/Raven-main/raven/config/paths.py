@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from raven.config.loader import get_config_path
@@ -69,7 +70,14 @@ def workspace_state_path(workspace: Path | str, name: str) -> Path:
     """
     from raven.utils.helpers import safe_filename
 
-    key = safe_filename(str(Path(workspace).expanduser().resolve())) or "workspace"
+    # RAVEN_WORKSPACE_STATE_BUCKET pins the bucket name. Bucketing by workspace
+    # path exists to keep unrelated projects apart inside one shared data dir;
+    # the Raven-Code launcher gives every instance a private data dir, where
+    # the path-derived name only breaks continuity: a session that moves into
+    # a git worktree mid-conversation would land in a new bucket and lose its
+    # own history.
+    pinned = os.environ.get("RAVEN_WORKSPACE_STATE_BUCKET", "").strip()
+    key = safe_filename(pinned or str(Path(workspace).expanduser().resolve())) or "workspace"
     return get_data_dir() / name / key
 
 

@@ -457,18 +457,6 @@ class TurnCancelResult(_Strict):
     cancelled: bool
 
 
-class SessionSteerParams(_Strict):
-    session_id: str
-    text: str
-
-
-class SessionSteerResult(_Strict):
-    # ``injected``: merged into the turn running now, to be read before its next
-    # model call. ``no_turn``: nothing was running, nothing was started, and the
-    # caller keeps the text -- a steer never becomes a turn of its own.
-    status: Literal["injected", "no_turn"]
-
-
 # ---------------------------------------------------------------------------
 # mcp.* methods
 # ---------------------------------------------------------------------------
@@ -861,7 +849,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "turn.subscribe": (TurnSubscribeParams, TurnSubscribeResult),
     "turn.unsubscribe": (TurnUnsubscribeParams, TurnUnsubscribeResult),
     "turn.cancel": (TurnCancelParams, TurnCancelResult),
-    "session.steer": (SessionSteerParams, SessionSteerResult),
     # mcp.*
     "mcp.list": (McpListParams, McpListResult),
     "mcp.test": (McpTestParams, McpTestResult),

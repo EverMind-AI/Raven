@@ -43,6 +43,21 @@ BOOTSTRAP_FILES = [
 # that size.
 BOOTSTRAP_FILE_MAX_CHARS = 24_000
 
+# Ceiling across every injected rules file combined: with three layers a deep
+# checkout could otherwise stack an unbounded number of per-file-capped files.
+BOOTSTRAP_TOTAL_MAX_CHARS = 64_000
+
+_TRUNCATION_NOTE = "\n\n… (truncated to fit the context)"
+
+# Machine-level personal rules; the first existing file wins (one layer, not
+# additive): raven's own name first, then the claude-code global file a user
+# very likely already maintains.
+GLOBAL_RULES_FILES = ("~/.raven/AGENTS.md", "~/.claude/CLAUDE.md")
+
+# Forces the machine-level rules layer on ("1") or off ("0") regardless of
+# profile; unset defers to ``profile.attended``.
+GLOBAL_RULES_ENV = "RAVEN_GLOBAL_RULES"
+
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
 
@@ -283,7 +298,7 @@ def _interaction_policy_substitutions() -> dict[str, str]:
 
 
 def identity_text(
-    workspace: Path,
+    agent_home: Path,
     model: str | None = None,
     now_fn: Callable[[], datetime] | None = None,
 ) -> str:
@@ -302,16 +317,21 @@ def identity_text(
     literal braces (code snippets, ``{skill-name}`` paths), which ``format``
     would try to interpret.
     """
+    from raven.agent import workdir
     from raven.agent.profile import current_profile
 
     domain = current_profile().domain
     served_domain, _family, template = identity_prompts.load_template(model, domain)
     if served_domain != domain:
         logger.warning("no identity prompt for domain {!r}; served {!r}", domain, served_domain)
+    home_path = str(agent_home.expanduser().resolve())
+    bound = workdir.current()
+    work_path = str(bound.expanduser().resolve()) if bound else home_path
     system = platform.system()
     substitutions = {
         "{{LANGUAGE_DIRECTIVE}}": _language_directive(),
-        "{{WORKSPACE}}": str(workspace.expanduser().resolve()),
+        "{{WORKDIR}}": work_path,
+        "{{AGENT_HOME}}": home_path,
         "{{PLATFORM}}": f"{system.lower()} {platform.machine()}",
         "{{PYTHON}}": platform.python_version(),
         "{{TODAY}}": (now_fn or datetime.now)().strftime("%a %b %d %Y"),
@@ -329,30 +349,152 @@ def identity_text(
     return template.rstrip("\n")
 
 
-def load_bootstrap_files(workspace: Path, bootstrap_files: list[str] | None = None) -> str:
-    """Segment 2 — concatenate the repository's own instruction files.
+def _global_rules_file() -> Path | None:
+    """The machine-level personal rules file, or ``None`` when the layer is off.
 
-    Read-only and size-capped: raven never writes these, and a repository can
-    carry an arbitrarily large markdown at these names.
+    ``~/.raven/AGENTS.md`` (raven's own convention) wins over
+    ``~/.claude/CLAUDE.md`` (the file many users already maintain for
+    claude-code): they are the same layer, so the first hit is the only hit.
+
+    The layer follows ``profile.attended`` — personal rules belong to a person
+    sitting at the machine, and an unattended run (evals above all) must not
+    inherit the operator's own preferences into a benchmark prompt.
+    ``RAVEN_GLOBAL_RULES=1/0`` forces it on or off either way; the test suite
+    pins it off so a developer's real home never leaks into unit tests.
+    """
+    from raven.agent.profile import current_profile
+
+    override = os.environ.get(GLOBAL_RULES_ENV, "").strip().lower()
+    if override in ("0", "false", "off", "no"):
+        return None
+    if override not in ("1", "true", "on", "yes") and not current_profile().attended:
+        return None
+    for name in GLOBAL_RULES_FILES:
+        path = Path(name).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
+def _git_root(start: Path) -> Path | None:
+    """The nearest ancestor (or ``start`` itself) holding a ``.git`` entry.
+
+    A plain existence check, not ``git rev-parse``: worktrees keep ``.git`` as
+    a file and submodules too, and either marks the checkout boundary just as
+    well.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _workdir_chain(workdir: Path) -> list[Path]:
+    """Directories to scan for rules files, checkout root first.
+
+    Every level between the git root and the workdir speaks (the claude-code
+    convention for nested rules files), ordered general → specific so deeper
+    files refine shallower ones. Outside any checkout the chain is just the
+    workdir itself — walking to the filesystem root would let a stray
+    ``/tmp/AGENTS.md`` into every prompt.
+    """
+    root = _git_root(workdir)
+    if root is None or root == workdir:
+        return [workdir]
+    levels = [workdir]
+    for parent in workdir.parents:
+        levels.append(parent)
+        if parent == root:
+            break
+    levels.reverse()
+    return levels
+
+
+def _display_dir(directory: Path) -> str:
+    """A home-abbreviated directory path for rules-file headings."""
+    home = Path.home()
+    if directory == home:
+        return "~"
+    try:
+        return "~/" + str(directory.relative_to(home))
+    except ValueError:
+        return str(directory)
+
+
+def load_bootstrap_files(workspace: Path, bootstrap_files: list[str] | None = None) -> str:
+    """Segment 2 — instruction files, broadest and most stable layer first.
+
+    Three layers, injected general → specific so later (more local) rules
+    naturally refine earlier ones:
+
+    1. machine-level personal rules (see :func:`_global_rules_file`);
+    2. the agent home ``workspace`` — the constructor-time root, which for a
+       run whose workspace *is* the checkout covers the whole story;
+    3. the per-turn working directory's chain (:func:`_workdir_chain`), git
+       root down to the workdir — the split deployment (ACP/host integration)
+       keeps agent state and the code checkout in different trees, and the
+       checkout's own rules live here, not under the agent home.
+
+    Files are deduped by resolved path, so workspace == workdir renders
+    byte-identical to the historical single-root output. Read-only and
+    size-capped per file and in total: raven never writes these, and a
+    repository can carry an arbitrarily large markdown at these names.
 
     Only for the coding domain: these files state how to build and test *this
     repository*, which is not what a data workspace holds. Injecting them into a
     data run is at best noise and at worst a coding checklist the grader never
     looks at, so the domain decides rather than "the file happened to be there".
     """
+    from raven.agent import workdir as _workdir
     from raven.agent.profile import current_profile
 
     if current_profile().domain != "coding":
         return ""
+
+    names = list(bootstrap_files or BOOTSTRAP_FILES)
+    ordered: list[tuple[Path, bool]] = []  # (file, bare heading?)
+    seen: set[Path] = set()
+
+    def _add(path: Path, bare: bool) -> None:
+        if not path.is_file():
+            return
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            ordered.append((path, bare))
+
+    if (global_rules := _global_rules_file()) is not None:
+        _add(global_rules, bare=False)
+    # Workspace-level files keep the bare historical heading (eval prompts
+    # must not shift); the other layers say where each rule came from.
+    for filename in names:
+        _add(workspace / filename, bare=True)
+    if (turn_dir := _workdir.current()) is not None:
+        for level in _workdir_chain(Path(turn_dir).resolve()):
+            for filename in names:
+                _add(level / filename, bare=False)
+
     parts: list[str] = []
-    for filename in bootstrap_files or BOOTSTRAP_FILES:
-        file_path = workspace / filename
-        if not file_path.exists():
+    total = 0
+    for path, bare in ordered:
+        # The layers read from the operator's home and from arbitrary
+        # checkouts now, so one unreadable or non-UTF-8 file must degrade to
+        # a skipped layer, not a failed prompt assembly.
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("skipping unreadable rules file {}: {}", path, exc)
             continue
-        content = file_path.read_text(encoding="utf-8")
         if len(content) > BOOTSTRAP_FILE_MAX_CHARS:
-            content = content[:BOOTSTRAP_FILE_MAX_CHARS] + "\n\n… (truncated to fit the context)"
-        parts.append(f"## {Path(filename).name}\n\n{content}")
+            content = content[:BOOTSTRAP_FILE_MAX_CHARS] + _TRUNCATION_NOTE
+        if total + len(content) > BOOTSTRAP_TOTAL_MAX_CHARS:
+            budget = BOOTSTRAP_TOTAL_MAX_CHARS - total
+            if budget <= 0:
+                break
+            content = content[:budget] + _TRUNCATION_NOTE
+        total += len(content)
+        heading = path.name if bare else f"{path.name} ({_display_dir(path.parent)})"
+        parts.append(f"## {heading}\n\n{content}")
     return "\n\n".join(parts) if parts else ""
 
 

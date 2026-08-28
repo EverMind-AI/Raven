@@ -30,8 +30,6 @@ from __future__ import annotations
 from typing import Any
 
 from raven.agent.acp.protocol import (
-    STEER_CAPABILITY,
-    STEER_METHOD,
     AcpProtocolError,
     decode,
     encode,
@@ -165,8 +163,6 @@ __all__ = [
     "PROTOCOL_VERSION",
     "REQUEST_CANCELLED",
     "RESOURCE_NOT_FOUND",
-    "STEER_CAPABILITY",
-    "STEER_METHOD",
     "STOP_REASONS",
     "AcpProtocolError",
     "decode",

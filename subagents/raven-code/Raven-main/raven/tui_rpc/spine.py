@@ -165,10 +165,28 @@ class TuiOutlet:
             {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+    async def emit_error(
+        self,
+        conversation_id: str,
+        code: int,
+        message: str,
+        reason: str,
+        detail: str = "",
+        turn_id: str | None = None,
+    ) -> None:
+        """Emit the turn's error event, carrying WHICH turn failed when known.
+
+        ``turn_id`` matters to any consumer that correlates endings to the turn
+        it started - the ACP translator settles a session/prompt only on a
+        positive match, so an error that names no turn is dropped as somebody
+        else's and the prompt hangs until the client gives up. The success path
+        (emit_complete) always carried the id; the failure path must too.
+        """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if detail:
             payload["detail"] = detail
+        if turn_id:
+            payload["turn_id"] = turn_id
         await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
 
 
@@ -216,6 +234,9 @@ def _make_tui_sink(
             return
         if isinstance(event, TurnFailed):
             await _finish(event.conversation_id)
+            # Read before _drop pops it: the error event must name the turn it
+            # ends, exactly as emit_complete does on the success path.
+            turn_id = turn_ids.get(event.conversation_id)
             _drop(event.conversation_id)
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
@@ -226,6 +247,7 @@ def _make_tui_sink(
                     "turn_failed",
                     "internal",
                     event.error or "",
+                    turn_id=turn_id,
                 )
             return
         if isinstance(event, TurnStarted):

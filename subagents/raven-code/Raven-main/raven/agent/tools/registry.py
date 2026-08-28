@@ -22,6 +22,16 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
         self._aliases: dict[str, str] = {}
+        # Optional first-write gate (see raven.agent.workspace_gate). Sits at
+        # this single choke point, after alias/mangled-name resolution, for the
+        # same reason canonical_name exists: a policy keyed on the raw spelling
+        # can be bypassed by a case-mangled call.
+        self._write_gate = None
+
+    def set_write_gate(self, gate) -> None:
+        """Install a callable `(canonical_name, params) -> str | None`;
+        a non-None return is handed to the model instead of executing."""
+        self._write_gate = gate
 
     def register(self, tool: Tool) -> None:
         """Register a tool (and any legacy-name aliases it declares)."""
@@ -91,6 +101,19 @@ class ToolRegistry:
         if resolve_aliases is not None:
             params, alias_note = resolve_aliases(params)
             note += alias_note
+
+        if self._write_gate is not None:
+            gate_params = params
+            session = str((params or {}).get("session") or "")
+            sessions = getattr(tool, "sessions", None)
+            session_working_dir = getattr(sessions, "working_dir", None)
+            if session and callable(session_working_dir):
+                opened_in = session_working_dir(session)
+                if opened_in:
+                    gate_params = {**params, "_raven_session_workdir": opened_in}
+            blocked = await self._write_gate(name, gate_params)
+            if blocked is not None:
+                return note + blocked
 
         try:
             # Attempt to cast parameters to match schema types

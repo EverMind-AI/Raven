@@ -33,7 +33,7 @@ from loguru import logger
 
 from raven.agent.subagent import activity
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
-from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_outcome,
@@ -137,17 +137,6 @@ def _human_failure(stdout: str, stderr: str) -> str:
             if line and not _framed(line):
                 return _one_line(line)
     return ""
-
-
-def _host_home_env() -> dict[str, str]:
-    """This raven's own ``RAVEN_HOME``, or nothing when it is running on the default.
-
-    Read from ``os.environ`` at spawn time rather than captured once: a test (and
-    ``raven serve``) may point a process at a different home between spawns, and
-    a value frozen at import would outlive the change.
-    """
-    home = os.environ.get("RAVEN_HOME", "").strip()
-    return {"RAVEN_HOME": home} if home else {}
 
 
 class CliAgentTimeoutError(RuntimeError):
@@ -410,7 +399,7 @@ class CliAgentBackend:
             # while a sub-agent writing back to "the host's store" writes into
             # ~/.raven. The hand-off lands in a file nobody reads and the wake
             # simply never arrives.
-            env = {**env_base, **_host_home_env(), **(runtime_env or {}), **self.env}
+            env = {**env_base, **host_identity_env(), **(runtime_env or {}), **self.env}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,

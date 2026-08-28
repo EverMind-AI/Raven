@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent import workdir
 from raven.context_engine.segments import identity_prompts, render
 
 
@@ -78,6 +79,21 @@ def test_anthropic_render_substitutes_env():
     assert "{{" not in rendered
     assert "/workspace" in rendered
     assert "todowrite" in rendered
+
+
+def test_identity_distinguishes_workdir_from_agent_home(tmp_path):
+    agent_home = tmp_path / "agent-home"
+    checkout = tmp_path / "checkout"
+    agent_home.mkdir()
+    checkout.mkdir()
+
+    with workdir.bind(checkout):
+        rendered = render.identity_text(agent_home, model="claude-opus-4-8")
+
+    assert f"Working directory: {checkout}" in rendered
+    assert f"Agent home: {agent_home}" in rendered
+    assert f"Custom skills: {agent_home}/skills/" in rendered
+    assert f"Custom skills: {checkout}/skills/" not in rendered
 
 
 def test_default_render_has_no_todowrite_section():

@@ -3641,15 +3641,15 @@ def test_the_spawning_ravens_home_reaches_its_cli_subagent(monkeypatch: pytest.M
     store" wrote into ``~/.raven``. Both homes exist, so nothing errored -- the
     hand-off simply landed in a file nobody reads and the wake never arrived.
     """
-    from raven.agent.subagent.backends.cli_agent import _host_home_env
+    from raven.agent.subagent.backends.env import host_identity_env
 
     monkeypatch.delenv("RAVEN_HOME", raising=False)
-    assert _host_home_env() == {}, "a raven on the default home must not pin one on its children"
+    assert host_identity_env() == {}, "a raven on the default home must not pin one on its children"
 
     monkeypatch.setenv("RAVEN_HOME", "/tmp/raven-main")
-    assert _host_home_env() == {"RAVEN_HOME": "/tmp/raven-main"}
+    assert host_identity_env() == {"RAVEN_HOME": "/tmp/raven-main"}
 
     # Whitespace-only is how an unset variable often reaches a process through a
     # shell wrapper, and it must read as unset rather than as an empty home.
     monkeypatch.setenv("RAVEN_HOME", "   ")
-    assert _host_home_env() == {}
+    assert host_identity_env() == {}

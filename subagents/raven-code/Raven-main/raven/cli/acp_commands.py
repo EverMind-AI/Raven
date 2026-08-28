@@ -37,11 +37,12 @@ def acp(
 ) -> None:
     """Serve the Agent Client Protocol on stdin/stdout.
 
-    ``--config`` because this checkout is invoked as a vendored sub-agent, and
-    that caller points every child at the folder's own ``config.json`` rather
-    than at a RAVEN_HOME (see ``subagents/raven-code/run.py``). Without it the
-    agent would come up on the host's config -- a different model, a different
-    provider, and the coding identity prompt this build exists for absent.
+    ``--config`` because a launcher may point this process at one specific
+    config file rather than at a RAVEN_HOME -- that is how a wrapper serving
+    this build as somebody else's sub-agent hands it a rendered copy carrying
+    the credentials. Without it the agent comes up on whatever RAVEN_HOME
+    resolves to: a different model, a different provider, and none of the
+    identity this build was configured for.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -94,9 +95,7 @@ async def _serve() -> None:
     ``print`` lands on stderr, where it is noise in a log rather than a frame the
     client cannot decode.
     """
-    log_path = redirect_loguru_to_file(
-        "acp.log", file_level=_file_log_level(), retention=3, terminal_level="WARNING"
-    )
+    log_path = redirect_loguru_to_file("acp.log", file_level=_file_log_level(), retention=3, terminal_level="WARNING")
     install_crash_handlers()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)

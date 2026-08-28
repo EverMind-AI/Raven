@@ -43,6 +43,7 @@ __all__ = [
     "Reasoning",
     "RunnerEvent",
     "Scheduler",
+    "session_of",
     "Source",
     "StreamDelta",
     "Text",
@@ -57,5 +58,4 @@ __all__ = [
     "TurnRunner",
     "TurnStarted",
     "Usage",
-    "session_of",
 ]

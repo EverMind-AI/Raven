@@ -91,7 +91,15 @@ class _FsTool(Tool):
         self._tracker = tracker
 
     def _resolve(self, path: str) -> Path:
-        return _resolve_path(path, self._workspace, self._allowed_dir)
+        # The turn's bound workdir wins over the constructed default: a session
+        # moved into a git worktree must resolve relative paths there, and the
+        # tool object is shared across every session in the process.
+        from raven.agent import workdir
+
+        bound = workdir.current()
+        workspace = bound or self._workspace
+        allowed_dir = workspace if bound is not None and self._allowed_dir is not None else self._allowed_dir
+        return _resolve_path(path, workspace, allowed_dir)
 
 
 # ---------------------------------------------------------------------------
