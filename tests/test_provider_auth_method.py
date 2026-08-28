@@ -492,7 +492,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/rpc/methods/model.py",
         "raven/rpc/methods/setup.py",
         "raven/providers/azure_openai_provider.py",
-        "raven/providers/base.py",
+        "raven/contracts/llm_provider.py",
         "raven/providers/minimax_oauth_provider.py",
         "raven/providers/per_model_provider.py",
         # Other subsystems' credentials entirely: the skill hub, the evolver's
