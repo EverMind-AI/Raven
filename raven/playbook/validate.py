@@ -147,24 +147,36 @@ def validate_graph_nodes(
     # Rule 8: nodes sharing an instance continue one session — they must be the
     # same agent (two agents sharing a handle share no session) and must form a
     # dependency chain (a shared session cannot run concurrently).
-    #
-    # There was a rule 9 here: only the node opening the session could declare
-    # `skills`, because a resumed raven-loop session keeps the system prompt --
-    # and therefore the skill menu -- it was opened with. It is gone because its
-    # premise is: `skills` is no longer a menu filter carried into that first
-    # prompt. The engine folds it into the step's own prompt, which is a user
-    # message appended on every node, resumed or not, so a continuation node
-    # declaring skills now says something that takes effect.
+    # Rule 9: only the node opening a shared session may set its skill or MCP
+    # menu. A resumed raven-loop session keeps the system prompt it opened with,
+    # so injection fields on continuation nodes cannot take effect.
     by_instance: dict[str, list[NodeSpec]] = {}
     for node in nodes:
         if node.instance:
             by_instance.setdefault(node.instance, []).append(node)
+    reach = _ancestors(nodes)
     for handle, members in sorted(by_instance.items()):
         if len({m.subagent for m in members}) > 1:
             errors.append(f"instance {handle!r} is shared across different agents")
         if len(members) > 1 and not _forms_chain(members, nodes):
             errors.append(
                 f"instance {handle!r}: members have no dependency chain between them (they would run concurrently)"
+            )
+        if len(members) < 2:
+            continue
+        declaring = [m for m in members if m.skills is not None or m.mcps is not None]
+        if not declaring:
+            continue
+        ids = {m.id for m in members}
+        heads = [m for m in members if not (reach.get(m.id, set()) & (ids - {m.id}))]
+        if len(heads) != 1:
+            continue
+        offenders = sorted(m.id for m in declaring if m.id != heads[0].id)
+        if offenders:
+            errors.append(
+                f"nodes {offenders} declare skills or mcps while continuing instance {handle!r} "
+                f"opened by node {heads[0].id!r}; a resumed session keeps its opening skill menu, "
+                f"so move those fields to {heads[0].id!r} or use a separate instance"
             )
 
     errors.extend(_cycle_errors(nodes))
