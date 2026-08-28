@@ -1,6 +1,6 @@
 """Discovering the ``subagents/`` tree as agent rows (raven/agent/subagent/vendored_agents.py).
 
-The four vendored raven builds are registered by scanning, not by a written list,
+The vendored raven builds are registered by scanning, not by a written list,
 so what needs guarding is the scan's edges: where it looks, what it does with a
 folder that is not ready, and that removing a folder removes its row. The last
 one is the whole point of scanning rather than storing -- a stored row would
@@ -239,7 +239,7 @@ class TestWhereTheTreeIs:
     ) -> None:
         """A venv lives inside its folder's checkout, so a tree under
         site-packages loses every venv when the wheel is replaced. Preferring the
-        home copy is what keeps the four agents in the roster across an upgrade.
+        home copy is what keeps the agents in the roster across an upgrade.
         """
         home = tmp_path / "home"
         (home / "subagents").mkdir(parents=True)
@@ -425,7 +425,7 @@ class TestInstallingTheWheelsOwnTree:
 
     Each folder's venv is built inside its own checkout, and a wheel install is
     replaced wholesale on upgrade. Left under site-packages the venvs die every
-    time and all four agents fall out of the roster until something spends
+    time and every agent falls out of the roster until something spends
     minutes rebuilding them. These pin the three states that follow from copying
     it out under a version stamp.
     """
@@ -528,8 +528,8 @@ class TestAStoredRowThatWentStale:
 
     Each folder's ``install.py`` bakes an absolute path into the row it writes, so
     a row written while the tree sat under site-packages keeps naming that path
-    after an upgrade replaced the wheel. Without this, "upgrade" would mean "all
-    four agents now fail at dispatch with file-not-found", and the discovered row
+    after an upgrade replaced the wheel. Without this, "upgrade" would mean
+    "every agent now fails at dispatch with file-not-found", and the discovered row
     that *does* work would be the one being shadowed.
     """
 
@@ -848,7 +848,7 @@ def test_an_explicit_empty_owns_is_the_users_opt_out(tree: Path) -> None:
 
 
 class TestTheShippedManifests:
-    """The four real ``subagent.json`` files, validated as what they declare.
+    """The real ``subagent.json`` files, validated as what they declare.
 
     Every other test here stands on a synthetic tree, which is what keeps them
     independent of whether the developer has built the folders' venvs. That

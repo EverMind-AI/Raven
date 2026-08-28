@@ -51,8 +51,8 @@ fi
 [ ${#FOLDERS[@]} -gt 0 ] || { echo "no sub-agent folder found in $HERE" >&2; exit 1; }
 
 # The checkout is the one subdirectory that is a python project. Discovered
-# rather than named, because the four folders already spell it four ways and a
-# new folder is free to spell it a fifth.
+# rather than named, because the folders that ship already spell it a different
+# way each and a new folder is free to spell it its own.
 checkout_of() {
     local found=()
     for project in "$1"/*/pyproject.toml; do
@@ -141,7 +141,7 @@ not_built=()
 newly_built=()
 # What `uv sync` changed, from the lines it writes for each package it touched.
 # Read from a captured stream rather than left to scroll past: uv writes to
-# stderr, which the `> /dev/null` below never suppressed, so a four-folder run
+# stderr, which the `> /dev/null` below never suppressed, so a multi-folder run
 # already printed its chatter interleaved and attributed to nothing.
 delta_of() {
     awk '
