@@ -271,7 +271,7 @@ function Test-RavenSource([string]$Dir) {
 # a clone install has no TUI and no page. Both must exist before first run.
 function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath) {
     $needTui = -not (Test-Path (Join-Path $ScriptDir "ui-tui\dist\entry.js"))
-    $needPage = -not (Test-Path (Join-Path $ScriptDir "ui\dist\index.html"))
+    $needPage = -not (Test-Path (Join-Path $ScriptDir "ui-web\dist\index.html"))
     if (-not ($needTui -or $needPage)) { return }
 
     # One probe for both builds. npm ships alongside node, but verify it
@@ -306,14 +306,14 @@ function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath)
     }
 
     if ($needPage) {
-        Write-Info "Building served page (ui/dist/index.html)..."
+        Write-Info "Building served page (ui-web/dist/index.html)..."
         # Warned rather than propagated, unlike the bundle above: bare `raven`
         # opens the TUI, so a machine that cannot build the page still gets the
         # surface this script exists to deliver. Each exit code is read back
         # because $ErrorActionPreference does not cover native commands, so a
         # failed npm ci would otherwise run on into the page assembler.
         try {
-            Push-Location (Join-Path $ScriptDir "ui")
+            Push-Location (Join-Path $ScriptDir "ui-web")
             try {
                 & $npm.Source ci
                 if ($LASTEXITCODE -ne 0) { throw "npm ci exited $LASTEXITCODE" }
@@ -322,13 +322,13 @@ function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath)
             } finally {
                 Pop-Location
             }
-            # Vite emits ui/.modern/modern.iife.js, then ui/build.py inlines it
+            # Vite emits ui-web/.modern/modern.iife.js, then ui-web/build.py inlines
             # with the page sources and the shared i18n catalogue. Python comes
             # from uv, already a hard requirement here, rather than from a bare
             # `python` -- on Windows that name is usually the Microsoft Store
             # stub, which opens the Store instead of running the script.
-            & $UvPath run --no-project python (Join-Path $ScriptDir "ui\build.py")
-            if ($LASTEXITCODE -ne 0) { throw "ui/build.py exited $LASTEXITCODE" }
+            & $UvPath run --no-project python (Join-Path $ScriptDir "ui-web\build.py")
+            if ($LASTEXITCODE -ne 0) { throw "ui-web/build.py exited $LASTEXITCODE" }
         } catch {
             Write-Warn "The served page did not build ($_); raven web will not start"
         }

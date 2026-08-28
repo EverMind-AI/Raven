@@ -44,16 +44,16 @@ jobs:
           npm run build
           test -f dist/entry.js  # fail fast if the bundle didn't land
 
-      # 2b) Build the served page into ui/dist. `ui/dist` is gitignored, so a
+      # 2b) Build the served page into ui-web/dist. `ui-web/dist` is gitignored, so a
       #     fresh CI checkout has none and the wheel hook's else-branch fires
       #     its warning -- every tagged release would answer `/` with
       #     "No front end built here", which is the state this MR exists to end.
       - name: Build the served page
         run: |
-          npm ci --prefix ui
-          npm run --prefix ui build
-          python ui/build.py
-          test -f ui/dist/index.html  # fail fast if the page didn't land
+          npm ci --prefix ui-web
+          npm run --prefix ui-web build
+          python ui-web/build.py
+          test -f ui-web/dist/index.html  # fail fast if the page didn't land
 
       # 3) Build the wheel directly from the checkout so the freshly generated
       #    ui-tui/dist/entry.js is visible to Hatch's conditional build hook.

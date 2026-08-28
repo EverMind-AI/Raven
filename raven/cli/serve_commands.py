@@ -26,12 +26,12 @@ gateway cannot start at all; the page then reaches those adapters over
 is still there, still looks live, and every send fails. `raven web --stop` is how
 you end it, and `--foreground` is the old behaviour for someone debugging.
 
-A page is served from ``<repo>/ui/dist`` or the wheel's packaged copy when one is
+A page is served from ``<repo>/ui-web/dist`` or the wheel's packaged copy when one is
 present; with none built, ``/`` answers with a short notice and the WebSocket
 endpoint stays live. `web` refuses instead, because the page is the whole point
 of it.
 
-``ui/`` is one front end, not two: the desktop window is a browser view of the
+``ui-web/`` is one front end, not two: the desktop window is a browser view of the
 same page a browser gets, so nothing here distinguishes them and nothing should.
 """
 
@@ -48,7 +48,11 @@ import typer
 
 from raven.utils import asyncio_runner as bounded_asyncio
 
-_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui"
+# The repository's source tree, and the copy inside an installed wheel. The two
+# names differ on purpose: `ui-web/` is what this repository calls the page's
+# sources, `raven/ui/dist` is the installed layout the build hook writes and
+# `_install_guard` reads back out of the RECORD.
+_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui-web"
 _PACKAGED_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 SERVED_PAGE_SURFACE = "page"
@@ -1001,7 +1005,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         return
 
     if resolve_ui_dist() is None:
-        typer.echo("No page is built. Run `python ui/build.py`, or install raven from a release wheel.")
+        typer.echo("No page is built. Run `python ui-web/build.py`, or install raven from a release wheel.")
         raise typer.Exit(1)
 
     if supervise:

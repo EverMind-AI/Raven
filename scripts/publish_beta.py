@@ -139,11 +139,11 @@ def _build(root: Path, version: str) -> tuple[Path, Path]:
         raise PublishError("ui-tui/dist/entry.js did not land")
 
     print("Building the served page...", flush=True)
-    _run(["npm", "ci", "--prefix", "ui"], cwd=root)
-    _run(["npm", "run", "--prefix", "ui", "build"], cwd=root)
-    _run([sys.executable, "ui/build.py"], cwd=root)
-    if not (root / "ui/dist/index.html").is_file():
-        raise PublishError("ui/dist/index.html did not land")
+    _run(["npm", "ci", "--prefix", "ui-web"], cwd=root)
+    _run(["npm", "run", "--prefix", "ui-web", "build"], cwd=root)
+    _run([sys.executable, "ui-web/build.py"], cwd=root)
+    if not (root / "ui-web/dist/index.html").is_file():
+        raise PublishError("ui-web/dist/index.html did not land")
 
     pyproject = root / "pyproject.toml"
     original = pyproject.read_text(encoding="utf-8")
