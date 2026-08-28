@@ -99,6 +99,37 @@ def test_save_writes_one_file_and_nothing_else(tmp_path):
     assert entries == ["playbook.md"]
 
 
+def test_failed_atomic_overwrite_keeps_the_previous_file(tmp_path, monkeypatch):
+    import raven.playbook.store as store_module
+
+    store = _store(tmp_path)
+    path = store.save(_spec("original"))
+    before = path.read_bytes()
+
+    def _fail_replace(_source, _target):
+        raise OSError("simulated publish failure")
+
+    monkeypatch.setattr(store_module.os, "replace", _fail_replace)
+    with pytest.raises(OSError, match="publish failure"):
+        store.save(_spec("replacement"), overwrite=True)
+
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in path.parent.iterdir()) == ["playbook.md"]
+
+
+def test_atomic_save_does_not_require_fchmod(tmp_path, monkeypatch):
+    """Native Windows on Python 3.12 has chmod but no os.fchmod."""
+    import raven.playbook.store as store_module
+
+    monkeypatch.delattr(store_module.os, "fchmod", raising=False)
+    store = _store(tmp_path)
+
+    path = store.save(_spec("portable publication"))
+
+    assert path.is_file()
+    assert store.load("competitor-scan").description == "portable publication"
+
+
 def test_notes_render_into_the_body_not_the_block(tmp_path):
     store = _store(tmp_path)
     store.save(_spec("with notes"), notes=["Open question: what is the scan for?", "Assumption: weekly cadence"])
@@ -268,6 +299,18 @@ def test_existing_name_is_reported_before_replacement_validation(tmp_path):
 
     with pytest.raises(PlaybookExistsError):
         store.save(invalid)
+
+
+def test_atomic_publish_still_refuses_a_concurrent_name_collision(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    monkeypatch.setattr(store, "origin_of", lambda _name: None)
+    store.save(_spec("first writer"))
+
+    with pytest.raises(PlaybookExistsError):
+        store.save(_spec("second writer"))
+
+    assert store.load("competitor-scan").description == "first writer"
+    assert sorted(p.name for p in (tmp_path / "competitor-scan").iterdir()) == ["playbook.md"]
 
 
 def test_generated_playbook_lands_in_the_user_layer(tmp_path):

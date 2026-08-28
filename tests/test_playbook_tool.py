@@ -9,6 +9,7 @@ give a model: the listing it chooses from, the enum that bounds the choice, and
 import pytest
 
 from raven.agent.tools.load_playbook import LoadPlaybookTool
+from raven.agent.tools.registry import ToolRegistry
 from raven.playbook import (
     NodeSpec,
     ParamSpec,
@@ -92,6 +93,44 @@ def test_name_is_constrained_to_installed_playbooks(runtime):
     assert schema["required"] == ["name"]
 
 
+def test_tool_schema_uses_one_consistent_view_then_refreshes_next_render(runtime):
+    loader = LoadPlaybookTool(runtime)
+    loader.set_turn_message("weekly feedback")
+
+    assert "weekly-feedback" in loader.description
+
+    runtime._store.save(_spec(name="monthly-feedback"))
+    assert loader.parameters["properties"]["name"]["enum"] == ["weekly-feedback"]
+
+    next_schema = loader.to_schema()
+    assert next_schema["function"]["parameters"]["properties"]["name"]["enum"] == [
+        "monthly-feedback",
+        "weekly-feedback",
+    ]
+
+
+def test_tool_schema_refreshes_after_adoption_in_the_same_turn(runtime):
+    loader = LoadPlaybookTool(runtime)
+    registry = ToolRegistry()
+    registry.register(loader)
+    loader.set_turn_message("weekly feedback")
+
+    first = registry.get_definitions()[0]
+    assert first["function"]["parameters"]["properties"]["name"]["enum"] == ["weekly-feedback"]
+
+    runtime._store.save(_spec(name="monthly-feedback"))
+    assert runtime.adopt("monthly-feedback") is True
+
+    # The next iteration renders a new definition, and direct validation also
+    # observes the runtime generation instead of retaining the old enum.
+    second = registry.get_definitions()[0]
+    assert second["function"]["parameters"]["properties"]["name"]["enum"] == [
+        "monthly-feedback",
+        "weekly-feedback",
+    ]
+    assert loader.validate_params({"name": "monthly-feedback"}) == []
+
+
 async def test_running_by_name_dispatches_the_same_graph(tmp_path):
     """The point of the tool: it joins the passive path at the executor, so a
     named run produces the dispatch a matched run would."""
@@ -145,20 +184,14 @@ def _create_tool(tmp_path, generator=None, *, adopt_ok=True):
     from raven.agent.tools.create_playbook import CreatePlaybookTool
 
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
-    switched: list[tuple[str, bool]] = []
     adopted: list[str] = []
 
     def _adopt(name: str) -> bool:
         adopted.append(name)
         return adopt_ok
 
-    tool = CreatePlaybookTool(
-        generator or FakeGenerator(),
-        store,
-        lambda n, d: switched.append((n, d)) or True,
-        adopt=_adopt,
-    )
-    return tool, store, switched, adopted
+    tool = CreatePlaybookTool(generator or FakeGenerator(), store, adopt=_adopt)
+    return tool, store, adopted
 
 
 def test_switching_one_off_takes_effect_without_a_restart(tmp_path):
@@ -352,6 +385,26 @@ def test_a_refusal_is_reconsidered_when_the_agent_table_changes(tmp_path):
     assert runtime.names() == ["needs-hermes"]
 
 
+def test_invalid_edit_discards_a_refused_cached_spec(tmp_path):
+    table = ["Raven"]
+    runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    store.save(
+        _spec(
+            name="needs-hermes",
+            nodes=[NodeSpec(id="pull", subagent="hermes", node_summary="pull it", prompt_template="do it")],
+        )
+    )
+    assert runtime.names() == []
+
+    (tmp_path / "needs-hermes" / "playbook.md").write_text("not a playbook", encoding="utf-8")
+    assert runtime.names() == []
+    assert "needs-hermes" not in runtime._refused
+
+    table.append("hermes")
+    assert runtime.names() == []
+
+
 def test_reconsidering_a_refusal_costs_no_parse(tmp_path):
     """Which is what makes reconsidering every refresh affordable: the spec is
     already in hand, and only the table it is checked against changed."""
@@ -423,6 +476,29 @@ def test_adopt_does_not_wait_for_the_next_read(tmp_path):
     assert "monthly-scan" in runtime._specs
 
 
+def test_adopt_does_not_hide_other_changed_playbooks(tmp_path):
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
+    edited = _spec(name="weekly-scan").model_copy(
+        update={"description": "Rewritten before another playbook was adopted."}
+    )
+    store.save(edited, overwrite=True)
+    store.save(_spec(name="monthly-scan"))
+
+    assert runtime.adopt("monthly-scan") is True
+    assert "Rewritten before" in dict(runtime.listing())["weekly-scan"]
+
+
+def test_failed_adopt_drops_an_old_loaded_copy(tmp_path):
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")])
+    path = tmp_path / "weekly-scan" / "playbook.md"
+    path.write_text("not a playbook", encoding="utf-8")
+
+    assert runtime.adopt("weekly-scan") is False
+    assert "weekly-scan" not in runtime._specs
+    assert runtime.names() == []
+
+
 def test_adopting_a_name_that_was_never_written_is_reported_not_raised(tmp_path):
     """The creating tool turns this into a reply that says which half happened;
     raising here would fail the turn that produced the file instead."""
@@ -437,12 +513,11 @@ async def test_create_lands_in_the_user_layer_and_is_usable_at_once(tmp_path):
     and behaved as a dead end: the only way off the list was a CLI command, and
     the runtime had read the list once at start, so even that did nothing until
     the next process. Disabling stays available; it is not the starting state."""
-    tool, store, switched, adopted = _create_tool(tmp_path)
+    tool, store, adopted = _create_tool(tmp_path)
 
     out = await tool.execute("weekly-scan", "every monday pull feedback then summarize")
 
     assert store.origin_of("weekly-scan") == "user"
-    assert switched == []
     assert adopted == ["weekly-scan"]
     assert "available now" in out
     assert "disabled" not in out
@@ -452,11 +527,29 @@ async def test_create_lands_in_the_user_layer_and_is_usable_at_once(tmp_path):
     assert store.load("weekly-scan").name == "weekly-scan"
 
 
+async def test_created_playbook_is_visible_and_loadable_in_the_same_process(tmp_path):
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+
+    runtime = _runtime(tmp_path, [])
+    creator = CreatePlaybookTool(FakeGenerator(), runtime._store, adopt=runtime.adopt)
+    loader = LoadPlaybookTool(runtime)
+
+    out = await creator.execute("weekly-scan", "every monday pull feedback then summarize")
+    assert "available now" in out
+
+    loader.set_turn_message("run the weekly scan")
+    assert "weekly-scan" in loader.description
+    assert loader.parameters["properties"]["name"]["enum"] == ["weekly-scan"]
+
+    load_out = await loader.execute("weekly-scan", {})
+    assert "which week should be analyzed?" in load_out
+
+
 async def test_a_playbook_that_cannot_be_loaded_back_says_which_half_happened(tmp_path):
     """ "Created" on its own would send the caller to load a name that does not
     resolve, and the next thing it reads is the tool saying that name is not in
     the library -- two rounds to learn one thing."""
-    tool, store, _switched, adopted = _create_tool(tmp_path, adopt_ok=False)
+    tool, store, adopted = _create_tool(tmp_path, adopt_ok=False)
 
     out = await tool.execute("weekly-scan", "every monday pull feedback then summarize")
 
@@ -470,18 +563,35 @@ async def test_a_playbook_that_cannot_be_loaded_back_says_which_half_happened(tm
 
 async def test_create_refuses_an_existing_name_without_generating(tmp_path):
     generator = FakeGenerator()
-    tool, store, switched, _adopted = _create_tool(tmp_path, generator)
+    tool, store, _adopted = _create_tool(tmp_path, generator)
     store.save(_spec(name="weekly-scan"))
 
     out = await tool.execute("weekly-scan", "whatever")
 
     assert out.startswith("Error")
     assert generator.calls == []
-    assert switched == []
+
+
+async def test_create_reports_a_name_written_while_generation_was_running(tmp_path):
+    tool, store, adopted = _create_tool(tmp_path)
+    generate = tool._generator.generate
+
+    async def _generate_after_another_writer(workflow, skills=None):
+        generated = await generate(workflow, skills)
+        store.save(_spec(name="weekly-scan", description="written by the winning request"))
+        return generated
+
+    tool._generator.generate = _generate_after_another_writer
+    out = await tool.execute("weekly-scan", "whatever")
+
+    assert out.startswith("Error")
+    assert "another request" in out
+    assert adopted == []
+    assert store.load("weekly-scan").description == "written by the winning request"
 
 
 async def test_create_degrades_generation_failure_to_an_error_reply(tmp_path):
-    tool, store, switched, _adopted = _create_tool(tmp_path, FakeGenerator(fail=True))
+    tool, store, _adopted = _create_tool(tmp_path, FakeGenerator(fail=True))
 
     out = await tool.execute("weekly-scan", "whatever")
 
@@ -489,17 +599,15 @@ async def test_create_degrades_generation_failure_to_an_error_reply(tmp_path):
     assert "Do not write directly" in out
     assert "official validation" in out
     assert store.origin_of("weekly-scan") is None
-    assert switched == []
 
 
 async def test_create_refuses_a_traversal_name_before_generating(tmp_path):
     generator = FakeGenerator()
-    tool, store, switched, _adopted = _create_tool(tmp_path, generator)
+    tool, store, _adopted = _create_tool(tmp_path, generator)
 
     for bad in ("../escape", "/tmp/absolute", "UPPER"):
         out = await tool.execute(bad, "whatever")
         assert out.startswith("Error"), bad
 
     assert generator.calls == []
-    assert switched == []
     assert list(tmp_path.rglob("playbook.md")) == []

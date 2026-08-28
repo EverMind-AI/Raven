@@ -4,10 +4,7 @@ The conversational half of the creation story (the other is ``raven playbook
 create``): when the user asks to save a workflow they just described or ran,
 the agent hands the description to the same generator the CLI uses, and the
 product lands in the same place under the same rules — the user layer of the
-library, on the disabled list until the user reviews and enables it. Disabled
-means it is not offered to the model -- so it cannot be picked up by accident --
-while ``raven playbook run`` still resolves it, which is how the user tries it
-before switching it on.
+library, enabled and handed to the live runtime as soon as it passes validation.
 
 The tool takes a description, never a spec: generation, validation and repair
 stay inside :class:`PlaybookGenerator`, so a model cannot write an arbitrary
@@ -34,17 +31,11 @@ class CreatePlaybookTool(Tool):
         self,
         generator: "PlaybookGenerator",
         store: "PlaybookStore",
-        set_disabled: Callable[[str, bool], bool],
         *,
         adopt: Callable[[str], bool] | None = None,
     ) -> None:
         self._generator = generator
         self._store = store
-        #: Kept although creation no longer switches anything off: the tool holds
-        #: the only write path that could need to, and a caller that wires one
-        #: half of the pair and not the other is the shape this signature exists
-        #: to refuse.
-        self._set_disabled = set_disabled
         #: Hands the written playbook to the live library. Optional because the
         #: CLI's creation entry has no runtime to hand it to -- the next process
         #: reads the file anyway.
@@ -97,7 +88,7 @@ class CreatePlaybookTool(Tool):
     async def execute(self, name: str, workflow: str, skills: list[str] | None = None, **kwargs: Any) -> str:
         import re
 
-        from raven.playbook import PlaybookGenerationError
+        from raven.playbook import PlaybookExistsError, PlaybookGenerationError
         from raven.playbook.types import NAME_RE
 
         # Refused before anything else: the schema's ``pattern`` is not
@@ -121,7 +112,13 @@ class CreatePlaybookTool(Tool):
                 "library or report success; a Playbook is usable only after its official validation passes."
             )
         spec = generated.spec.model_copy(update={"name": name})
-        path = self._store.save(spec, notes=generated.notes)
+        try:
+            path = self._store.save(spec, notes=generated.notes)
+        except PlaybookExistsError:
+            return (
+                f"Error: playbook {name!r} was created by another request while this one was generating. "
+                "The existing file was kept; review it or choose another name."
+            )
         # Enabled on arrival. It used to be written onto the deny list for the
         # user to review, which read as caution and behaved as a dead end: the
         # only way back off that list was a CLI command, and the runtime had read

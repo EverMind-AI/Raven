@@ -1390,16 +1390,13 @@ class AgentLoop:
         # Creation registers whenever the feature is on -- an empty library is
         # exactly when capturing the first workflow matters.
         from raven.agent.tools.create_playbook import CreatePlaybookTool
-        from raven.config.update import set_playbook_disabled
 
         self.tools.register(
             CreatePlaybookTool(
                 self._playbook_generator,
                 self._playbook_store,
-                set_playbook_disabled,
-                # So a playbook created mid conversation is loadable in the same
-                # conversation: the library is read once at construction, and
-                # nothing else would tell it that a file appeared.
+                # A new playbook is loadable in the same conversation without
+                # waiting for the next directory reconciliation.
                 adopt=self._playbooks.adopt,
             )
         )

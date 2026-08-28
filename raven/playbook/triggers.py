@@ -1,18 +1,15 @@
 """Offline trigger expansion -- build a playbook's L1 match vocabulary.
 
-Runs once per playbook at compile time (never per user message): one LLM
-call expands the description, the user's original wording and any author
-seeds into candidate keywords/phrases, then two automatic guards cut what
-would poison retrieval:
+Callers may expand a description, the user's original wording and author seeds
+through an LLM, then pass the candidates through the same guards used for
+model-generated and hand-written vocabularies:
 
 - **rule filter** -- too-short entries and bare function words;
-- **generic-word filter** -- the load-bearing one. A candidate is matched
-  against a corpus of unrelated everyday messages exactly the way L1 will
-  match it; hitting more than ``max_hit_rate`` of them means the word is
-  generic (an IDF argument), and a generic entry costs an LLM gate call on
-  every message that contains it, forever. Filtering is deliberately
-  strict: a dropped word shows up as an observable miss and can be
-  re-added, a generic word is an invisible standing cost.
+- **generic-word filter** -- when the caller supplies a representative negative
+  corpus, candidates matching too many unrelated messages are removed.
+
+Generic entries can crowd specific playbooks out of the top-K descriptions the
+main model sees. They never dispatch work or cause a per-message LLM call.
 
 Cross-playbook collision checking is a separate pure function over the
 whole library (`find_collisions`), run at load/compile time by the caller.
@@ -278,14 +275,8 @@ def guard_triggers(
         if dropped:
             logger.info("trigger guards dropped generic entries: {}", dropped)
     else:
-        # Said out loud because this is the load-bearing guard: the rule filter
-        # only catches short and stop-word entries, so without a corpus to
-        # measure hit rate against, a plausible-looking but generic word
-        # survives -- and a generic L1 entry costs a gate call on every message
-        # containing it, for as long as the playbook exists.
-        logger.warning(
-            "trigger guards for {!r} ran without negative samples: the generic-word filter "
-            "was skipped, so the vocabulary passed only the length and stop-word rules",
+        logger.debug(
+            "trigger guards for {!r}: optional generic-word filter skipped without negative samples",
             what or raw[:3],
         )
     if not keywords:
@@ -300,9 +291,9 @@ def guard_triggers(
 def find_collisions(library: dict[str, Triggers]) -> dict[str, list[str]]:
     """Map each vocabulary entry claimed by 2+ playbooks to the claimants.
 
-    A collision is a warning, not an error: overlapping candidates simply
-    go to the gate together. The report exists so a human can decide to
-    sharpen one side's vocabulary -- which is why a playbook must not be able
+    A collision is a warning, not an error: overlapping candidates can be shown
+    to the model together. The report lets a human sharpen one side's vocabulary,
+    which is why a playbook must not be able
     to collide with itself: ``["seo", "SEO"]`` normalizes to one entry claimed
     twice, and a report saying "a collides with a" gives the reader nothing to
     sharpen while burying the cross-playbook conflicts that do."""

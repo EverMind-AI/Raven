@@ -1,8 +1,8 @@
 """PlaybookRuntime — the library, and the one entry the model loads a playbook by.
 
-One object bundles the library (loaded once at construction), the retrieval index
-over its trigger vocabularies, and the executor. :meth:`load` is the only
-execution entry; :meth:`listing` and :meth:`names` are what the tool advertises.
+One object bundles the live on-disk library, its retrieval index and the executor.
+:meth:`load` is the execution entry; :meth:`listing` and :meth:`names` are what
+the tool advertises.
 
 **This used to be a funnel.** It scanned every user message, spent an LLM gate
 call on any message that mentioned a trigger word, and on a hit took over the
@@ -12,8 +12,8 @@ existed to patch it: the per-conversation memory of refusals, the "which of thes
 two did you mean" user prompt, and the gate itself. What remains is a library the
 model chooses from.
 
-Library reloads are by rebuilding the runtime (restart or a future hot-reload
-hook); nothing here watches the directory.
+Library reads reconcile content fingerprints with the directory, parsing only
+files whose bytes changed.
 """
 
 from __future__ import annotations
@@ -108,6 +108,10 @@ class PlaybookRuntime:
         #: one, an edit, a ``git pull`` -- visible without a restart, and what
         #: keeps the cost of asking down to reading rather than parsing.
         self._fingerprints: dict[str, bytes] = {}
+        #: Monotonic library generation. Model-facing tools use it to discard a
+        #: schema snapshot when adoption or reconciliation changes what can be
+        #: loaded during the same user turn.
+        self._revision = 0
         self._refresh()
         deny = self.disabled()
         offered = {pid: spec.triggers for pid, spec in self._specs.items() if pid not in deny}
@@ -172,6 +176,7 @@ class PlaybookRuntime:
             except Exception as exc:  # noqa: BLE001 - one bad file must not sink the library
                 logger.warning("Skipping unloadable playbook {!r}: {}", name, exc)
                 self._specs.pop(name, None)
+                self._refused.pop(name, None)
                 continue
             # Soundness, not completeness: a field the author left for the
             # caller to fill is what ``load_playbook`` asks for by name, and
@@ -248,29 +253,44 @@ class PlaybookRuntime:
         being rebuilt, so :meth:`listing` filters at the point of use.
         """
         self._index = TriggerIndex({pid: s.triggers for pid, s in self._specs.items()})
+        self._revision += 1
+
+    @property
+    def revision(self) -> int:
+        """Generation of the loaded library, for invalidating derived views."""
+        return self._revision
 
     def adopt(self, name: str) -> bool:
         """Take a playbook that was just written into the live library.
 
-        The library was read once at construction, so a playbook created mid
-        conversation was invisible until the process restarted -- including to
-        the tool whose whole job is to load it. Loading the one file that
-        changed rather than rescanning: the caller knows the name, and a rescan
-        would parse every other file to learn nothing.
+        Creation already knows which file changed, so it need not wait for the
+        next directory reconciliation. Loading that one file also avoids hashing
+        the rest of the library before the creating tool reports success.
 
         Returns False when the file cannot be read, which is reported by the
         caller rather than raised: a playbook that was written but cannot be
         parsed back is worth saying out loud, and is not a reason to fail the
         turn that wrote it.
         """
+        digest = self._store.fingerprint(name)
         try:
-            self._specs[name] = self._store.load(name)
+            spec = self._store.load(name)
         except Exception as exc:  # noqa: BLE001 - the caller reports it
             logger.warning("Playbook {!r} was written but could not be loaded back: {}", name, exc)
+            self._specs.pop(name, None)
+            self._refused.pop(name, None)
+            if digest is None:
+                self._fingerprints.pop(name, None)
+            else:
+                self._fingerprints[name] = digest
+            self._reindex()
             return False
-        # Recorded here too, so the next refresh sees a name it already holds at
-        # the digest it already read and does not report it as an arrival.
-        self._fingerprints = self._store.fingerprints()
+        self._specs[name] = spec
+        self._refused.pop(name, None)
+        if digest is None:
+            self._fingerprints.pop(name, None)
+        else:
+            self._fingerprints[name] = digest
         self._reindex()
         logger.info("Playbook {!r} adopted into the live library", name)
         return True
@@ -304,6 +324,23 @@ class PlaybookRuntime:
         self._refresh()
         return sorted(set(self._specs) - self.disabled())
 
+    def library_view(self, message: str = "") -> tuple[list[tuple[str, str]], list[str]]:
+        """One reconciled listing and full name set from the same directory view."""
+        self._refresh()
+        deny = self.disabled()
+        offered = {pid: spec for pid, spec in self._specs.items() if pid not in deny}
+        chosen = select_playbooks(
+            offered,
+            message,
+            # The index this object already built at load: it normalized the whole
+            # vocabulary once, which the ranking would otherwise redo per keyword
+            # per playbook per turn.
+            index=self._index,
+            sizes=self._router,
+        )
+        listing = [(pid, self._detail(offered[pid])) for pid in chosen]
+        return listing, sorted(offered)
+
     def listing(self, message: str = "") -> list[tuple[str, str]]:
         """``(name, detail)`` for the playbooks worth describing in full this turn.
 
@@ -314,18 +351,7 @@ class PlaybookRuntime:
         Without the parameter table it can only guess key names, and a guessed key
         is dropped silently and comes back as the same question.
         """
-        self._refresh()
-        deny = self.disabled()
-        chosen = select_playbooks(
-            {pid: spec for pid, spec in self._specs.items() if pid not in deny},
-            message,
-            # The index this object already built at load: it normalized the whole
-            # vocabulary once, which is the work the ranking would otherwise redo
-            # per keyword per playbook per turn.
-            index=self._index,
-            sizes=self._router,
-        )
-        return [(pid, self._detail(self._specs[pid])) for pid in chosen]
+        return self.library_view(message)[0]
 
     def _detail(self, spec: PlaybookSpec) -> str:
         """One playbook as the tool description renders it."""

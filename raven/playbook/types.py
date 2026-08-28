@@ -75,8 +75,8 @@ class CamelBase(BaseModel):
 
 
 class Triggers(CamelBase):
-    """L1 vocabulary: normalized substring matching; words and phrases share
-    one list. A nomination is free — the LLM gate decides."""
+    """Retrieval vocabulary: normalized substring matching; words and phrases
+    share one list and affect visibility, never automatic execution."""
 
     keywords: list[str] = Field(min_length=1)
 
@@ -84,9 +84,9 @@ class Triggers(CamelBase):
 class ParamSpec(CamelBase):
     """One runtime input, keyed by its name in ``PlaybookSpec.params``.
 
-    ``description`` is required because it triple-serves: the gate's
-    extraction target, the missing-param follow-up wording, and the
-    compile-time doc."""
+    ``description`` is required because it guides the model's extraction,
+    supplies the missing-param follow-up wording and documents the stored
+    procedure."""
 
     type: Literal["string", "integer", "number", "boolean", "enum", "path"] = "string"
     required: bool = False
