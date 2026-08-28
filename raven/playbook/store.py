@@ -35,7 +35,7 @@ from loguru import logger
 
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook.types import NAME_RE, PlaybookSpec
-from raven.playbook.validate import validate_structure
+from raven.playbook.validate import unusable_mcp_servers, validate_structure
 
 #: Playbooks that ship with the package. Kept next to the code so the
 #: package-data glob picks the directories up; may not exist in a source
@@ -211,8 +211,31 @@ class PlaybookStore:
         if data["name"] != name:
             raise ValueError(f"playbook {name!r}: frontmatter name {data['name']!r} != directory name")
         spec = PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
+        spec = _drop_unusable_mcp_servers(spec)
         _require_valid_structure(spec)
         return spec
+
+
+def _drop_unusable_mcp_servers(spec: PlaybookSpec) -> PlaybookSpec:
+    """Load a playbook without the server definitions it cannot honour.
+
+    ``mcpServers`` is an optional section on top of a playbook that otherwise
+    runs, so a definition written wrong has to cost that server and nothing else.
+    Refused instead, it reaches the caller as a load error, and the runtime
+    answers a load error by dropping the playbook out of the library -- a saved
+    procedure stops existing because an optional section had a typo in it.
+
+    Logged rather than silent: the run that follows will resolve those names to
+    ``not_configured`` and say so in its own notice, but the reason lives here
+    and nowhere else.
+    """
+    unusable = unusable_mcp_servers(spec)
+    if not unusable:
+        return spec
+    for name, why in sorted(unusable.items()):
+        logger.warning("playbook {}: dropping mcpServers.{} -- {}", spec.name, name, why)
+    kept = {name: cfg for name, cfg in (spec.mcp_servers or {}).items() if name not in unusable}
+    return spec.model_copy(update={"mcp_servers": kept})
 
 
 def _require_valid_structure(spec: PlaybookSpec) -> None:

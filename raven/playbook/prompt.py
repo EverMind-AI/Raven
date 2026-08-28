@@ -130,6 +130,39 @@ value is missing, so phrase it as a directly askable question. A param with
 a default is never asked for. Templates reference values as
 ${params.<key>}. Anything fixable at generation time must not be a param.
 
+`type: secret` is for a credential the run must be given and the playbook
+must not carry. A secret may be referenced **only** from an `mcpServers`
+entry's `env` or `headers` value, never from a `promptTemplate` and never
+from `prompts` -- a secret in a work order travels to the sub-agent and into
+the transcript. A secret may not have a default. Use it when a server this
+playbook ships needs a token, and leave it out otherwise -- which includes
+every prompt-mode playbook, since those cannot ship a server at all.
+
+# mcpServers (optional, dag mode only)
+
+Name a server here when the playbook needs one that a machine running it may
+not already have -- the playbook is the unit that travels, and a bare `mcps`
+name only resolves against whatever that host happens to have configured.
+**A prompt-mode playbook may not carry this section**: its graph is composed by
+the caller after the playbook is read, and the definitions cannot be handed
+across that boundary. A playbook that has to ship a server is a dag playbook.
+Each entry is a server definition: `command`/`args` for stdio, `url` for
+http or sse, with credentials referenced rather than written in:
+
+    params:
+      PG_PASSWORD: {type: secret, description: Postgres password for ...}
+    mcpServers:
+      local-pg:
+        command: pg-mcp
+        args: ["--db", "analytics"]
+        env: {PGPASSWORD: "{{ params.PG_PASSWORD }}"}
+
+A node's `mcps` then names it like any other. Lookup is playbook-first, host
+second, so a name defined here shadows a host server of the same name -- and a
+shadowed name is delivered by this playbook's definition only, never by the
+host's connection to its own server of that name. Omit this section when every
+server the run needs is one the host already has.
+
 # confirmation
 
 `confirm` is graph-level. Set it to true when any step can make an
@@ -152,7 +185,9 @@ otherwise set it to false. Never put `confirm` on an individual node.
   this step injects. Nodes using separate sessions may differ, but when nodes
   share an `instance`, only the node opening that session may set
   `skills`/`mcps`; continuation nodes must omit both fields. Skills may only
-  reference names from the candidate list.
+  reference names from the candidate list. Each `mcps` name must be one the
+  host has configured (listed below) or one this playbook defines in
+  `mcpServers`; a name from neither is not delivered.
 - `promptTemplate` is the step's work order: state the criteria, the
   prohibitions and the hard format constraints so the step's job is
   unambiguous. Reference upstream output with {{ <upstreamId>.output }}

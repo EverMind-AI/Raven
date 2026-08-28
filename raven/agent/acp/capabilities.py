@@ -37,7 +37,7 @@ from loguru import logger
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
 from raven.agent.acp.permissions import auto_approver
-from raven.agent.acp.protocol import STEER_CAPABILITY, AcpError, AcpRemoteError
+from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
 
 _FILENAME = "subagent_acp_capabilities.json"
 
@@ -99,6 +99,18 @@ class CapabilitySnapshot:
     """Whether the agent serves raven's ``_raven/session/steer`` extension,
     read from ``agentCapabilities._meta``. Decides whether text typed at an
     instance mid-turn can be merged into that turn or has to wait for it."""
+    mcp_http: bool = False
+    mcp_sse: bool = False
+    session_mcp: bool = False
+    """Whether the agent promises to honour ``mcpServers`` per session, read from
+    ``agentCapabilities._meta``.
+
+    Not the same question as ``mcp_http`` / ``mcp_sse``, which name transports.
+    This one is about the field itself: a raven build that refuses it answers
+    ``session/new`` with ``-32602`` while reporting exactly the ``mcpCapabilities``
+    object a build that honours it reports, so no spec field separates them. Read
+    only where that refusal is possible -- see ``AcpAgentBackend._session_mcp_refused``,
+    which is also why a third-party agent leaving this false changes nothing."""
     prompt_modalities: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
     available_modes: tuple[AcpMode, ...] = ()
@@ -136,6 +148,9 @@ class CapabilitySnapshot:
             "canFork": self.can_fork,
             "canLoad": self.can_load,
             "canSteer": self.can_steer,
+            "mcpHttp": self.mcp_http,
+            "mcpSse": self.mcp_sse,
+            "sessionMcp": self.session_mcp,
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
             "availableModes": [
@@ -193,6 +208,9 @@ class CapabilitySnapshot:
             can_fork=bool(row.get("canFork")),
             can_load=bool(row.get("canLoad")),
             can_steer=bool(row.get("canSteer")),
+            mcp_http=bool(row.get("mcpHttp")),
+            mcp_sse=bool(row.get("mcpSse")),
+            session_mcp=bool(row.get("sessionMcp")),
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
             available_modes=_modes("availableModes"),
@@ -308,6 +326,9 @@ class _Handshake:
     can_load: bool = False
     can_delete: bool = False
     can_steer: bool = False
+    mcp_http: bool = False
+    mcp_sse: bool = False
+    session_mcp: bool = False
     prompt_modalities: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
@@ -324,6 +345,7 @@ def _read_initialize(result: Any) -> _Handshake:
     caps = _dict(payload.get("agentCapabilities"))
     session_caps = _dict(caps.get("sessionCapabilities"))
     prompt_caps = _dict(caps.get("promptCapabilities"))
+    mcp_caps = _dict(caps.get("mcpCapabilities"))
     info = _dict(payload.get("agentInfo"))
     auth = payload.get("authMethods")
     auth_ids = (
@@ -346,6 +368,11 @@ def _read_initialize(result: Any) -> _Handshake:
         # The one extension raven itself serves, announced in the schema's
         # extension carrier; a client that did not read it must not call it.
         can_steer=STEER_CAPABILITY in _dict(caps.get("_meta")),
+        mcp_http=bool(mcp_caps.get("http")),
+        mcp_sse=bool(mcp_caps.get("sse")),
+        # The same carrier as the steer flag, and read the same way: presence,
+        # not truthiness, because the schema spells "supported" as ``{}``.
+        session_mcp=SESSION_MCP_CAPABILITY in _dict(caps.get("_meta")),
         prompt_modalities=modalities,
         auth_methods=auth_ids,
     )
@@ -485,6 +512,9 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             can_fork=hs.can_fork,
             can_load=hs.can_load,
             can_steer=hs.can_steer,
+            mcp_http=hs.mcp_http,
+            mcp_sse=hs.mcp_sse,
+            session_mcp=hs.session_mcp,
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
             available_modes=hs.available_modes,

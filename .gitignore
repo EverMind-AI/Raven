@@ -96,7 +96,7 @@ demos/skill_retrieval/sessions/
 demos/skill_retrieval/user_memory/
 demos/skill_retrieval/agent_memory/
 
-# Scratch workspace for local sub-agent / DAG testing.
+# Scratch workspace for local sub-agent / DAG testing (see ui-webui chat workspace picker).
 /tmp/
 .omo/*
 .ruff_cache/

@@ -4,7 +4,8 @@ A chunker never merges across a section boundary -- that is what keeps the
 structure a parser found (a heading, a page, a slide) from being averaged away
 before anything is retrieved.
 
-Adopted from AgentScope's own implementation (Apache-2.0; see NOTICES.md).
+Adopted from the AgentScope tree vendored under ``ui-webui/service/agentscope``
+(Apache-2.0; see NOTICES.md).
 """
 
 from __future__ import annotations

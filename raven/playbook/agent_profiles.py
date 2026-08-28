@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from raven.agent.subagent import dag_capabilities
 from raven.agent.subagent.prompt_capabilities import check_path_placeholders
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
@@ -35,9 +34,10 @@ class AgentProfileSource(Protocol):
 def agent_profiles_from_registry(registry: "AgentRegistry") -> dict[str, PlaybookAgentProfile]:
     """Project enabled registry rows into the model-safe Playbook view.
 
-    MCP injection is advertised only when both the agent and the DAG runtime
-    support it. Registry transport/configuration fields deliberately do not
-    cross this boundary.
+    MCP injection is advertised per agent: the runtime-wide gate this used to
+    also require is gone, because the runtime now delivers a node's ``mcps``.
+    Registry transport/configuration fields deliberately do not cross this
+    boundary.
     """
     return {
         row.name: PlaybookAgentProfile(
@@ -45,7 +45,7 @@ def agent_profiles_from_registry(registry: "AgentRegistry") -> dict[str, Playboo
             stateful=row.caps.stateful,
             reads_local_files=row.caps.reads_local_files,
             injectable_skills=row.injectable.skills,
-            injectable_mcps=row.injectable.mcps and dag_capabilities.MCPS_IMPLEMENTED,
+            injectable_mcps=row.injectable.mcps,
         )
         for row in registry.enabled()
     }

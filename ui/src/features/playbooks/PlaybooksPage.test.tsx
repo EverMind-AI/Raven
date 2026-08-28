@@ -672,7 +672,7 @@ describe('the graph-level fields', () => {
 
     fireEvent.click(tab('gui.pb.tab_contract'))
     expect(tab('gui.pb.tab_contract').getAttribute('aria-selected')).toBe('true')
-    expect(document.querySelectorAll('.pbsec').length).toBe(2)
+    expect(document.querySelectorAll('.pbsec').length).toBe(3)
     /* Hidden, not unmounted: the board still holds whatever the reader panned
        and zoomed it to, and coming back must not reset that. */
     expect(document.querySelector('.pbwork.gone')).not.toBeNull()
@@ -760,15 +760,87 @@ describe('the graph-level fields', () => {
     expect(document.querySelector('.pbtbl')).toBeNull()
   })
 
+  it('shows what a carried server actually launches, not just its name', async () => {
+    /* A node's `mcps` entry is only a name, and the same name may be a server
+       this machine configures -- a different process. Without the definition a
+       reader cannot tell which one a step will reach. */
+    await open({
+      nodes: [node({ id: 'a', mcps: ['local-pg', 'host-only'] })],
+      mcp_servers: {
+        'local-pg': {
+          command: 'pg-mcp',
+          args: ['--db', 'analytics'],
+          url: '',
+          env: { PGPASSWORD: '{{ params.PG_PASSWORD }}' },
+          headers: {}
+        }
+      }
+    })
+    fireEvent.click(tab('gui.pb.tab_contract'))
+
+    const text = document.body.textContent || ''
+    expect(text).toContain('pg-mcp --db analytics')
+    /* The reference, never a value: the run supplies the credential and the
+       file only names it, so this is what the page has to be able to show. */
+    expect(text).toContain('PGPASSWORD={{ params.PG_PASSWORD }}')
+  })
+
+  it('says what a carried server actually is, not a guess from its shape', async () => {
+    /* A disabled SSE server carrying OAuth used to render as a launchable
+       generic http one -- every field a reader would use to decide whether to
+       trust the step, wrong. */
+    await open({
+      nodes: [node({ id: 'a', mcps: ['quiet'] })],
+      mcp_servers: {
+        quiet: {
+          type: 'sse',
+          command: '',
+          args: [],
+          url: 'https://svc.test/sse',
+          env: {},
+          headers: {},
+          enabled: false,
+          auth: 'oauth',
+          tool_timeout: 7,
+          has_oauth_config: true
+        }
+      }
+    })
+    fireEvent.click(tab('gui.pb.tab_contract'))
+
+    const text = document.body.textContent || ''
+    expect(text).toContain('sse')
+    expect(text).toContain('oauth')
+    expect(text).toContain('gui.pb.server_off')
+    expect(text).toContain('gui.pb.own_oauth')
+    expect(text).toContain('gui.pb.tool_timeout {"n":7}')
+  })
+
+  it('marks which of a step mcps the playbook ships', async () => {
+    await open({
+      nodes: [node({ id: 'a', mcps: ['local-pg', 'host-only'] })],
+      mcp_servers: {
+        'local-pg': { command: 'pg-mcp', args: [], url: '', env: {}, headers: {} }
+      }
+    })
+    fireEvent.click(document.querySelector('.pbnode') as Element)
+
+    const chips = [...document.querySelectorAll('.pbkv .tag')].map(c => [c.textContent, c.className])
+    expect(chips).toContainEqual(['local-pg', 'tag own'])
+    expect(chips).toContainEqual(['host-only', 'tag'])
+  })
+
   it('carries description under the title and nowhere else', async () => {
     await open()
     expect(document.querySelector('.pbsum')?.textContent).toBe('what it is for')
     fireEvent.click(tab('gui.pb.tab_contract'))
-    /* Two sections, not three: description is the line above, and repeating it
-       under a heading of its own said the same thing twice. */
+    /* Keywords, inputs, carried servers -- and no section for description: it is
+       the line above, and repeating it under a heading of its own said the same
+       thing twice. */
     expect([...document.querySelectorAll('.pbsec h2')].map(h => h.textContent)).toEqual([
       'gui.pb.sec_keywords',
-      'gui.pb.sec_params'
+      'gui.pb.sec_params',
+      'gui.pb.sec_servers'
     ])
     expect(document.body.textContent?.split('what it is for').length).toBe(2)
   })

@@ -57,10 +57,11 @@ BLOCKED_ASSET_EXTENSIONS = {
 # these trees are exempt from the extension list. The size limit still applies.
 APP_SOURCE_PREFIXES = (
     "bridge/",
-    # "ui/" is not a prefix of "ui-tui/" -- the slash ends it -- so each entry
-    # matches its own tree and nothing else.
+    # Not a prefix of "ui-tui/" or "ui-webui/", so those two keep matching
+    # exactly what they matched before.
     "ui/",
     "ui-tui/",
+    "ui-webui/",
 )
 ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
 RAVEN_DESIGN_SKILL_PREFIX = (

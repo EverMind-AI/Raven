@@ -60,9 +60,12 @@ def agent_capabilities() -> dict[str, Any]:
             "audio": False,
             "embeddedContext": False,
         },
-        # MCP is connected once per process from raven's own config; nothing
-        # scopes a server to one session. Declaring http/sse would invite
-        # exactly the request that has to be refused.
+        # A session may bring stdio servers of its own -- they are connected
+        # into a registry that session owns and are visible to its turns alone.
+        # http and sse stay false because every server a dispatcher hands a
+        # sub-agent arrives as one stdio stanza pointing at a host endpoint,
+        # whatever the upstream transport is, and declaring a transport means
+        # honouring a definition (and its credentials) inside this process.
         "mcpCapabilities": {"http": False, "sse": False},
         # No auth: nothing to log out of either.
         "auth": {},
@@ -71,7 +74,11 @@ def agent_capabilities() -> dict[str, Any]:
         # accept ``_raven/clarify_respond`` -- honoured by AcpMethods once the
         # CLIENT also declares it (both sides must opt in; this key is how the
         # consuming raven knows offering its UI is worthwhile).
-        "_meta": {"raven": {"askUser": True}},
+        # ``SESSION_MCP_CAPABILITY`` is a promise, not a feature flag: it says
+        # the servers a session brings really are connected, and the tools behind
+        # them are reachable from that session's turns and from no sibling
+        # session on this connection.
+        "_meta": {"raven": {"askUser": True}, protocol.SESSION_MCP_CAPABILITY: {}},
     }
 
 

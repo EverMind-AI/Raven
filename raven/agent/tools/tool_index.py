@@ -117,6 +117,29 @@ def _get_or_build(sig: _Signature, items: list[tuple[str, str]]) -> _BuiltIndex:
     return built
 
 
+def rank_tools(query: str, tools: "list[Tool]", limit: int) -> list[str]:
+    """BM25-rank an ad-hoc tool set, off to the side of the shared index.
+
+    For a set too short-lived to index. Routing it through :class:`ToolIndex`
+    would make its signature the one in the process-level slot, so the shared
+    catalog would be evicted and rebuilt on the next search -- and back again on
+    the one after. This builds a throwaway BM25 instead and leaves the slot
+    alone; the sets it is for hold a handful of tools, not a few hundred.
+
+    Same tokenizer and same name-weighting as :class:`ToolIndex`, so a query
+    that matches a tool in one matches it in the other. Scores are not
+    comparable across the two, though: idf falls with corpus size, so a caller
+    merging both rankings has to merge by rank.
+    """
+    tokens = tokenize(query)
+    if not tokens or not tools:
+        return []
+    bm25 = BM25Okapi([tokenize(_format_tool_text(t)) for t in tools])
+    scores = bm25.get_scores(tokens)
+    ranked = sorted(zip([t.name for t in tools], scores), key=lambda x: x[1], reverse=True)
+    return [name for name, score in ranked if score > 0.0][:limit]
+
+
 class ToolIndex:
     """Prebuilt BM25 over a tool catalog, rebuilt on (name, description, parameters) change.
 

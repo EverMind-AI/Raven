@@ -156,6 +156,8 @@ class SubagentRow(_Strict):
     probe_status: Literal["ready", "attention", "missing", "unknown"]
     probe_detail: str
     has_api_key: bool
+    mcps: list[str]
+    allow_mcp_secrets: bool
     last_test_ok: bool | None = None
     last_test_detail: str | None = None
     last_test_at_ms: int | None = None
@@ -1837,6 +1839,8 @@ class SubagentsAddParams(_Strict):
     name: str | None = None
     description: str | None = None
     api_key: str | None = None
+    mcps: list[str] | None = None
+    allow_mcp_secrets: bool | None = None
 
 
 class SubagentsAddResult(_Strict):
@@ -1849,6 +1853,8 @@ class SubagentsUpdateParams(_Strict):
     new_name: str | None = None
     description: str | None = None
     api_key: str | None = None
+    mcps: list[str] | None = None
+    allow_mcp_secrets: bool | None = None
 
 
 class SubagentsUpdateResult(_Strict):
@@ -3443,6 +3449,39 @@ class PlaybookParam(_Strict):
     description: str
 
 
+class PlaybookMcpServer(_Strict):
+    """One MCP server the playbook itself carries, as the file declares it.
+
+    Shown so a reader can tell a portable carried server from a host server of
+    the same name -- a node's ``mcps`` entry is only a name, and the two resolve
+    to different processes.
+
+    ``env`` and ``headers`` are the declarations, not resolved values: a carried
+    server references a credential through ``{{ params.X }}`` and the run
+    supplies it, so what the file holds is the reference and that is what this
+    reports. Nothing here is ever a secret's value.
+    """
+
+    type: Literal["stdio", "sse", "streamableHttp"] | None = None
+    """The transport the file declares, or ``None`` for the runtime to detect
+    from ``command`` / ``url``. Reported rather than collapsed into a guess: an
+    ``sse`` server presented as generic http is a different protocol."""
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    url: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    tool_timeout: int = 30
+    enabled: bool = True
+    """False is a server the run will not dial. Without it a disabled definition
+    reads as launchable, which is the opposite of what it does."""
+    auth: Literal["none", "apikey", "oauth"] = "none"
+    has_oauth_config: bool = False
+    """Whether the file declares OAuth endpoints of its own, not what they are:
+    a client id or a registration endpoint is the deployment's business and the
+    reader only needs to know the server carries one."""
+
+
 class PlaybookNode(_Strict):
     """One step, whole.
 
@@ -3484,6 +3523,11 @@ class PlaybookDetail(_Strict):
     params: dict[str, PlaybookParam]
     nodes: list[PlaybookNode]
     prompts: str
+    mcp_servers: dict[str, PlaybookMcpServer] = Field(default_factory=dict)
+    """The servers this playbook ships, keyed by the name a node's ``mcps`` uses.
+
+    Empty for a playbook that names only servers the host configures, which is
+    most of them."""
 
 
 class PlaybooksListParams(_Strict):

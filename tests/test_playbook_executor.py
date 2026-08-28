@@ -10,6 +10,7 @@ the party that can act on them.
 import json
 from pathlib import Path
 
+from raven.config.schema import MCPServerConfig
 from raven.playbook import (
     MAX_GAP_ROUNDS,
     NodeSpec,
@@ -50,8 +51,16 @@ class FakeDagTool:
     def set_context(self, channel, chat_id, session_key=None):
         self.context = (channel, chat_id, session_key)
 
-    async def execute(self, nodes, task_summary="", background=True, confirm=False, **_):
-        self.calls.append({"nodes": nodes, "task_summary": task_summary, "background": background, "confirm": confirm})
+    async def execute(self, nodes, task_summary="", background=True, confirm=False, mcp_servers=None, **_):
+        self.calls.append(
+            {
+                "nodes": nodes,
+                "task_summary": task_summary,
+                "background": background,
+                "confirm": confirm,
+                "mcp_servers": dict(mcp_servers or {}),
+            }
+        )
         return "DAG run wf-1 started in the background (%d nodes)." % len(nodes)
 
 
@@ -101,6 +110,41 @@ async def test_a_missing_param_is_a_gap_and_dispatches_nothing():
     assert plan.kind == "gaps"
     assert "which week should be analyzed?" in plan.reply
     assert tool.calls == []
+
+
+async def test_a_secret_never_reaches_a_dispatched_work_order():
+    """Through the executor, because that is where it would leave.
+
+    A prompt template is dispatched to a sub-agent and written into the run's
+    transcript, so this is the one substitution that must not happen. Asserted on
+    what the graph tool was actually handed rather than on the helper alone -- a
+    helper that redacts correctly proves nothing if the dispatch path calls a
+    different one.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        params={
+            "week_of": ParamSpec(type="string", required=True, description="which week?"),
+            "PG_PASSWORD": ParamSpec(type="secret", description="the database password"),
+        },
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull it",
+                prompt_template="connect with ${params.PG_PASSWORD} and pull ${params.week_of}",
+            )
+        ],
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "w32", "PG_PASSWORD": "s3cr3t-value"}, confirmed=True)
+
+    assert plan.kind != "gaps", plan.reply
+    assert tool.calls, "the run still happened -- withholding degrades it, it does not stop it"
+    dispatched = json.dumps(tool.calls[0]["nodes"])
+    assert "s3cr3t-value" not in dispatched, "the credential reached a sub-agent's work order"
+    assert "week_of" not in dispatched or "w32" in dispatched, "the ordinary param still filled"
 
 
 async def test_the_gap_reply_names_the_argument_to_pass():
@@ -237,11 +281,11 @@ async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
     assert nodes["pull"]["skills"] == ["sql-queries"]
     assert "skills" not in nodes["report"]
     assert "sql-queries" not in nodes["pull"]["prompt_template"]
-    assert "mcps" not in nodes["report"]
     assert "skills" not in nodes["report"]["prompt_template"].lower()
-    # mcps cannot be honoured at all, so it is reported rather than written into
-    # the prompt as an instruction the sub-agent has no tool to follow.
-    assert any("mcp" in n and "slack" in n for n in plan.notes)
+    # mcps is the one this change makes travel: a real field, not prose, because
+    # unlike skills the receiving side now has something to do with it.
+    assert nodes["report"]["mcps"] == ["slack"]
+    assert "mcps" not in nodes["pull"]
 
 
 async def test_executor_forwards_inputs_and_namespaces_node_input_references():
@@ -364,8 +408,8 @@ class ComposeProvider:
         return _R(payload)
 
 
-def _prompt_spec():
-    return PlaybookSpec(
+def _prompt_spec(**over):
+    base = dict(
         name="due-diligence",
         description="run due diligence on a target company",
         task_summary="scan the target company and summarize what was found",
@@ -374,6 +418,8 @@ def _prompt_spec():
         params={"target": ParamSpec(required=True, description="which company is the target?")},
         prompts="compose a two-layer graph for ${params.target}: a breadth scan, then a summary.",
     )
+    base.update(over)
+    return PlaybookSpec(**base)
 
 
 GOOD_GRAPH = {
@@ -415,6 +461,42 @@ async def test_prompt_mode_returns_the_guidance_to_a_caller_that_can_compose():
     assert "run_subagent_dag" in plan.reply  # and it says where to take it
     assert provider.calls == []  # no composition call spent
     assert tool.calls == []  # and nothing dispatched behind the caller's back
+
+
+async def test_composition_says_when_it_withheld_a_secret():
+    """The path that changed a work order and said nothing.
+
+    The other two fills log it; this one dropped the names and dispatched a
+    normal-looking run, so an operator debugging a graph that could not do what
+    the file asked had no trace of why. All three go through one helper now, and
+    the message names which text to edit -- "a secret was withheld" is not
+    actionable without that.
+    """
+    from loguru import logger as _logger
+
+    lines: list[str] = []
+    sink = _logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    try:
+        provider = ComposeProvider([json.dumps(GOOD_GRAPH)])
+        ex = PlaybookExecutor(dag_tool=FakeDagTool(), provider=provider, compose_prompt_mode=True)
+        ex.set_agent_profiles(lambda: COMPOSE_PROFILES)
+        spec = _prompt_spec(
+            params={
+                "target": ParamSpec(required=True, description="which company?"),
+                "TOKEN": ParamSpec(type="secret", description="an api credential"),
+            },
+            prompts="scan ${params.target} using ${params.TOKEN}",
+        )
+
+        plan = await ex.execute(spec, params={"target": "AcmeAI", "TOKEN": "s3cr3t-value"})
+    finally:
+        _logger.remove(sink)
+
+    assert plan.kind == "dag", "withholding degrades the run, it does not stop it"
+    assert "s3cr3t-value" not in provider.calls[0][0]["content"], "the provider must not receive it"
+    text = "".join(lines)
+    assert "TOKEN" in text and "withheld" in text
+    assert "composition" in text, "the operator has to know which text to edit"
 
 
 async def test_prompt_mode_composes_when_there_is_no_caller_to_hand_it_to():
@@ -534,6 +616,74 @@ async def test_prompt_mode_missing_tool_does_not_enter_content_repair():
     assert plan.kind == "questions"
     assert "required_tool_missing" in plan.reply
     assert len(provider.calls) == 1
+
+
+# --- The spec's own mcpServers, on the way to the graph tool. `raven playbook
+# --- run` wires a pre-flight that has heard of them; a conversation wires
+# --- nothing, so without this hand-off the same file resolved every server it
+# --- ships to "not configured" through `load_playbook` and worked on the CLI.
+
+
+def _mcp_spec(**over):
+    return _dag_spec(
+        params={
+            "week_of": ParamSpec(type="string", required=True, description="which week should be analyzed?"),
+            "PG_PASSWORD": ParamSpec(type="secret", description="Postgres password"),
+        },
+        mcp_servers={
+            "local-pg": MCPServerConfig(
+                command="pg-mcp",
+                args=["--db", "analytics"],
+                env={"PGPASSWORD": "{{ params.PG_PASSWORD }}"},
+            )
+        },
+        **over,
+    )
+
+
+async def test_a_playbooks_own_servers_reach_the_graph_tool_with_their_params_filled():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+
+    plan = await ex.execute(_mcp_spec(), params={"week_of": "w", "PG_PASSWORD": "hunter2"})
+
+    assert plan.kind == "dag"
+    handed = tool.calls[0]["mcp_servers"]
+    assert sorted(handed) == ["local-pg"]
+    assert handed["local-pg"].env == {"PGPASSWORD": "hunter2"}
+
+
+async def test_the_spec_still_holds_the_reference_after_a_dispatch():
+    # The file is the distribution unit: filling in place would bake one run's
+    # secret into the library the next run reads.
+    tool = FakeDagTool()
+    spec = _mcp_spec()
+    await PlaybookExecutor(dag_tool=tool).execute(spec, params={"week_of": "w", "PG_PASSWORD": "hunter2"})
+
+    assert spec.mcp_servers["local-pg"].env == {"PGPASSWORD": "{{ params.PG_PASSWORD }}"}
+
+
+async def test_a_playbook_that_ships_no_servers_hands_over_nothing():
+    tool = FakeDagTool()
+    await PlaybookExecutor(dag_tool=tool).execute(_dag_spec(), params={"week_of": "w"})
+
+    assert tool.calls[0]["mcp_servers"] == {}
+
+
+async def test_a_prompt_mode_playbooks_servers_reach_the_composed_graph_too():
+    # The graph comes from a model rather than the file, but the servers still
+    # come from the file -- and the CLI is the entry point that composes one.
+    provider = ComposeProvider([json.dumps(GOOD_GRAPH)])
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
+    spec = _prompt_spec(
+        mcp_servers={"local-pg": MCPServerConfig(command="pg-mcp", args=["--db", "analytics"])},
+    )
+
+    plan = await ex.execute(spec, params={"target": "AcmeAI"})
+
+    assert plan.kind == "dag"
+    assert sorted(tool.calls[0]["mcp_servers"]) == ["local-pg"]
 
 
 # ---------------------------------------------------------------- runtime
@@ -796,14 +946,7 @@ async def test_an_empty_skills_list_is_forwarded_without_changing_the_prompt():
     assert not [n for n in plan.notes if "skill" in n.lower()]
 
 
-async def test_mcps_are_reported_rather_than_written_into_the_prompt():
-    """A step cannot be told to use a tool it will not have.
-
-    The sub-agent registry has no mcp path at all, so a sentence naming a server
-    would be an instruction with nothing behind it -- worse than the note,
-    because the sub-agent would either refuse or invent. Reported so a wrong
-    result stays attributable.
-    """
+async def test_mcps_are_passed_to_the_graph_tool_without_prompt_rewriting():
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
@@ -822,9 +965,9 @@ async def test_mcps_are_reported_rather_than_written_into_the_prompt():
 
     assert plan.kind == "dag"
     node = tool.calls[0]["nodes"][0]
-    assert "mcps" not in node
+    assert node["mcps"] == ["github"]
     assert "github" not in node["prompt_template"]
-    assert any("github" in n and "not implemented" in n for n in plan.notes)
+    assert plan.notes == []
 
 
 async def test_the_dispatch_receipt_names_the_run() -> None:
@@ -843,3 +986,27 @@ async def test_the_dispatch_receipt_names_the_run() -> None:
     assert plan.kind == "dag"
     assert plan.reply.startswith("DAG "), plan.reply
     assert "weekly-feedback" in plan.reply and "2 steps" in plan.reply
+
+
+async def test_both_param_spellings_fill_from_the_one_mechanism():
+    """``{{ params.x }}`` is the spelling an author reaches for inside an MCP
+    server definition, where ``{{ ... }}`` is already the placeholder family.
+    It means the same thing everywhere, so it is one substitution and not two.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="pull",
+                subagent="data-raven",
+                node_summary="pull the feedback",
+                prompt_template="pull ${params.week_of} for {{ params.audience }}",
+            )
+        ]
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "2026-08-11"})
+
+    assert plan.kind == "dag"
+    assert tool.calls[0]["nodes"][0]["prompt_template"] == "pull 2026-08-11 for PM"

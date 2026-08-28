@@ -1,14 +1,13 @@
 """The knowledge-base data model: what a parsed document becomes on its way
 into a vector store, and what a search hands back.
 
-The shapes are adopted from AgentScope's ``rag`` package (Apache-2.0; see
-NOTICES.md), which this repository vendored while the web service existed. They
-are kept unchanged now that it does not: a knowledge base written before the
-retirement is still read by this code, and the shapes are what make that true.
-Defined here rather than imported because importing AgentScope would put
-FastAPI, a message bus and a provider catalogue behind ``raven.knowledge``, and
-the package's whole point is that indexing and retrieval run inside the gateway
-process.
+The shapes are adopted from the AgentScope tree vendored under
+``ui-webui/service/agentscope/rag`` (Apache-2.0; see NOTICES.md), so a knowledge
+base written by one and read by the other stays interchangeable while the two
+front ends coexist. Defined here rather than imported from there because that
+tree is a web-service dependency: importing it would put FastAPI, a message bus
+and a provider catalogue behind ``raven.knowledge``, and the package's whole
+point is that indexing and retrieval run inside the gateway process.
 """
 
 from __future__ import annotations

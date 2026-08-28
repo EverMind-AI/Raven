@@ -105,17 +105,28 @@ async def test_single_takes_the_session_manager_off_the_engine():
 async def test_create_hooks_run_on_every_engine_including_later_ones():
     loops = _registry()
     seen: list[str] = []
-    loops.on_create(lambda agent_loop: seen.append(agent_loop.conversation))
+    loops.on_create(lambda agent_loop, _conversation: seen.append(agent_loop.conversation))
     await loops.get("acp:a")
     await loops.get("acp:b")
     await loops.get("acp:a")
     assert seen == ["acp:a", "acp:b"]
 
 
+async def test_a_create_hook_is_told_which_session_the_engine_serves():
+    """The engine alone cannot say. A hook that re-scopes something held per
+    session -- the servers a session brought -- has to be handed the id."""
+    loops = _registry()
+    seen: list[tuple[str, str]] = []
+    loops.on_create(lambda agent_loop, conversation: seen.append((agent_loop.conversation, conversation)))
+    await loops.get("acp:a")
+    await loops.get("acp:b")
+    assert seen == [("acp:a", "acp:a"), ("acp:b", "acp:b")]
+
+
 async def test_a_failing_create_hook_does_not_lose_the_engine():
     loops = _registry()
 
-    def boom(_agent_loop):
+    def boom(_agent_loop, _conversation):
         raise RuntimeError("hook exploded")
 
     loops.on_create(boom)

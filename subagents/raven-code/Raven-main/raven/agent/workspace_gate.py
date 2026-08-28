@@ -89,6 +89,13 @@ CHOICE_RETRY = "retry_later"
 # todowrite, web_*, ask_user - none of them touch the checkout).
 WRITE_TOOLS = frozenset({"write_file", "edit_file", "exec_write", "apply_patch"})
 
+MCP_TOOL_PREFIX = "mcp_"
+"""How ``MCPToolWrapper`` names every tool it publishes (``mcp_<server>_<tool>``).
+
+Named here rather than matched inline because this gate is the one place that
+has to treat the whole family as a family: the names past the prefix come from
+somebody else's server and there is no list of them to keep."""
+
 # Commands whose every segment is one of these run without allocation. The
 # asymmetry is deliberate: misclassifying a read as a write costs one early
 # (invisible) allocation or one unnecessary question; misclassifying a write
@@ -555,6 +562,13 @@ _BLOCK_ESCAPE = (
     "primary checkout ({root}) or overriding git's target repository is not allowed. "
     "Work inside the worktree only."
 )
+_BLOCK_MCP_IN_WORKTREE = (
+    "WRITE BLOCKED: this session is bound to the worktree {worktree}, and {tool} reaches an MCP "
+    "server this agent cannot see the effect of. The server was started by the host before this "
+    "session moved here, so nothing about the call proves it stays inside the worktree -- it may "
+    "resolve a relative path against the directory the host started it in, or hold an absolute "
+    "root that is the primary checkout. Use the built-in file tools inside the worktree instead."
+)
 _BLOCK_GATE_ERROR = (
     "WRITE BLOCKED: workspace allocation failed before this write could be authorized "
     "(error: {error}). The write was NOT executed and no files were changed. This is "
@@ -639,6 +653,20 @@ class WorkspaceGate:
             return True
         if name == "exec":
             return not _is_readonly_command(str((params or {}).get("command", "")))
+        if name.startswith(MCP_TOOL_PREFIX):
+            # An MCP tool is opaque here, and opaque means write by the same
+            # asymmetry the readonly command list is built on: this agent sees a
+            # name and a schema chosen by somebody else's server, so a filesystem
+            # or database tool is indistinguishable from a lookup. Reading one as
+            # a write costs an allocation that was going to happen anyway; reading
+            # a write as a read lets it touch the primary checkout while another
+            # session owns it, which is the failure this gate exists to prevent.
+            #
+            # `annotations.readOnlyHint` is not consulted on purpose. The MCP spec
+            # calls it a hint and says clients must not treat it as a guarantee,
+            # and a server's own word about itself is not a basis for skipping a
+            # gate that protects the workspace from that server.
+            return True
         return False
 
     # -- escape guard (worktree mode) -------------------------------------
@@ -646,8 +674,29 @@ class WorkspaceGate:
     def _escape_blocked(self, name: str, params: dict, alloc: dict) -> str | None:
         if alloc.get("mode") != "worktree":
             return None
-        root = (alloc.get("repo") or {}).get("root") or ""
         wt = alloc.get("boundWorkdir") or ""
+        if name.startswith(MCP_TOOL_PREFIX):
+            # Fails closed, and before the path checks below, because there is no
+            # path here to check. The guard those checks perform is only possible
+            # for a tool whose arguments name what it will touch; an MCP call's
+            # arguments belong to somebody else's schema, and the work happens in
+            # a process the host started before this session was moved -- it never
+            # heard about the rebind and has no channel to be told.
+            #
+            # Two distinct escapes, and neither is visible from here: a server that
+            # resolves a relative path against the directory the host started it
+            # in, and one holding an absolute root that *is* the primary checkout.
+            # The second needs no cwd at all, so knowing where the process started
+            # would not settle it either.
+            #
+            # This takes out remote servers that touch no filesystem along with the
+            # rest, which is a real cost. It is the cost of the bridge being
+            # transparent: this agent is handed one stdio stanza naming a socket
+            # and cannot tell an http lookup from a filesystem write behind it. A
+            # host-side declaration could hand back the ones it can vouch for; that
+            # is an opt-in to add, not a default to assume.
+            return _BLOCK_MCP_IN_WORKTREE.format(worktree=wt, tool=name)
+        root = (alloc.get("repo") or {}).get("root") or ""
         if not root:
             return None
         try:

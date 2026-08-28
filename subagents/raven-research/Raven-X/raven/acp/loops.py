@@ -96,6 +96,7 @@ class AcpLoops:
         self._loops: OrderedDict[str, Any] = OrderedDict()
         self._tags: dict[str, Any] = {}
         self._on_create: list[Callable[[Any], None]] = []
+        self._on_create: list[Callable[[Any, str], None]] = []
         self._busy: Callable[[str], bool] = lambda _conversation: False
         self._closing: set[asyncio.Task[None]] = set()
 
@@ -111,12 +112,18 @@ class AcpLoops:
         kwargs.setdefault("session_manager", getattr(loop, "sessions", None))
         return cls(lambda _conversation: loop, per_session=False, **kwargs)
 
-    def on_create(self, hook: Callable[[Any], None]) -> None:
+    def on_create(self, hook: Callable[[Any, str], None]) -> None:
         """Register a hook run on every engine as it is built.
 
         The arming seam: capabilities the client declares once (``ask_user``)
         have to reach the engines built after the declaration too, not just the
         ones alive when it arrived.
+
+        The conversation is passed beside the engine because not every such
+        capability is per-connection. A session's own MCP servers are held for
+        the session and bound into whichever engine currently serves it, so the
+        hook that rebinds them after an eviction has to know which session it is
+        looking at -- the engine alone cannot say.
         """
         self._on_create.append(hook)
 
@@ -162,7 +169,7 @@ class AcpLoops:
         logger.info("acp: engine built for session {} ({} resident)", conversation, len(self._loops))
         for hook in self._on_create:
             try:
-                hook(loop)
+                hook(loop, conversation)
             except Exception:
                 logger.exception("acp: a session-engine create hook failed")
         self._evict_over_cap(keep=conversation)

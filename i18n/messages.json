@@ -5555,6 +5555,58 @@
       "en": "description",
       "zh": "说明"
     },
+    "gui.pb.sec_servers": {
+      "en": "Servers this playbook carries",
+      "zh": "本剧本自带的 MCP 服务器"
+    },
+    "gui.pb.no_servers": {
+      "en": "carries none - every mcps name resolves against this machine's configuration",
+      "zh": "没有自带的服务器 —— mcps 里的每个名字都在本机配置里解析"
+    },
+    "gui.pb.col_transport": {
+      "en": "transport",
+      "zh": "传输"
+    },
+    "gui.pb.col_launch": {
+      "en": "launched as",
+      "zh": "启动方式"
+    },
+    "gui.pb.col_refs": {
+      "en": "credential references",
+      "zh": "引用的凭证"
+    },
+    "gui.pb.no_transport": {
+      "en": "neither",
+      "zh": "两者都无"
+    },
+    "gui.pb.col_auth": {
+      "en": "auth",
+      "zh": "认证"
+    },
+    "gui.pb.no_auth": {
+      "en": "none",
+      "zh": "无"
+    },
+    "gui.pb.own_oauth": {
+      "en": "carries its own OAuth endpoints",
+      "zh": "自带 OAuth 端点"
+    },
+    "gui.pb.server_off": {
+      "en": "disabled - this run will not dial it",
+      "zh": "已停用 —— 本次运行不会拨它"
+    },
+    "gui.pb.tool_timeout": {
+      "en": "tool timeout {n}s",
+      "zh": "工具超时 {n} 秒"
+    },
+    "gui.pb.no_refs": {
+      "en": "none",
+      "zh": "无"
+    },
+    "gui.pb.carried": {
+      "en": "carried by this playbook, not this machine's configuration",
+      "zh": "本剧本自带,不是本机配置里的同名服务器"
+    },
     "gui.pb.required": {
       "en": "required",
       "zh": "必填"

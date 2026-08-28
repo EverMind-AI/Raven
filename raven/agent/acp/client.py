@@ -25,7 +25,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.acp import protocol
-from raven.agent.acp.journal import FrameJournal
+from raven.agent.acp.journal import FrameJournal, redact_acp_frame
 from raven.agent.acp.protocol import (
     CANCEL_REQUEST_METHOD,
     AcpConnectionError,
@@ -519,7 +519,7 @@ class AcpClient:
         response to an agent-initiated request carries only the id it answers.
         """
         if self._journal is not None:
-            self._journal.note("out", frame=frame, session=session or self._frame_session(frame))
+            self._journal.note("out", frame=redact_acp_frame(frame), session=session or self._frame_session(frame))
         stdin = self._proc.stdin
         if stdin is None or stdin.is_closing():
             raise AcpConnectionError(f"acp agent {self.name!r}: stdin is closed")

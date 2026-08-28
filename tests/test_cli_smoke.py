@@ -182,6 +182,9 @@ REGISTERED_COMMAND_NAMES = {
     "doctor",
     "gateway",
     "import",
+    # Plumbing a sub-agent spawns, not something a person types: `raven mcp
+    # bridge <socket>` pumps frames to a server the host holds open.
+    "mcp",
     "onboard",
     # The owner's machine registry (`raven ops connection add/list/doctor`),
     # lifted from the on-call agent's checkout. Campaigns stay in that checkout;

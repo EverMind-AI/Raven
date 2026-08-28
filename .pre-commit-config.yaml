@@ -15,8 +15,8 @@ repos:
         exclude: '^subagents/'
       - id: ruff-format
         # Adopted code: lint it, but do not restyle it. See per-file-ignores in
-        # pyproject.toml.
-        exclude: '^subagents/'
+        # pyproject.toml and ui-webui/service/agentscope/PROVENANCE.md.
+        exclude: '^(ui-webui/service/agentscope/|subagents/)'
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

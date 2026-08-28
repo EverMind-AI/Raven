@@ -732,14 +732,8 @@ class GatewayLogConfig(Base):
 
 
 class GatewayWebConfig(ChannelBase):
-    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint a
-    client connects to over a WebSocket.
-
-    Configured off by default, but the gateway starts the endpoint either way --
-    see ``raven/cli/gateway_commands.py``: this flag decides whether the
-    configured host/port/token are used, not whether the channel exists, because
-    the endpoint is also how any other process asks a live channel adapter what
-    it is actually doing.
+    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint the
+    web backend connects to as a client (ui-webui P1).
 
     Off by default. When enabled, the gateway hosts a ``web`` channel — its own
     streaming spine (build_web) plus a WS server — alongside the IM channels,
@@ -1160,6 +1154,8 @@ class ThirdPartyCliSubagentConfig(Base):
     """
     command: str
     resume_command: str | None = None
+    mcps: list[str] | None = None
+    allow_mcp_secrets: bool = False
     stateful: bool | None = None
     """Declares whether reusing an instance handle continues this agent's
     session. ``None`` derives it from ``resume_command``; an explicit value must
@@ -1208,6 +1204,16 @@ class ThirdPartyCliSubagentConfig(Base):
             raise ValueError("command must contain {agent_id} when idSource is 'provisioned'")
         if self.id_source == "derived" and in_command:
             raise ValueError("command must not contain {agent_id} when idSource is 'derived'")
+        return self
+
+    @model_validator(mode="after")
+    def _check_mcp_file_placeholders(self) -> "ThirdPartyCliSubagentConfig":
+        templates = [self.command, *([self.resume_command] if self.resume_command else [])]
+        carries = ["{mcp_file}" in template for template in templates]
+        if len(set(carries)) > 1:
+            raise ValueError("command and resumeCommand must either both contain {mcp_file} or both omit it")
+        if self.mcps and not carries[0]:
+            raise ValueError("mcps is set but command does not contain {mcp_file}")
         return self
 
     @model_validator(mode="after")
@@ -1310,6 +1316,25 @@ class ThirdPartyOpenAISubagentConfig(Base):
     everos: SubagentEverosConfig | None = None
     """This agent's everos identity, or ``None`` for an agent the host records no
     memory for."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unsupported_mcp_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        declared_mcps = data.get("mcps")
+        allow_secrets = data.get("allowMcpSecrets", data.get("allow_mcp_secrets"))
+        if declared_mcps or allow_secrets:
+            logger.warning(
+                "mcps/allowMcpSecrets are not supported for kind 'openai' (sub-agent {!r}); ignoring -- "
+                "the backend has no tool loop",
+                data.get("name") or "<unnamed>",
+            )
+        cleaned = dict(data)
+        cleaned.pop("mcps", None)
+        cleaned.pop("allowMcpSecrets", None)
+        cleaned.pop("allow_mcp_secrets", None)
+        return cleaned
 
     @model_validator(mode="after")
     def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
@@ -1444,6 +1469,43 @@ class ThirdPartyAcpSubagentConfig(Base):
     needs it."""
     enabled: bool = True
     command: str
+    mcps: list[str] | None = None
+    allow_mcp_secrets: bool = False
+    session_mcp: bool | None = None
+    """Whether this agent keeps one session's MCP servers to that session.
+
+    Three-valued. ``None`` is "not declared", and it resolves to the measured
+    answer for the preset this row was created from -- ``False`` for opencode,
+    ``True`` for everything else. Not a plain ``True`` default, because the field
+    arrived after rows were already on disk: an ``opencode`` row written before it
+    existed carries no key, and a permissive default would leave exactly the agent
+    this is about delivering as if it isolated. See
+    :func:`raven.agent.subagent.presets.session_mcp_for`.
+
+    The one behavioural declaration an acp entry carries, and it is not a second
+    source of truth for the reason the rest of them would be: ``initialize`` has
+    no field for session isolation. Measured on the three shipped adapters --
+    claude-agent-acp 0.66.0 and codex-acp 1.1.14 isolate, opencode-ai 1.18.16
+    does not, and all three report the same ``mcpCapabilities``. So there is
+    nothing here to disagree with the handshake about, and nothing in the
+    handshake to read instead.
+
+    ``False`` withholds this agent's MCP delivery rather than degrading it,
+    because raven pools one connection per agent name: two concurrent sub-agents
+    of an agent that does not isolate see each other's tools, so a node deliberately
+    not granted a server reaches it through the sibling that was. Delivery is
+    withheld with a note (``AcpAgentBackend._mcp_note``) instead of being sent and
+    hoped over.
+
+    An undeclared row on a hand-written agent, or on a preset that says nothing,
+    resolves to ``True``: a peer that isolates is the normal case, and the ungated
+    stdio baseline is what makes the field work at all. Withholding from an agent
+    nobody has measured would turn off MCP for peers that work.
+
+    An acp field only. A cli agent is one process per task and is handed its
+    servers in that process's own config file, so its isolation is structural and
+    there is nothing to declare; an openai agent has no tool loop and is refused
+    the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     ready_timeout_ms: int = 30000
@@ -1570,6 +1632,7 @@ class BuiltinAgentConfig(Base):
     """Model override for this agent's loop; ``None`` inherits the main loop's."""
     skills: list[str] | None = None
     tools: list[str] | None = None
+    mcps: list[str] | None = None
     restrict_to_workspace: bool | None = None
     """``None`` inherits the manager's own setting rather than forcing one, so a
     row that says nothing about confinement cannot loosen it."""

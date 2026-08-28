@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -330,3 +331,151 @@ def test_list_keeps_brackets_in_hand_placed_names_and_diagnostics(library):
     # so presence alone cannot pin add_row's escape -- the count can. Escaped
     # it appears twice (name cell + diagnostic); with add_row unescaped, once.
     assert r.output.count("weird[fs]") == 2
+
+
+# ------------------------------------------------- run: the MCP pre-flight
+
+
+def _write_dag_md(root: Path, name: str) -> None:
+    """A dag playbook that ships its own MCP server and names a host one too."""
+    target = root / name
+    target.mkdir(parents=True)
+    (target / "playbook.md").write_text(
+        f"---\nname: {name}\ndescription: audit the analytics database\n---\n\nbody\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "taskSummary: run the analytics audit and report back\n"
+        f"triggers:\n  keywords: [{name}]\n"
+        "params:\n"
+        "  PG_PASSWORD:\n    type: secret\n    description: the analytics database password\n"
+        "mcpServers:\n"
+        "  local-pg:\n"
+        "    command: pg-mcp\n"
+        "    args: ['--db', 'analytics']\n"
+        "    env:\n      PGPASSWORD: '{{ params.PG_PASSWORD }}'\n"
+        "nodes:\n"
+        "  - id: audit\n    subagent: raven\n    nodeSummary: audit every table\n"
+        "    promptTemplate: audit every table\n    mcps: [local-pg, deepwiki]\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+
+def _connected(names):
+    from raven.mcp.client import Connected
+
+    class _Caps:
+        resources = None
+        prompts = None
+        tools = object()
+
+    return Connected(names=list(names), session=object(), capabilities=_Caps())
+
+
+def _capture_source(monkeypatch) -> dict:
+    """Record what the run hands the sub-agent registry as its MCP source."""
+    from raven.agent.subagent.manager import SubagentManager
+
+    seen: dict = {}
+    original = SubagentManager.set_mcp_source
+
+    def recording(self, source):
+        if source is not None:
+            seen["source"] = source
+        return original(self, source)
+
+    monkeypatch.setattr(SubagentManager, "set_mcp_source", recording)
+    return seen
+
+
+def test_run_wires_the_playbooks_own_servers_over_the_hosts(library, monkeypatch):
+    """Two holes, one test: this entry wired no MCP source at all (every declared
+    server resolved to "not connected on the host"), and a playbook's ``mcps``
+    was a bare local short name that only worked where the receiving machine
+    happened to have a server of that name.
+    """
+    _write_dag_md(library["user"], "audit")
+    library["config"].write_text(
+        json.dumps(
+            {
+                "playbooks": {"dir": str(library["user"])},
+                "tools": {"mcpServers": {"deepwiki": {"url": "https://deepwiki.test/mcp"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+    seen = _capture_source(monkeypatch)
+
+    dialled = []
+
+    async def record(name, cfg, registry, stack, executor=None, http_auth=None):
+        dialled.append(name)
+        return _connected([])
+
+    with patch("raven.mcp.manager.connect_mcp_server", new=record):
+        r = runner.invoke(app, ["playbook", "run", "audit", "PG_PASSWORD=hunter2"])
+
+    assert r.exit_code == 0, r.stdout
+    assert sorted(dialled) == ["deepwiki", "local-pg"]
+
+    source = seen["source"]
+    # The playbook's own definition is resolvable, with the value filled in on
+    # this side only.
+    assert source.server("local-pg").config.command == "pg-mcp"
+    assert source.server("local-pg").config.env == {"PGPASSWORD": "hunter2"}
+    # And the host's config is still the fallback, not replaced.
+    assert source.server("deepwiki").config.url == "https://deepwiki.test/mcp"
+
+    # The value reached neither the file nor the terminal.
+    assert "{{ params.PG_PASSWORD }}" in (library["user"] / "audit" / "playbook.md").read_text(encoding="utf-8")
+    assert "hunter2" not in r.stdout
+
+
+def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(library, monkeypatch):
+    """The pre-flight is the last moment a person is around to be told. It says
+    so and moves on; it must not hold the run open on a browser click."""
+    import asyncio
+    import time
+
+    _write_dag_md(library["user"], "audit")
+    library["config"].write_text(
+        json.dumps(
+            {
+                "playbooks": {"dir": str(library["user"])},
+                "tools": {"mcpServers": {"deepwiki": {"url": "https://deepwiki.test/mcp", "auth": "oauth"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+
+    from raven.mcp import oauth as mcp_oauth
+
+    captured: dict = {}
+
+    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
+        captured["notify"] = notify
+        return None
+
+    monkeypatch.setattr(mcp_oauth, "provider_for", fake_provider_for)
+    released = asyncio.Event()
+
+    async def parks(name, cfg, registry, stack, executor=None, http_auth=None):
+        if name == "deepwiki":
+            captured["notify"]("oauth.pending", {"server": name, "url": "https://idp.test/a"})
+            await released.wait()
+        return _connected([])
+
+    started = time.monotonic()
+    with patch("raven.mcp.manager.connect_mcp_server", new=parks):
+        r = runner.invoke(app, ["playbook", "run", "audit", "PG_PASSWORD=hunter2"])
+    elapsed = time.monotonic() - started
+
+    assert r.exit_code == 0, r.stdout
+    assert elapsed < 10, f"the run waited {elapsed:.1f}s on a browser authorization"
+    # CliRunner folds stderr into one stream, which is where err_console writes.
+    assert "deepwiki" in r.output and "auth_required" in r.output
+    assert "raven plugin auth deepwiki" in r.output

@@ -3665,6 +3665,37 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
+        """Make this session's own tools visible, then run the turn.
+
+        The scope is opened here because this is where the turn's task begins.
+        The ACP handler that accepted the servers cannot open it: it submits the
+        turn onto the spine and the turn runs on a task that inherits nothing
+        from it. Turns from two sessions run concurrently on this one registry,
+        which is the point.
+        """
+        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        with self.tools.session_scope_for(session_key):
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
+
+    async def _run_turn(
+        self,
+        req: TurnRequest,
+        emit: Emit,
+        drain: Drain,
+        *,
+        stream: bool = True,
+        inline_tool_stream: bool = False,
+        usage_sink: dict[str, Any] | None = None,
+        text_sink: dict[str, Any] | None = None,
+    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.

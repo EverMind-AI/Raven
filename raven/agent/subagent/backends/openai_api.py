@@ -181,6 +181,8 @@ class OpenAIApiBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        mcps: list[str] | None = None,
+        mcp_grant: Any = None,
         mode: str | None = None,
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,

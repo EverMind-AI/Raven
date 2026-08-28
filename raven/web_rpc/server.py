@@ -1,8 +1,8 @@
-"""WebSocket JSON-RPC 2.0 server for the gateway's web channel.
+"""WebSocket JSON-RPC 2.0 server for the gateway's web channel (ui-webui P1).
 
 Mirrors :class:`raven.rpc.server.RpcServer`, but the transport is a
 WebSocket (aiohttp) instead of a TCP-loopback newline-JSON socket: the web
-client connects over a WebSocket. Same JSON-RPC 2.0 framing and
+backend connects as a WS client (MIGRATION §1). Same JSON-RPC 2.0 framing and
 the same :class:`~raven.rpc.dispatcher.Dispatcher`; turn events reach clients
 because the :class:`~raven.rpc.subscriptions.SubscriptionEmitter` is
 constructed with ``send_frame=<this server>.broadcast``.
