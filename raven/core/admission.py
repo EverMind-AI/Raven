@@ -83,6 +83,11 @@ def admit_slice(
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, got boolean"
             )
+        if value is None and not spec.get("required"):
+            # None on an optional key is "unset", not a type violation: the
+            # central models spell optionality as `str | None`, and the door
+            # must not turn an explicit unset into a rejection or a default.
+            continue
         if not isinstance(value, expected):
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, "
@@ -96,3 +101,44 @@ def admit_slice(
                 key,
             )
     return admitted
+
+
+class DispensedSlice:
+    """The frozen view a factory receives once its cargo passed the door.
+
+    Declared keys answer from the admitted slice (defaults applied, types
+    checked); anything else -- the socket fields and any not-yet-declared
+    field -- falls back to the central section, so the pilot changes where a
+    value travels, never what it is.
+    """
+
+    __slots__ = ("_cargo", "_section")
+
+    def __init__(self, section: Any, cargo: dict[str, Any]) -> None:
+        object.__setattr__(self, "_section", section)
+        object.__setattr__(self, "_cargo", dict(cargo))
+
+    def __getattr__(self, name: str) -> Any:
+        cargo = object.__getattribute__(self, "_cargo")
+        if name in cargo:
+            return cargo[name]
+        return getattr(object.__getattribute__(self, "_section"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"admitted slice is frozen (tried to set {name!r})")
+
+
+def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
+    """Route a channel section through the admission door before its factory.
+
+    A channel with no declaration keeps the verbatim section -- same rule as
+    plugin slices. The slice fed to the door is the declared subset of the
+    section's values, so central defaults and declared defaults meet the
+    consistency guard, not each other's shadow.
+    """
+    schema = getattr(spec, "config_schema", None) or {}
+    if not schema:
+        return section
+    raw = {k: getattr(section, k) for k in schema if hasattr(section, k)}
+    cargo = admit_slice(schema, raw, plugin_id=f"channel:{channel}")
+    return DispensedSlice(section, cargo)

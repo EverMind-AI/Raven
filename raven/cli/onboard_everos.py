@@ -27,13 +27,6 @@ def _set_memory_backend(backend: Optional[str]) -> None:
     set_memory_backend(backend)
 
 
-def _init_extension_block_defaults() -> None:
-    """Seed the memory / plugins / skillForge extension defaults via the ops layer."""
-    from raven.config.update import init_extension_block_defaults
-
-    init_extension_block_defaults()
-
-
 def _everos_section(section: str) -> dict[str, Any]:
     from raven.config.update_everos import everos_section
 
