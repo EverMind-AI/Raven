@@ -8,6 +8,9 @@ module exists to end.
 """
 
 import asyncio
+import contextlib
+import json
+import re
 
 import pytest
 
@@ -17,6 +20,12 @@ from raven.acp.outbound import OutboundRequests
 from raven.acp.questions import ANSWER_FIELD, CLARIFY_METHOD, AcpQuestions
 
 SESSION = "acp:s-1"
+
+# A choice the model wrote with a credential in it. Both routes publish the
+# choices, and both frames are ones the client keeps in a transcript.
+SECRET = "sk-proj-abcdefghijklmnop"
+CREDENTIAL_CHOICE = f"api_key={SECRET}"
+REDACTED_CHOICE = "api_key=[redacted]"
 
 
 class Wire:
@@ -141,6 +150,47 @@ async def test_an_answer_outside_the_offered_choices_is_refused_rather_than_pass
 
 
 @pytest.mark.asyncio
+async def test_a_credential_in_a_choice_is_kept_out_of_the_form_and_still_answerable():
+    """Both halves, because leaking nothing and answering nothing is a regression.
+
+    A schema enum is the answer token as well as the label, so redacting it moves
+    what the client will send back. The tool still gets the choice it authored.
+    """
+    wire, outbound, questions = build(elicitation=True)
+    broker = Broker()
+
+    ask(questions, broker, choices=[CREDENTIAL_CHOICE, "use the default"])
+    await asyncio.sleep(0)
+    sent = wire.sent("elicitation/create")[0]
+    assert SECRET not in json.dumps(sent)
+    shown = sent["params"]["requestedSchema"]["properties"][ANSWER_FIELD]["enum"]
+    assert shown == [REDACTED_CHOICE, "use the default"]
+
+    outbound.resolve({"id": sent["id"], "result": {"action": "accept", "content": {ANSWER_FIELD: shown[0]}}})
+    await settle(questions)
+
+    assert broker.answers == [("q-1", CREDENTIAL_CHOICE)]
+
+
+@pytest.mark.asyncio
+async def test_two_choices_that_redact_alike_are_offered_once_rather_than_ambiguously():
+    """A duplicate enum value is a button nobody can tell from its neighbour, and
+    an answer no lookup can resolve to one of the two rather than the other."""
+    wire, outbound, questions = build(elicitation=True)
+    broker = Broker()
+
+    ask(questions, broker, choices=[CREDENTIAL_CHOICE, "api_key=sk-proj-zyxwvutsrqponmlk"])
+    await asyncio.sleep(0)
+    sent = wire.sent("elicitation/create")[0]
+    assert sent["params"]["requestedSchema"]["properties"][ANSWER_FIELD]["enum"] == [REDACTED_CHOICE]
+
+    outbound.resolve({"id": sent["id"], "result": {"action": "accept", "content": {ANSWER_FIELD: REDACTED_CHOICE}}})
+    await settle(questions)
+
+    assert broker.answers == [("q-1", CREDENTIAL_CHOICE)]
+
+
+@pytest.mark.asyncio
 async def test_a_dismissed_form_is_not_an_error_and_takes_the_default():
     wire, outbound, questions = build(elicitation=True)
     broker = Broker()
@@ -193,6 +243,94 @@ async def test_an_option_id_the_client_invented_selects_nothing():
     await settle(questions)
 
     assert broker.answers == [("q-1", "")]
+
+
+@pytest.mark.asyncio
+async def test_a_credential_in_a_choice_is_kept_out_of_the_permission_and_still_answerable():
+    """The same two halves on the route whose option carries an id.
+
+    Matching already keys on the minted id, so redacting the displayed name costs
+    the round trip nothing -- the client sends back an id, never the label.
+    """
+    wire, outbound, questions = build(elicitation=False)
+    broker = Broker()
+
+    ask(questions, broker, choices=[CREDENTIAL_CHOICE, "use the default"])
+    await asyncio.sleep(0)
+    sent = wire.sent("session/request_permission")[0]
+    assert SECRET not in json.dumps(sent)
+    options = sent["params"]["options"]
+    assert [o["name"] for o in options] == [REDACTED_CHOICE, "use the default"]
+
+    outbound.resolve(
+        {"id": sent["id"], "result": {"outcome": {"outcome": "selected", "optionId": options[0]["optionId"]}}}
+    )
+    await settle(questions)
+
+    assert broker.answers == [("q-1", CREDENTIAL_CHOICE)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("elicitation", "method", "field"),
+    [(True, "elicitation/create", ("message",)), (False, "session/request_permission", ("toolCall", "title"))],
+)
+async def test_the_question_text_is_scrubbed_without_a_call_at_the_field(elicitation, method, field):
+    """Neither of these fields is wrapped where it is written any more.
+
+    That they still arrive redacted is the choke point doing the work, which is the
+    difference between this surface being safe and the fields somebody remembered.
+    """
+    wire, _outbound, questions = build(elicitation=elicitation)
+
+    ask(questions, broker=Broker(), question=f"is {CREDENTIAL_CHOICE} still valid", choices=["yes", "no"])
+    await asyncio.sleep(0)
+
+    published = wire.sent(method)[0]["params"]
+    for key in field:
+        published = published[key]
+    assert published == f"is {REDACTED_CHOICE} still valid"
+
+
+@pytest.mark.asyncio
+async def test_the_ids_this_surface_minted_survive_the_scan_intact():
+    """Caught on a live connection, not here: the synthesised ``ask-<hex>`` id went
+    out as ``a[redacted]``, because the vendor patterns match ``sk-`` inside a word
+    and a hex id is 32 chars of coin flips. An id is not prose and must not be
+    rewritten; a client correlating the permission with the tool call needs it whole.
+    """
+    wire, _outbound, questions = build(elicitation=False)
+
+    ask(questions, broker=Broker(), choices=["teal", "amber"])
+    await asyncio.sleep(0)
+    params = wire.sent("session/request_permission")[0]["params"]
+
+    assert params["sessionId"] == SESSION
+    assert re.fullmatch(r"ask-[0-9a-f]{32}", params["toolCall"]["toolCallId"])
+    assert all(re.fullmatch(r"choice-\d+-[0-9a-f]{32}", o["optionId"]) for o in params["options"])
+
+
+@pytest.mark.asyncio
+async def test_a_field_nobody_here_named_is_scrubbed_too():
+    """The shape rather than the field list.
+
+    Redacting per field protects whatever the last edit had in mind, which is how
+    the choices came to sit unscrubbed two lines under a scrubbed title. A payload
+    grown a field later has to be covered without anyone rewrapping it.
+    """
+    wire, _outbound, questions = build(elicitation=True)
+
+    task = asyncio.create_task(
+        questions._publish("elicitation/create", {"addedLater": {"nested": [CREDENTIAL_CHOICE]}})
+    )
+    await asyncio.sleep(0)
+    sent = wire.sent("elicitation/create")[0]
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert SECRET not in json.dumps(sent)
+    assert sent["params"]["addedLater"]["nested"] == [REDACTED_CHOICE]
 
 
 @pytest.mark.asyncio
