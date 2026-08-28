@@ -97,7 +97,7 @@ INVARIANTS: tuple[GuardedRegistration, ...] = (
         # in `subagent/manager.py`. Both have to be listed -- gating only the main
         # loop leaves the tool advertised to every nested sub-agent.
         trunk=(
-            "raven/agent/loop/main.py",
+            "raven/agent/loop/wiring.py",
             "raven/agent/subagent/backends/raven_loop.py",
         ),
         forks={
