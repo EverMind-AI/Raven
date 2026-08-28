@@ -7,7 +7,7 @@ import * as attachmentCache from '../../shell/attachment-cache'
 import { shell, t } from '../../shell/bridge'
 import { copy } from '../../shell/clipboard'
 import { open as openChip } from '../../shell/chips'
-import { humanSize } from '../workspace/deliveries'
+import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
@@ -1222,6 +1222,13 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
 
 const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
   useSeg(lane, seg)
+  /* And on the registry the deliveries come from, not only on the lane. What a
+     delivered file IS keeps moving after this card is drawn: the reader opens it
+     from the desk, it is not there, and `markMissing` writes that back so every
+     surface says the same thing. Subscribed to the lane alone, this card kept
+     the frame it was painted with -- one file greyed out on the shelf and still
+     offered here, in the same window, from the same registry. */
+  useSyncExternalStore(deliveriesSubscribe, deliveriesVersion)
   const changes = store.artifactsOf(lane, seg.turn)
   const deliveries = store.deliveriesOf(lane, seg.turn)
   if (!changes.length && !deliveries.length) return null
