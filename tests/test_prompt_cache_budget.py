@@ -96,7 +96,7 @@ class TestWhoOwnsPlacement:
         strategies were installed silenced the provider for them too, and the
         strategy that was to place the marks instead never sees their requests.
         """
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         install_from_config(TokenWiseConfig(cache_optimization=True))
 
@@ -165,7 +165,7 @@ class TestTheOwnerCoversTheStableHead:
 
 class TestTheLifetimeArrivesWithTheConfig:
     def test_an_hour_reaches_every_mark(self):
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         install_from_config(TokenWiseConfig(cache_ttl="1h"))
 
@@ -173,7 +173,7 @@ class TestTheLifetimeArrivesWithTheConfig:
 
     def test_a_lifetime_the_block_cannot_name_costs_the_default_not_the_startup(self):
         """A config surprise must not be what stops the agent coming up."""
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         cfg = TokenWiseConfig()
         object.__setattr__(cfg, "__dict__", {**cfg.__dict__, "cache_ttl": "7 fortnights"})
@@ -200,34 +200,34 @@ class TestEveryFieldFallsBackRatherThanRaises:
         return cfg
 
     def test_a_value_of_the_wrong_type_takes_the_default(self):
-        from raven.cli._token_wise_stack import _setting
+        from raven.core.token_wise_stack import _setting
 
         assert _setting(self._cfg(max_cache_breakpoints=object()), "max_cache_breakpoints", 4, int) == 4
 
     def test_a_true_is_not_a_count_of_one(self):
         """`bool` is an `int`, so an unguarded numeric check would take it."""
-        from raven.cli._token_wise_stack import _setting
+        from raven.core.token_wise_stack import _setting
 
         assert _setting(self._cfg(max_cache_breakpoints=True), "max_cache_breakpoints", 4, int) == 4
 
     def test_a_value_below_the_floor_takes_the_default(self):
-        from raven.cli._token_wise_stack import _setting
+        from raven.core.token_wise_stack import _setting
 
         assert _setting(self._cfg(max_cache_breakpoints=0), "max_cache_breakpoints", 4, int, floor=1) == 4
 
     def test_a_field_that_is_not_there_takes_the_default(self):
-        from raven.cli._token_wise_stack import _setting
+        from raven.core.token_wise_stack import _setting
 
         assert _setting(object(), "cache_ttl", "5m", str, allowed=("5m", "1h")) == "5m"
 
     def test_a_usable_value_survives(self):
-        from raven.cli._token_wise_stack import _setting
+        from raven.core.token_wise_stack import _setting
 
         assert _setting(self._cfg(max_cache_breakpoints=2), "max_cache_breakpoints", 4, int, floor=1) == 2
 
     def test_a_breakpoint_count_nobody_can_use_still_installs_the_strategy(self):
         """The optimisation degrades; the agent does not fail to come up."""
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         registry = install_from_config(self._cfg(max_cache_breakpoints=0))
 
@@ -242,7 +242,7 @@ class TestTheCeilingTheVendorSets:
 
     @pytest.mark.parametrize("configured", [5, 8, 99])
     def test_a_count_over_the_limit_falls_back_to_the_limit(self, configured):
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         registry = install_from_config(self._cfg(max_cache_breakpoints=configured))
 
@@ -250,7 +250,7 @@ class TestTheCeilingTheVendorSets:
         assert optimizer.max_breakpoints == prompt_cache.MAX_BREAKPOINTS
 
     def test_the_limit_itself_is_kept(self):
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         registry = install_from_config(self._cfg(max_cache_breakpoints=4))
 
@@ -259,7 +259,7 @@ class TestTheCeilingTheVendorSets:
 
     async def test_no_configured_count_can_put_a_fifth_mark_on_the_wire(self):
         """The vendor refuses a fifth outright; nothing below may produce one."""
-        from raven.cli._token_wise_stack import install_from_config
+        from raven.core.token_wise_stack import install_from_config
 
         registry = install_from_config(self._cfg(max_cache_breakpoints=99))
         messages, tools, _ = await registry.before_llm_call(_messages(), _tools(), MODEL)

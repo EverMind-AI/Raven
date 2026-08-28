@@ -21,7 +21,7 @@ from loguru import logger
 from rich.console import Console
 
 from raven import __logo__
-from raven.cli._helpers import (
+from raven.core.helpers import (
     build_model_routing,
     load_runtime_config,
     make_resolving_provider,
@@ -29,7 +29,7 @@ from raven.cli._helpers import (
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
-from raven.cli._plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
+from raven.core.plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.helpers import sync_workspace_templates
 
@@ -331,7 +331,7 @@ def register(app: typer.Typer) -> None:
         # NudgeInjector serves as the AgentLoop response_modifier;
         # SentinelRunner.on_user_inbound tracks reply engagement.
         # These bindings must happen BEFORE AgentLoop construction.
-        from raven.cli._proactive_stack import (
+        from raven.core.proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
@@ -373,7 +373,7 @@ def register(app: typer.Typer) -> None:
         deliverables = _build_deliverable_store(config)
 
         # Create agent with cron service
-        from raven.cli._token_wise_stack import caching_probe, install_from_config
+        from raven.core.token_wise_stack import caching_probe, install_from_config
         from raven.providers.pool import ProviderPool
 
         strategies = install_from_config(
@@ -549,7 +549,7 @@ def register(app: typer.Typer) -> None:
                 # Built here, inside the running loop, not in the sync command
                 # prologue: Scheduler pins its home loop at construction (submit
                 # must come from that loop), and the prologue has no loop yet.
-                from raven.cli._gateway_spine import build_gateway
+                from raven.core.gateway_spine import build_gateway
 
                 gw_scheduler, gw_hub, gw_readback_texts, gw_sources, gw_teardown = build_gateway(
                     agent,

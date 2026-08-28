@@ -21,8 +21,8 @@ from raven.agent.hook.adapters import (
     OnUserInboundAdapter,
     ResponseModifierAdapter,
 )
-from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.hook.composite import CompositeHook
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 __all__ = [
     "AgentHook",

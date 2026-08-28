@@ -610,7 +610,7 @@ class TestMakeHermesProvider:
         assert _make_hermes_provider(Config()) is None
 
     def test_returns_provider_with_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import _helpers
+        from raven.core import helpers as _helpers
 
         stub = SimpleNamespace(name="stub")
         monkeypatch.setattr(_helpers, "make_provider", lambda _c: stub)
@@ -622,7 +622,8 @@ class TestMakeHermesProvider:
     def test_strips_tty_handlers_after_building(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """litellm reattaches its stderr handler when it is imported, which happens
         inside make_provider -- after redirect_loguru_to_file already stripped."""
-        from raven.cli import _helpers, _log_file
+        from raven.cli import _log_file
+        from raven.core import helpers as _helpers
 
         calls: list[str] = []
         monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="stub"))

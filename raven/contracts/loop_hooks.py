@@ -1,5 +1,9 @@
 """AgentHook ABC + AgentHookContext + HookDecision.
 
+Factory-loop tier: Versioned with the factory loop, not frozen for every
+loop — a replacement loop may ship its own hook vocabulary and version this
+paper with it. Only the ``contract`` tier is a cross-loop promise.
+
 This abstraction wires into AgentLoop, replacing the scattered callback
 fields (``response_modifier`` / ``on_user_inbound`` / ``decision_consumer`` /
 ``enable_personalization``). eval_engine builds three concrete hook
@@ -220,4 +224,5 @@ class AgentHook(ABC):
         return HookDecision()
 
 
+__tier__ = "factory_loop"
 __all__ = ["AgentHook", "AgentHookContext", "HookDecision"]

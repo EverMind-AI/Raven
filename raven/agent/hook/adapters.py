@@ -25,7 +25,7 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Union
 
-from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 logger = logging.getLogger(__name__)
 

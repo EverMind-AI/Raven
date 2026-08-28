@@ -61,9 +61,9 @@ def _hub_marker_name() -> str | None:
 
 
 async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    from raven.cli._plugin_stack import plugin_discovery_sources
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
+    from raven.core.plugin_stack import plugin_discovery_sources
     from raven.plugins.discover import PluginDiscovery
 
     loop = _safe_loop(agent_loop_factory)

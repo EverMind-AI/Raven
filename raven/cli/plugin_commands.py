@@ -28,7 +28,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from raven.cli._helpers import load_runtime_config
+from raven.core.helpers import load_runtime_config
 
 console = Console()
 
@@ -104,7 +104,7 @@ def register(app: typer.Typer) -> None:
         """List installed plugins + the active memory backend."""
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
-        from raven.cli._plugin_stack import plugin_discovery_sources
+        from raven.core.plugin_stack import plugin_discovery_sources
         from raven.plugins import (
             PluginDiscovery,
             PluginRegistry,

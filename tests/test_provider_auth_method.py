@@ -7,7 +7,7 @@ independently and disagreed:
   skipped when matching a model id to a provider.
 * ``config.update_providers.list_providers`` gates display -- it is what
   ``raven provider list`` and the pickers show.
-* ``cli._helpers.check_provider_credentials`` gates startup -- it decides
+* ``core.helpers.check_provider_credentials`` gates startup -- it decides
   whether ``raven agent`` runs at all.
 
 A provider the second accepted and the first rejected was configured according
@@ -148,7 +148,7 @@ def _display_says(case: dict[str, Any], path: Path) -> bool:
 
 def _startup_says(case: dict[str, Any], path: Path) -> bool:
     """Would `raven agent` start?"""
-    from raven.cli._helpers import check_provider_credentials
+    from raven.core.helpers import check_provider_credentials
     from raven.providers.auth import MissingCredentialsError
 
     config = Config.model_validate(json.loads(path.read_text(encoding="utf-8")))
@@ -470,7 +470,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/tools/capabilities.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
-        "raven/cli/_helpers.py",
+        "raven/core/helpers.py",
         "raven/cli/onboard_commands.py",
         # Carries the wizard's EverOS cluster split out of onboard_commands --
         # same reads, same argument, new file name.

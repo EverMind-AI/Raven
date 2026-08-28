@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from raven.cli._helpers import make_resolving_provider
 from raven.config.schema import Config
+from raven.core.helpers import make_resolving_provider
 from raven.providers.resolving_provider import ResolvingProvider
 
 

@@ -571,7 +571,7 @@ def attach_sentinel_feedback_tool(runner, agent: "AgentLoop") -> None:
     """
     if runner is None:
         return
-    from raven.agent.hook.base import (
+    from raven.contracts.loop_hooks import (
         AgentHook,
         AgentHookContext,
         HookDecision,

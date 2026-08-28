@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import raven.cli._helpers as helpers_mod
+import raven.core.helpers as helpers_mod
 from raven import _LiteLLMBotocorePreloadFilter
 from raven.providers.registry import PROVIDERS, find_by_model, find_by_name
 

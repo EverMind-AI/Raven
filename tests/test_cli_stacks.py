@@ -18,9 +18,9 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.hook import AgentHook, CompositeHook
-from raven.cli._eval_stack import build_eval_stack
-from raven.cli._hooks_stack import build_hooks_stack
-from raven.cli._token_wise_stack import install_from_config
+from raven.core.eval_stack import build_eval_stack
+from raven.core.hooks_stack import build_hooks_stack
+from raven.core.token_wise_stack import install_from_config
 from raven.eval_engine import EvalEngine, EvalEngineConfig
 
 # ===========================================================================
@@ -46,7 +46,7 @@ class TestBuildEvalStack:
         assert len(hooks) == 3
 
     async def test_default_hooks_are_noops_when_mounted_into_chain(self):
-        from raven.agent.hook.base import AgentHookContext
+        from raven.contracts.loop_hooks import AgentHookContext
 
         engine = build_eval_stack()
         composite = CompositeHook(engine.hooks())
@@ -140,7 +140,7 @@ class TestInstallFromConfig:
     def test_module_path(self):
         """Pin the new canonical import path so future refactors
         catch any test still trying ``raven.token_wise.install``."""
-        from raven.cli import _token_wise_stack
+        from raven.core import token_wise_stack as _token_wise_stack
 
         assert hasattr(_token_wise_stack, "install_from_config")
 

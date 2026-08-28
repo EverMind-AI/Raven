@@ -50,11 +50,17 @@ def test_memory_engine_base_exports_assembled_dataclasses():
     assert ReBudget is TokenBudget
 
 
-def test_raven_core_module_is_gone():
-    # The transitional raven.core package was deleted. Any
-    # holdout import should fail loudly so callers update the path.
-    with pytest.raises(ModuleNotFoundError):
-        import raven.core  # noqa: F401
+def test_raven_core_is_the_assembly_root_not_the_old_context_home():
+    # raven.core was once a transitional home for AssembledContext/TokenBudget
+    # (now in memory_engine) and was deleted with a tombstone here. The name is
+    # re-founded as the assembly root (the *_stack builders). Keep the old
+    # meaning dead: a holdout importing the context types from here must still
+    # fail loudly, while the assembly stacks answer at their new address.
+    import raven.core
+
+    assert not hasattr(raven.core, "AssembledContext")
+    assert not hasattr(raven.core, "TokenBudget")
+    from raven.core.plugin_stack import build_plugin_registry  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

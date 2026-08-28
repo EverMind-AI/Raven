@@ -191,7 +191,7 @@ class TestBuildPluginTools:
         return RavenConfig(plugins=PluginsConfig(config=dict(plugin_config or {})))
 
     def test_builds_tools_from_registry(self, tmp_path: Path) -> None:
-        from raven.cli._plugin_stack import build_plugin_tools
+        from raven.core.plugin_stack import build_plugin_tools
 
         seen = {}
 
@@ -209,12 +209,12 @@ class TestBuildPluginTools:
         assert seen["config"] == {"flag": "on"}
 
     def test_empty_when_no_tools(self, tmp_path: Path) -> None:
-        from raven.cli._plugin_stack import build_plugin_tools
+        from raven.core.plugin_stack import build_plugin_tools
 
         assert build_plugin_tools(tmp_path, self._config(), registry=PluginRegistry()) == []
 
     def test_failing_factory_is_skipped(self, tmp_path: Path) -> None:
-        from raven.cli._plugin_stack import build_plugin_tools
+        from raven.core.plugin_stack import build_plugin_tools
 
         def boom(ctx):
             raise RuntimeError("nope")
@@ -226,7 +226,7 @@ class TestBuildPluginTools:
         assert build_plugin_tools(tmp_path, self._config(), registry=reg) == []
 
     def test_none_factory_is_skipped(self, tmp_path: Path) -> None:
-        from raven.cli._plugin_stack import build_plugin_tools
+        from raven.core.plugin_stack import build_plugin_tools
 
         # A factory may return None to decline contribution (e.g. an
         # optional dependency is absent) — skipped without error.

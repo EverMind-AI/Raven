@@ -16,11 +16,11 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
 from rich.table import Table
 
-from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.cli._theme import POINTER, QMARK
 from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
+from raven.core.plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.skills import SkillOrigin
 from raven.importer.skills.hermes import HermesSkillSource
@@ -311,8 +311,8 @@ def _make_hermes_provider(config: Config) -> "LLMProvider | None":
     only the progress bar. Stripping again right after the import closes that
     window. There is nothing to gain from laziness in a one-shot command.
     """
-    from raven.cli._helpers import make_provider
     from raven.cli._log_file import _strip_tty_stream_handlers
+    from raven.core.helpers import make_provider
 
     try:
         provider = make_provider(config)

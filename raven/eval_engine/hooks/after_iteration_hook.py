@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 
-from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.eval_engine.adapter.adapter import EvalAdapter
 from raven.eval_engine.config import EvalEngineConfig
 from raven.eval_engine.judge.judge import EvalJudge, JudgeVerdict

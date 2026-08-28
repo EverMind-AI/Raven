@@ -157,6 +157,7 @@ if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.ask_user import QuestionResponder
     from raven.agent.tools.base import Tool
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
@@ -181,7 +182,6 @@ if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
-    from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.events import NoticeKind
@@ -1217,7 +1217,7 @@ class AgentLoop:
         # The deep-vs-regular ask broker (transport-wired, post-construction). Kept
         # on the loop for the same reason: a tool built later by promotion must
         # inherit it, else it silently skips the ask -- see ``set_deep_research_broker``.
-        self._deep_research_broker: QuestionBroker | None = None
+        self._deep_research_broker: QuestionResponder | None = None
         if deep_research_mode(self.deep_research_config) == "real":
             self._register_real_deep_research(self.deep_research_config)
         else:
@@ -1264,7 +1264,7 @@ class AgentLoop:
         self.tools.register(DagStatusTool(loop=self))
         self.tools.register(ResolveDagNodeTool(loop=self))
         self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
-        # The QuestionBroker is a per-transport singleton, late-bound via
+        # The question responder is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
         # The plugin market, reachable from the conversation. Unconditional: the
@@ -2513,7 +2513,7 @@ class AgentLoop:
         if self.deep_research_manager is not None:
             self.deep_research_manager.set_submit(submit)
 
-    def set_deep_research_broker(self, broker: QuestionBroker) -> None:
+    def set_deep_research_broker(self, broker: QuestionResponder) -> None:
         """Wire the deep-vs-regular ask broker (TUI/gateway). Stored on the loop and
         applied to the currently-registered deep_research tool, so a tool built
         later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""

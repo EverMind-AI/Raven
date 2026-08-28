@@ -86,7 +86,7 @@ def test_the_probe_each_site_passes_reads_the_running_turns_binding():
     there -- otherwise a session switched onto a caching model is told it cannot
     cache, and one switched off it marks a request that cannot carry the field.
     """
-    from raven.cli._token_wise_stack import caching_probe
+    from raven.core.token_wise_stack import caching_probe
     from raven.providers.binding import ModelBinding, use_binding
     from raven.providers.litellm_provider import LiteLLMProvider
 

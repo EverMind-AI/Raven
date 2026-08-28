@@ -13,7 +13,7 @@ NudgePolicy's user-level acceptance-rate model, so it lives next to
 
 Older installs that wrote to ``{workspace}/sentinel_feedback.jsonl`` are
 migrated on next sentinel start by
-``raven.cli._proactive_stack._migrate_legacy_feedback_log``.
+``raven.core.proactive_stack._migrate_legacy_feedback_log``.
 
 Not a ring buffer: keeps every event. The file grows roughly
 (#nudges/day) × (bytes/event) ≈ a few KB/day — fine for months.

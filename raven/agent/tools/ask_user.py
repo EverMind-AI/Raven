@@ -1,7 +1,7 @@
 """ask_user tool — pause the turn to ask the user a question and await the reply.
 
 Blocking interaction: the registry does NOT wrap this in a timeout (the
-QuestionBroker manages its own fail-safe). On execute the tool hands the turn's
+injected responder manages its own fail-safe). On execute the tool hands the turn's
 conversation_id and the prompt to the broker, which emits a ``clarify.request``
 notification and blocks until an inbound answer arrives (or the broker's
 fail-safe default fires). The returned answer is rendered as a natural-language
@@ -17,10 +17,41 @@ import asyncio
 import json
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
+
+# Last-resort wait for one whole call when the responder exposes no
+# ``default_timeout_s`` of its own. The broker machinery ships the same value;
+# duplicated rather than imported so this module names no concrete machine.
+DEFAULT_TIMEOUT_S = 600.0
+
+
+class QuestionResponder(Protocol):
+    """Turn-scoped capability that can put questions to the user and await
+    answers.
+
+    The paper the tools type against -- the concrete broker lives with the
+    transport that constructs it and is injected at assembly (mirror of
+    ``ApprovalResponder`` in ``shell.py``). Structural: no machine imports
+    this, nothing here imports a machine.
+    """
+
+    async def await_question(
+        self,
+        conversation_id: str,
+        *,
+        prompt: str,
+        choices: list[str] | None = None,
+        default: str = "",
+        timeout_s: float | None = None,
+        header: str = "",
+        recommended: str = "",
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, Any]] | None = None,
+    ) -> str: ...
+
 
 # How many times an argument may be JSON-decoded before it is treated as text.
 _MAX_JSON_LAYERS = 3
@@ -179,7 +210,7 @@ class AskUserTool(Tool):
     """Ask the user a question mid-turn and wait for their answer.
 
     Wiring: the layer that builds the per-turn tool set must inject a
-    :class:`QuestionBroker` (constructor or :meth:`set_broker`) and the turn's
+    :class:`QuestionResponder` (constructor or :meth:`set_broker`) and the turn's
     conversation_id via :meth:`set_context` — the same conversation_id the
     scheduler derives (``req.conversation or f"{channel}:{chat_id}"``).
     """
@@ -188,7 +219,7 @@ class AskUserTool(Tool):
 
     def __init__(
         self,
-        broker: QuestionBroker | None = None,
+        broker: QuestionResponder | None = None,
         conversation_id: str = "",
         timeout_s: float | None = None,
     ) -> None:
@@ -204,8 +235,8 @@ class AskUserTool(Tool):
         # failure in the path of the RPC server coming up.
         self._timeout_s = timeout_s
 
-    def set_broker(self, broker: QuestionBroker | None) -> None:
-        """Set the QuestionBroker. ``None`` disables the round-trip."""
+    def set_broker(self, broker: QuestionResponder | None) -> None:
+        """Set the question responder. ``None`` disables the round-trip."""
         self._broker = broker
 
     def set_context(self, conversation_id: str) -> None:
