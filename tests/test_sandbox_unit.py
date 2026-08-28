@@ -1499,14 +1499,17 @@ class TestConnectMcpSandboxGuard:
         async with AsyncExitStack() as stack:
             await connect_mcp_servers({"svc": cfg}, ToolRegistry(), stack)
 
-        assert clients == [
-            {
-                "headers": {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"},
-                "follow_redirects": True,
-                "timeout": "timeout",
-                "auth": "auth",
-            }
-        ]
+        assert len(clients) == 1
+        assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
+        assert clients[0]["timeout"] == "timeout"
+        assert clients[0]["auth"] == "auth"
+        # Not merely the default: httpx applies client-level headers to every
+        # hop of a redirect chain and scrubs only Authorization when the origin
+        # changes, so a server answering 302 could read a custom header meant
+        # for it alone -- and cfg.headers is where the plugin market renders the
+        # user's secret. The refusal to follow is the reason the merge above is
+        # safe to do at client level at all.
+        assert clients[0]["follow_redirects"] is False
 
     async def test_unknown_transport_is_skipped(self, monkeypatch):
         """An unknown transport does not attempt to open an MCP connection."""
