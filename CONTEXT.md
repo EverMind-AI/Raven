@@ -1234,22 +1234,25 @@ other turn, and only its *origin* differs.
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
 as only that: `url` elicitation is for out-of-band credential and payment collection, so
 advertising it would let a sub-agent send the reader to an address of its own choosing. The
-requested schema is decomposed into one question per property, each put through the same
-`clarify.request` contract as `ask_user` - so a surface that already answers a question needs
-nothing new - and the answers are reassembled into one `accept`; a required property nobody
+requested schema is decomposed into one question per property, and each one **Question
+Autofill** leaves for the user is put through the same `clarify.request` contract as
+`ask_user` - so a surface that already answers a question needs nothing new - and the answers
+are reassembled into one `accept`; a required property nobody
 answered declines the whole form rather than handing back content its schema rejects. Routed
 by `sessionId` to the run that asked and answered off the connection's read loop, so one
-pending question does not stall the other sessions of a pooled connection. A whole form holds
-a per-conversation lock, because the question broker allows one pending question per
-conversation and fail-safes an overlapping one to its default - which here would read as a
+pending question does not stall the other sessions of a pooled connection. A form with anything left to ask
+holds a per-conversation lock for the whole of it, because the question broker allows one
+pending question per conversation and fail-safes an overlapping one to its default - which here would read as a
 skip nobody ever saw. The lifetime is the backend's, since a sub-agent asks after the turn
 that spawned it has replied: `clarify.closed` retracts a question that can no longer be
 answered, a run that ends cancels the elicitor it attached, and `$/cancel_request` from the
 sub-agent retracts the one request it names - the only signal there is that the run behind a
 question has stopped listening, since a sub-agent that gives up says nothing else.
 _Avoid_: reading it as the same kind of thing as **Unattended Approval**. That one is
-answered by raven with nobody in the loop; this one exists only to reach somebody, and
-declines when a dispatch has no reachable user.
+answered by raven with nobody in the loop as a matter of policy; this one reaches for somebody
+by default and declines when a dispatch has no reachable user. **Question Autofill** is the
+one thing that answers on this path without asking, and only from what the turn already
+established.
 
 **Ask-User Round Trip** (`raven/agent/acp/ask_user.py`):
 How an ACP Subagent's question reaches the user when it does not use `elicitation/create`.
@@ -1259,9 +1262,10 @@ goes back as a `_raven/clarify_respond` request of raven's own. Armed by declara
 sides - the agent sends nothing unless the client declared `_meta.raven.askUser` at
 `initialize`, and unarmed its tool falls back to ending the turn on the questions, so this is
 the difference between a clarify that interrupts one turn and one that costs a whole round
-trip through the caller. Ends at the same `clarify.request` contract as **Elicitation
-Pass-Through** and shares its per-conversation lock, because both reach one question broker
-that allows a single pending question per conversation. Answered off the connection's read
+trip through the caller. A question **Question Autofill** does not answer
+ends at the same `clarify.request` contract as **Elicitation Pass-Through** and takes its
+per-conversation lock, because both reach one question broker that allows a single pending
+question per conversation; one that is answered takes neither. Answered off the connection's read
 loop for a sharper reason than the request path's: notifications are dispatched inline there,
 so a question awaited on that loop stalls every other session of a pooled connection. Every
 question a run owns is answered, including the ones nobody can put to a user - a background
@@ -1273,6 +1277,30 @@ responder.
 _Avoid_: reading a dropped frame as a no-op. The agent blocks its tool call on the reply for
 ten minutes before falling back to the question's default, so not answering is the stall this
 exists to prevent, not an abstention.
+
+**Question Autofill** (`raven/agent/acp/autofill.py`, `raven/agent/acp/resolver.py`):
+The step in which raven answers a Subagent's question from the turn's own context instead
+of putting it to the user. It sits in front of both question routes -- **Elicitation
+Pass-Through** and **Ask-User Round Trip** -- and decides per form rather than per
+question, in one model call that continues the turn that spawned the sub-agent: the live
+message list holds both what the user said and the spawn call's own arguments, plus one
+recall keyed on the questions rather than on the user's message. Each question comes back
+`answer`, `partial` or `defer`. Only `answer` skips the user; a `partial` is still asked,
+carrying what raven does know appended to the sub-agent's own wording; and a form answered
+in full never takes the per-conversation question lock, so a form nobody has to see cannot
+park another agent's question behind it. Every failure defers -- the switch off
+(`subagentQuestions.autofillEnabled`), no provider, the call past its budget, an answer
+outside the offered options, an answer the schema cannot hold -- and a question asking to
+authorise an action (pushing, deleting, sending, paying) is instructed back as `partial`
+however plainly the context supports it, because authorising is the user's to do. The step
+renders as a synthetic `answer_for_user` tool call, deliberately absent from the **Tool
+Registry** so the model has no interface for claiming it, and is written into the
+conversation at the loop's `drain` seam -- the one point where the turn's own task owns
+the message list with every tool result already in it.
+_Avoid_: reading it as a *default* for a question. The broker's `default` is what its
+fail-safe paths return (timeout, cancellation, an undeliverable question, connection EOF),
+and autofill never sets one, so a question it deferred and nobody answered is the same
+empty skip it always was.
 
 **Frame Journal** (`raven/agent/acp/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from

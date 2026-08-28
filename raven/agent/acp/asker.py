@@ -5,6 +5,10 @@ config with no loop reference, so it cannot resolve the tool the way
 `AgentLoop._confirm_graph` does. A turn-scoped ContextVar is how `ExecTool`
 already solves the same problem for shell approvals, and it inherits into the
 background task a sub-agent run happens on.
+
+Both `current_ask` and `current_autofill` must be read at construction in the
+turn's context: the connection pool carries the ContextVars of whichever turn
+first opened it, so question-time reads return the wrong turn's objects.
 """
 
 from __future__ import annotations
@@ -12,23 +16,77 @@ from __future__ import annotations
 import asyncio
 import weakref
 from contextvars import ContextVar
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from raven.agent.tools.ask_user import AskUserTool
 
 
 class Asker(Protocol):
-    async def ask(self, prompt: str, choices: list[str] | None, conversation_id: str) -> str | None: ...
+    async def ask(
+        self,
+        prompt: str,
+        choices: list[str] | None,
+        conversation_id: str,
+        *,
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, str]] | None = None,
+    ) -> str | None: ...
+
+
+class AskViaTool:
+    """Adapts `AskUserTool.ask_direct` to the `Asker` protocol.
+
+    Bound per turn but resolved per question, which is what lets a transport
+    bind its broker after the tool was registered. Lives here rather than in one
+    host because both turn runners -- the RPC one and the gateway's -- have to
+    build the same asker from the same tool.
+    """
+
+    def __init__(self, tool: "AskUserTool") -> None:
+        self._tool = tool
+
+    async def ask(
+        self,
+        prompt: str,
+        choices: list[str] | None,
+        conversation_id: str,
+        *,
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, str]] | None = None,
+    ) -> str | None:
+        return await self._tool.ask_direct(prompt, choices, conversation_id, index=index, total=total, batch=batch)
 
 
 _TURN: ContextVar[tuple[Any, str]] = ContextVar("acp_ask_turn", default=(None, ""))
+_AUTOFILL: ContextVar[Any] = ContextVar("acp_autofill_turn", default=None)
 
 
-def start_ask_turn(asker: Any, *, conversation_id: str) -> None:
-    """Bind this turn's asker. `None` means no human is reachable."""
+def start_ask_turn(asker: Any, autofill: Any = None, *, conversation_id: str) -> None:
+    """Bind this turn's asker and its autofill. `None` means no human is reachable."""
     _TURN.set((asker, conversation_id))
+    _AUTOFILL.set(autofill)
 
 
 def current_ask() -> tuple[Any, str]:
     return _TURN.get()
+
+
+def current_autofill() -> Any:
+    """This turn's autofill, or `None` when nothing may be answered for the user.
+
+    Separate from `current_ask` rather than a third tuple slot: every existing
+    caller of `current_ask` unpacks two values, and widening that tuple would
+    break each of them for a value most do not want.
+
+    Must be read at construction in the turn's context, not at question time.
+    An ACP connection's read loop carries a copy of the ContextVars of the turn
+    that opened it, and the pool keeps that connection for the process lifetime,
+    so reading at question time returns the first turn's object or nothing.
+    """
+    return _AUTOFILL.get()
 
 
 _LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = weakref.WeakKeyDictionary()
@@ -69,4 +127,12 @@ def attribute(agent: str, instance: str, message: str) -> str:
     return f"{who}: {message}"
 
 
-__all__ = ["Asker", "attribute", "current_ask", "question_lock", "start_ask_turn"]
+__all__ = [
+    "AskViaTool",
+    "Asker",
+    "attribute",
+    "current_ask",
+    "current_autofill",
+    "question_lock",
+    "start_ask_turn",
+]
