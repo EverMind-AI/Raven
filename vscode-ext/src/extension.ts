@@ -59,7 +59,7 @@ export async function activate(context: { subscriptions: VscodeDisposable[] }): 
       )
       return
     }
-    manager.open(command, firstWorkspacePath(api), process.platform)
+    manager.open(command, firstWorkspacePath(api))
   }
 
   context.subscriptions.push(api.commands.registerCommand('raven.openTui', openTui))

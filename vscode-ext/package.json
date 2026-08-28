@@ -1,9 +1,9 @@
 {
   "name": "raven-vscode",
-  "displayName": "Raven",
+  "displayName": "Raven Agent",
   "description": "Open the Raven TUI inside the VS Code integrated terminal.",
   "version": "0.1.0",
-  "publisher": "evermind",
+  "publisher": "EverMind-AI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

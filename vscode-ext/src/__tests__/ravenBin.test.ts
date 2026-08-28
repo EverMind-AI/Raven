@@ -1,3 +1,8 @@
+/**
+ * Unit tests for resolveRavenCommand: resolution order (setting, RAVEN_BIN,
+ * PATH, uv), ~ expansion, existence validation, and extraArgs handling.
+ */
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { resolveRavenCommand, type ResolutionContext } from '../ravenBin.js'

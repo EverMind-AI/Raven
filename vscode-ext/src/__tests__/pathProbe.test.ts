@@ -1,3 +1,8 @@
+/**
+ * Unit tests for findOnPath: which/where probing, the bash/zsh login-shell
+ * fallback, non-file output filtering, and win32 behavior.
+ */
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { findOnPath, type ProbeResult } from '../pathProbe.js'
