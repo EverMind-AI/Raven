@@ -93,6 +93,94 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
+_INOTIFY_LIMIT_PATH = Path("/proc/sys/fs/inotify/max_user_instances")
+_INOTIFY_LIMIT_FLOOR = 1024
+_PROC_ROOT = Path("/proc")
+
+
+def _inotify_usage() -> tuple[int, int] | None:
+    """(inotify instances held by this user, the kernel cap), or ``None``.
+
+    ``max_user_instances`` limits instances per real user id, and the spawned
+    server inherits this process's uid, so only same-uid instances count.
+    ``/proc/<pid>/fdinfo`` marks an inotify instance with a line starting with
+    ``inotify``; when procfs is absent or unreadable (non-Linux), ``None`` lets
+    callers skip the check rather than guess.
+    """
+    try:
+        limit = int(_INOTIFY_LIMIT_PATH.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+    me = os.getuid()
+    used = 0
+    for pid_dir in _PROC_ROOT.glob("[0-9]*"):
+        try:
+            if pid_dir.stat().st_uid != me:
+                continue
+            entries = (pid_dir / "fdinfo").iterdir()
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                blob = entry.read_bytes()
+            except OSError:
+                continue
+            if any(line.startswith(b"inotify") for line in blob.splitlines()):
+                used += 1
+    return used, limit
+
+
+def _try_raise_inotify_limit() -> int | None:
+    """Raise the per-user inotify cap when the kernel allows it, else ``None``.
+
+    Writing ``/proc/sys`` needs root (or a dedicated capability); when that
+    fails the caller falls back to spelling out the command, because the cap is
+    the documented remedy and there is no raven-side substitute for it.
+    """
+    try:
+        current = int(_INOTIFY_LIMIT_PATH.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+    target = max(_INOTIFY_LIMIT_FLOOR, current * 2)
+    try:
+        _INOTIFY_LIMIT_PATH.write_text(str(target), encoding="ascii")
+    except OSError:
+        return None
+    return target
+
+
+def _inotify_gate() -> str | None:
+    """``None`` when a spawn can proceed, else the diagnosis + fix text.
+
+    With the cap exhausted a spawned server dies immediately on a cryptic
+    OSError, so exhaustion is caught here instead: raise the cap when the
+    kernel lets us (root), otherwise hand back the fix so the caller fails
+    before spawning a process that cannot start.
+    """
+    usage = _inotify_usage()
+    if usage is None:
+        return None
+    used, limit = usage
+    if used < limit:
+        return None
+    raised = _try_raise_inotify_limit()
+    after = _inotify_usage()
+    if after is not None and after[0] < after[1]:
+        if raised is not None:
+            logger.info("raised fs.inotify.max_user_instances to {} so EverOS can start", raised)
+        return None
+    used, limit = after if after is not None else (used, limit)
+    target = _INOTIFY_LIMIT_FLOOR if limit < _INOTIFY_LIMIT_FLOOR else limit * 2
+    return (
+        f"EverOS needs an inotify instance to watch its memory directory, but this user "
+        f"already holds {used} of the {limit} allowed "
+        f"(fs.inotify.max_user_instances). Raise it with:\n"
+        f"  sudo sysctl -w fs.inotify.max_user_instances={target}\n"
+        f"To make the change permanent:\n"
+        f"  echo 'fs.inotify.max_user_instances={target}' | sudo tee /etc/sysctl.d/99-inotify-limits.conf"
+    )
+
+
 class EverosBinaryMissingError(RuntimeError):
     """The everos CLI is not installed where raven can reach it.
 
@@ -729,6 +817,14 @@ async def ensure_everos_server(
     # its LLM client, so its credentials are proven by the probe above.
     _require_llm_configured()
 
+    # A machine whose per-user inotify cap is exhausted cannot hold a spawned
+    # server: its watcher dies at boot with an OSError the log buries. Catch it
+    # here -- raising the cap when this process may, failing with the commands
+    # when it may not -- instead of spawning a child that cannot start.
+    inotify_block = await asyncio.to_thread(_inotify_gate)
+    if inotify_block:
+        raise RuntimeError(inotify_block)
+
     if on_wait is not None:
         on_wait()
 
@@ -754,6 +850,10 @@ async def ensure_everos_server(
         # child of ours to inspect and polling health is all we can do.
         if proc is not None and proc.poll() is not None:
             detail = await asyncio.to_thread(_last_error_line)
+            if "inotify" in detail.lower():
+                hint = await asyncio.to_thread(_inotify_gate)
+                if hint:
+                    detail = f"{detail} {hint}"
             raise RuntimeError(
                 f"EverOS server exited with code {proc.returncode} while starting at {base_url}. "
                 + (f"{detail} " if detail else "")
