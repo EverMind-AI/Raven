@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-import raven.agent.loop.main as agent_main
+import raven.agent.loop.organ_glue as agent_main
 from raven.agent.loop import AgentLoop
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding

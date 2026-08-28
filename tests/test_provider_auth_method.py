@@ -435,7 +435,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
     allowed = {
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
-        "raven/agent/loop/main.py",
+        "raven/agent/loop/wiring.py",
         # The sub-agent loop asks the same question the main loop does, about the
         # same tool: whether web_search resolved a Serper key, so an unusable
         # search is withheld rather than offered and failed. It asks the built

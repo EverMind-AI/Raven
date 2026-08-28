@@ -98,5 +98,5 @@ def test_the_dag_lane_takes_its_resolver_from_the_manager():
     one (see its constructor), so the rule reaches that lane by injection or not
     at all. Both construction sites hand it over -- the registered tool and the
     playbook executor's -- because a playbook step names an instance too."""
-    source = (RAVEN / "agent/loop/main.py").read_text(encoding="utf-8")
+    source = (RAVEN / "agent/loop/wiring.py").read_text(encoding="utf-8")
     assert source.count("mode_for=self.subagents.resolve_mode") == 2

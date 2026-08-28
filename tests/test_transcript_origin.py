@@ -181,8 +181,9 @@ def test_no_path_writes_the_inbound_entry_around_the_writer() -> None:
     import inspect
 
     from raven.agent.loop import main as loop_main
+    from raven.agent.loop import turn_path
 
-    source = inspect.getsource(loop_main)
+    source = inspect.getsource(turn_path)
     # Exactly one: the writer's own line. A second is a path that skipped it.
     assert source.count('{"role": "user", "content": content') == 1
     assert '{"role": "user", "content": content' in inspect.getsource(loop_main.AgentLoop._record_inbound)

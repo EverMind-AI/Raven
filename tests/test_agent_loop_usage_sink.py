@@ -17,8 +17,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+import raven.agent.loop.turn_path as agent_loop_main
 from raven.agent.loop import AgentLoop
-from raven.agent.loop import main as agent_loop_main
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
