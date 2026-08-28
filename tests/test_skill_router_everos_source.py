@@ -9,7 +9,7 @@ import pytest
 from raven.memory_engine import Memory
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
-    SkillSource,
+    ForgeSkillSource,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ def source(backend) -> EverosSkillSource:
 
 class TestProtocolShape:
     def test_satisfies_skill_source_protocol(self, source) -> None:
-        assert isinstance(source, SkillSource)
+        assert isinstance(source, ForgeSkillSource)
 
     def test_name_and_weight(self, source) -> None:
         assert source.name == "everos"

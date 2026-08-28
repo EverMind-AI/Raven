@@ -1,4 +1,4 @@
-"""SkillSource Protocol shape, LocalSkillSource emission,
+"""ForgeSkillSource Protocol shape, LocalSkillSource emission,
 LocalSkillCatalog rendering.
 
 The Local source/catalog own the :class:`LocalPool` /
@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from raven.memory_engine.skill_forge import (
+    ForgeSkillSource,
     LocalSkillCatalog,
     LocalSkillSource,
     RouterHit,
-    SkillSource,
 )
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ class TestRouterHitDataclass:
 
 
 # ---------------------------------------------------------------------------
-# SkillSource Protocol runtime check
+# ForgeSkillSource Protocol runtime check
 # ---------------------------------------------------------------------------
 
 
@@ -80,10 +80,10 @@ class _MissingAttr:
 
 class TestSkillSourceProtocol:
     def test_complete_source_satisfies_protocol(self) -> None:
-        assert isinstance(_GoodSource(), SkillSource)
+        assert isinstance(_GoodSource(), ForgeSkillSource)
 
     def test_missing_attribute_fails_protocol(self) -> None:
-        assert not isinstance(_MissingAttr(), SkillSource)
+        assert not isinstance(_MissingAttr(), ForgeSkillSource)
 
 
 # ---------------------------------------------------------------------------

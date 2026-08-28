@@ -11,6 +11,6 @@ External callers should keep using:
 which re-exports through here.
 """
 
-from raven.agent.loop.main import AgentLoop, TurnOutcome
+from raven.agent.loop.main import AgentLoop, LoopOutcome
 
-__all__ = ["AgentLoop", "TurnOutcome"]
+__all__ = ["AgentLoop", "LoopOutcome"]

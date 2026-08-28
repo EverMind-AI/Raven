@@ -45,7 +45,7 @@ class _StubProvider:
 
 
 class _StubSource:
-    """SkillSource that returns a hard-coded hit list."""
+    """ForgeSkillSource that returns a hard-coded hit list."""
 
     def __init__(self, name: str, hits: list[RouterHit], weight: float = 1.0) -> None:
         self.name = name

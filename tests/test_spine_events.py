@@ -12,7 +12,6 @@ from raven.spine import (
     Notice,
     NoticeKind,
     Reasoning,
-    RunnerEvent,
     Source,
     StreamDelta,
     Text,
@@ -24,6 +23,7 @@ from raven.spine import (
     TurnStarted,
     Usage,
 )
+from raven.spine.events import RunnerEvent
 
 
 def test_usage_is_frozen_with_three_int_fields():
@@ -38,12 +38,16 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     # separately from progress (send_progress), as the bus path did.
     # action_blocked is the one kind that REPLACES the answer rather than
     # accompanying it, which is why an outlet that drops the rest still shows it.
+    # organ_degraded accompanies an answer produced without an optional organ
+    # (degrade-with-notice ruling): the user must be able to tell a memoryless
+    # answer from a remembered one.
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
         "injected",
         "delivery_failed",
         "action_blocked",
+        "organ_degraded",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"

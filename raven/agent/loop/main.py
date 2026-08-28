@@ -185,14 +185,14 @@ if TYPE_CHECKING:
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.events import NoticeKind
-    from raven.spine.runner import Drain, Emit, TurnOutcome
+    from raven.spine.runner import Drain, Emit
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
 
 @dataclass
-class TurnOutcome:
+class LoopOutcome:
     """Result of one ``_run_agent_loop`` turn beyond its text reply.
 
     ``status`` distinguishes a normal completion from a max-iteration
@@ -1858,6 +1858,7 @@ class AgentLoop:
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
         self._last_injected_skill_sources = {}
+        self._last_degraded_segments: list[str] = []
         session_messages = self._context_messages_for_session(session)
         assembled = await self.context_engine.assemble(
             session_key,
@@ -1883,6 +1884,8 @@ class AgentLoop:
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
         meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
         self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
+        meta_degraded = assembled.metadata.get("degraded_segments") if assembled.metadata else None
+        self._last_degraded_segments = list(meta_degraded) if meta_degraded else []
         messages = assembled.messages
         self._inject_recovery_block(session_key, messages)
         return messages
@@ -1935,7 +1938,7 @@ class AgentLoop:
                 self._checkpoints[target] = None
         return self._checkpoints[target]
 
-    def _stash_recovery(self, session_key: str, outcome: "TurnOutcome") -> None:
+    def _stash_recovery(self, session_key: str, outcome: "LoopOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
         session gets a recovery prompt. No-op unless checkpoint is enabled
         and the turn was actually interrupted with something to recover.
@@ -3241,7 +3244,7 @@ class AgentLoop:
         on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
-    ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
+    ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
         ``drain``, when wired, is called at the top of each iteration to pull
@@ -3268,7 +3271,7 @@ class AgentLoop:
 
         # Bug2 / decision B — track whether the turn was a normal exit or a
         # max-iter interruption. ``status`` is the only piece read downstream
-        # (used to label the shadow-git commit and stamp the ``TurnOutcome``).
+        # (used to label the shadow-git commit and stamp the ``LoopOutcome``).
         status = "completed"
 
         # Context-overflow recovery: bound the number of emergency shrinks so a
@@ -3862,7 +3865,7 @@ class AgentLoop:
         # ``backend.feedback`` run from ``_process_message``. We surface
         # ``outcome.status`` so that pipeline can gate on completion later.
 
-        outcome = TurnOutcome(status=status)
+        outcome = LoopOutcome(status=status)
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
@@ -4248,6 +4251,17 @@ class AgentLoop:
         # Surface the skills SkillForge injected this turn to the web UI's skill
         # panel (populated into _last_injected_skill_ids by the assemble above).
         await self._emit_injected_skills(key)
+        degraded = getattr(self, "_last_degraded_segments", [])
+        if degraded and on_notice is not None:
+            # The answer was produced without an optional organ; saying so is
+            # the degrade-with-notice ruling -- silence here would make a
+            # memoryless answer indistinguishable from a remembered one.
+            await on_notice(
+                NoticeKind.ORGAN_DEGRADED,
+                "Some capabilities were unavailable this turn ("
+                + ", ".join(degraded)
+                + "); the answer was produced without them.",
+            )
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
@@ -4589,7 +4603,7 @@ class AgentLoop:
         inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
-    ) -> TurnOutcome:
+    ) -> LoopOutcome:
         """Bind the turn to its session's model; see ``_run_turn`` for the turn.
 
         This is where a session's model becomes the one thing everything under
@@ -4632,9 +4646,9 @@ class AgentLoop:
         inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
-    ) -> TurnOutcome:
+    ) -> LoopOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
-        onto the single ``emit``, return a TurnOutcome. Collapses the legacy
+        onto the single ``emit``, return a LoopOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
@@ -4652,9 +4666,9 @@ class AgentLoop:
         path did; the spine surfaces it as a TurnFailed event instead).
 
         ``usage_sink`` lets a caller observe the turn's full token accounting
-        (cost / context, richer than the three-field TurnOutcome.usage): pass a
+        (cost / context, richer than the three-field LoopOutcome.usage): pass a
         dict and it is filled. The TUI passes one to attach the rich usage to
-        message.complete; the REPL omits it and uses TurnOutcome.usage.
+        message.complete; the REPL omits it and uses LoopOutcome.usage.
 
         ``text_sink`` is its sibling for the reply text: pass a dict and the
         final reply lands in text_sink["text"] (the reply still goes out via

@@ -8,7 +8,7 @@ scoped narrow — every public symbol here is consumed by
 :class:`DefaultContextEngine` (lands in CE-1) and not by anything else.
 
 Key design point repeated for newcomers reading top-down: the
-:class:`SkillSource` Protocol is **host-internal**. Per the
+:class:`ForgeSkillSource` Protocol is **host-internal**. Per the
 project-wide design decision, sources are hardcoded (Local + Mass +
 Everos) and not a public plugin contribution point. Third-party
 extension of skill retrieval happens via :class:`MemoryBackend`
@@ -30,7 +30,7 @@ from raven.memory_engine.skill_forge.rewriter import (
     RewriteResult,
 )
 from raven.memory_engine.skill_forge.router import SkillForgeRouter
-from raven.memory_engine.skill_forge.types import RouterHit, SkillSource
+from raven.memory_engine.skill_forge.types import ForgeSkillSource, RouterHit
 
 __all__ = [
     "EverosSkillSource",
@@ -43,7 +43,7 @@ __all__ = [
     "RewriteResult",
     "RouterHit",
     "SkillForgeRouter",
-    "SkillSource",
+    "ForgeSkillSource",
     "resolve_refs",
     "rrf_merge_weighted",
 ]

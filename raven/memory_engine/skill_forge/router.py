@@ -18,7 +18,7 @@ Two policies the router enforces (not its sources):
 The router's source list is **fixed at construction**. Per the design
 decision, sources are internal and hardcoded (Local + Mass + Everos
 arrive in SR-3 / SR-4); third-party skill retrieval extension goes
-through :class:`MemoryBackend` rather than through new SkillSource
+through :class:`MemoryBackend` rather than through new ForgeSkillSource
 implementations.
 """
 
@@ -29,17 +29,17 @@ import logging
 from typing import Any
 
 from raven.memory_engine.skill_forge.fusion import rrf_merge_weighted
-from raven.memory_engine.skill_forge.types import RouterHit, SkillSource
+from raven.memory_engine.skill_forge.types import ForgeSkillSource, RouterHit
 
 logger = logging.getLogger(__name__)
 
 
 class SkillForgeRouter:
-    """Compose N :class:`SkillSource` outputs into one top-K ranking."""
+    """Compose N :class:`ForgeSkillSource` outputs into one top-K ranking."""
 
     def __init__(
         self,
-        sources: list[SkillSource],
+        sources: list[ForgeSkillSource],
         *,
         over_fetch_factor: int = 2,
         dedup_by: str = "name",
@@ -73,7 +73,7 @@ class SkillForgeRouter:
 
     async def _safe_search(
         self,
-        source: SkillSource,
+        source: ForgeSkillSource,
         query: str,
         history: list[dict[str, Any]],
         k: int,
