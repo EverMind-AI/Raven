@@ -12,6 +12,7 @@ from raven.agent.tools.tool_search import (
     DEFAULT_ALWAYS_VISIBLE,
     META_TOOL_NAMES,
     TOOL_CALL_NAME,
+    TOOL_SEARCH_NAME,
     ToolCallTool,
     ToolSearchController,
     ToolSearchStrategy,
@@ -334,13 +335,14 @@ def _registry_with_n(n: int) -> tuple[ToolRegistry, ToolSearchController]:
 
 
 @pytest.mark.asyncio
-async def test_strategy_small_catalog_passthrough_drops_meta() -> None:
+async def test_strategy_small_catalog_passthrough_drops_only_tool_search() -> None:
     reg, ctrl = _registry_with_n(3)
     strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
     tools = reg.get_definitions()
     _, out, _ = await strat.before_llm_call([], tools, "m")
     out_names = {t["function"]["name"] for t in out}
-    assert not (META_TOOL_NAMES & out_names), "meta-tools dropped below threshold"
+    assert TOOL_SEARCH_NAME not in out_names, "nothing to search below threshold"
+    assert TOOL_CALL_NAME in out_names, "schema-hidden tools need a name route at any catalog size"
     assert "extra_0" in out_names, "all real tools exposed below threshold"
 
 
@@ -670,15 +672,30 @@ class TestAnAbsentNameOnTheFoldedPath:
     A tool whose MCP server was unloaded mid-turn lands here too and the search
     finds nothing: one wasted hop, and the accepted price of not tracking what
     used to exist.
+
+    Registering ``ToolSearchTool`` is what makes these the folded path: the
+    pointer is withheld where the fold is off, because ``tool_call`` ships there
+    too and naming a tool the deploy does not have is the broken promise this
+    text is supposed to avoid.
     """
 
     @pytest.mark.asyncio
     async def test_an_unknown_name_is_told_where_the_catalog_is(self):
         reg = ToolRegistry()
-        ctrl = ToolSearchController(reg, always_visible=set())
+        reg.register(_FakeTool("real_one", "a cataloged tool"))
+        ctrl = ToolSearchController(reg, always_visible=set(), compaction_threshold=0)
+        reg.register(ToolSearchTool(ctrl))
         out = await ctrl.call("mcp_ghost_thing", {})
         assert "not available" in out
         assert "tool_search" in out
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_not_pointed_at_an_absent_tool_search(self):
+        reg = ToolRegistry()
+        ctrl = ToolSearchController(reg, always_visible=set())
+        out = await ctrl.call("mcp_ghost_thing", {})
+        assert "not available" in out
+        assert "tool_search" not in out
 
     @pytest.mark.asyncio
     async def test_it_reads_the_same_way_as_the_direct_path(self):
@@ -704,7 +721,9 @@ class TestAnAbsentNameOnTheFoldedPath:
         name = "mcp_openseo_search"
         reg.register(_FakeTool(name, "search openseo"), origin=MCPToolRef(name=name, server="openseo", tool="search"))
         reg.unregister(name)
-        ctrl = ToolSearchController(reg, always_visible=set())
+        reg.register(_FakeTool("real_one", "a cataloged tool"))
+        ctrl = ToolSearchController(reg, always_visible=set(), compaction_threshold=0)
+        reg.register(ToolSearchTool(ctrl))
         out = await ctrl.call(name, {})
         assert "not available" in out
         assert "tool_search" in out

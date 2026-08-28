@@ -384,14 +384,16 @@ async def test_hidden_tools_leave_the_schema_but_stay_callable_and_unsearchable(
     assert await registry.execute("hidden_tool", {}) == "hidden ran"
 
 
-def test_tool_call_availability_answers_whether_the_fold_ships_tool_call() -> None:
+def test_tool_call_availability_answers_whether_tool_call_ships() -> None:
     registry = ToolRegistry()
     registry.register(_Hidden())
     registry.register(_HiddenTwo())
-    ctrl = ToolSearchController(registry, always_visible=set(), compaction_threshold=1)
+    # A threshold far above this catalog: the fold would never engage here, and
+    # the answer must not depend on that -- a schema-hidden tool needs the name
+    # route at every catalog size, which is why the predicate stopped reading it.
+    ctrl = ToolSearchController(registry, always_visible=set(), compaction_threshold=99)
 
-    # The fold only ships tool_call above the threshold; without the meta-tool
-    # registered there is no route either way.
+    # Without the meta-tool registered there is no route.
     assert ctrl.tool_call_available() is False
 
     registry.register(ToolCallTool(ctrl))
@@ -452,14 +454,18 @@ async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: 
     out = await loop.tools.execute("resolve_dag_node", {"run_id": "r1", "node_id": "a", "decision": "abandon"})
     assert "No DAG run r1 in this conversation" in out
 
-    assert loop.dag_control_reachable() is False, "a default deploy has no route to the hidden tools"
+    assert loop.dag_control_reachable() is True, "tool_call carries the route to the hidden tools"
 
     for i in range(51):
         loop.tools.register(_Dummy(f"dummy_{i}"))
-    assert loop.dag_control_reachable() is True, "above the fold tool_call carries the route"
+    assert loop.dag_control_reachable() is True, "and still does once the catalog is above the fold"
 
 
-async def test_a_default_loop_answers_unreachable_instead_of_raising(workspace: Path) -> None:
+async def test_a_default_loop_can_still_reach_the_hidden_tools(workspace: Path) -> None:
+    # Progressive disclosure is off by default, which used to take tool_call with
+    # it and leave all three controls advertised but unnameable -- a suspended
+    # node then waited out its whole adjudication timeout for a decision the
+    # model had no way to send.
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -469,4 +475,6 @@ async def test_a_default_loop_answers_unreachable_instead_of_raising(workspace: 
         # no tool_search_config: the default deploy
     )
 
-    assert loop.dag_control_reachable() is False
+    assert loop.tools.has("tool_call")
+    assert loop.strategies.get("tool_search") is None, "the fold itself stays off"
+    assert loop.dag_control_reachable() is True

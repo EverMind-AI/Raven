@@ -7,9 +7,9 @@ provider's tool schema on purpose (``ToolRegistry.hide_from_schema``): the only
 place that tells the model these exist is ``run_subagent_dag``'s own acceptance
 text -- and, for ``resolve_dag_node``, the exception report -- so the per-turn
 tool list carries nothing a conversation that never starts a DAG has any use
-for. Where progressive disclosure is active the model reaches them through
-``tool_call``; the registry resolves either way, as its dispatch never consults
-the schema.
+for. The model reaches them by naming them through ``tool_call``, which is
+registered whether or not progressive disclosure is on for exactly this reason;
+the registry resolves either way, as its dispatch never consults the schema.
 """
 
 from __future__ import annotations
