@@ -99,3 +99,58 @@ def test_task_summary_is_a_machine_field_not_frontmatter() -> None:
     spec = _dag()
     assert spec.block_dump()["taskSummary"] == spec.task_summary
     assert PlaybookSpec.FRONTMATTER_FIELDS == ("name", "description")
+
+
+def test_a_secret_param_may_not_carry_a_default():
+    """A default is a value, and a value in the file travels with the file."""
+    with pytest.raises(ValidationError, match="must not carry a default"):
+        ParamSpec(type="secret", default="hunter2", description="the database password")
+    assert ParamSpec(type="secret", description="the database password").default is None
+
+
+def test_a_playbook_may_ship_its_own_mcp_servers():
+    spec = PlaybookSpec.model_validate(
+        {
+            "name": "audit",
+            "description": "audit the analytics database",
+            "taskSummary": "run the analytics audit",
+            "mode": "dag",
+            "triggers": {"keywords": ["audit"]},
+            "params": {"PG_PASSWORD": {"type": "secret", "description": "the database password"}},
+            "mcpServers": {
+                "local-pg": {
+                    "command": "pg-mcp",
+                    "args": ["--db", "analytics"],
+                    "env": {"PGPASSWORD": "{{ params.PG_PASSWORD }}"},
+                    "toolTimeout": 45,
+                }
+            },
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "research-raven",
+                    "nodeSummary": "audit",
+                    "promptTemplate": "audit it",
+                    "mcps": ["local-pg"],
+                }
+            ],
+        }
+    )
+    # The host's own server model, not a second definition of the same thing.
+    assert spec.mcp_servers["local-pg"].command == "pg-mcp"
+    assert spec.mcp_servers["local-pg"].tool_timeout == 45
+
+    # The block keeps the reference and only what the author wrote: a server
+    # config carries a full default set, and dumping it whole turned a
+    # three-line definition into twenty.
+    dumped = spec.block_dump()["mcpServers"]["local-pg"]
+    assert dumped == {
+        "command": "pg-mcp",
+        "args": ["--db", "analytics"],
+        "env": {"PGPASSWORD": "{{ params.PG_PASSWORD }}"},
+        "toolTimeout": 45,
+    }
+
+
+def test_a_playbook_without_mcp_servers_writes_no_such_section():
+    assert "mcpServers" not in _dag().block_dump()

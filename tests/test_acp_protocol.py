@@ -116,7 +116,9 @@ class TestDeclaredCapabilities:
         caps = agent_capabilities()
 
         assert caps["promptCapabilities"]["audio"] is False, "there is no audio path on the prompt side"
-        assert caps["mcpCapabilities"] == {"http": False, "sse": False}, "MCP is per process, not per session"
+        assert caps["mcpCapabilities"] == {"http": False, "sse": False}, (
+            "a session may bring stdio servers, but no http/sse transport is offered"
+        )
         assert caps["auth"] == {}, "declaring auth.logout would put a method on the wire with nothing to end"
         # ``list``, ``resume``, ``close`` and ``delete`` are declared and each
         # has a method behind it; additionalDirectories is stable in the schema
@@ -160,6 +162,34 @@ class TestDeclaredCapabilities:
         for name, method in (("close", "session/close"), ("delete", "session/delete")):
             assert name in agent_capabilities()["sessionCapabilities"], name
             assert method not in UNIMPLEMENTED_METHODS, method
+
+    def test_per_session_mcp_is_declared_only_because_both_halves_are_built(self):
+        """The promise is two claims, and neither has a spec field to make it in.
+
+        stdio servers are the ACP baseline, so accepting them cannot be
+        advertised, and ``mcpCapabilities`` says nothing about isolation. So the
+        claim goes in ``_meta`` -- and it is only honest while ``session/new`` /
+        ``load`` / ``resume`` really connect what they are handed and the tools
+        stay scoped to that session's turns.
+        """
+        from raven.acp.methods import AcpMethods
+        from raven.agent.tools.registry import ToolRegistry
+
+        assert protocol.SESSION_MCP_CAPABILITY in agent_capabilities()["_meta"]
+        # connected, not refused
+        assert hasattr(AcpMethods, "_adopt_per_session_mcp")
+        # and released again, so nothing outlives the session that brought it
+        assert hasattr(AcpMethods, "_release_per_session_mcp")
+        # visible to that session's turns alone
+        assert hasattr(ToolRegistry, "session_scope_for")
+
+    def test_the_meta_carrier_does_not_break_the_declared_shape(self):
+        """``_meta`` is the schema's extension slot, so the whole response must
+        still validate with raven's claim inside it."""
+        validate_def("InitializeResponse", initialize_result({"protocolVersion": 1}))
+        assert agent_capabilities()["_meta"][protocol.SESSION_MCP_CAPABILITY] == {}, (
+            "the schema spells supported as an empty object, and a reader tests presence not truthiness"
+        )
 
     def test_the_agent_names_itself_with_a_real_version(self):
         info = initialize_result({})["agentInfo"]

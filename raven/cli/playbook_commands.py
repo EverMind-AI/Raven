@@ -298,6 +298,13 @@ def playbook_run(
     from raven.agent.subagent.manager import SubagentManager
     from raven.cli._helpers import make_provider
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
+    from raven.playbook.mcp import (
+        declared_mcp_names,
+        playbook_mcp_servers,
+        preflight_mcp_source,
+        unusable_servers,
+    )
+    from raven.playbook.params import resolve_params, secret_param_names
 
     provider = make_provider(config)
     manager = SubagentManager(
@@ -333,7 +340,45 @@ def playbook_run(
         executor=executor,
         disabled=config.playbooks.disabled,
     )
-    plan = asyncio.run(runtime.load(name, values, fills, allow_disabled=True))
+
+    # Nothing wired an MCP source on this path, so a node's `mcps` resolved to
+    # "not connected on the host" however well the machine was configured. The
+    # spec is read here rather than taken from the runtime because the pre-flight
+    # has to know what to dial before the graph starts; a file that cannot be
+    # parsed is left to the runtime, which reports it below.
+    try:
+        spec = store.load(name)
+    except Exception:  # noqa: BLE001 - the runtime reports an unloadable file
+        spec = None
+
+    async def run_with_mcp():
+        if spec is None:
+            return await runtime.load(name, values, fills, allow_disabled=True)
+        param_values, _ = resolve_params(spec, values)
+        secrets = secret_param_names(spec)
+        declared = declared_mcp_names(spec, fills)
+        async with preflight_mcp_source(
+            host_servers=config.tools.mcp_servers,
+            playbook_servers=playbook_mcp_servers(spec, param_values),
+            declared=declared,
+            disabled_tools=lambda: frozenset(config.tools.disabled_tools),
+            sandbox_config=config.tools.sandbox,
+            workspace=config.workspace_path,
+            secret_values=[param_values.get(pname, "") for pname in secrets],
+        ) as source:
+            for server, state in unusable_servers(source, declared or ()):
+                hint = f" -- run: raven plugin auth {server}" if state == "auth_required" else ""
+                err_console.print(f"[yellow]MCP server {escape(server)}: {escape(state)}{escape(hint)}[/yellow]")
+            manager.set_mcp_source(source)
+            try:
+                return await runtime.load(name, values, fills, allow_disabled=True)
+            finally:
+                # The source outlives nothing: its connections close with the
+                # pre-flight, and a backend still holding it would resolve
+                # grants against a manager that has already let go.
+                manager.set_mcp_source(None)
+
+    plan = asyncio.run(run_with_mcp())
     if plan is None:
         err_console.print(f"[red]Playbook {escape(repr(name))} did not load; see the log for the parse error.[/red]")
         raise typer.Exit(code=1)

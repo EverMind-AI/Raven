@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
 from raven.rpc.methods.subagents import (
@@ -33,9 +34,11 @@ def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                             "name": "Coder",
                             "preset": "claude_code",
                             "kind": "cli",
-                            "command": "claude -p {prompt}",
+                            "command": "claude -p {prompt} --mcp-config {mcp_file}",
                             "description": "coding",
                             "enabled": True,
+                            "mcps": ["github"],
+                            "allowMcpSecrets": True,
                         },
                         {
                             "name": "Researcher",
@@ -64,7 +67,11 @@ async def test_list_returns_configured_entries_and_unconfigured_presets(config_p
     assert by_name["Coder"]["configured"] is True
     assert by_name["Coder"]["preset"] == "claude_code"
     assert by_name["Coder"]["enabled"] is True
+    assert by_name["Coder"]["mcps"] == ["github"]
+    assert by_name["Coder"]["allow_mcp_secrets"] is True
     assert by_name["Researcher"]["enabled"] is False
+    assert by_name["Researcher"]["mcps"] == []
+    assert by_name["Researcher"]["allow_mcp_secrets"] is False
     # A preset with no configured entry still appears, so the overlay can offer it.
     assert by_name["opencode"]["configured"] is False
 
@@ -239,6 +246,20 @@ async def test_add_defaults_name_and_description_to_the_preset(config_path: Path
     assert entry["description"]  # the preset's shipped text, not blank
 
 
+async def test_add_preserves_empty_mcps_and_false_secret_policy(config_path: Path) -> None:
+    await subagents_add(
+        {
+            "preset": "opencode",
+            "name": "Builder",
+            "mcps": [],
+            "allow_mcp_secrets": False,
+        }
+    )
+    entry = next(e for e in _stored(config_path) if e["name"] == "Builder")
+    assert entry["mcps"] == []
+    assert entry["allowMcpSecrets"] is False
+
+
 async def test_add_disables_an_openai_preset_that_has_no_key(config_path: Path) -> None:
     # mirothinker ships an empty apiKey. Added enabled, it would be advertised to
     # the model and fail on first dispatch.
@@ -325,6 +346,71 @@ async def test_update_leaves_execution_fields_alone(config_path: Path) -> None:
     after = next(e for e in _stored(config_path) if e["name"] == "Coder")
     assert after["command"] == before["command"]
     assert after["description"] == "new text"
+    assert after["mcps"] == ["github"]
+    assert after["allowMcpSecrets"] is True
+
+
+async def test_update_can_clear_mcps_and_disable_secret_forwarding(config_path: Path) -> None:
+    await subagents_update({"name": "Coder", "mcps": [], "allow_mcp_secrets": False})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["mcps"] == []
+    assert entry["allowMcpSecrets"] is False
+
+
+async def test_update_rejects_mcp_fields_for_an_openai_agent(config_path: Path) -> None:
+    before = _stored(config_path)
+    with pytest.raises(ConfigValidationError, match="no tool loop"):
+        await subagents_update({"name": "Researcher", "mcps": ["github"]})
+    with pytest.raises(ConfigValidationError, match="no tool loop"):
+        await subagents_update({"name": "Researcher", "allow_mcp_secrets": True})
+    assert _stored(config_path) == before
+
+
+async def test_update_materializes_a_vendored_mcp_override(
+    config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendored = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe",
+        command="raven-probe {prompt_file} {mcp_file}",
+        description="shipped",
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda: [vendored],
+    )
+
+    out = await subagents_update(
+        {
+            "name": "Raven-Probe",
+            "new_name": "Raven-Probe",
+            "mcps": ["github"],
+            "allow_mcp_secrets": True,
+        }
+    )
+
+    assert out == {"updated": True, "name": "Raven-Probe"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-Probe")
+    assert entry["command"] == "raven-probe {prompt_file} {mcp_file}"
+    assert entry["mcps"] == ["github"]
+    assert entry["allowMcpSecrets"] is True
+
+
+async def test_a_vendored_override_cannot_be_renamed(
+    config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendored = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe",
+        command="raven-probe {prompt_file} {mcp_file}",
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_vendored_rows",
+        lambda: [vendored],
+    )
+
+    with pytest.raises(ConfigFieldReadonlyError, match="cannot be renamed"):
+        await subagents_update({"name": "Raven-Probe", "new_name": "Renamed"})
 
 
 async def test_update_rejects_an_unknown_name(config_path: Path) -> None:

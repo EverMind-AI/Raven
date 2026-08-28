@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import os
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -257,12 +258,17 @@ class AcpMethods:
         replacement would overwrite the table entry, and the table is the only
         handle on an engine.
         """
-        self._refuse_per_session_mcp(params)
+        # Parsed before the build, so a malformed stanza costs a rejected request
+        # rather than an engine that has to be torn down again.
+        servers = self._validated_mcp_servers(params)
         cwd = self._validated_cwd(params.get("cwd"))
         returning = params.get("sessionId")
         if (open_now := self._reuse_open(returning, cwd)) is not None:
             return {"sessionId": open_now.session_id}
         session = await self._open_session(self._resumable_chat_id(returning) or _new_chat_id(), cwd)
+        # After the engine, because the servers are connected into its registry,
+        # and before the answer goes out, because the client may prompt at once.
+        await self._adopt_per_session_mcp(session, servers)
         logger.info("acp: session {} created; job {} delivering to {}", session.session_id, session.root, cwd)
         # The ACP sessionId IS the raven session key: spine addresses a turn's
         # events by conversation id and every session/update frame is addressed by
@@ -311,10 +317,11 @@ class AcpMethods:
         Returns the session rather than a result, because what differs between
         ``load`` and ``resume`` is only what is sent afterwards.
         """
-        self._refuse_per_session_mcp(params)
+        servers = self._validated_mcp_servers(params)
         cwd = self._validated_cwd(params.get("cwd"))
         session_id = params.get("sessionId")
         if (open_now := self._reuse_open(session_id, cwd)) is not None:
+            await self._adopt_per_session_mcp(open_now, servers)
             return open_now
 
         chat_id = self._resumable_chat_id(session_id)
@@ -329,6 +336,7 @@ class AcpMethods:
             )
 
         session = await self._open_session(chat_id, cwd)
+        await self._adopt_per_session_mcp(session, servers)
         logger.info("acp: session {} {}; job {} delivering to {}", session.session_id, verb, session.root, cwd)
         return session
 
@@ -716,21 +724,75 @@ class AcpMethods:
         return session
 
     @staticmethod
-    def _refuse_per_session_mcp(params: dict[str, Any]) -> None:
-        """Refuse a non-empty ``mcpServers`` rather than ignoring it.
+    def _validated_mcp_servers(params: dict[str, Any]) -> dict[str, Any]:
+        """The servers a session brought, as a config mapping. Empty is the normal value.
 
-        MCP is connected once per engine and nothing scopes a server to one
-        session, so accepting the field would leave a client believing its tools
-        are available for the rest of the session. Required by the schema on
-        ``session/new``, and an empty array is the normal value.
+        No refusal path for "nothing can scope them": this surface builds an
+        engine per session, so the registry to scope them in is the one that
+        session is about to get. What is still refused is a stanza this agent
+        cannot honour -- see :func:`_acp_mcp_config`.
         """
-        servers = params.get("mcpServers")
-        if isinstance(servers, list) and servers:
-            raise AcpMethodError(
-                protocol.INVALID_PARAMS,
-                "per-session MCP servers are not supported; configure MCP servers in this agent's own config",
-                {"field": "mcpServers", "count": len(servers)},
-            )
+        entries = params.get("mcpServers")
+        if not isinstance(entries, list) or not entries:
+            return {}
+        servers: dict[str, Any] = {}
+        for entry in entries:
+            try:
+                name, config = _acp_mcp_config(entry)
+            except AcpMethodError as exc:
+                logger.warning("acp: dropping a per-session MCP server: {}", exc)
+                continue
+            servers[name] = config
+        return servers
+
+    async def _adopt_per_session_mcp(self, session: AcpSession, entries: dict[str, Any]) -> None:
+        """Connect the servers a session brought, for that session alone.
+
+        The definitions come from whoever dispatched this agent and carry no
+        credentials: each is a stdio stanza pointing at an endpoint that
+        dispatcher opened, and the socket's mode is the whole of the boundary. So
+        there is nothing here to merge into this agent's own config -- the servers
+        are connected into a registry of their own and made visible only for this
+        session's turns (see ``ToolRegistry.bind_session_tools``).
+
+        A server that fails to connect costs this session its tools and nothing
+        else. The session is still minted: refusing it would turn one unreachable
+        server into a sub-agent that cannot answer at all.
+
+        The stanza is a *replacement*, so releasing what it replaces comes first
+        and happens for an empty one too. ``session/load`` and ``session/resume``
+        both carry it, and the dispatch that opened the previous endpoints is
+        gone by then: leaving the old binding in place advertises tools backed by
+        a dead bridge, and ``session.mcp`` is the only handle on their stack.
+        """
+        registry = getattr(getattr(session.engine, "agent_loop", None), "tools", None)
+        if session.mcp is not None:
+            previous, session.mcp = session.mcp, None
+            with contextlib.suppress(Exception):
+                await previous.aclose()
+            if hasattr(registry, "release_session_tools"):
+                registry.release_session_tools(session.session_id)
+        if not entries:
+            return
+        if not hasattr(registry, "bind_session_tools"):
+            logger.warning("acp: session {} has no registry to scope its MCP servers in", session.session_id)
+            return
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        held = ToolRegistry()
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        session.mcp = stack
+        try:
+            # No executor: the endpoint is a unix socket on this host, so the
+            # bridge command has to run where that socket is.
+            await connect_mcp_servers(entries, held, stack, executor=None)
+        except Exception:
+            logger.exception("acp: connecting session {}'s MCP servers failed", session.session_id)
+        tools = {name: tool for name in held.tool_names if (tool := held.get(name)) is not None}
+        registry.bind_session_tools(session.session_id, tools)
+        logger.info("acp: session {} brought {} MCP tool(s)", session.session_id, len(tools))
 
     @staticmethod
     def _validated_cwd(raw: Any) -> str:
@@ -779,6 +841,69 @@ def _file_uri_to_path(uri: str) -> str | None:
     if parsed.netloc and parsed.netloc != "localhost":
         return None
     return unquote(parsed.path) or None
+
+
+def _acp_mcp_config(entry: Any) -> tuple[str, Any]:
+    """One ACP ``McpServer`` object as a ``(name, MCPServerConfig)`` pair.
+
+    Stdio only, matching what ``mcpCapabilities`` declares: every server a
+    dispatcher hands a sub-agent projects to a stdio stanza pointing at a host
+    endpoint, whatever the upstream transport is. An http or sse stanza is
+    refused rather than connected -- the capability said it would not come, and
+    honouring it anyway would put the definition (and its credentials) in this
+    process.
+    """
+    from raven.config.schema import MCPServerConfig
+
+    if not isinstance(entry, dict):
+        raise AcpMethodError(
+            protocol.INVALID_PARAMS, "each mcpServers entry must be an object", {"field": "mcpServers"}
+        )
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise AcpMethodError(protocol.INVALID_PARAMS, "an mcpServers entry needs a name", {"field": "mcpServers.name"})
+    if entry.get("type") not in (None, "stdio") or entry.get("url"):
+        raise AcpMethodError(
+            protocol.INVALID_PARAMS,
+            "only stdio MCP servers are supported per session; see mcpCapabilities",
+            {"field": "mcpServers.type", "name": name},
+        )
+    command = entry.get("command")
+    if not isinstance(command, str) or not command:
+        raise AcpMethodError(
+            protocol.INVALID_PARAMS,
+            "a stdio mcpServers entry needs a command",
+            {"field": "mcpServers.command", "name": name},
+        )
+    args = [str(arg) for arg in entry.get("args") or []]
+    return name, MCPServerConfig(type="stdio", command=command, args=args, env=_acp_env(entry.get("env"), name))
+
+
+def _acp_env(raw: Any, name: str) -> dict[str, str]:
+    """The ``env`` of a stdio stanza, in either shape the wire uses.
+
+    The schema's shape is a list of ``{name, value}`` objects; a mapping is
+    accepted too because it says the same thing unambiguously and a client that
+    sends one is not wrong about anything a refusal would teach it.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return {str(key): str(value) for key, value in raw.items()}
+    if isinstance(raw, list):
+        env: dict[str, str] = {}
+        for item in raw:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                raise AcpMethodError(
+                    protocol.INVALID_PARAMS,
+                    "each mcpServers env entry must be an object with a name",
+                    {"field": "mcpServers.env", "name": name},
+                )
+            env[item["name"]] = str(item.get("value") or "")
+        return env
+    raise AcpMethodError(
+        protocol.INVALID_PARAMS, "mcpServers env must be a list or an object", {"field": "mcpServers.env", "name": name}
+    )
 
 
 __all__ = [

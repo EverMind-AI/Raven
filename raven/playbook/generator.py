@@ -44,7 +44,7 @@ from raven.playbook.prompt import (
 )
 from raven.playbook.triggers import TriggerGuardError, guard_triggers
 from raven.playbook.types import PlaybookSpec, slugify
-from raven.playbook.validate import check_assets, validate_structure
+from raven.playbook.validate import check_assets, unusable_mcp_servers, validate_structure
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import SkillForgeRouter
@@ -268,6 +268,14 @@ class PlaybookGenerator:
                 notes = [f"Open question: {q}" for q in questions]
                 notes += [f"Assumption: {a}" for a in assumptions]
                 notes += [f"Missing capability: {m}" for m in missing]
+                # A server definition the file cannot honour is dropped when the
+                # playbook loads (``store._drop_unusable_mcp_servers``), so the
+                # generated file has to say so where a reviewer will see it --
+                # otherwise the section reads as delivered and the run reports
+                # ``not_configured`` with no trail back to the file.
+                notes += [
+                    f"Unusable mcpServers.{name}: {why}" for name, why in sorted(unusable_mcp_servers(spec).items())
+                ]
                 logger.info("playbook {} generated in {} round(s)", spec.name, round_no + 1)
                 return GeneratedPlaybook(spec=spec, notes=notes)
             messages.append({"role": "user", "content": build_repair_prompt(args, errors)})

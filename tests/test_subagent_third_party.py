@@ -33,6 +33,7 @@ from raven.agent.subagent.backends import (
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
+from raven.agent.subagent.mcp_grant import McpGrant
 from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.config.schema import (
@@ -1470,6 +1471,23 @@ def test_cli_config_resume_requires_agent_id() -> None:
         )
 
 
+def test_cli_config_requires_mcp_file_on_both_create_and_resume() -> None:
+    with pytest.raises(ValidationError, match="mcps is set"):
+        ThirdPartyCliSubagentConfig(name="x", command="agent {prompt}", mcps=["github"])
+    with pytest.raises(ValidationError, match="both contain"):
+        ThirdPartyCliSubagentConfig(
+            name="x",
+            command="agent {agent_id} {mcp_file}",
+            resume_command="agent --resume {agent_id}",
+            mcps=["github"],
+        )
+
+
+def test_cli_config_allows_an_empty_mcp_file_contract() -> None:
+    config = ThirdPartyCliSubagentConfig(name="x", command="agent {prompt_file} {mcp_file}")
+    assert config.mcps is None
+
+
 def test_cli_config_valid_stateful_provisioned_round_trips_camel() -> None:
     cfg = ThirdPartyCliSubagentConfig(
         name="claude_code",
@@ -2157,6 +2175,76 @@ async def test_cli_backend_resume_failure_forgets_and_retries_as_create(tmp_path
     assert await reg.lookup("s", "flaky", "h") == second
 
 
+async def test_resume_fallback_reuses_one_mcp_file_and_deletes_it(tmp_path: Path) -> None:
+    paths: list[str] = []
+    payloads: list[dict[str, Any]] = []
+
+    class RecordingBackend(CliAgentBackend):
+        async def _exec(
+            self,
+            template: str,
+            task: str,
+            task_id: str,
+            cwd: str,
+            agent_id: str | None,
+            attempts: list[dict[str, Any]] | None = None,
+            on_delta: Any = None,
+            runtime_env: dict[str, str] | None = None,
+            mcp_file: str | None = None,
+        ) -> tuple[str, str]:
+            assert mcp_file is not None
+            paths.append(mcp_file)
+            payloads.append(json.loads(Path(mcp_file).read_text(encoding="utf-8")))
+            if template == self.resume_command:
+                raise RuntimeError("stale session")
+            return "created", ""
+
+    registry = InstanceRegistry(path=tmp_path / "inst.json")
+    await registry.commit("s", "handoff", "h", "stale")
+    backend = RecordingBackend(
+        name="handoff",
+        command="agent {agent_id} {mcp_file}",
+        resume_command="resume {agent_id} {mcp_file}",
+        registry=registry,
+    )
+
+    assert (
+        await backend.run(
+            "task",
+            task_id="mcp-resume",
+            workspace=tmp_path,
+            executor=None,
+            session_key="s",
+            instance="h",
+        )
+        == "created"
+    )
+    assert len(paths) == 2 and paths[0] == paths[1]
+    assert payloads[0] == payloads[1] == {"tools": {"mcpServers": {}, "disabledTools": []}}
+    assert not Path(paths[0]).exists()
+
+
+async def test_cli_backend_uses_the_prepared_dispatch_grant_without_resolving_again(tmp_path: Path) -> None:
+    class PreparedBackend(CliAgentBackend):
+        def resolve_mcp_grant(self, mcps: list[str] | None = None) -> McpGrant:
+            raise AssertionError("dispatch grant was resolved twice")
+
+        async def _exec(self, *args: Any, **kwargs: Any) -> tuple[str, str]:
+            return "ok", ""
+
+    backend = PreparedBackend(name="prepared", command="agent {mcp_file}")
+
+    result = await backend.run(
+        "task",
+        task_id="prepared-grant",
+        workspace=tmp_path,
+        executor=None,
+        mcp_grant=McpGrant(),
+    )
+
+    assert result == "ok"
+
+
 async def test_cli_backend_create_after_failed_resume_also_fails_leaves_no_record(tmp_path: Path) -> None:
     reg = InstanceRegistry(path=tmp_path / "inst.json")
     await reg.commit("s", "allfail", "h", "stale-id")
@@ -2171,6 +2259,136 @@ async def test_cli_backend_create_after_failed_resume_also_fails_leaves_no_recor
     # The failed resume dropped the stale record; the retried create also
     # failed, so the error propagates and no record (stale or new) survives.
     assert await reg.lookup("s", "allfail", "h") is None
+
+
+def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
+    """``sessionMcp`` is declared per agent because no handshake reports it.
+
+    Measured: claude-agent-acp 0.66.0 and codex-acp 1.1.14 keep one session's MCP
+    servers to that session, opencode-ai 1.18.16 does not, and all three report
+    the same ``mcpCapabilities``. Pinned as a table because getting it backwards
+    is silent both ways -- a wrong ``false`` turns an agent's MCP off, a wrong
+    ``true`` offers one dispatch's servers to every concurrent sibling, since
+    raven pools one connection per agent name.
+
+    The unmeasured acp presets default to true: withholding from an agent nobody
+    has checked would turn off MCP for peers that work, which is the regression
+    this field must not cause.
+    """
+    from raven.agent.subagent.presets import session_mcp_for
+
+    presets = {p["name"]: p for p in third_party_subagent_presets()}
+    # The resolved answer, not the raw key: a preset that says nothing resolves to
+    # the permissive baseline, and that resolution is what a dispatch reads.
+    declared = {
+        name: session_mcp_for(ThirdPartyAcpSubagentConfig.model_validate(p))
+        for name, p in presets.items()
+        if p["kind"] == "acp"
+    }
+    assert declared == {
+        "claude_code": True,
+        "codex": True,
+        "opencode": False,
+        "hermes": True,
+        "openclaw": True,
+    }
+
+
+def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer() -> None:
+    """The case the shipped preset does not cover.
+
+    A stored row is a full config and is never re-merged from the preset table
+    when it loads, so an ``opencode`` row an operator already had carries no
+    ``sessionMcp`` key at all. Reading that absence as "isolates" would leave the
+    one agent measured not to isolate delivering as if it did -- and the operator
+    would have to know that a field they never wrote now needs writing.
+
+    Resolved from the row's ``preset`` instead, with an explicit value winning:
+    an operator who answers for their own build is answering, and the answer that
+    is merely missing is the one this fills in.
+    """
+    from raven.agent.subagent.presets import session_mcp_for
+
+    def _cfg(**over):
+        return ThirdPartyAcpSubagentConfig.model_validate({"kind": "acp", "command": "npx -y x", **over})
+
+    # absent -> the preset's measured answer
+    assert session_mcp_for(_cfg(name="opencode", preset="opencode")) is False
+    assert session_mcp_for(_cfg(name="claude", preset="claude_code")) is True
+    # absent with no preset at all (a hand-written row) -> the permissive baseline
+    assert session_mcp_for(_cfg(name="mine")) is True
+    # declared -> the row wins, in both directions
+    assert session_mcp_for(_cfg(name="opencode", preset="opencode", sessionMcp=True)) is True
+    assert session_mcp_for(_cfg(name="mine", sessionMcp=False)) is False
+
+
+def test_the_roster_row_advertises_the_verdict_the_dispatch_will_reach() -> None:
+    """The registry row, not just the backend, has to carry the effective answer.
+
+    ``injectable.mcps`` was the transport-level fact -- an acp peer takes an
+    ``mcpServers`` field -- and the playbook generator reads it to decide whether
+    a node may require a server. On the shipped opencode preset that advertised
+    injection while the dispatch withholds the servers for isolation, so a
+    generated work order could assign a required server to the one agent measured
+    not to keep it to the session, and the run would proceed without it.
+    """
+    from raven.agent.subagent.registry import _row_for
+
+    def _cfg(**over):
+        return ThirdPartyAcpSubagentConfig.model_validate({"kind": "acp", "command": "npx -y x", **over})
+
+    assert _row_for(_cfg(name="opencode", preset="opencode")).injectable.mcps is False
+    assert _row_for(_cfg(name="claude", preset="claude_code")).injectable.mcps is True
+    # And the operator's own answer still wins, in the direction that turns it on.
+    assert _row_for(_cfg(name="opencode", preset="opencode", sessionMcp=True)).injectable.mcps is True
+
+
+def test_the_backend_and_the_roster_cannot_disagree_about_delivery() -> None:
+    """One predicate answers both, so a peer is never advertised what it is denied."""
+    from raven.agent.subagent.backends import build_third_party_backend, session_mcp_effective
+    from raven.agent.subagent.registry import _row_for
+
+    for over in (
+        {"name": "opencode", "preset": "opencode"},
+        {"name": "claude", "preset": "claude_code"},
+        {"name": "opencode", "preset": "opencode", "sessionMcp": True},
+        {"name": "mine"},
+    ):
+        cfg = ThirdPartyAcpSubagentConfig.model_validate({"kind": "acp", "command": "npx -y x", **over})
+        backend = build_third_party_backend(cfg)
+        assert _row_for(cfg).injectable.mcps is not backend._session_mcp_refused, over
+        assert session_mcp_effective(cfg) is not backend._session_mcp_refused, over
+
+
+def test_the_resolved_answer_is_what_reaches_the_backend() -> None:
+    """Through ``build_third_party_backend``, because the resolver is only worth
+    anything at the seam the dispatch actually reads."""
+    stored_before_the_field = {
+        "name": "opencode",
+        "preset": "opencode",
+        "kind": "acp",
+        "command": "npx -y opencode-ai@1.18.16 acp",
+        "readyTimeoutMs": 120000,
+    }
+    backend = build_third_party_backend(ThirdPartyAcpSubagentConfig.model_validate(stored_before_the_field))
+    assert backend.session_mcp is False
+
+
+def test_the_declaration_survives_being_added_from_a_preset() -> None:
+    """``subagents_add`` builds the entry from the preset and then overlays only
+    presentation and MCP-policy fields, so a preset that withholds keeps
+    withholding on a row a user created through the UI. Pinned because the
+    overlay is an allowlist: a rewrite that built the entry from that list
+    instead would drop this silently, and the gate would stop applying to every
+    agent anyone added rather than hand-wrote."""
+    from raven.agent.subagent.presets import third_party_subagent_preset
+
+    entry = third_party_subagent_preset("opencode")
+    entry["name"] = "my-opencode"
+    entry["mcps"] = ["db"]
+    cfg = ThirdPartyAcpSubagentConfig.model_validate(entry)
+    assert cfg.name == "my-opencode"
+    assert cfg.session_mcp is False
 
 
 def test_presets_are_valid_and_complete() -> None:

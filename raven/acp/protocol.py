@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.agent.acp.protocol import (
+    SESSION_MCP_CAPABILITY,
     AcpProtocolError,
     decode,
     encode,
@@ -173,6 +174,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "REQUEST_CANCELLED",
     "RESOURCE_NOT_FOUND",
+    "SESSION_MCP_CAPABILITY",
     "STOP_REASONS",
     "AcpProtocolError",
     "decode",

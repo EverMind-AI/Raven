@@ -554,13 +554,30 @@ async def test_an_unusable_cwd_is_refused(harness, cwd):
     assert result["error"]["data"]["field"] == "cwd"
 
 
-async def test_per_session_mcp_servers_are_refused_not_ignored(harness):
-    """Accepting the field would leave a client believing its tools are available
-    for the rest of the session."""
+async def test_a_stdio_mcp_server_is_accepted_now(harness):
+    """The field used to be refused outright. What it does instead is in
+    ``test_acp_per_session_mcp.py``; this pins that it is no longer an error."""
     await harness.handshake()
     result = await harness.call("session/new", {"cwd": str(harness.cwd), "mcpServers": [{"name": "x", "command": "y"}]})
-    assert result["error"]["code"] == protocol.INVALID_PARAMS
-    assert result["error"]["data"] == {"field": "mcpServers", "count": 1}
+    assert "error" not in result, result
+
+
+async def test_a_transport_this_agent_cannot_honour_is_dropped(harness):
+    """``mcpCapabilities`` says http and sse do not come, and honouring one
+    anyway would put its credentials in this process.
+
+    Dropped rather than refused: the servers a dispatcher attaches are a
+    capability on top of the task, so a stanza this build cannot serve costs the
+    session those tools and must not cost the session -- failing ``session/new``
+    means the sub-agent never runs at all.
+    """
+    await harness.handshake()
+    result = await harness.call(
+        "session/new",
+        {"cwd": str(harness.cwd), "mcpServers": [{"name": "x", "type": "http", "url": "https://x/mcp"}]},
+    )
+    assert "error" not in result, result
+    assert result["result"]["sessionId"]
 
 
 async def test_an_empty_mcp_server_list_is_the_normal_value(harness):
@@ -992,7 +1009,7 @@ async def test_a_handler_bug_becomes_an_error_frame(harness, monkeypatch):
     def _boom(_params):
         raise ValueError("unexpected")
 
-    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    monkeypatch.setattr(harness.methods, "_validated_mcp_servers", _boom)
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
     assert result["error"]["code"] == protocol.INTERNAL_ERROR
     assert result["error"]["data"] == {"reason": "unexpected"}
@@ -1013,7 +1030,7 @@ async def test_an_error_data_never_carries_a_traceback(harness, monkeypatch):
             {"traceback_tail": '  File "/home/me/.config/raven.toml", line 3', "stage": "render"},
         )
 
-    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    monkeypatch.setattr(harness.methods, "_validated_mcp_servers", _boom)
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
 
     assert result["error"]["data"] == {"stage": "render"}
@@ -1027,7 +1044,7 @@ async def test_an_error_whose_data_is_only_private_carries_none_at_all(harness, 
     def _boom(_params):
         raise AcpMethodError(protocol.INTERNAL_ERROR, "the build failed", {"stack": "..."})
 
-    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    monkeypatch.setattr(harness.methods, "_validated_mcp_servers", _boom)
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
 
     assert "data" not in result["error"]
@@ -1043,7 +1060,7 @@ async def test_an_error_message_and_its_data_are_both_redacted(harness, monkeypa
             {"env": {"OPENAI_API_KEY": "sk-proj-abcdefghijklmnop"}},
         )
 
-    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    monkeypatch.setattr(harness.methods, "_validated_mcp_servers", _boom)
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
 
     assert "sk-proj-abcdefghijklmnop" not in str(result)
@@ -1058,7 +1075,7 @@ async def test_a_handler_bugs_reason_is_redacted(harness, monkeypatch):
     def _boom(_params):
         raise ValueError("cannot reach https://user:hunter2secret@db:5432/app")
 
-    monkeypatch.setattr(harness.methods, "_refuse_per_session_mcp", _boom)
+    monkeypatch.setattr(harness.methods, "_validated_mcp_servers", _boom)
     result = await harness.call("session/new", {"cwd": str(harness.cwd)})
 
     assert "hunter2secret" not in str(result)

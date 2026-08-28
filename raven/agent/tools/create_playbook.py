@@ -52,8 +52,9 @@ class CreatePlaybookTool(Tool):
             "run the same way later. Use it when the user wants to keep a workflow -- 'save "
             "this as a playbook', 'make this repeatable'. Describe the whole procedure from "
             "the conversation: the steps and their order, which results feed which steps, the "
-            "parameters that change per run, and the words someone would use when they want "
-            "this done (those make it easier to find later, they do not run it). It is usable "
+            "parameters that change per run, the MCP servers any step needs, and the words "
+            "someone would use when they want this done (those make it easier to find later, "
+            "they do not run it). It is usable "
             "as soon as it is written -- tell them where it landed and what it will do, and do "
             "not run it unless they ask."
         )
@@ -73,7 +74,11 @@ class CreatePlaybookTool(Tool):
                     "description": (
                         "The full procedure in plain language: steps in order, what each step "
                         "produces and consumes, per-run parameters, trigger phrases. Everything "
-                        "the run needs must be in here -- the generator sees only this text."
+                        "the run needs must be in here -- the generator sees only this text. "
+                        "That includes any MCP server a step needs: name it, say whether it is "
+                        "one this machine already has or one the playbook should carry its own "
+                        "definition for, and name the credential it needs without writing the "
+                        "credential itself."
                     ),
                 },
                 "skills": {

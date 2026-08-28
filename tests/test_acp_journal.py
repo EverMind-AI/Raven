@@ -14,7 +14,7 @@ import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from raven.agent.acp.journal import CALL, FRAME, FrameJournal, enabled, open_journal, prune
+from raven.agent.acp.journal import CALL, FRAME, FrameJournal, enabled, open_journal, prune, redact_acp_frame
 
 
 def _records(path: Path) -> list[dict]:
@@ -63,6 +63,29 @@ def test_the_file_is_unreadable_to_anyone_else(tmp_path: Path) -> None:
     journal.close()
 
     assert stat.S_IMODE(journal.path.stat().st_mode) == 0o600
+
+
+def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame() -> None:
+    frame = {
+        "method": "session/load",
+        "params": {
+            "mcpServers": [
+                {
+                    "name": "private",
+                    "env": [{"name": "TOKEN", "value": "stdio-secret"}],
+                    "headers": [{"name": "Authorization", "value": "header-secret"}],
+                }
+            ]
+        },
+    }
+
+    redacted = redact_acp_frame(frame)
+
+    server = redacted["params"]["mcpServers"][0]
+    assert server["env"][0]["value"] == "<redacted>"
+    assert server["headers"][0]["value"] == "<redacted>"
+    assert frame["params"]["mcpServers"][0]["env"][0]["value"] == "stdio-secret"
+    assert frame["params"]["mcpServers"][0]["headers"][0]["value"] == "header-secret"
 
 
 def test_reaching_the_ceiling_is_written_down(tmp_path: Path) -> None:

@@ -100,6 +100,12 @@ class AcpSession:
     reply: list[str] = field(default_factory=list)
     # Set when the connection is shutting down; see ``begin_turn``.
     closing: bool = False
+    # The ``AsyncExitStack`` holding the MCP servers this session brought with
+    # it, if any. Owned by the session and not by the methods object, because
+    # both ways a session leaves -- ``session/close`` and the connection going
+    # away -- already funnel through ``_close_engine``, and a second table
+    # keyed by session id would be a second answer to reclaim from.
+    mcp: Any = None
 
     @property
     def materials(self) -> Path:
@@ -197,7 +203,36 @@ class SessionTable:
                 logger.exception("acp: releasing session {} failed", session_id)
 
 
+async def release_session_mcp(session: AcpSession) -> None:
+    """Drop the MCP servers this session brought: hidden first, then disconnected.
+
+    Hidden first because the two failures are not symmetric -- a turn that finds
+    a tool whose connection is gone reports a broken tool call, while a turn that
+    cannot see the tool asks for something else.
+
+    Idempotent, and called on every path a session leaves by: most sessions bring
+    no servers at all.
+    """
+    registry = getattr(getattr(session.engine, "agent_loop", None), "tools", None)
+    if hasattr(registry, "release_session_tools"):
+        registry.release_session_tools(session.session_id)
+    stack, session.mcp = session.mcp, None
+    if stack is None:
+        return
+    try:
+        await stack.aclose()
+    except (RuntimeError, BaseExceptionGroup):
+        # The MCP SDK's anyio cancel scopes are noisy when the close lands on a
+        # different task than the connect did, which is the normal case here.
+        logger.debug("acp: closing session {}'s MCP servers was noisy", session.session_id)
+    except Exception:
+        logger.exception("acp: closing session {}'s MCP servers failed", session.session_id)
+
+
 async def _close_engine(session: AcpSession) -> None:
+    # Before the engine goes: the release reads the registry off it, and the
+    # subprocesses are this session's to reap either way.
+    await release_session_mcp(session)
     engine = session.engine
     if engine is None:
         return
@@ -220,4 +255,5 @@ __all__ = [
     "AcpSession",
     "SessionTable",
     "TurnAlreadyRunningError",
+    "release_session_mcp",
 ]

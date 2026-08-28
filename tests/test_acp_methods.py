@@ -350,17 +350,20 @@ class TestSessionNew:
 
             assert response["error"]["code"] == protocol.INVALID_PARAMS
 
-    async def test_per_session_mcp_servers_are_refused_not_ignored(self, rig):
-        """Accepting the field silently would leave a client believing its tools
-        are available for the rest of the session."""
+    async def test_per_session_mcp_servers_are_dropped_when_nothing_can_scope_them(self, rig):
+        """This rig's engine carries no tool registry, which is the state of a
+        connection whose loop never built. The field can do nothing there -- and
+        doing nothing must not fail the dispatch, which is the whole session. Where
+        there is a registry the servers are connected and scoped to the session
+        (test_acp_per_session_mcp.py)."""
         await rig.handshake()
         response = await rig.call(
             "session/new",
             {"cwd": str(rig.tmp_path / "p"), "mcpServers": [{"name": "x", "command": "y", "args": []}]},
         )
 
-        assert response["error"]["code"] == protocol.INVALID_PARAMS
-        assert response["error"]["data"] == {"field": "mcpServers", "count": 1}
+        assert "error" not in response, response
+        assert response["result"]["sessionId"]
 
     async def test_an_empty_mcp_server_list_is_fine(self, rig):
         """The field is required by the schema and an empty array is the normal
@@ -502,8 +505,12 @@ class TestSessionLoad:
         missing = await rig.call("session/load", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []})
 
         assert relative["error"]["data"]["field"] == "cwd"
-        assert servers["error"]["data"]["field"] == "mcpServers"
         assert missing["error"]["data"]["field"] == "sessionId"
+        # `mcpServers` is the exception, and deliberately: a stanza this build
+        # cannot serve is dropped, because the session is the dispatch and the
+        # servers were an attachment to it. The two above are the request itself
+        # being unanswerable.
+        assert "error" not in servers, servers
 
 
 class TestSessionResume:

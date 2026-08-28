@@ -36,6 +36,7 @@ from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (
     get_agents,
+    reject_unsupported_openai_fields,
     remove_agent,
     set_agents,
 )
@@ -304,6 +305,8 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "probe_status": result.status,
                 "probe_detail": result.detail,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),
+                "mcps": list(getattr(cfg, "mcps", None) or []),
+                "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
                 "last_test_detail": None if last is None else last.detail,
                 "last_test_at_ms": None if last is None else last.tested_at_ms,
@@ -355,9 +358,9 @@ def _hot_apply(agent_loop_factory: "AgentLoopFactory | None") -> None:
 async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Add a configured entry from a preset template.
 
-    Only `name`, `description` and `api_key` come from the caller; every
-    execution field (command, resumeCommand, idSource, transcriptFormat, ...)
-    comes from the preset, which is already correct and version-verified.
+    Only presentation, credentials and MCP policy fields come from the caller;
+    every execution field (command, resumeCommand, idSource, transcriptFormat,
+    ...) comes from the preset, which is already correct and version-verified.
     """
     preset_name = params.get("preset")
     if preset_name not in THIRD_PARTY_SUBAGENT_PRESETS:
@@ -373,6 +376,10 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         entry["description"] = params["description"]
     if params.get("api_key") is not None:
         entry["apiKey"] = params["api_key"]
+    if params.get("mcps") is not None:
+        entry["mcps"] = list(params["mcps"])
+    if params.get("allow_mcp_secrets") is not None:
+        entry["allowMcpSecrets"] = params["allow_mcp_secrets"]
     # Every preset ships `enabled: true`, but an openai entry with no key cannot
     # answer: advertising it to the model would produce a sub-agent that fails on
     # first dispatch. Added disabled instead, so the user enables it once the key
@@ -381,6 +388,7 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     if entry.get("kind") == "openai" and not (entry.get("apiKey") or "").strip():
         entry["enabled"] = False
     try:
+        reject_unsupported_openai_fields([entry])
         kept = list(get_agents(config_path=get_config_path()))
         set_agents([*kept, entry], config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
@@ -398,17 +406,29 @@ def _default_description(preset_name: str | None) -> str:
 
 
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Change only name / description / api key on an existing entry."""
+    """Change editable presentation, credential and MCP policy fields."""
     name = params.get("name")
     try:
         entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     target = next((e for e in entries if e.get("name") == name), None)
+    materialized_vendored = target is None
     if target is None:
-        raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+        from raven.agent.subagent.vendored_agents import discover_vendored_rows
+
+        vendored = next((cfg for cfg in discover_vendored_rows() if getattr(cfg, "name", None) == name), None)
+        if vendored is None:
+            raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+        target = vendored.model_dump(by_alias=True)
+        entries.append(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
+        if materialized_vendored and new_name != name:
+            raise ConfigFieldReadonlyError(
+                "a vendored sub-agent override cannot be renamed; its name binds it to the shipped launcher",
+                data={"field": "new_name", "name": name},
+            )
         target["name"] = new_name
     if params.get("description") is not None:
         description = params["description"]
@@ -420,7 +440,12 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     # an empty field is "unchanged", never "clear it".
     if (params.get("api_key") or "").strip():
         target["apiKey"] = params["api_key"]
+    if params.get("mcps") is not None:
+        target["mcps"] = list(params["mcps"])
+    if params.get("allow_mcp_secrets") is not None:
+        target["allowMcpSecrets"] = params["allow_mcp_secrets"]
     try:
+        reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)

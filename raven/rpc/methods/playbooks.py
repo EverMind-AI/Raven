@@ -128,6 +128,11 @@ async def playbooks_get(params: dict) -> dict:
     if store.origin_of(name) is None:
         raise ConfigValidationError(f"no playbook named {name}")
     spec = store.load(name)
+    # Imported here rather than at module scope: this module is loaded to
+    # register RPC methods, and the MCP client package pulls the SDK in with it.
+    from raven.mcp.client import resolve_transport
+    from raven.mcp.oauth import declares_own_endpoints
+
     return {
         "playbook": {
             "name": spec.name,
@@ -152,6 +157,44 @@ async def playbooks_get(params: dict) -> dict:
             },
             "nodes": [_node_wire(n) for n in (spec.nodes or [])],
             "prompts": spec.prompts or "",
+            # The declarations, not resolved values: a carried server references
+            # a credential through `{{ params.X }}` and the run supplies it, so
+            # what the file holds is the reference and that is what goes out. A
+            # node's `mcps` entry is only a name, and without this a reader
+            # cannot tell a server the playbook ships from a host server that
+            # happens to share the name.
+            "mcp_servers": {
+                name: {
+                    # Every field the runtime reads to decide what this is and
+                    # whether it runs -- `resolve_transport` consumes `type`,
+                    # grant resolution consumes `enabled` and `auth`, and a tool
+                    # call consumes the timeout. A projection missing any of them
+                    # shows a disabled SSE server with OAuth as a launchable
+                    # generic http one.
+                    # The transport the runtime will pick, not the raw field: a
+                    # url ending `/sse` resolves to `sse` and reporting the
+                    # unwritten field as null both breaks the contract (the schema
+                    # allows the three strings or an absent key) and leaves the
+                    # reader to redo a guess this already knows the answer to.
+                    **({"type": transport} if (transport := resolve_transport(cfg)) else {}),
+                    "command": cfg.command or "",
+                    "args": list(cfg.args or []),
+                    "url": cfg.url or "",
+                    "env": dict(cfg.env or {}),
+                    "headers": dict(cfg.headers or {}),
+                    "tool_timeout": cfg.tool_timeout,
+                    "enabled": cfg.enabled,
+                    "auth": cfg.auth,
+                    # Whether one is declared, never what it is: the endpoints and
+                    # any client id are the deployment's business. Asked through
+                    # the predicate the OAuth path itself uses -- a partial
+                    # document is ignored there and discovery runs, so calling it
+                    # self-carried here would describe a server that does not
+                    # exist.
+                    "has_oauth_config": declares_own_endpoints(cfg),
+                }
+                for name, cfg in (spec.mcp_servers or {}).items()
+            },
         }
     }
 
