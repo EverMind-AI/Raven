@@ -573,7 +573,7 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
     import json
     import time
 
-    from raven.cli._gateway_lock import read_status
+    from raven.gateway.lock import read_status
 
     status = read_status(now=time.time())
     if status is None or status.pid <= 0:
@@ -696,7 +696,7 @@ def _gateway_holds_the_lock() -> bool:
     import time
 
     try:
-        from raven.cli._gateway_lock import read_status
+        from raven.gateway.lock import read_status
 
         return read_status(time.time()) is not None
     except Exception:

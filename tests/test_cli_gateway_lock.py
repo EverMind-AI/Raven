@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from raven.cli import _gateway_lock
-from raven.cli._gateway_lock import (
+from raven.config.loader import set_config_path
+from raven.gateway import lock as _gateway_lock
+from raven.gateway.lock import (
     GatewayAlreadyRunningError,
     acquire,
     read_status,
 )
-from raven.config.loader import set_config_path
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ def _spy_payload_write_modes(monkeypatch, records: list[tuple[int, int]]) -> Non
 def test_the_published_endpoint_file_is_never_briefly_world_readable(tmp_path, monkeypatch) -> None:
     """The payload carries the web token: when publish itself creates the
     file, the token must already land in an owner-only file."""
-    from raven.cli import _gateway_lock as lock
+    from raven.gateway import lock
 
     target = tmp_path / "gateway.lock"
     monkeypatch.setattr(lock, "_lock_path", lambda: target)
@@ -156,7 +156,7 @@ def test_an_existing_wide_open_payload_is_narrowed_before_the_token_lands(tmp_pa
     """O_CREAT applies its mode only to a file it creates, so a payload that
     already exists as 0644 must be narrowed BEFORE the token is written --
     narrowing after leaves the token world-readable for the span in between."""
-    from raven.cli import _gateway_lock as lock
+    from raven.gateway import lock
 
     target = tmp_path / "gateway.lock"
     target.write_text("{}", encoding="utf-8")

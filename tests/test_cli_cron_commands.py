@@ -759,7 +759,7 @@ def test_add_im_channel_unresolvable_to_errors_with_hint(runner, fake_cron_dir, 
 
 
 def test_list_warns_im_jobs_without_gateway(runner, populated_cron, feishu_enabled, monkeypatch):
-    monkeypatch.setattr("raven.cli._gateway_lock.read_status", lambda now: None)
+    monkeypatch.setattr("raven.gateway.lock.read_status", lambda now: None)
 
     r = runner.invoke(cron_app, ["list"])
     assert r.exit_code == 0
@@ -768,12 +768,12 @@ def test_list_warns_im_jobs_without_gateway(runner, populated_cron, feishu_enabl
 
 
 def test_list_shows_gateway_and_warns_disabled_channel(runner, populated_cron, monkeypatch):
-    from raven.cli._gateway_lock import LockInfo
+    from raven.gateway.lock import LockInfo
 
     # No channels enabled in config → the populated feishu job is bound to a
     # disabled channel; gateway itself is up.
     monkeypatch.setattr(
-        "raven.cli._gateway_lock.read_status",
+        "raven.gateway.lock.read_status",
         lambda now: LockInfo(pid=4242, started_at=0.0, config_path=""),
     )
     from raven.config.schema import Config

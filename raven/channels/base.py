@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.channels.contract import Capabilities
-from raven.channels.intake import Intake
+from raven.gateway.intake import Intake
 
 
 class ChannelBase:

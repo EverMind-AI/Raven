@@ -2,7 +2,7 @@
 
 Exercises :func:`build_plugin_registry` and
 :func:`maybe_build_memory_backend` against the bundled
-``raven.plugin.memory.everos`` plugin installed via entry points.
+``raven.plugins.memory.everos`` plugin installed via entry points.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from raven.config.raven import (
     RavenConfig,
 )
 from raven.memory_engine import MemoryBackend
-from raven.plugin import PluginRegistry
+from raven.plugins import PluginRegistry
 
 # ---------------------------------------------------------------------------
 # Helpers

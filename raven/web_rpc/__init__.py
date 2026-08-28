@@ -4,7 +4,7 @@ A local WebSocket JSON-RPC endpoint a client connects to over a WebSocket.
 
 Built for `ui-webui`, which has been retired. It stays because it became the
 gateway process's only cross-process control plane, and something else now
-depends on that: ``raven.channels.live_probe`` reaches the live channel adapters
+depends on that: ``raven.gateway.live_probe`` reaches the live channel adapters
 through this endpoint, and those adapters exist nowhere else. Without it every
 other surface goes back to drawing the config file's ``enabled`` flag as if it
 were a connection.

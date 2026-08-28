@@ -1,4 +1,4 @@
-"""Tests for raven.plugin.memory.everos._server."""
+"""Tests for raven.plugins.memory.everos._server."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from raven.plugin.memory.everos._server import (
+from raven.plugins.memory.everos._server import (
     EverosNotConfiguredError,
     StopOutcome,
     _everos_executable,
@@ -129,10 +129,10 @@ class TestSpawnPreflight:
         _write_llm_section(everos_toml, api_key="")
         spawned = []
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: spawned.append(1),
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+        with patch("raven.plugins.memory.everos._server._probe_health", return_value=False):
             with pytest.raises(EverosNotConfiguredError, match="memory LLM is not configured"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
@@ -144,10 +144,10 @@ class TestSpawnPreflight:
         everos_toml.write_text('[memory]\ntimezone = "UTC"\n', encoding="utf-8")
         spawned = []
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: spawned.append(1),
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+        with patch("raven.plugins.memory.everos._server._probe_health", return_value=False):
             with pytest.raises(EverosNotConfiguredError):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
@@ -162,8 +162,8 @@ class TestSpawnPreflight:
         # API prefix, and leaving that unstubbed makes the outcome depend on
         # whether the developer's machine happens to have EverOS on this port.
         with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=True),
+            patch("raven.plugins.memory.everos._server._probe_health", return_value=True),
+            patch("raven.plugins.memory.everos._server._speaks_our_api", return_value=True),
         ):
             await ensure_everos_server("http://localhost:18791", on_wait=lambda: waits.append(1))
 
@@ -174,14 +174,14 @@ class TestSpawnPreflight:
         _write_llm_section(everos_toml)
         spawned = []
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: spawned.append(1),
         )
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server.get_logs_dir",
+            "raven.plugins.memory.everos._server.get_logs_dir",
             lambda: tmp_path,
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=[False, True]):
+        with patch("raven.plugins.memory.everos._server._probe_health", side_effect=[False, True]):
             await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
         assert spawned == [1]
@@ -197,10 +197,10 @@ class TestTheRootDescribesItsOwnAddress:
 
     @pytest.fixture(autouse=True)
     def _no_real_spawn(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("raven.plugin.memory.everos._server.get_logs_dir", lambda: tmp_path)
-        monkeypatch.setattr("raven.plugin.memory.everos._server.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("raven.plugins.memory.everos._server.get_logs_dir", lambda: tmp_path)
+        monkeypatch.setattr("raven.plugins.memory.everos._server.get_data_dir", lambda: tmp_path)
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._everos_executable",
+            "raven.plugins.memory.everos._server._everos_executable",
             lambda: "/bin/true",
         )
         self.spawned: list[list[str]] = []
@@ -220,7 +220,7 @@ class TestTheRootDescribesItsOwnAddress:
     def test_the_declared_address_is_written_before_the_child_starts(self, everos_toml) -> None:
         import tomllib
 
-        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+        from raven.plugins.memory.everos._server import _start_server_if_unlocked
 
         _write_llm_section(everos_toml)
         _start_server_if_unlocked("http://localhost:18791")
@@ -230,7 +230,7 @@ class TestTheRootDescribesItsOwnAddress:
         assert api == {"host": "localhost", "port": 18791}
 
     def test_the_child_gets_root_and_no_port(self, everos_toml) -> None:
-        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+        from raven.plugins.memory.everos._server import _start_server_if_unlocked
 
         _write_llm_section(everos_toml)
         _start_server_if_unlocked("http://localhost:18791")
@@ -243,7 +243,7 @@ class TestTheRootDescribesItsOwnAddress:
     def test_the_started_server_is_recorded(self, everos_toml, tmp_path) -> None:
         import json
 
-        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+        from raven.plugins.memory.everos._server import _start_server_if_unlocked
 
         _write_llm_section(everos_toml)
         _start_server_if_unlocked("http://localhost:18791")
@@ -258,19 +258,19 @@ class TestStoppingWhatWeStarted:
 
     @pytest.fixture
     def _data_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("raven.plugin.memory.everos._server.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("raven.plugins.memory.everos._server.get_data_dir", lambda: tmp_path)
         return tmp_path
 
     def test_a_pid_reused_by_another_program_is_not_signalled(self, _data_dir, monkeypatch) -> None:
         import json
         import os as _os
 
-        from raven.plugin.memory.everos._server import stop_recorded_server
+        from raven.plugins.memory.everos._server import stop_recorded_server
 
         (_data_dir / "everos-server.pid").write_text(
             json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
         )
-        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: False)
+        monkeypatch.setattr("raven.plugins.memory.everos._server._is_everos_server", lambda _p: False)
         signalled: list[int] = []
         monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
 
@@ -281,12 +281,12 @@ class TestStoppingWhatWeStarted:
         import json
         import os as _os
 
-        from raven.plugin.memory.everos._server import stop_recorded_server
+        from raven.plugins.memory.everos._server import stop_recorded_server
 
         (_data_dir / "everos-server.pid").write_text(
             json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": "/somewhere/else"})
         )
-        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+        monkeypatch.setattr("raven.plugins.memory.everos._server._is_everos_server", lambda _p: True)
         signalled: list[int] = []
         monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
 
@@ -303,14 +303,14 @@ class TestStoppingWhatWeStarted:
         import json
         import os as _os
 
-        from raven.plugin.memory.everos._server import stop_recorded_server
+        from raven.plugins.memory.everos._server import stop_recorded_server
 
         (_data_dir / "everos-server.pid").write_text(
             json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
         )
-        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+        monkeypatch.setattr("raven.plugins.memory.everos._server._is_everos_server", lambda _p: True)
         monkeypatch.setattr(_os, "kill", lambda *_a: None)
-        monkeypatch.setattr("raven.plugin.memory.everos._server.time.sleep", lambda _s: None)
+        monkeypatch.setattr("raven.plugins.memory.everos._server.time.sleep", lambda _s: None)
 
         assert stop_recorded_server(_data_dir, timeout=0.05) is StopOutcome.STILL_DRAINING
         assert (_data_dir / "everos-server.pid").exists(), "forgot a server that is still up"
@@ -319,12 +319,12 @@ class TestStoppingWhatWeStarted:
         import json
         import os as _os
 
-        from raven.plugin.memory.everos._server import stop_recorded_server
+        from raven.plugins.memory.everos._server import stop_recorded_server
 
         (_data_dir / "everos-server.pid").write_text(
             json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
         )
-        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+        monkeypatch.setattr("raven.plugins.memory.everos._server._is_everos_server", lambda _p: True)
 
         def _denied(*_a):
             raise PermissionError("nope")
@@ -338,14 +338,14 @@ class TestStoppingWhatWeStarted:
         import os as _os
         import signal as _signal
 
-        from raven.plugin.memory.everos._server import stop_recorded_server
+        from raven.plugins.memory.everos._server import stop_recorded_server
 
         (_data_dir / "everos-server.pid").write_text(
             json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
         )
         alive = [True, False]
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._is_everos_server",
+            "raven.plugins.memory.everos._server._is_everos_server",
             lambda _p: alive.pop(0) if alive else False,
         )
         sent: list[int] = []
@@ -365,7 +365,7 @@ class TestThePrimitivesAgainstTheRealOS:
     """
 
     def test_an_untouched_root_reads_as_free(self, tmp_path) -> None:
-        from raven.plugin.memory.everos._server import ome_lock_held
+        from raven.plugins.memory.everos._server import ome_lock_held
 
         assert ome_lock_held(tmp_path / "never-started") is False
 
@@ -376,7 +376,7 @@ class TestThePrimitivesAgainstTheRealOS:
         description, so a holder in *this* process collides with itself. That is
         why only the wizard and doctor -- which hold no engine -- may ask.
         """
-        from raven.plugin.memory.everos._server import ome_lock_held
+        from raven.plugins.memory.everos._server import ome_lock_held
         from raven.utils.portable_lock import file_lock
 
         lock = tmp_path / "root" / ".index" / "sqlite" / "ome.db.lock"
@@ -394,7 +394,7 @@ class TestThePrimitivesAgainstTheRealOS:
         A pidfile names a number, not a process; without this check a recycled
         pid would take a SIGTERM meant for an everos server.
         """
-        from raven.plugin.memory.everos._server import _is_everos_server
+        from raven.plugins.memory.everos._server import _is_everos_server
 
         assert _is_everos_server(os.getpid()) is False
 
@@ -420,7 +420,7 @@ class TestThePrimitivesAgainstTheRealOS:
         import subprocess
         import sys
 
-        from raven.plugin.memory.everos._server import _is_everos_server
+        from raven.plugins.memory.everos._server import _is_everos_server
 
         # A stand-in whose command line carries the marker `ps` looks for; the
         # point is that the parsing works against real `ps` output, not that this
@@ -448,7 +448,7 @@ class TestThePrimitivesAgainstTheRealOS:
     def test_a_dead_pid_is_not_a_server(self) -> None:
         import subprocess
 
-        from raven.plugin.memory.everos._server import _is_everos_server
+        from raven.plugins.memory.everos._server import _is_everos_server
 
         proc = subprocess.Popen(["sh", "-c", "exit 0"])
         proc.wait(timeout=5)
@@ -461,7 +461,7 @@ class TestThePrimitivesAgainstTheRealOS:
         import http.server
         import threading
 
-        from raven.plugin.memory.everos._server import _probe_health
+        from raven.plugins.memory.everos._server import _probe_health
 
         class _Handler(http.server.BaseHTTPRequestHandler):
             status = 200
@@ -515,7 +515,7 @@ class TestDeadChildDetection:
 
     @pytest.fixture
     def _logs(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("raven.plugin.memory.everos._server.get_logs_dir", lambda: tmp_path)
+        monkeypatch.setattr("raven.plugins.memory.everos._server.get_logs_dir", lambda: tmp_path)
         return tmp_path / "everos-server.log"
 
     @pytest.mark.asyncio
@@ -531,10 +531,10 @@ class TestDeadChildDetection:
         dead.poll.return_value = 1
         dead.returncode = 1
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: dead,
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=_probe):
+        with patch("raven.plugins.memory.everos._server._probe_health", side_effect=_probe):
             with pytest.raises(RuntimeError, match="exited with code 1"):
                 await ensure_everos_server("http://localhost:18791", timeout=30.0)
 
@@ -560,10 +560,10 @@ class TestDeadChildDetection:
         dead.poll.return_value = 3
         dead.returncode = 3
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: dead,
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+        with patch("raven.plugins.memory.everos._server._probe_health", return_value=False):
             with pytest.raises(RuntimeError, match="EngineLockHeldError"):
                 await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
@@ -572,7 +572,7 @@ class TestDeadChildDetection:
         """A slow first boot is what the timeout exists for; do not cut it short."""
         _write_llm_section(everos_toml)
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: _live_child(),
         )
         probes = []
@@ -581,7 +581,7 @@ class TestDeadChildDetection:
             probes.append(1)
             return False
 
-        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=_probe):
+        with patch("raven.plugins.memory.everos._server._probe_health", side_effect=_probe):
             with pytest.raises(RuntimeError, match="is still starting"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
@@ -593,10 +593,10 @@ class TestDeadChildDetection:
         """No handle means someone else holds the startup lock, not a dead child."""
         _write_llm_section(everos_toml)
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: None,
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=[False, True]):
+        with patch("raven.plugins.memory.everos._server._probe_health", side_effect=[False, True]):
             await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
     @pytest.mark.asyncio
@@ -606,10 +606,10 @@ class TestDeadChildDetection:
         dead.poll.return_value = 2
         dead.returncode = 2
         monkeypatch.setattr(
-            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            "raven.plugins.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: dead,
         )
-        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+        with patch("raven.plugins.memory.everos._server._probe_health", return_value=False):
             with pytest.raises(RuntimeError, match="exited with code 2"):
                 await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
@@ -621,8 +621,8 @@ class TestEnsureEverosServer:
         mock_response.status_code = 200
 
         with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=True),
+            patch("raven.plugins.memory.everos._server._probe_health", return_value=True),
+            patch("raven.plugins.memory.everos._server._speaks_our_api", return_value=True),
         ):
             await ensure_everos_server("http://localhost:18791")
 
@@ -636,9 +636,9 @@ class TestEnsureEverosServer:
         healthy while nothing was written and nothing recalled.
         """
         with (
-            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
-            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=False),
-            patch("raven.plugin.memory.everos._server._start_server_if_unlocked") as start,
+            patch("raven.plugins.memory.everos._server._probe_health", return_value=True),
+            patch("raven.plugins.memory.everos._server._speaks_our_api", return_value=False),
+            patch("raven.plugins.memory.everos._server._start_server_if_unlocked") as start,
         ):
             with pytest.raises(RuntimeError, match="too old for this raven"):
                 await ensure_everos_server("http://localhost:18791")
@@ -658,15 +658,15 @@ class TestEnsureEverosServer:
 
         with (
             patch(
-                "raven.plugin.memory.everos._server._probe_health",
+                "raven.plugins.memory.everos._server._probe_health",
                 side_effect=probe_side_effect,
             ),
             patch(
-                "raven.plugin.memory.everos._server._start_server_if_unlocked",
+                "raven.plugins.memory.everos._server._start_server_if_unlocked",
                 return_value=_live_child(),
             ) as mock_start,
             patch(
-                "raven.plugin.memory.everos._server.get_logs_dir",
+                "raven.plugins.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
         ):
@@ -682,15 +682,15 @@ class TestEnsureEverosServer:
         _write_llm_section(everos_toml)
         with (
             patch(
-                "raven.plugin.memory.everos._server._probe_health",
+                "raven.plugins.memory.everos._server._probe_health",
                 return_value=False,
             ),
             patch(
-                "raven.plugin.memory.everos._server._start_server_if_unlocked",
+                "raven.plugins.memory.everos._server._start_server_if_unlocked",
                 return_value=None,
             ),
             patch(
-                "raven.plugin.memory.everos._server.get_logs_dir",
+                "raven.plugins.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
             pytest.raises(RuntimeError, match="is still starting"),
@@ -698,7 +698,7 @@ class TestEnsureEverosServer:
             await ensure_everos_server("http://localhost:18791", timeout=0.05)
 
     def test_port_extraction(self) -> None:
-        from raven.plugin.memory.everos._server import _extract_port
+        from raven.plugins.memory.everos._server import _extract_port
 
         assert _extract_port("http://localhost:18791") == "18791"
         assert _extract_port("http://127.0.0.1:9999") == "9999"
@@ -716,7 +716,7 @@ class TestProbeClassification:
     """
 
     def test_ok_on_200(self) -> None:
-        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+        from raven.plugins.memory.everos._server import ProbeResult, probe_health
 
         resp = MagicMock(status_code=200)
         with patch("httpx.get", return_value=resp):
@@ -725,7 +725,7 @@ class TestProbeClassification:
     def test_refused_is_distinct_from_timeout(self) -> None:
         import httpx
 
-        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+        from raven.plugins.memory.everos._server import ProbeResult, probe_health
 
         with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
             assert probe_health("http://localhost:18791") is ProbeResult.REFUSED
@@ -737,14 +737,14 @@ class TestProbeClassification:
             assert probe_health("http://localhost:18791") is ProbeResult.TIMEOUT
 
     def test_non_200_is_error_not_refused(self) -> None:
-        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+        from raven.plugins.memory.everos._server import ProbeResult, probe_health
 
         resp = MagicMock(status_code=503)
         with patch("httpx.get", return_value=resp):
             assert probe_health("http://localhost:18791") is ProbeResult.ERROR
 
     def test_unexpected_exception_is_error(self) -> None:
-        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+        from raven.plugins.memory.everos._server import ProbeResult, probe_health
 
         with patch("httpx.get", side_effect=ValueError("garbage")):
             assert probe_health("http://localhost:18791") is ProbeResult.ERROR
@@ -756,7 +756,7 @@ class TestProbeClassification:
         pass on a refused connection."""
         import httpx
 
-        from raven.plugin.memory.everos._server import _probe_health
+        from raven.plugins.memory.everos._server import _probe_health
 
         resp = MagicMock(status_code=200)
         with patch("httpx.get", return_value=resp):
@@ -773,7 +773,7 @@ class TestProbeClassification:
         a probe that outlives the turn it was kicked from is a leak, not a
         check.
         """
-        from raven.plugin.memory.everos._server import _PROBE_TIMEOUT_S
+        from raven.plugins.memory.everos._server import _PROBE_TIMEOUT_S
 
         assert _PROBE_TIMEOUT_S == 1.0
 
@@ -793,14 +793,14 @@ class TestLockHolderLookup:
     """
 
     def test_returns_none_when_lock_file_absent(self, tmp_path) -> None:
-        from raven.plugin.memory.everos._server import lock_holder
+        from raven.plugins.memory.everos._server import lock_holder
 
         assert lock_holder(tmp_path) is None
 
     def test_lsof_pid_is_verified_against_the_cmdline(self, tmp_path) -> None:
         """A pid alone is not enough: the number may have been recycled onto an
         unrelated process, and signalling that is the accident this guards."""
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
         lock.parent.mkdir(parents=True)
@@ -813,7 +813,7 @@ class TestLockHolderLookup:
             assert _server.lock_holder(tmp_path) is None
 
     def test_reports_the_port_the_holder_actually_listens_on(self, tmp_path) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
         lock.parent.mkdir(parents=True)
@@ -836,7 +836,7 @@ class TestLockHolderLookup:
         HTTP. Reporting them with ``port=None`` is what lets the wizard say
         "something has your data but there is nowhere to connect" instead of
         silently deciding nobody is there."""
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
         lock.parent.mkdir(parents=True)
@@ -854,7 +854,7 @@ class TestLockHolderLookup:
         assert holder.port is None
 
     def test_falls_back_to_the_pidfile_when_the_os_cannot_answer(self, tmp_path) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
         lock.parent.mkdir(parents=True)
@@ -884,7 +884,7 @@ class TestTheWrittenAddressIsVerified:
     """
 
     def test_readback_mismatch_refuses_to_spawn(self, tmp_path, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         root = tmp_path / "everos"
         root.mkdir()
@@ -910,7 +910,7 @@ class TestParsingLsofListenOutput:
     """
 
     def test_ipv4_row(self) -> None:
-        from raven.plugin.memory.everos._server import _parse_listen_port
+        from raven.plugins.memory.everos._server import _parse_listen_port
 
         out = (
             "COMMAND     PID  USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
@@ -919,7 +919,7 @@ class TestParsingLsofListenOutput:
         assert _parse_listen_port(out) == 31995
 
     def test_ipv6_row(self) -> None:
-        from raven.plugin.memory.everos._server import _parse_listen_port
+        from raven.plugins.memory.everos._server import _parse_listen_port
 
         out = (
             "COMMAND   PID  USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
@@ -928,7 +928,7 @@ class TestParsingLsofListenOutput:
         assert _parse_listen_port(out) == 18791
 
     def test_wildcard_row(self) -> None:
-        from raven.plugin.memory.everos._server import _parse_listen_port
+        from raven.plugins.memory.everos._server import _parse_listen_port
 
         out = (
             "COMMAND   PID  USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
@@ -937,12 +937,12 @@ class TestParsingLsofListenOutput:
         assert _parse_listen_port(out) == 8000
 
     def test_header_only_is_no_port(self) -> None:
-        from raven.plugin.memory.everos._server import _parse_listen_port
+        from raven.plugins.memory.everos._server import _parse_listen_port
 
         assert _parse_listen_port("COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n") is None
 
     def test_empty_output_is_no_port(self) -> None:
-        from raven.plugin.memory.everos._server import _parse_listen_port
+        from raven.plugins.memory.everos._server import _parse_listen_port
 
         assert _parse_listen_port("") is None
 
@@ -960,7 +960,7 @@ class TestParsingProcLocks:
 
     @staticmethod
     def _parse(rows: str, inode: int, tmp_path, monkeypatch) -> int | None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         lock = tmp_path / "ome.db.lock"
         lock.touch()
@@ -995,7 +995,7 @@ class TestStoppingWhatTheLockNamed:
     """
 
     def test_a_pid_from_the_lock_can_be_stopped(self, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         signalled: list[int] = []
         monkeypatch.setattr(_server.os, "kill", lambda pid, sig: signalled.append(pid))
@@ -1009,7 +1009,7 @@ class TestStoppingWhatTheLockNamed:
         assert signalled == [4242]
 
     def test_an_undeliverable_signal_is_reported(self, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         def _boom(_pid, _sig):
             raise PermissionError("not yours")
@@ -1018,7 +1018,7 @@ class TestStoppingWhatTheLockNamed:
         assert _server.stop_pid(4242) is _server.StopOutcome.SIGNAL_FAILED
 
     def test_a_process_that_will_not_go_is_reported_as_draining(self, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         monkeypatch.setattr(_server.os, "kill", lambda _p, _s: None)
         monkeypatch.setattr(_server, "_is_everos_server", lambda _p: True)
@@ -1040,7 +1040,7 @@ class TestAnUnwritableRootFailsAsAStartFailure:
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o555 does not block root")
     def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         root = tmp_path / "everos"
         root.mkdir()
@@ -1073,7 +1073,7 @@ class TestFindingTheHolderWithoutLsof:
     """
 
     def test_the_port_comes_from_proc_net_tcp_when_lsof_is_gone(self, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         # /proc/net/tcp: local_address is hex ip:port; 0x4967 == 18791.
         rows = (
@@ -1087,7 +1087,7 @@ class TestFindingTheHolderWithoutLsof:
         assert _server._listening_port(4242) == 18791
 
     def test_lsof_is_still_used_when_present(self, monkeypatch) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         monkeypatch.setattr(_server, "_lsof_listening_port", lambda _p: 31995)
         monkeypatch.setattr(_server, "_proc_net_rows", lambda: pytest.fail("went to /proc with lsof available"))
@@ -1097,7 +1097,7 @@ class TestFindingTheHolderWithoutLsof:
     def test_proc_locks_is_preferred_on_linux(self, monkeypatch) -> None:
         """The holder/waiter distinction /proc/locks makes is worth ten lines of
         comment; asking lsof first threw it away wherever lsof exists."""
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         monkeypatch.setattr(_server, "_proc_locks_pid", lambda _l: 111)
         monkeypatch.setattr(_server, "_lsof_lock_pid", lambda _l: pytest.fail("asked lsof first"))
@@ -1105,7 +1105,7 @@ class TestFindingTheHolderWithoutLsof:
         assert _server._lock_holder_pid(Path("/x/ome.db.lock"), Path("/x")) == 111
 
     def test_lsof_answers_when_proc_locks_cannot(self, monkeypatch, tmp_path) -> None:
-        from raven.plugin.memory.everos import _server
+        from raven.plugins.memory.everos import _server
 
         monkeypatch.setattr(_server, "_proc_locks_pid", lambda _l: None)
         monkeypatch.setattr(_server, "_lsof_lock_pid", lambda _l: 222)

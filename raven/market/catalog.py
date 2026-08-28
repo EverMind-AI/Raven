@@ -37,12 +37,12 @@ _MAX_CATALOG_BYTES = 8 * 1024 * 1024
 
 @lru_cache(maxsize=1)
 def _bundled() -> dict:
-    raw = files("raven.plughub").joinpath("catalog.json").read_text(encoding="utf-8")
+    raw = files("raven.market").joinpath("catalog.json").read_text(encoding="utf-8")
     return json.loads(raw)
 
 
 async def _load() -> dict:
-    from raven.plughub.trust import hub_endpoint
+    from raven.market.trust import hub_endpoint
 
     raw = os.environ.get(_HUB_ENV, "").strip()
     if not raw:

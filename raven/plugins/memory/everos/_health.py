@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+from raven.plugins.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
 # Health is a local, in-process check; a slow answer means the server is wedged,
 # and waiting on it would only delay the work it is meant to inform.

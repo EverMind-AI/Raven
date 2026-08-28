@@ -37,7 +37,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from raven.channels.manager import ChannelManager
+    from raven.gateway.manager import ChannelManager
     from raven.memory_engine.consolidate.behaviors_extractor import (
         BehaviorsExtractor,
     )

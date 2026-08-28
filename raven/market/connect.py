@@ -1,6 +1,6 @@
 """Install-and-connect: the one transaction behind every plugin surface.
 
-The disk transaction lives in :mod:`raven.plughub.install`; what lives here is
+The disk transaction lives in :mod:`raven.market.install`; what lives here is
 everything that has to happen *around* it -- the catalog lookup, the id rules,
 the bounded connect kick, the rollback rule ("authentication failed => the
 plugin was not installed"), the re-authorization retry and the removal.
@@ -82,7 +82,7 @@ def entry_required_fields(entry: dict) -> list[str]:
 def installed_names() -> set[str]:
     """Every plugin/server name this install knows: ledgers plus config."""
     from raven.config.loader import load_config
-    from raven.plughub import read_ledgers
+    from raven.market import read_ledgers
 
     names = set(read_ledgers())
     try:
@@ -99,7 +99,7 @@ def validated_catalog_id(raw: Any, field: str = "id") -> str:
     as a validation error naming the field, instead of surfacing as
     internal_error from a path join three modules down.
     """
-    from raven.plughub.ledger import LedgerIdError, validate_catalog_id
+    from raven.market.ledger import LedgerIdError, validate_catalog_id
 
     try:
         return validate_catalog_id(str(raw or ""))
@@ -263,10 +263,10 @@ async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
     still pending is reported as ``pending`` (the caller keeps the entry out of
     "installed" and resolves it from later events).
     """
+    from raven.market import catalog_detail, install_plugin, uninstall_plugin
+    from raven.market.install import PlugInstallError
+    from raven.market.trust import HubTrustError
     from raven.mcp.oauth import auth_wait_servers
-    from raven.plughub import catalog_detail, install_plugin, uninstall_plugin
-    from raven.plughub.install import PlugInstallError
-    from raven.plughub.trust import HubTrustError
 
     entry_id = validated_catalog_id(entry_id)
     form = form or {}
@@ -331,8 +331,8 @@ async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
 
 async def remove(name: Any, loop: Any) -> dict:
     """Disconnect and uninstall one plugin or hand-written server."""
-    from raven.plughub import uninstall_plugin
-    from raven.plughub.install import PlugInstallError
+    from raven.market import uninstall_plugin
+    from raven.market.install import PlugInstallError
 
     name = server_name(name)
     if loop is not None and hasattr(loop, "mcp_manager"):
@@ -420,8 +420,8 @@ def installed_overview(loop: Any) -> list[dict]:
     truth is that someone has a consent page open.
     """
     from raven.config.loader import load_config
+    from raven.market import read_ledger
     from raven.mcp.oauth import auth_wait_servers
-    from raven.plughub import read_ledger
 
     manager = getattr(loop, "mcp_manager", None) if loop is not None else None
     live = {s["name"]: s for s in manager.status()} if manager is not None else {}

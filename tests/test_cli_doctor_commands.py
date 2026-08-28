@@ -50,7 +50,7 @@ def no_memory_server(monkeypatch: pytest.MonkeyPatch):
     machine whose embedding provider is broken would fail the healthy-exit-0
     case. Tests that care about capabilities install their own answer.
     """
-    from raven.plugin.memory.everos import _health
+    from raven.plugins.memory.everos import _health
 
     monkeypatch.setattr(
         _health,
@@ -119,7 +119,7 @@ def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
 
 def test_doctor_shows_gateway_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A held instance lock surfaces as ``running (pid …)`` in the Gateway section."""
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     monkeypatch.setattr(
         _gateway_lock,
@@ -134,7 +134,7 @@ def test_doctor_shows_gateway_running(healthy_config: Path, monkeypatch: pytest.
 
 
 def test_doctor_shows_gateway_not_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     monkeypatch.setattr(_gateway_lock, "read_status", lambda now: None)
     r = runner.invoke(app, ["doctor"])
@@ -221,7 +221,7 @@ def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pyt
 
 def _capabilities(no_memory_server, **caps: bool) -> None:
     """Make the memory probe answer as a reachable server with `caps`."""
-    from raven.plugin.memory.everos import _health
+    from raven.plugins.memory.everos import _health
 
     no_memory_server.setattr(
         _health,
@@ -243,7 +243,7 @@ def test_the_probe_follows_the_configured_address(healthy_config: Path, no_memor
     """
     import json as _json
 
-    from raven.plugin.memory.everos import _health
+    from raven.plugins.memory.everos import _health
 
     raw = _json.loads(healthy_config.read_text())
     raw.setdefault("plugins", {}).setdefault("config", {})["everos-memory"] = {"base_url": "http://localhost:29999"}
@@ -576,7 +576,7 @@ class TestDoctorDoesNotInventASelfManagedRoot:
             "raven.config.update_everos.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
-        from raven.plugin.memory.everos import _health
+        from raven.plugins.memory.everos import _health
 
         monkeypatch.setattr(
             _health,
@@ -632,7 +632,7 @@ class TestASelfManagedServerCanStillBeBroken:
     @staticmethod
     def _info(monkeypatch, caps: dict):
         from raven.cli import doctor_commands as dc
-        from raven.plugin.memory.everos import _health
+        from raven.plugins.memory.everos import _health
 
         monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
         monkeypatch.setattr(

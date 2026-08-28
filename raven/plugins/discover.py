@@ -23,7 +23,7 @@ from importlib import metadata
 from importlib.resources import as_file, files
 from pathlib import Path
 
-from raven.plugin.manifest import PluginManifest
+from raven.plugins.manifest import PluginManifest
 
 logger = logging.getLogger(__name__)
 

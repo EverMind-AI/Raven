@@ -39,7 +39,7 @@ _FLUSH_TIMEOUT_S = 360.0
 
 Flush is what triggers extraction -- it runs an LLM -- and everos itself
 budgets 360s for exactly this call (`_MEMORIZE_TIMEOUT_S` in
-`raven/plugin/memory/everos/backend.py`). `add` is a plain append and keeps
+`raven/plugins/memory/everos/backend.py`). `add` is a plain append and keeps
 the module's regular `_HTTP_TIMEOUT_S`.
 """
 
@@ -148,7 +148,7 @@ async def prime_from_turn(
         return False
     if not turn:
         return False
-    from raven.plugin.memory.everos.backend import convert_messages
+    from raven.plugins.memory.everos.backend import convert_messages
 
     payload = convert_messages(
         _monotonic(turn),
@@ -191,7 +191,7 @@ def _monotonic(turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     if len(turn) < 2:
         return turn
-    from raven.plugin.memory.everos.backend import as_ms_epoch
+    from raven.plugins.memory.everos.backend import as_ms_epoch
 
     stamps = [ms for row in turn[1:] if (ms := as_ms_epoch(row.get("timestamp")))]
     first = as_ms_epoch(turn[0].get("timestamp"))

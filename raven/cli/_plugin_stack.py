@@ -29,7 +29,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from raven.plugin import (
+from raven.plugins import (
     PluginConflictError,
     PluginFactoryImportError,
     PluginNotFoundError,
@@ -51,15 +51,15 @@ def plugin_discovery_sources() -> dict:
     Shared by :func:`build_plugin_registry` (live boot) and the
     ``raven plugins`` CLI command so both see the same set:
 
-    - bundled — ``raven/plugin/memory/`` inside the package.
-    - user    — ``~/.raven/plugin/``.
-    - project — ``./.raven/plugin/``.
+    - bundled — ``raven/plugins/memory/`` inside the package.
+    - user    — ``~/.raven/plugins/``.
+    - project — ``./.raven/plugins/``.
     - entry_points — the ``raven.plugins`` group.
     """
     import raven
 
     return {
-        "bundled_dir": Path(raven.__path__[0]) / "plugin" / "memory",
+        "bundled_dir": Path(raven.__path__[0]) / "plugins" / "memory",
         "user_dir": Path.home() / ".raven" / "plugins",
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",
@@ -80,10 +80,10 @@ def build_plugin_registry(
     Discovery spans four sources (priority bundled > user > project >
     entry_points):
 
-    - **bundled** — ``raven/plugin/memory/<id>/`` shipped inside the
+    - **bundled** — ``raven/plugins/memory/<id>/`` shipped inside the
       raven package (the EverOS backend lives here).
-    - **user** — ``~/.raven/plugin/<id>/`` drop-in directories.
-    - **project** — ``./.raven/plugin/<id>/`` drop-in directories.
+    - **user** — ``~/.raven/plugins/<id>/`` drop-in directories.
+    - **project** — ``./.raven/plugins/<id>/`` drop-in directories.
     - **entry_points** — the ``raven.plugins`` group, where
       third-party pip-installed plugins register their factories.
     """

@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from raven.plughub import catalog as catalog_mod
-from raven.plughub import install as install_mod
-from raven.plughub import ledger as ledger_mod
-from raven.plughub.catalog import catalog_categories, catalog_detail, catalog_search
-from raven.plughub.install import PlugInstallError, install_plugin, toggle_server, uninstall_plugin
-from raven.plughub.ledger import read_ledger, read_ledgers
+from raven.market import catalog as catalog_mod
+from raven.market import install as install_mod
+from raven.market import ledger as ledger_mod
+from raven.market.catalog import catalog_categories, catalog_detail, catalog_search
+from raven.market.install import PlugInstallError, install_plugin, toggle_server, uninstall_plugin
+from raven.market.ledger import read_ledger, read_ledgers
 
 
 @pytest.fixture(autouse=True)
@@ -232,7 +232,7 @@ async def test_catalog_detail_and_config_template_validates(monkeypatch):
 async def test_every_catalog_mcp_template_is_valid(monkeypatch):
     monkeypatch.delenv("RAVEN_PLUGHUB_URL", raising=False)
     from raven.config.schema import MCPServerConfig
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     data = catalog_mod._bundled()
     for entry in data["entries"]:
@@ -282,7 +282,7 @@ def test_a_catalog_id_cannot_escape_the_ledger_directory(bad_id: str) -> None:
     ``Path.__truediv__`` honours ``..`` and absolute strings alike. Without this
     an id of ``../config`` resolves to ~/.raven/config.json, which uninstall then
     unlinks; ``../credentials/mcp/github`` takes a stored OAuth refresh token."""
-    from raven.plughub.ledger import LedgerIdError, ledger_path
+    from raven.market.ledger import LedgerIdError, ledger_path
 
     with pytest.raises(LedgerIdError):
         ledger_path(bad_id)
@@ -293,7 +293,7 @@ def test_an_ordinary_catalog_id_still_resolves_inside_the_ledger_directory() -> 
 
     The autouse fixture already points the ledger directory at tmp_path.
     """
-    from raven.plughub.ledger import _plugins_dir, ledger_path
+    from raven.market.ledger import _plugins_dir, ledger_path
 
     path = ledger_path("notion")
     assert path.name == "notion.json"
@@ -315,7 +315,7 @@ def test_an_ordinary_catalog_id_still_resolves_inside_the_ledger_directory() -> 
     ],
 )
 def test_a_hub_endpoint_may_be_https_or_local_plaintext(url: str) -> None:
-    from raven.plughub.trust import require_https
+    from raven.market.trust import require_https
 
     assert require_https(url, what="hub") == url
 
@@ -341,14 +341,14 @@ def test_a_hub_endpoint_may_be_https_or_local_plaintext(url: str) -> None:
 def test_a_hub_endpoint_may_not_be_plaintext_remote_or_non_http(url: str) -> None:
     """Whoever answers the endpoint dictates the catalogue, and every stdio entry
     in it is a command line. Over plain http that is whoever is on the path."""
-    from raven.plughub.trust import HubTrustError, require_https
+    from raven.market.trust import HubTrustError, require_https
 
     with pytest.raises(HubTrustError):
         require_https(url, what="hub")
 
 
 def test_an_absent_override_leaves_the_default_endpoint(monkeypatch) -> None:
-    from raven.plughub.trust import hub_endpoint
+    from raven.market.trust import hub_endpoint
 
     assert hub_endpoint(None, "https://hub.evermind.ai/", what="X") == "https://hub.evermind.ai"
     assert hub_endpoint("   ", "https://hub.evermind.ai", what="X") == "https://hub.evermind.ai"
@@ -371,21 +371,21 @@ def test_an_absent_override_leaves_the_default_endpoint(monkeypatch) -> None:
     ],
 )
 def test_a_hub_supplied_download_url_may_not_aim_inside_the_network(url: str) -> None:
-    from raven.plughub.trust import HubTrustError, require_public_https
+    from raven.market.trust import HubTrustError, require_public_https
 
     with pytest.raises(HubTrustError):
         require_public_https(url, what="zip_url")
 
 
 def test_a_hub_supplied_download_url_may_be_an_ordinary_cdn() -> None:
-    from raven.plughub.trust import require_public_https
+    from raven.market.trust import require_public_https
 
     assert require_public_https("https://cdn.example.com/a.zip", what="zip_url")
 
 
 @pytest.mark.parametrize("command", ["npx", "uvx", "bunx"])
 def test_a_catalog_entry_may_launch_a_package_runner(command: str) -> None:
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     validate_mcp_connection({"type": "stdio", "command": command, "args": ["-y", "some-mcp"]})
 
@@ -427,7 +427,7 @@ def test_a_catalog_entry_may_not_relocate_the_payload_its_name_describes(args: l
     dialog still shows a trustworthy package name -- and the same entry can be
     rendering the user's API key into that process's environment.
     """
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": args})
@@ -444,7 +444,7 @@ def test_a_catalog_entry_may_not_relocate_the_payload_its_name_describes(args: l
     ],
 )
 def test_the_shapes_the_real_catalogue_uses_still_install(args: list) -> None:
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     validate_mcp_connection({"type": "stdio", "command": "npx", "args": args})
 
@@ -470,7 +470,7 @@ def test_the_shapes_the_real_catalogue_uses_still_install(args: list) -> None:
     ],
 )
 def test_a_catalog_entry_may_not_redirect_where_its_package_comes_from(name: str) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg"], "env": {name: "x"}})
@@ -490,7 +490,7 @@ def test_a_catalog_entry_may_not_redirect_where_its_package_comes_from(name: str
 def test_a_catalog_entry_may_not_launch_anything_it_likes(cfg: dict) -> None:
     """A stdio entry is a command line raven executes. The payload of a package
     runner is a visible package name in `args`; a shell's payload is not."""
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(cfg)
@@ -498,7 +498,7 @@ def test_a_catalog_entry_may_not_launch_anything_it_likes(cfg: dict) -> None:
 
 @pytest.mark.parametrize("arg", ["-c", "--call", "--call=whoami", "-e", "--eval=1"])
 def test_a_package_runner_may_not_be_turned_back_into_an_evaluator(arg: str) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": [arg, "whoami"]})
@@ -522,14 +522,14 @@ def test_a_package_runner_may_not_be_turned_back_into_an_evaluator(arg: str) -> 
     ],
 )
 def test_a_catalog_entry_may_not_set_an_environment_variable_that_loads_code(name: str) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": [], "env": {name: "/tmp/x.so"}})
 
 
 def test_a_catalog_entry_may_still_set_its_own_credential_variable() -> None:
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     validate_mcp_connection(
         {"type": "stdio", "command": "npx", "args": ["-y", "firecrawl-mcp"], "env": {"FIRECRAWL_API_KEY": "fc-1"}}
@@ -547,7 +547,7 @@ def test_a_catalog_entry_may_still_set_its_own_credential_variable() -> None:
     ],
 )
 def test_a_remote_catalog_entry_must_be_https_with_clean_headers(cfg: dict) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(cfg)
@@ -598,7 +598,7 @@ async def test_install_refuses_a_form_field_that_targets_a_loader_variable(_isol
 async def test_a_hub_that_may_not_be_trusted_does_not_become_one_we_read(monkeypatch) -> None:
     """An unreachable hub degrades to the bundled catalogue; a hub we refuse to
     talk to must not silently do the same, or the operator never learns."""
-    from raven.plughub.trust import HubTrustError
+    from raven.market.trust import HubTrustError
 
     monkeypatch.setenv("RAVEN_PLUGHUB_URL", "http://hub.example.com")
     with pytest.raises(HubTrustError):
@@ -624,7 +624,7 @@ async def test_a_ledger_that_cannot_be_written_rolls_the_install_back(_isolated,
         raise OSError("read-only ledger directory")
 
     monkeypatch.setattr(install_mod, "write_ledger", _boom, raising=False)
-    monkeypatch.setattr("raven.plughub.ledger.write_ledger", _boom)
+    monkeypatch.setattr("raven.market.ledger.write_ledger", _boom)
 
     with pytest.raises(OSError):
         await install_plugin(ENTRY_NONE)
@@ -636,7 +636,7 @@ async def test_a_ledger_that_cannot_be_written_rolls_the_install_back(_isolated,
 async def test_every_bundled_entry_survives_the_trust_check(monkeypatch) -> None:
     """The checks constrain a hostile hub, so they must not quietly disqualify the
     catalogue raven ships: an entry that cannot install is dead weight on the page."""
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     monkeypatch.delenv("RAVEN_PLUGHUB_URL", raising=False)
     for entry in catalog_mod._bundled()["entries"]:
@@ -694,7 +694,7 @@ async def test_a_plugin_skill_piece_refuses_to_replace_an_existing_skill(_isolat
     ],
 )
 def test_a_download_url_is_judged_on_the_host_the_client_will_use(url: str) -> None:
-    from raven.plughub.trust import HubTrustError, require_public_https
+    from raven.market.trust import HubTrustError, require_public_https
 
     with pytest.raises(HubTrustError):
         require_public_https(url, what="zip_url")
@@ -704,7 +704,7 @@ def test_the_plaintext_exemption_is_still_only_for_this_machine() -> None:
     """The two questions have different answers for the same name: *.localhost is
     loopback enough to refuse a hub-supplied target, and not trustworthy enough
     to buy the http exemption (hostile DNS can point it anywhere)."""
-    from raven.plughub.trust import HubTrustError, require_https
+    from raven.market.trust import HubTrustError, require_https
 
     assert require_https("http://localhost:8000", what="hub")
     assert require_https("http://127.0.0.1:8000", what="hub")
@@ -717,7 +717,7 @@ def test_pipx_is_not_a_runner_the_market_launches() -> None:
     the first non-flag token is the package would validate the word "run" and let
     `--python-args "-c ..."` through -- code execution under a name the confirm
     dialog still shows as trustworthy."""
-    from raven.plughub.trust import ALLOWED_COMMANDS, HubTrustError, validate_mcp_connection
+    from raven.market.trust import ALLOWED_COMMANDS, HubTrustError, validate_mcp_connection
 
     assert "pipx" not in ALLOWED_COMMANDS
     with pytest.raises(HubTrustError):
@@ -739,7 +739,7 @@ def test_pipx_is_not_a_runner_the_market_launches() -> None:
     ],
 )
 def test_a_catalog_entry_may_not_point_a_runner_at_its_own_config(name: str) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg"], "env": {name: "/tmp/x"}})
@@ -749,7 +749,7 @@ def test_a_catalog_entry_may_not_point_a_runner_at_its_own_config(name: str) -> 
 def test_each_runners_own_spelling_of_relaxed_trust_is_refused(arg: str) -> None:
     """`--insecure` and `--cafile` were the generic names; these are what npm and
     uv actually call the same thing."""
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg", arg, "v"]})
@@ -771,7 +771,7 @@ def _oauth_stanza(**overrides) -> dict:
 
 
 def test_a_catalog_entry_may_declare_its_authorization_server() -> None:
-    from raven.plughub.trust import validate_mcp_connection
+    from raven.market.trust import validate_mcp_connection
 
     validate_mcp_connection(_oauth_stanza(redirectUri="http://127.0.0.1:18860/oauth/callback"))
 
@@ -787,7 +787,7 @@ def test_a_catalog_entry_may_declare_its_authorization_server() -> None:
     ],
 )
 def test_a_catalog_entry_may_not_send_an_authorization_code_over_plaintext(overrides: dict) -> None:
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(_oauth_stanza(**overrides))
@@ -797,7 +797,7 @@ def test_a_catalog_entry_may_not_send_an_authorization_code_over_plaintext(overr
 def test_a_catalog_entry_may_not_carry_an_oauth_client_secret(key: str) -> None:
     """A secret every user of the catalog holds is not a secret, and raven
     authorizes as a public client either way."""
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     with pytest.raises(HubTrustError, match="public client"):
         validate_mcp_connection(_oauth_stanza(**{key: "sh-1"}))

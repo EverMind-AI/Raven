@@ -88,7 +88,7 @@ def _build_mcp_config(contrib: dict, form: dict) -> dict:
     """Catalog connection template + form secrets -> a camelCase config
     stanza, validated through MCPServerConfig before it ever hits disk."""
     from raven.config.schema import MCPServerConfig
-    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+    from raven.market.trust import HubTrustError, validate_mcp_connection
 
     cfg: dict[str, Any] = dict(contrib.get("connection") or {})
     cfg["auth"] = ((contrib.get("auth") or {}).get("mode")) or "none"
@@ -172,7 +172,7 @@ async def install_plugin(entry: dict, form: dict | None = None) -> dict:
 
     Returns the written ledger. Does not connect anything.
     """
-    from raven.plughub.ledger import read_ledger, write_ledger
+    from raven.market.ledger import read_ledger, write_ledger
 
     entry_id = str(entry.get("id") or "")
     if not entry_id:
@@ -220,7 +220,7 @@ async def install_plugin(entry: dict, form: dict | None = None) -> dict:
 async def uninstall_plugin(name: str) -> dict:
     """Remove a plugin: ledger replay for market installs, config+credential
     removal for manual servers. Does not touch live connections."""
-    from raven.plughub.ledger import delete_ledger, read_ledger
+    from raven.market.ledger import delete_ledger, read_ledger
 
     led = read_ledger(name)
     if led is not None:

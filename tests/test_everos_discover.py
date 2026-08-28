@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugin.memory.everos import _discover
+from raven.plugins.memory.everos import _discover
 
 
 def _write_root(root: Path, *, api: tuple[str, int] | None = ("127.0.0.1", 18791), key: str = "k") -> None:

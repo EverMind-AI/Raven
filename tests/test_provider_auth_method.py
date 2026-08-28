@@ -500,7 +500,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/config/update.py",
         "raven/context_engine/factory.py",
         "raven/evolver/judge/llm_client.py",
-        "raven/plugin/memory/everos/backend.py",
+        "raven/plugins/memory/everos/backend.py",
         "raven/routing/generate_embeddings.py",
         # A third-party sub-agent's own credential, not a provider section: the
         # key goes on that agent's own Authorization header against its own

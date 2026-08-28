@@ -165,7 +165,7 @@ path = "hatch_build.py"
 [tool.hatch.build]
 include = [
     "raven/**/*.py",
-    "raven/plugin/**/raven-plugin.toml",
+    "raven/plugins/**/raven-plugin.toml",
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",

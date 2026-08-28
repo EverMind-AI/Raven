@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from raven.plugin import (
+from raven.plugins import (
     Contributes,
     MemoryBackendContribution,
     PluginManifest,
@@ -77,13 +77,13 @@ class TestMemoryBackends:
 
             [[plugin.contributes.memory_backends]]
             name = "everos"
-            factory = "raven.plugin.memory.everos.backend:make_backend"
+            factory = "raven.plugins.memory.everos.backend:make_backend"
         """)
         mf = PluginManifest.from_toml_str(toml)
         assert len(mf.contributes.memory_backends) == 1
         c = mf.contributes.memory_backends[0]
         assert c.name == "everos"
-        assert c.factory == "raven.plugin.memory.everos.backend:make_backend"
+        assert c.factory == "raven.plugins.memory.everos.backend:make_backend"
 
     def test_factory_format_rejected_without_colon(self) -> None:
         toml = textwrap.dedent("""
@@ -92,7 +92,7 @@ class TestMemoryBackends:
             version = "0.1"
             [[plugin.contributes.memory_backends]]
             name = "x"
-            factory = "raven.plugin.memory.everos.backend.make_backend"
+            factory = "raven.plugins.memory.everos.backend.make_backend"
         """)
         with pytest.raises(ValidationError, match="module.path:callable"):
             PluginManifest.from_toml_str(toml)
@@ -104,7 +104,7 @@ class TestMemoryBackends:
             version = "0.1"
             [[plugin.contributes.memory_backends]]
             name = "x"
-            factory = "raven.plugin.memory.everos.backend:"
+            factory = "raven.plugins.memory.everos.backend:"
         """)
         with pytest.raises(ValidationError):
             PluginManifest.from_toml_str(toml)

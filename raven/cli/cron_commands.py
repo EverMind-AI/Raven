@@ -104,8 +104,8 @@ def _print_runner_status(service: CronService) -> None:
     the banner can honestly say "next wake due" while nothing ever fires."""
     import time
 
-    from raven.cli._gateway_lock import read_status as read_gateway_status
     from raven.config.loader import load_config
+    from raven.gateway.lock import read_status as read_gateway_status
 
     gateway = read_gateway_status(now=time.time())
     console.print(

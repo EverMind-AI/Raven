@@ -84,7 +84,7 @@ def _configured_target_url() -> str:
     should not, and the wizard moved both while calling the second a legacy
     port.
     """
-    from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+    from raven.plugins.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
     port = _recorded_memory_slice().get("port")
     if isinstance(port, int) and port > 0:
@@ -1316,7 +1316,7 @@ def _config_everos_role(
 
 def _lock_holder(root: Path | str):
     """The process serving ``root``, or None. Indirected so callers can stub it."""
-    from raven.plugin.memory.everos._server import lock_holder
+    from raven.plugins.memory.everos._server import lock_holder
 
     return lock_holder(root)
 
@@ -1334,7 +1334,7 @@ def _stop_for_reload(root: Path | str) -> bool:
     the models a moment ago, and applying them is what that means. Only a server
     raven can identify as serving this root is touched.
     """
-    from raven.plugin.memory.everos._server import StopOutcome, stop_pid
+    from raven.plugins.memory.everos._server import StopOutcome, stop_pid
 
     holder = _lock_holder(root)
     if holder is None:
@@ -1412,7 +1412,7 @@ def _ask_managed_port(root: Path | str, *, default: int | None = None, force_pro
     silently deciding the port is fine and rerunning the identical start makes
     the menu item look broken.
     """
-    from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+    from raven.plugins.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
     # Creating a root is the other question, and here a recorded address is the
     # best answer available: ignoring it is what "start the everos server at
@@ -1531,7 +1531,7 @@ def _use_self_managed_everos() -> bool:
     a convention into something the code cannot break.
     """
     from raven.config.update import set_plugin_config_fields
-    from raven.plugin.memory.everos._server import ProbeResult, probe_health
+    from raven.plugins.memory.everos._server import ProbeResult, probe_health
 
     while True:
         host = _prompt_text(oc._t("Host (e.g. 127.0.0.1):", "主机(如 127.0.0.1):"), default="localhost")
@@ -1592,7 +1592,7 @@ def _capability_lines(base_url: str) -> list[str]:
     embedding provider failed to build still answers 200 and quietly degrades to
     keyword-only recall.
     """
-    from raven.plugin.memory.everos._health import (
+    from raven.plugins.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         capability_available,
@@ -1622,7 +1622,7 @@ def _restart_here(root: Any, target: str) -> bool:
     """
     import asyncio
 
-    from raven.plugin.memory.everos._server import ensure_everos_server
+    from raven.plugins.memory.everos._server import ensure_everos_server
 
     _set_base_url(target)
     oc.console.print(
@@ -1924,7 +1924,7 @@ def _step4_memory(
 
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
-    from raven.plugin.memory.everos import _discover
+    from raven.plugins.memory.everos import _discover
 
     while True:
         source = _memory_source_menu()
@@ -2044,8 +2044,8 @@ def _step4_memory(
     import asyncio
 
     from raven.config.raven import load_raven_config
-    from raven.plugin.memory.everos._health import configured_base_url
-    from raven.plugin.memory.everos._server import ensure_everos_server
+    from raven.plugins.memory.everos._health import configured_base_url
+    from raven.plugins.memory.everos._server import ensure_everos_server
 
     # The configured address, not the default: the memory backend connects to
     # whatever ``plugins.config`` names, so probing 18791 on a setup that moved
@@ -2154,7 +2154,7 @@ def _report_everos_capabilities() -> None:
     "unavailable" would condemn a working install.
     """
     from raven.config.raven import load_raven_config
-    from raven.plugin.memory.everos._health import (
+    from raven.plugins.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         configured_base_url,
@@ -2191,6 +2191,6 @@ def _report_everos_capabilities() -> None:
 
 
 def _everos_server_log_hint() -> str:
-    from raven.plugin.memory.everos._server import server_log_path
+    from raven.plugins.memory.everos._server import server_log_path
 
     return str(server_log_path())

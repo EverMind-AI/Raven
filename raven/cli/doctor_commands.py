@@ -88,7 +88,7 @@ class MemoryInfo:
     @property
     def unbuilt(self) -> list[str]:
         """Roles the user configured that the server could not build."""
-        from raven.plugin.memory.everos._health import capability_available
+        from raven.plugins.memory.everos._health import capability_available
 
         return [s for s in self.configured if capability_available(self.capabilities, s) is False]
 
@@ -101,7 +101,7 @@ class MemoryInfo:
         semantically, and that is a worse memory rather than no memory. Only this
         list decides the exit code.
         """
-        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS
+        from raven.plugins.memory.everos._health import REQUIRED_SECTIONS
 
         return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
 
@@ -460,7 +460,7 @@ def _gather_static_checks() -> DoctorReport:
     except Exception:
         skill_forge_on = False
 
-    from raven.channels.manager import missing_dependency_channels
+    from raven.gateway.manager import missing_dependency_channels
 
     report.features = FeaturesInfo(
         channels_enabled=enabled,
@@ -470,7 +470,7 @@ def _gather_static_checks() -> DoctorReport:
 
     report.tools = _gather_tools(config)
 
-    from raven.cli._gateway_lock import read_status
+    from raven.gateway.lock import read_status
 
     info = read_status(now=time.time())
     if info is None:
@@ -493,7 +493,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     if backend != "everos":
         return info
     from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
-    from raven.plugin.memory.everos._health import (
+    from raven.plugins.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         configured_base_url,
@@ -555,7 +555,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
     "Server running" and "server can recall" stopped being the same statement in
     everos 1.2.1, so they are printed as separate lines rather than one tick.
     """
-    from raven.plugin.memory.everos._health import capability_available
+    from raven.plugins.memory.everos._health import capability_available
 
     if memory.backend != "everos":
         return
@@ -578,7 +578,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         if memory.configured:
             console.print(f"  Configured: {', '.join(memory.configured)}")
         return
-    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+    from raven.plugins.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
 
     for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
         label = f"  {section + ':':<12}"
@@ -698,7 +698,7 @@ def _degradation_note(section: str) -> str:
 
 
 def _server_log_hint() -> str:
-    from raven.plugin.memory.everos._server import server_log_path
+    from raven.plugins.memory.everos._server import server_log_path
 
     return str(server_log_path())
 
@@ -769,7 +769,7 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
         if features.channels_missing_deps:
-            from raven.channels.manager import _missing_dep_hint
+            from raven.gateway.manager import _missing_dep_hint
 
             names = ", ".join(features.channels_missing_deps)
             console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")

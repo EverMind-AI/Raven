@@ -78,7 +78,7 @@ async def test_status_leaves_the_live_fields_off_when_no_gateway_answers(
 ) -> None:
     """Absent, not false. A probe that cannot reach the gateway knows nothing
     about the channels, and 'not connected' would be a claim it cannot make."""
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     live_probe.reset_cache()
     monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
@@ -93,7 +93,7 @@ async def test_status_leaves_the_live_fields_off_when_no_gateway_answers(
 async def test_status_carries_the_live_state_when_the_gateway_answers(
     isolated_config: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     live_probe.reset_cache()
 
@@ -113,7 +113,7 @@ async def test_qr_is_empty_rather_than_an_error_when_no_gateway_answers(monkeypa
     """To this surface "nothing pending" and "nobody could say" are the same:
     there is no code to show either way, and a distinction here would only add a
     state the dialog has to explain."""
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
 
@@ -123,7 +123,7 @@ async def test_qr_is_empty_rather_than_an_error_when_no_gateway_answers(monkeypa
 
 
 async def test_qr_passes_the_gateways_answer_through(monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     async def _fake(name):
         assert name == "weixin"

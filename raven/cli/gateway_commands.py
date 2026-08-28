@@ -241,9 +241,9 @@ def register(app: typer.Typer) -> None:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-        from raven.channels.manager import ChannelManager
         from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
+        from raven.gateway.manager import ChannelManager
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
         from raven.session.manager import SessionManager
@@ -265,7 +265,7 @@ def register(app: typer.Typer) -> None:
             terminal_level="DEBUG" if verbose else log_cfg.console_level,
         )
 
-        from raven.cli._gateway_lock import GatewayAlreadyRunningError, acquire, publish_web_endpoint
+        from raven.gateway.lock import GatewayAlreadyRunningError, acquire, publish_web_endpoint
 
         # Held for the whole process; closing/GC of this handle releases the lock.
         try:
@@ -564,7 +564,7 @@ def register(app: typer.Typer) -> None:
                 # build_gateway registers one per channel that existed at
                 # launch, and without this a hot-started channel could receive
                 # but every reply to it was dropped by the hub.
-                from raven.channels.outlet import ChannelOutletAdapter
+                from raven.gateway.outlet import ChannelOutletAdapter
 
                 channels.on_started = lambda ch: gw_hub.register(ChannelOutletAdapter(ch))
                 # And retired when it stops, so a channel disabled and enabled

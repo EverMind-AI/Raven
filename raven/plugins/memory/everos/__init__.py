@@ -8,7 +8,7 @@ source); ``backend.make_backend`` is the factory the registry calls.
 This module is kept import-cheap on purpose: PluginDiscovery touches it
 during resource resolution, so it must NOT import ``backend`` (which
 lazily pulls the heavy ``everos`` substrate). Import the backend
-explicitly from :mod:`raven.plugin.memory.everos.backend`.
+explicitly from :mod:`raven.plugins.memory.everos.backend`.
 """
 
 __version__ = "1.1.0"

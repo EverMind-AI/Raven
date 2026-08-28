@@ -1,6 +1,6 @@
 """L2 — everos extraction quality (real LLM, direct service calls).
 
-This layer bypasses the raven.plugin.memory.everos backend and drives
+This layer bypasses the raven.plugins.memory.everos backend and drives
 ``everos.service.memorize`` directly with ``is_final=True`` so a
 boundary is forced and extraction runs deterministically (the backend's
 ``store`` has no flush path — that's covered as boundary-by-volume in

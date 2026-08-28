@@ -21,16 +21,16 @@ Two principles, both load-bearing:
 
 from __future__ import annotations
 
-from raven.plugin.bootstrap import assemble_plugin_registry
-from raven.plugin.context import PluginContext, ServiceLocator
-from raven.plugin.discover import DiscoveredPlugin, PluginDiscovery, Source
-from raven.plugin.manifest import (
+from raven.plugins.bootstrap import assemble_plugin_registry
+from raven.plugins.context import PluginContext, ServiceLocator
+from raven.plugins.discover import DiscoveredPlugin, PluginDiscovery, Source
+from raven.plugins.manifest import (
     Contributes,
     MemoryBackendContribution,
     PluginManifest,
     ToolContribution,
 )
-from raven.plugin.registry import (
+from raven.plugins.registry import (
     MemoryBackendFactory,
     PluginConflictError,
     PluginError,

@@ -385,7 +385,7 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     assert by_name["data.warehouse"]["connected"] is True
 
     # Non-empty is the load-bearing half. `plugin_discovery_sources()` points its
-    # bundled_dir at `raven/plugin/memory/`, which is in this tree, so discovery
+    # bundled_dir at `raven/plugins/memory/`, which is in this tree, so discovery
     # always has something to find -- and an empty list therefore means the block
     # raised and its `except` swallowed it, which is what the stub above used to
     # cause. A shape assertion alone would hold vacuously over that empty list.
@@ -1015,7 +1015,7 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
         asked.append((name, enabled))
         return "started" if enabled else "stopped"
 
-    import raven.channels.live_probe as probe
+    import raven.gateway.live_probe as probe
 
     probe_start = probe.channel_start
     probe.channel_start = fake_start
@@ -1037,7 +1037,7 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
     successful write into an error."""
     import json as _json
 
-    import raven.channels.live_probe as probe
+    import raven.gateway.live_probe as probe
     from raven.config.loader import get_config_path
 
     async def boom(name: str, *, enabled: bool = True) -> str:

@@ -8,7 +8,7 @@ enabled_by_default = true
 
 [[plugin.contributes.memory_backends]]
 name    = "everos"
-factory = "raven.plugin.memory.everos.backend:make_backend"
+factory = "raven.plugins.memory.everos.backend:make_backend"
 
 # Multimodal understanding exposed as an agent tool: the LLM calls
 # ``understand_media(paths=[...])`` to read attachments it can't consume
@@ -17,7 +17,7 @@ factory = "raven.plugin.memory.everos.backend:make_backend"
 # extra + ``EVEROS_MULTIMODAL__*`` config at call time.
 [[plugin.contributes.tools]]
 name    = "understand_media"
-factory = "raven.plugin.memory.everos.tools:make_understand_media_tool"
+factory = "raven.plugins.memory.everos.tools:make_understand_media_tool"
 
 # No config_schema block: the registry passes the user's
 # ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)`` verbatim
