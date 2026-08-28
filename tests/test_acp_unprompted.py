@@ -62,8 +62,8 @@ async def test_a_turn_reaches_the_pane_as_the_three_events_a_typed_turn_uses(tmp
     """The client demultiplexes message.start / token.delta / message.complete on
     ``target`` -- the same three a typed direct-chat turn produces -- and it must
     not be able to tell this turn from one it asked for. That is what makes the
-    fix zero client change, on both front ends (ui-tui dispatchDirect, ui-webui
-    directEvent), and it is the half that was missing while the log write looked
+    fix zero client change on the front ends that consume it (ui-tui
+    dispatchDirect), and it is the half that was missing while the log write looked
     finished: rounds ran, the log grew, the pane sat on the first reply."""
     rec, emitted = _recorder(tmp_path)
 

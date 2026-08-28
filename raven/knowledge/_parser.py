@@ -1,8 +1,7 @@
 """File parsers: raw upload bytes to a list of sections.
 
 A parser handles one format family and preserves boundaries; it never chunks.
-Adopted from the AgentScope tree vendored under ``ui-webui/service/agentscope``
-(Apache-2.0; see NOTICES.md), narrowed to the text family -- the only parsers
+Adopted from AgentScope's own implementation (Apache-2.0; see NOTICES.md), narrowed to the text family -- the only parsers
 the deployment being replaced ever registered. PDF, Word, Excel and PowerPoint
 each need a third-party library, so they arrive with the optional extra that
 carries those, not with the package.

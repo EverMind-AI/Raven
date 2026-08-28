@@ -46,7 +46,7 @@ def build_web(
     gateway runner is non-streaming (proactive replies are one Text), while the
     web channel wants token streaming, so it gets its own streaming runner. Both
     drive the same ``agent_loop`` (concurrency-safe: per-turn tool state is
-    turn-local). See ui-webui/docs/plans/2026-07-23-p1-gateway-web-channel.md.
+    turn-local).
 
     ``direct_targets`` has to be the *same object* the caller hands
     ``register_turn_methods``: ``turn.send`` writes the addressee into it and the
