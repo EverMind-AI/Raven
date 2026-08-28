@@ -71,6 +71,55 @@ def bind(path: Path) -> Iterator[None]:
         _CURRENT.reset(token)
 
 
+# The per-session resolver a runtime may register: ``callable(session_key) ->
+# Path | None``. Module state on purpose - the turn scheduler that binds a
+# working directory around a turn must not import the engine, and the engine
+# that knows where sessions keep their pinned workdir must not import the
+# scheduler. ``None`` (unset, or resolver answering None) makes ``bind_for`` a
+# no-op, which is every context that never pins a workdir: evals, plain CLI.
+_RESOLVER: Any = None
+
+
+def set_resolver(resolver: Any) -> None:
+    """Register (or clear, with None) the session-key workdir resolver."""
+    global _RESOLVER
+    _RESOLVER = resolver
+
+
+@contextmanager
+def bind_for(session_key: str) -> Iterator[None]:
+    """Bind the registered resolver's answer for ``session_key``, or nothing.
+
+    The resolver must never fail a turn: any error is logged and the turn runs
+    unbound, exactly as it would have before resolvers existed.
+    """
+    path: Path | None = None
+    if _RESOLVER is not None and session_key:
+        try:
+            answer = _RESOLVER(session_key)
+            path = Path(answer) if answer else None
+        except Exception as exc:  # noqa: BLE001 - a turn must not die on this
+            logger.warning("workdir resolver failed for {}: {}", session_key, exc)
+    if path is None:
+        logger.debug("workdir: no pin for {}; turn runs unbound", session_key)
+        yield
+        return
+    logger.debug("workdir: {} bound to {}", session_key, path)
+    with bind(path):
+        yield
+
+
+def repoint(path: Path) -> None:
+    """Repoint the RUNNING context at ``path``, with no reset.
+
+    For a mid-turn rebind (the workspace gate moving a session into a git
+    worktree the user just approved): the new binding must hold for the rest
+    of the turn's task context and die with it. Outside a turn this leaks
+    nothing - the contextvar is task-local.
+    """
+    _CURRENT.set(Path(path))
+
+
 def is_within(path: Path, root: Path) -> bool:
     """Whether ``path`` sits inside ``root``, comparing physical paths.
 

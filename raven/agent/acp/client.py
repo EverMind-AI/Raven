@@ -219,7 +219,7 @@ class AcpClient:
         # Imported here rather than at module level: backends/__init__ pulls in
         # the acp backend, which pulls in this module, so a module-level import
         # back into that package would close the cycle at init time.
-        from raven.agent.subagent.backends.env import login_shell_env
+        from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
 
         try:
             argv = shlex.split(command)
@@ -233,7 +233,7 @@ class AcpClient:
         # These agents need the login shell's PATH, not raven's -- the same
         # reason the cli transport does it.
         base_env = await asyncio.to_thread(login_shell_env)
-        child_env = {**base_env, **(env or {})}
+        child_env = {**base_env, **host_identity_env(), **(env or {})}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

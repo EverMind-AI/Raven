@@ -47,6 +47,15 @@ class AskUserTool(Tool):
         self._cid.set(conversation_id)
 
     @property
+    def broker(self) -> QuestionBroker | None:
+        """The wired broker, for co-located askers (the workspace gate)."""
+        return self._broker
+
+    def conversation_id(self) -> str:
+        """The current turn's conversation_id, empty outside a turn."""
+        return self._cid.get()
+
+    @property
     def name(self) -> str:
         return "ask_user"
 

@@ -38,6 +38,7 @@ class ExecSessionRegistry:
     def __init__(self, executor: SandboxExecutor):
         self._executor = executor
         self._sessions: dict[str, ExecSession] = {}
+        self._working_dirs: dict[str, str] = {}
         self._background_seq = 0
 
     @property
@@ -49,6 +50,9 @@ class ExecSessionRegistry:
 
     def get(self, name: str) -> ExecSession | None:
         return self._sessions.get(name)
+
+    def working_dir(self, name: str) -> str | None:
+        return self._working_dirs.get(name)
 
     def next_background_name(self) -> str:
         self._background_seq += 1
@@ -66,10 +70,12 @@ class ExecSessionRegistry:
             )
         session = await self._executor.open_session(cwd=cwd, env=env)
         self._sessions[name] = session
+        self._working_dirs[name] = str(cwd or os.getcwd())
         return session
 
     async def close(self, name: str) -> bool:
         session = self._sessions.pop(name, None)
+        self._working_dirs.pop(name, None)
         if session is None:
             return False
         await session.close()
@@ -231,7 +237,11 @@ class ExecTool(Tool):
         background: bool = False,
         **kwargs: Any,
     ) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        from raven.agent import workdir
+
+        # Per-call working_dir wins; then the turn's bound workdir (a session
+        # moved into a git worktree); then the constructed default.
+        cwd = working_dir or str(workdir.current() or "") or self.working_dir or os.getcwd()
 
         if not self._executor.is_sandboxed:
             # Non-sandboxed: full guard — deny-list patterns AND workspace restriction.

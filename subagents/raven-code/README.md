@@ -11,10 +11,11 @@ outside this directory.
 
 | | |
 |---|---|
-| Source | `github.com/TongLi31/Raven`, branch `feat/swarm_integration`, commit `e16aec5f` |
+| Remote source | `github.com/TongLi31/Raven`, branch `feat/acp_worktree_integration`, current remote tip `9bda1403` |
+| Vendored source | Local continuation of that branch at `3edd204f`; the GitLab workflow does not publish GitHub branches |
 | Local checkout | `./Raven-main` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.9, branch `feat/swarm_integration`, updated 2026-08-20 (installed 2026-08-12 from a zip of the same branch at `537578e6`) |
-| Local patches | **two**, recorded in `local-patches.diff` - see below |
+| Package / version | `raven` 0.1.9 (integration line), vendored 2026-08-28 from local source commit `3edd204f` |
+| Local patches | **none** - `local-patches.diff` records only that every former patch was upstreamed |
 | **Read first** | **`Raven-main/README.SWARM.md`** - the branch's own contract, and the authority on everything below |
 
 This is **Raven-X's swarm-integration branch**, not plain upstream Raven. It is
@@ -33,18 +34,24 @@ patches is obsolete** - the branch does all six jobs itself, and better:
 | Raised the 10k exec output cap and made it configurable | 30k cap **plus** spill-to-file: past the cap the full output is written out and the truncation notice names the path for `grep` / `read_file`. Strictly better than a bigger cap |
 | Stripped `ask_user` from the system prompt, since the tool was disabled | Keeps `ask_user` registered and makes it answer instantly with `Error: ask_user not configured (no question broker)` when there is no channel. Verified here. So the tool stays enabled and the prompt stays honest |
 
-Those six are gone for good. **Two patches have since come back**, and the rule
-that matters is that they are recorded rather than remembered:
+Those six are gone for good. **Three more patches came back during the 2026-08
+integration work - and have since been upstreamed into the fork branch, so zero
+live patches remain.** The table below is kept as history (the WHY of each fix);
+the fixes themselves now arrive with the vendored tree instead of being applied
+on top of it:
 
 | Patch | Why it is still here |
 |---|---|
 | `raven/plugin/memory/everos/backend.py` - coerce a message `timestamp` to the ms epoch | EverOS's `MessageItemDTO` declares `timestamp: int` while raven stamps its own records with an ISO-8601 string. A caller forwarding a persisted message fails the entire write with `422 INVALID_INPUT`, logged at warning level and surfaced nowhere else, so the store silently stops receiving turns. Upstream still carries the bare `m.get("timestamp") or now_ms` at `e16aec5f`. **Defense-in-depth, not an observed outage**: verified 2026-08-17 that no current caller sends an ISO string, so this is for the replay and direct-chat paths that do forward persisted messages |
 | `raven/session/manager.py` + `tests/test_session_state_dir.py` - drop the in-workspace session migration | `SessionManager` read `<workspace>/sessions` as a legacy location, moved every file into the per-workspace state bucket and removed the source tree. Trunk now keeps a raven's live transcripts exactly there, and this fork's workspace defaults to `~/.raven/workspace` - the host agent's own home - so the migration ran against the host's live store rather than a legacy one, once per launch. **Observed 2026-08-27**, not defense-in-depth. The two upstream tests that asserted the migration are inverted in the same patch, so a replay restores the fix and its regression guard together |
+| Agent Loop, coding tools, identity, bootstrap and checkpoints - consume the ACP session Working directory | ACP already validated and persisted `session/new.cwd`, but turns still used Raven-Code's Agent home for relative file and exec operations and described that path to the model. **Observed 2026-08-27** in a real Direct Chat: the ACP frame and session metadata named the host checkout while Raven-Code inspected `/root/.raven/workspace`. The patch binds the session directory for the whole turn, keeps Agent home separate in the prompt, reads repository rules from the bound checkout, and isolates shadow checkpoints per checkout so rendered credentials in Agent home are never snapshotted. |
 
-`local-patches.diff` holds them as appliable diffs with that rationale in its
-header. Everything that adapts this agent to our gateway still lives *beside*
-the checkout, never inside it - the patches above are the exception, and they are
-inside only because they correct upstream's own code.
+`local-patches.diff` no longer holds appliable diffs: it records WHERE each of
+the three went (fork commits on `feat/acp_worktree_integration`) so an update
+can verify the fixes are still present upstream instead of re-applying them.
+Everything that adapts this agent to our gateway lives *beside* the checkout,
+never inside it - and with the patches upstreamed, that rule now holds without
+exceptions.
 
 **The 2026-08-20 update found this the hard way.** The tree that was here
 differed from its own stated source in eight files. Seven were `ruff format`
@@ -64,40 +71,44 @@ cd <repo root>
 git fetch --no-tags https://github.com/TongLi31/Raven.git \
     'refs/heads/*:refs/remotes/tongli31/*'
 
-# What you are about to take, as a real commit range. The base is the commit
-# whose tree the current checkout matches - find it by diffing trees, because
-# no file here records it.
-git log --oneline <base>..tongli31/feat/swarm_integration
+# What you are about to take, as a real commit range. The base is the source
+# commit named in the provenance table at the top of this file. (While the
+# branch tip only exists locally - vendored from a not-yet-pushed commit -
+# fetch has nothing newer; diff against the local fork checkout instead.)
+git log --oneline <base>..tongli31/feat/acp_worktree_integration
 ```
 
-Then replace the body from those objects and re-apply the patches:
+Then replace the body from those objects. There is no patch step: live local
+patches are zero, so the vendored tree must equal the source tree exactly.
 
 ```bash
 cd subagents/raven-code
 rm -rf Raven-main && mkdir Raven-main
-git -C <repo root> archive tongli31/feat/swarm_integration | tar -x -C Raven-main
-(cd Raven-main && git apply ../local-patches.diff)
+git -C <repo root> archive <source-commit> | tar -x -C Raven-main
 git add -A .
 ```
 
 **The check that makes this safe**, run before committing: the staged tree must
-differ from upstream in exactly the files `local-patches.diff` touches, and in
-nothing else. Deletions of `.pdf` / `.png` / `.svg` / `.html` are expected - the
-repo's `subagents/**` rules keep report assets out - but a deleted source file
-means the extraction lost something.
+differ from the source tree in NOTHING. Deletions of `.pdf` / `.png` / `.svg` /
+`.html` are expected - the repo's `subagents/**` rules keep report assets out -
+but any other line means either the extraction lost a file or something local
+crept in unrecorded.
 
 ```bash
-git diff --name-status "tongli31/feat/swarm_integration^{tree}" \
+git diff --name-status "<source-commit>^{tree}" \
     $(git write-tree --prefix=subagents/raven-code/Raven-main)
 ```
+
+Also refresh `subagents/TREE_HASHES` in the same commit
+(`python3 scripts/check_vendored_subagents.py --update`) and update the source
+commit in the provenance table at the top of this file.
 
 A `.venv` inside the checkout is gitignored and so is absent from a fresh
 worktree; in a clone that has one, move it aside first and `uv sync --reinstall`
 afterwards (the install is editable, but `uv sync` bakes absolute-path shebangs
 into `.venv/bin/`, so a venv that moved needs them rewritten). Re-sync whenever
-`pyproject.toml` or `uv.lock` moved -- the 2026-08-20 update added `sqlglot`,
-`jedi` (with `parso`), `ripgrep-bin`, and an opt-in `data-agent` extra
-(`duckdb`, `pandas`).
+`pyproject.toml` or `uv.lock` changes; never assume an older checkout's resolved
+dependency set still matches the vendored source.
 
 The zip-era procedure below still applies when a drop arrives as an archive
 rather than a branch.
@@ -134,11 +145,12 @@ uv sync --reinstall
 live immediately, but `uv sync` bakes absolute-path shebangs into `.venv/bin/`,
 so a venv that moved needs them rewritten.
 
-If a future drop reintroduces something that has to be patched locally, capture
-it as a `local-patches.diff` beside this file rather than as six hand edits, and
-re-add it to step 4 - that is how the previous drop was handled.
+If a future drop reintroduces something that has to be fixed, commit the fix to
+the fork branch FIRST and re-vendor, so the tree-equality check keeps holding.
+Only a change that cannot live upstream goes into `local-patches.diff` - and it
+must then be re-added as an apply step here, the way the zip-era drops did it.
 
-### What `e16aec5f` brought that is worth knowing
+### History: what the 2026-08 swarm drop (`e16aec5f`) brought
 
 125 files, +11053/-629 over 29 commits. Two items change this agent's risk
 surface rather than its behaviour:
@@ -306,10 +318,11 @@ other's history.
 The workspace is the subtle part. Sessions are bucketed by the workspace's
 absolute path, so **the same id against a different workspace is a different
 conversation with no history** - the one trap the branch's README calls out. A
-later turn does not repeat the `repo:` directive, so `run.py` records the first
-turn's choice in `<RUN_ROOT>/sessions/<id>/workspace` and replays it. A directive
-naming a *different* repository is refused with an explanation rather than
-silently starting over.
+On the ACP path, the host sends the current Working directory with both
+`session/new` and `session/load`. The CLI compatibility path instead records the
+first turn's choice in `<state root>/instance-<id>/workspace` and replays it. A
+directive naming a *different* repository is refused with an explanation rather
+than silently starting over.
 
 Two consequences:
 
@@ -556,7 +569,8 @@ This matters more than it looks: the CLI itself prints `Using config: <path>` to
 **stderr** on every run. `run.py` captures the child's output rather than letting
 it inherit, so that line never reaches the reply.
 
-Diagnostics go to `<RUN_ROOT>/sessions/<id>/launcher.log`; `--verbose` mirrors
+ACP diagnostics go to `<state root>/acp/launcher.log`; CLI compatibility-mode
+diagnostics go to `<state root>/instance-<id>/launcher.log`. `--verbose` mirrors
 them to stderr and is for running by hand only, never for a spawn.
 
 ## Credentials
@@ -587,11 +601,15 @@ and so does `session_file`, which resolves against the same path, which is why
 the two cannot drift. Rendering it under
 
 ```
-~/.raven/workspace/subagent_sessions/raven-code/
+<host Agent home>/subagent_sessions/raven-code/acp/
 ```
 
-keeps real task transcripts out of this folder. `CODE_STATE_ROOT` moves that
-root; `CODE_RUN_ROOT` moves the per-conversation launcher state under it.
+keeps real task transcripts out of this folder. `CODE_STATE_ROOT` moves the
+`raven-code/` root; the CLI compatibility path uses `instance-<id>/` below it.
+
+The rendered config also pins `agents.defaults.workspace` to that same state
+partition. That is Raven-Code's Agent home; the ACP session `cwd` remains the
+separate Working directory where repository files are read, edited and run.
 
 Transcripts are bucketed by the **escaped absolute path of the workspace**, so
 moving either root invalidates existing buckets: the recorded workspace pointer
@@ -723,7 +741,7 @@ blocking.
 | `config.json` | Run config. Holds **no** secrets |
 | `.env` / `.env.example` | The real secrets (mode 600, never published) and their template |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders |
-| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **Two local patches**, recorded in `local-patches.diff` |
+| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **No live local patches** - `local-patches.diff` records only the history of their upstreaming |
 | `sessions/` | Raven's own transcripts, bucketed by workspace path. Created by the build beside its config; not ours to curate |
 
 ## Publishing

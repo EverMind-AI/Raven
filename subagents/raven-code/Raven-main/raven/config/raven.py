@@ -1262,8 +1262,22 @@ class CheckpointConfig(_Base):
     docstring for the interaction with the AgentLoop ``interactive`` flag."""
 
     shadow_dir: str = ".raven/shadow.git"
-    """Shadow git-dir, relative to the workspace. The real workspace is the
-    work-tree; the user's own ``.git`` is never touched."""
+    """Internal / direct-constructor compatibility only. The configured agent
+    loop NEVER places checkpoint data inside a working directory: it always
+    resolves ``shadow_base`` (below). This field exists for code that builds
+    a ``CheckpointService`` directly without a ``shadow_base`` and for the
+    tests of that legacy layout; the workspace is the work-tree either way,
+    and the user's own ``.git`` is never touched."""
+
+    shadow_base: str | None = None
+    """Directory (outside every working directory) holding the per-workdir
+    shadow repos, bucketed by a hash of each canonical working directory.
+    Unset or empty both mean the runtime's own state partition
+    (``<agent data dir>/checkpoints``, hoisted to a sibling when that would
+    land inside the boot workspace) - under NO configuration does checkpoint
+    state land inside the checkout being snapshotted. An explicit path that
+    resolves inside a working directory is refused and checkpointing is
+    disabled with a logged diagnostic."""
 
 
 class RuntimeConfig(_Base):

@@ -3,11 +3,7 @@
 For a coding agent the workspace is the user's repository: writing session
 files there makes every run show up as untracked files, which the agent then
 spends turns investigating. ``get_workspace_state_dir`` is the established
-convention for raven's own state, and this bucket is where sessions go.
-
-What this build must not do is reach into ``<workspace>/sessions`` and clear it
-out: a raven that shares the workspace keeps its live transcripts exactly
-there. See ``../local-patches.diff``.
+convention for raven's own state; sessions predate it and are migrated here.
 """
 
 from raven.session.manager import SessionManager
@@ -29,23 +25,26 @@ def test_each_workspace_gets_its_own_bucket(tmp_path):
     assert SessionManager(a).sessions_dir != SessionManager(b).sessions_dir
 
 
-def test_an_in_workspace_sessions_tree_is_left_untouched(tmp_path):
-    """Another raven's live store shares this directory, and outranks us.
+def test_in_workspace_sessions_are_left_alone(tmp_path):
+    """A sessions/ directory inside the workspace belongs to the CALLER.
 
-    An earlier version read ``<workspace>/sessions`` as this build's own legacy
-    layout and moved it into the state directory, removing the source. Pointed
-    at a workspace a current raven also uses, that ate the host's live session
-    store rather than a legacy one.
+    Run as a sub-agent this raven inherits the host agent's working directory,
+    and the host keeps its own transcripts and direct-chat records under
+    exactly <workspace>/sessions. The migration that used to sweep that tree
+    into our state dir stole the host's in-flight direct-chat record, so the
+    host silently dropped the reply. The contract now: never move, delete or
+    read it.
     """
     workspace = tmp_path / "repo"
-    host = workspace / "sessions" / "cli"
-    host.mkdir(parents=True)
-    (host / "live.jsonl").write_text('{"role": "user", "content": "hi"}\n', encoding="utf-8")
+    theirs = workspace / "sessions" / "cli"
+    theirs.mkdir(parents=True)
+    (theirs / "host.jsonl").write_text(chr(123) + "role: host" + chr(125) + chr(10), encoding="utf-8")
 
     mgr = SessionManager(workspace)
-
-    assert (host / "live.jsonl").read_text(encoding="utf-8").startswith('{"role"')
-    assert not (mgr.sessions_dir / "cli" / "live.jsonl").exists()
+    # Untouched in place...
+    assert (theirs / "host.jsonl").read_text(encoding="utf-8").startswith(chr(123))
+    # ...and not copied into our own state either.
+    assert not (mgr.sessions_dir / "cli" / "host.jsonl").exists()
 
 
 def test_round_trip_still_works_from_the_new_location(tmp_path):

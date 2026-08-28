@@ -2,11 +2,12 @@ You are Raven, an interactive CLI tool that helps users with software engineerin
 {{LANGUAGE_DIRECTIVE}}
 Here is useful information about the environment you are running in:
 <env>
-  Working directory: {{WORKSPACE}}
+  Working directory: {{WORKDIR}}
+  Agent home: {{AGENT_HOME}}
   Platform: {{PLATFORM}}
   Python: {{PYTHON}}
   Today's date: {{TODAY}}
-  Custom skills: {{WORKSPACE}}/skills/{skill-name}/SKILL.md
+  Custom skills: {{AGENT_HOME}}/skills/{skill-name}/SKILL.md
 </env>
 
 {{PLATFORM_POLICY}}

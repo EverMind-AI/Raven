@@ -1,231 +1,32 @@
 # Local patches carried on top of the vendored checkout.
 #
-# Apply from inside the checkout after replacing it with a newer upstream tree:
+# CURRENTLY EMPTY: the snapshot equals the fork tree exactly.
 #
-#     cd subagents/raven-code/Raven-main && git apply ../local-patches.diff
+# This file is retained as a history of patches that used to be carried here.
+# Do not run git apply while it is empty. A future local-only patch must add an
+# actual diff below and document why it cannot live in the fork first. After a
+# re-vendor, compare the snapshot with the recorded fork commit: zero difference
+# is expected when this file remains empty.
 #
-# Then confirm the tree differs from upstream in exactly these files and no
-# others. An empty diff-vs-upstream means a patch was lost; extra files mean
-# something local crept in unrecorded.
+# Every patch this file used to carry is now in the source lineage. The remote
+# fork branch (github.com/TongLi31/Raven, feat/acp_worktree_integration) is at
+# 9bda1403; this snapshot exactly matches its local continuation at 3edd204f.
+# The GitLab workflow does not publish that continuation to GitHub.
 #
-# 1. everos timestamp coercion. EverOS's MessageItemDTO declares
-#    `timestamp: int` (ms epoch) while raven stamps its own records with an
-#    ISO-8601 string, so a caller that forwards a persisted message fails the
-#    whole write with 422 INVALID_INPUT, logged at warning level and reported
-#    nowhere else -- the store just stops receiving turns. Upstream still has
-#    the bare `m.get("timestamp") or now_ms` as of e16aec5f.
+# 1. everos timestamp coercion -> fork commit 31fd7f3
+#    ("fix(memory): coerce a message timestamp to the ms epoch for everos").
 #
-#    Status: defense-in-depth, NOT an observed outage. Verified 2026-08-17 that
-#    no current caller sends an ISO string (the assembler's messages carry no
-#    timestamp key; the importer converts to ms before storing). Keep it for
-#    the replay / direct-chat paths that do forward persisted messages.
+# 2. in-workspace session migration removal -> the fork dropped
+#    `SessionManager._migrate_in_workspace_sessions` (and inverted the two
+#    upstream tests that asserted the migration happens); the vendored tree
+#    carries no migration code to remove.
 #
-# 2. in-workspace session migration removed. This build still carries
-#    `SessionManager._migrate_in_workspace_sessions`, which treats
-#    `<workspace>/sessions` as a legacy location and moves every file out of it
-#    before `rmdir`-ing the tree. Trunk has since made `<workspace>/sessions`
-#    the canonical home of the host's live transcripts, and this fork's
-#    workspace defaults to `~/.raven/workspace` -- the host's own agent home --
-#    so the migration fired on the host's store, not on a legacy one.
+# 3. ACP session working-directory binding (turn workdir, coding tools,
+#    identity prompt, bootstrap segment, per-checkout checkpoints) -> fork
+#    commit d076432 ("feat(agent): adopt the workspace-inheritance hotfix
+#    semantics at the source"), which ports the gitlab hotfix
+#    (fix/raven_code_workspace_init_hotfix @9cd1047d) verbatim where the fork
+#    had not already implemented it.
 #
-#    Status: observed outage, 2026-08-27. Two launches (02:39 and 02:58) each
-#    relocated the whole host session tree into
-#    `<STATE_ROOT>/sessions/_root_.raven_workspace/`. A conversation ended up
-#    split across two roots, sub-agent records opened before a launch could not
-#    be finished (`SpawnRecord.finish` returns early when its directory is
-#    gone, so no `out.md`, `status` stuck at `running`, and no instance log at
-#    all), and the `dest.exists()` branch `unlink`-ed one segment outright.
-#    Drop the migration rather than re-point it: this fork has no legacy tree
-#    of its own to migrate, so there is nothing left for it to do.
-#
-#    Covers `tests/test_session_state_dir.py` as well as the module. The two
-#    upstream tests there assert the migration happens, so a replay carrying the
-#    module hunk alone restores the fix and a suite that contradicts it (2 failed,
-#    3 passed) -- and loses the regression guard this patch exists to keep. They
-#    are inverted rather than deleted: the hazard is the claim, not the identifier.
-diff --git a/raven/plugin/memory/everos/backend.py b/raven/plugin/memory/everos/backend.py
-index 39addf39..da6a5793 100644
---- a/raven/plugin/memory/everos/backend.py
-+++ b/raven/plugin/memory/everos/backend.py
-@@ -29,6 +29,7 @@ from __future__ import annotations
- import logging
- import os
- import time
-+from datetime import datetime, timezone
- from types import SimpleNamespace
- from typing import Any, Literal, Protocol
- 
-@@ -152,6 +153,42 @@ _DEFAULT_HTTP_TIMEOUT_S: float = 60.0
- _MEMORIZE_TIMEOUT_S: float = 360.0
- 
- 
-+def _timestamp_ms(value: object, *, default_ms: int) -> int:
-+    """Coerce a message's timestamp to the ms epoch EverOS's DTO declares.
-+
-+    Raven stamps its own records with an ISO-8601 string while
-+    ``MessageItemDTO.timestamp`` is an ``int``, so passing one straight
-+    through fails the whole write -- ``422 INVALID_INPUT`` over HTTP, and an
-+    ``int()`` parse error embedded. The failure is logged at warning level and
-+    nothing else reports it, so the store simply stops receiving turns.
-+
-+    An unparseable value falls back to now rather than dropping the message:
-+    the timestamp is bookkeeping about the turn, the content is the part worth
-+    keeping.
-+    """
-+    if value is None or isinstance(value, bool):
-+        return default_ms
-+    if isinstance(value, int):
-+        return value
-+    if isinstance(value, float):
-+        return int(value)
-+    if not isinstance(value, str):
-+        return default_ms
-+    text = value.strip()
-+    if not text:
-+        return default_ms
-+    if text.isdigit():
-+        return int(text)
-+    try:
-+        parsed = datetime.fromisoformat(text)
-+    except ValueError:
-+        return default_ms
-+    # Raven writes a naive isoformat() and its clock is UTC; reading it as
-+    # local time would shift every stored turn by the host's offset.
-+    if parsed.tzinfo is None:
-+        parsed = parsed.replace(tzinfo=timezone.utc)
-+    return int(parsed.timestamp() * 1000)
-+
- class _HttpEverosAdapter:
-     """Adapter that talks to an EverOS service over HTTP.
- 
-@@ -681,7 +718,8 @@ class EverosBackend:
-           ``recall(user_id=<X>)`` must use that same ``<X>``.
- 
-         Other conversions: drop ``system``; missing ``sender_id`` on a
--        user message → ``user_id``; missing ``timestamp`` → now (ms);
-+        user message → ``user_id``; ``timestamp`` coerced to ms epoch
-+        (unparseable → now);
-         multimodal ``content`` → space-joined text; empty text → drop.
-         """
-         now_ms = int(time.time() * 1000)
-@@ -709,7 +747,7 @@ class EverosBackend:
-             entry: dict[str, Any] = {
-                 "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
-                 "role": role,
--                "timestamp": m.get("timestamp") or now_ms,
-+                "timestamp": _timestamp_ms(m.get("timestamp"), default_ms=now_ms),
-                 "content": content,
-             }
-             if tool_calls:
-diff --git a/raven/session/manager.py b/raven/session/manager.py
-index 7b195591..b7dd73cb 100644
---- a/raven/session/manager.py
-+++ b/raven/session/manager.py
-@@ -11,7 +11,7 @@ from typing import Any
- from loguru import logger
- 
- from raven.utils.atomic_io import atomic_replace, locked_append
--from raven.utils.helpers import ensure_dir, safe_filename
-+from raven.utils.helpers import safe_filename
- 
- 
- def new_chat_id(now: datetime | None = None) -> str:
-@@ -149,36 +149,8 @@ class SessionManager:
-         # is the user's repository, so state written there turns up as untracked
-         # files in every run (and the agent spends turns investigating them).
-         self.sessions_dir = get_workspace_state_dir(workspace, "sessions")
--        self._migrate_in_workspace_sessions()
-         self._cache: dict[str, Session] = {}
- 
--    def _migrate_in_workspace_sessions(self) -> None:
--        """Move sessions written by older versions into the state directory.
--
--        Best-effort and one-way: a file already present in the new location is
--        the newer one and is never overwritten. The source tree is removed only
--        once nothing is left in it, so a partial failure keeps the data.
--        """
--        legacy = self.workspace / "sessions"
--        if not legacy.is_dir() or legacy.is_symlink() or legacy == self.sessions_dir:
--            return
--        try:
--            for src in sorted(legacy.rglob("*")):
--                if not src.is_file():
--                    continue
--                dest = self.sessions_dir / src.relative_to(legacy)
--                if dest.exists():
--                    src.unlink()
--                    continue
--                ensure_dir(dest.parent)
--                src.replace(dest)
--            for path in sorted(legacy.rglob("*"), reverse=True):
--                if path.is_dir():
--                    path.rmdir()
--            legacy.rmdir()
--        except OSError as exc:
--            logger.debug("session migration skipped: {}", exc)
--
-     def _get_session_path(self, key: str) -> Path:
-         """Get the file path for a session: sessions/{channel}/{chat_id}.jsonl."""
-         channel, _, chat_id = key.partition(":")
-diff --git a/tests/test_session_state_dir.py b/tests/test_session_state_dir.py
-index a55a040c..142cacca 100644
---- a/tests/test_session_state_dir.py
-+++ b/tests/test_session_state_dir.py
-@@ -3,7 +3,11 @@
- For a coding agent the workspace is the user's repository: writing session
- files there makes every run show up as untracked files, which the agent then
- spends turns investigating. ``get_workspace_state_dir`` is the established
--convention for raven's own state; sessions predate it and are migrated here.
-+convention for raven's own state, and this bucket is where sessions go.
-+
-+What this build must not do is reach into ``<workspace>/sessions`` and clear it
-+out: a raven that shares the workspace keeps its live transcripts exactly
-+there. See ``../local-patches.diff``.
- """
- 
- from raven.session.manager import SessionManager
-@@ -25,32 +29,23 @@ def test_each_workspace_gets_its_own_bucket(tmp_path):
-     assert SessionManager(a).sessions_dir != SessionManager(b).sessions_dir
- 
- 
--def test_existing_in_workspace_sessions_are_migrated_once(tmp_path):
--    workspace = tmp_path / "repo"
--    legacy = workspace / "sessions" / "cli"
--    legacy.mkdir(parents=True)
--    (legacy / "old.jsonl").write_text('{"role": "user", "content": "hi"}\n', encoding="utf-8")
--
--    mgr = SessionManager(workspace)
--    assert (mgr.sessions_dir / "cli" / "old.jsonl").read_text(encoding="utf-8").startswith('{"role"')
--    # The workspace copy is gone, so the repository stops showing an untracked dir.
--    assert not (workspace / "sessions").exists()
--
-+def test_an_in_workspace_sessions_tree_is_left_untouched(tmp_path):
-+    """Another raven's live store shares this directory, and outranks us.
- 
--def test_migration_never_overwrites_newer_state(tmp_path):
-+    An earlier version read ``<workspace>/sessions`` as this build's own legacy
-+    layout and moved it into the state directory, removing the source. Pointed
-+    at a workspace a current raven also uses, that ate the host's live session
-+    store rather than a legacy one.
-+    """
-     workspace = tmp_path / "repo"
--    legacy = workspace / "sessions" / "cli"
--    legacy.mkdir(parents=True)
--    (legacy / "s.jsonl").write_text("legacy\n", encoding="utf-8")
-+    host = workspace / "sessions" / "cli"
-+    host.mkdir(parents=True)
-+    (host / "live.jsonl").write_text('{"role": "user", "content": "hi"}\n', encoding="utf-8")
- 
-     mgr = SessionManager(workspace)
--    target = mgr.sessions_dir / "cli" / "s.jsonl"
--    target.write_text("current\n", encoding="utf-8")
- 
--    legacy.mkdir(parents=True, exist_ok=True)
--    (legacy / "s.jsonl").write_text("legacy again\n", encoding="utf-8")
--    SessionManager(workspace)
--    assert target.read_text(encoding="utf-8") == "current\n"
-+    assert (host / "live.jsonl").read_text(encoding="utf-8").startswith('{"role"')
-+    assert not (mgr.sessions_dir / "cli" / "live.jsonl").exists()
- 
- 
- def test_round_trip_still_works_from_the_new_location(tmp_path):
+# A future local fix should be committed to the fork first whenever possible;
+# only a change that cannot live upstream belongs here.

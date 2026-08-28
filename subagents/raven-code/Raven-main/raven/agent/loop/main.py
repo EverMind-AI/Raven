@@ -772,14 +772,38 @@ class AgentLoop:
         set_current_profile(self.profile)
         logger.info("{}", describe_effective(self.profile))
         self._checkpoint = None
+        self._checkpoint_shadow_dir = runtime_config.checkpoint.shadow_dir
+        # Shadow git data lives in the agent's own state partition, bucketed
+        # per effective workdir - never inside the checkout being snapshotted.
+        from raven.config.paths import get_config_path
+
+        _raw_base = runtime_config.checkpoint.shadow_base
+        _base = Path(_raw_base).expanduser() if _raw_base else get_config_path().parent / "checkpoints"
+        if not _raw_base:
+            # The DEFAULT must never land inside the boot workspace: for a
+            # multiplexed launcher the agent home IS the config's directory
+            # (workspace == config parent), and a base inside the workspace is
+            # refused by CheckpointService - which would disable checkpoints
+            # for every workdir this loop ever binds. Hoist to a sibling.
+            _ws = Path(workspace).expanduser().resolve()
+            try:
+                _resolved = _base.resolve()
+            except OSError:  # pragma: no cover - resolution is best-effort
+                _resolved = _base
+            if _resolved == _ws or _resolved.is_relative_to(_ws):
+                _base = _ws.parent / "checkpoints"
+        self._checkpoint_shadow_base = _base
+        self._checkpoints: dict[Path, Any] = {}
         if self._checkpoint_active(runtime_config.checkpoint.policy, self.profile.shadow_checkpoint):
             from raven.agent.loop.checkpoint import CheckpointService
 
             try:
                 self._checkpoint = CheckpointService(
                     workspace,
-                    shadow_dir=runtime_config.checkpoint.shadow_dir,
+                    shadow_dir=self._checkpoint_shadow_dir,
+                    shadow_base=self._checkpoint_shadow_base,
                 )
+                self._checkpoints[Path(workspace).expanduser().resolve()] = self._checkpoint
             except ValueError as exc:
                 # Bad shadow_dir (e.g. ``../escape`` or absolute path) →
                 # CheckpointService refuses to construct. Don't crash the
@@ -1025,6 +1049,22 @@ class AgentLoop:
         # tool that waits for an answer is a stall, not a question.
         if self.profile.ask_user_enabled:
             self.tools.register(AskUserTool())
+        # First-write workspace gate: armed only when the Raven-Code launcher
+        # exported RAVEN_WORKSPACE_ALLOC_*; a no-op in every other context.
+        from raven.agent.workspace_gate import build_workspace_gate
+
+        _ws_gate = build_workspace_gate(Path(self.workspace))
+        if _ws_gate is not None:
+            _ws_gate.ask = self._gate_ask
+            _ws_gate.rebind = self._pin_session_workdir
+            _ws_gate.cid = self._gate_cid
+            self.tools.set_write_gate(_ws_gate)
+        # Sessions that pinned a working directory (metadata["workdir"], set by
+        # the ACP server's session/new, or by the gate moving a session into a
+        # worktree) get it bound around each of their turns.
+        from raven.agent import workdir as _workdir
+
+        _workdir.set_resolver(self._session_workdir)
         # ``cron`` is not a default tool: scheduling reminders is orthogonal to the
         # work a coding agent does, and its schema is the largest of any tool here.
         # ``CronService`` still runs, so jobs added through the CLI keep firing --
@@ -1228,6 +1268,27 @@ class AgentLoop:
         if policy == "always":
             return True
         return profile_default  # policy == "interactive"
+
+    def _checkpoint_for(self, workspace: Path):
+        """Return the checkpoint service isolated to ``workspace``."""
+        if self._checkpoint is None:
+            return None
+        key = Path(workspace).expanduser().resolve()
+        if service := self._checkpoints.get(key):
+            return service
+        from raven.agent.loop.checkpoint import CheckpointService
+
+        try:
+            service = CheckpointService(
+                key,
+                shadow_dir=self._checkpoint_shadow_dir,
+                shadow_base=self._checkpoint_shadow_base,
+            )
+        except ValueError as exc:
+            logger.warning("runtime.checkpoint disabled for {} - {}", key, exc)
+            return None
+        self._checkpoints[key] = service
+        return service
 
     def _stash_recovery(self, session_key: str, outcome: "TurnOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
@@ -1604,6 +1665,71 @@ class AgentLoop:
         self.deep_research_config = cfg
         self._register_real_deep_research(cfg)
         logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
+
+    async def _gate_ask(self, prompt: str, choices: list, default: str = "") -> str | None:
+        """The workspace gate's question channel: the turn's own ask broker.
+
+        None when no channel exists (no broker wired, or outside a turn) - the
+        gate then falls back to its between-turns pending protocol. Over ACP
+        the broker is bridged to the client (elicitation/create, or a marked
+        synthetic permission request), so the answer arrives in-turn.
+        """
+        tool = self.tools.get("ask_user")
+        broker = getattr(tool, "broker", None) if tool is not None else None
+        cid = tool.conversation_id() if tool is not None and hasattr(tool, "conversation_id") else ""
+        if broker is None or not cid:
+            return None
+        return await broker.await_question(cid, prompt=prompt, choices=list(choices), default=default)
+
+    def _gate_cid(self) -> str:
+        """The current turn's conversation key, for per-session allocation."""
+        tool = self.tools.get("ask_user")
+        if tool is not None and hasattr(tool, "conversation_id"):
+            return tool.conversation_id()
+        return ""
+
+    def _pin_session_workdir(self, path) -> None:
+        """Repoint the running session's working directory at ``path``.
+
+        Two halves: the contextvar for the rest of THIS turn, and the session
+        metadata for every later one (the same key the ACP server's
+        session/new writes and ``_session_workdir`` reads).
+        """
+        from pathlib import Path as _Path
+
+        from raven.agent import workdir as _workdir
+
+        _workdir.repoint(_Path(path))
+        cid = self._gate_cid()
+        if not cid:
+            return
+        try:
+            session = self.sessions.get_or_create(cid)
+            session.metadata["workdir"] = str(path)
+            self.sessions.save(session)
+        except Exception as exc:  # noqa: BLE001 - the rebind must not fail the turn
+            logger.warning("could not persist the workdir pin for {}: {}", cid, exc)
+
+    def _session_workdir(self, session_key: str):
+        """The workdir a session pinned, or None. Fed to workdir.bind_for.
+
+        ```peek```, never ```get_or_create```: this resolver runs on EVERY turn
+        of every conversation, and a creating read would mint a session row for
+        each key it is asked about - phantom sessions that pollute session
+        listings and most-recent lookups (measured: cron fanout and sentinel
+        persistence tests fail on exactly that).
+        """
+        try:
+            session = self.sessions.peek(session_key)
+            stored = session.metadata.get("workdir") if session is not None else None
+        except Exception:  # noqa: BLE001
+            return None
+        if not stored:
+            return None
+        from pathlib import Path as _Path
+
+        candidate = _Path(stored)
+        return candidate if candidate.is_absolute() else None
 
     def _set_tool_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
         """Update context for all tools that need routing info."""
@@ -2078,35 +2204,13 @@ class AgentLoop:
         skill extraction when a turn completes. When ``None``, extraction
         is skipped (no pipeline wired).
         """
-        # Aliased, never rebound: the caller keeps this list to persist a turn
-        # that dies mid-flight (`_save_broken_turn`), and it can only do that if
-        # the list it holds is the one the loop is still appending to. Both
-        # compaction sites below therefore replace the CONTENTS rather than the
-        # binding -- rebinding here would silently cut the caller off from every
-        # message added after the first compaction.
         messages = initial_messages
 
         def _swap_transcript(replacement: list[dict]) -> None:
-            """Put ``replacement`` in the working transcript, in place.
-
-            In place because the caller keeps this list to persist a turn that
-            dies mid-flight, and can only do that if the list it holds is the
-            one being appended to. Rebinding here would cut it off from every
-            message added after the first compaction.
-
-            Checkpointed on both sides because the caller also holds an INDEX
-            into this list, and the summary tier returns a shorter one: the
-            first call puts the turn so far on disk, the swap happens, and the
-            second moves that index onto the new list -- which the session now
-            covers whole, so it saves nothing and only re-anchors. Without it a
-            watermark taken at 44 messages survives a compaction to 5 and every
-            later message sits below it, unsaved.
-            """
+            """Replace the active transcript without disconnecting its caller."""
             if on_checkpoint is not None:
                 on_checkpoint(messages)
-
             messages[:] = replacement
-
             if on_checkpoint is not None:
                 on_checkpoint(messages)
 
@@ -2284,7 +2388,9 @@ class AgentLoop:
                 limit, reserved = self._compaction_limits(effective_model)
                 if compaction.should_compact(fullness, limit, reserved, self._compaction.trigger_ratio):
                     compacted, changed = await self._compact_context(
-                        messages, effective_model, observed_used=fullness
+                        messages,
+                        effective_model,
+                        observed_used=fullness,
                     )
                     if changed:
                         _swap_transcript(compacted)
@@ -2611,9 +2717,7 @@ class AgentLoop:
                     # result; then, and only then, it goes in as its own message.
                     riding = messages[-1].get("role") == "tool"
                     budget_note = (
-                        time_budget.poll(time.time())
-                        if riding or time_budget.in_wrapup(time.time())
-                        else None
+                        time_budget.poll(time.time()) if riding or time_budget.in_wrapup(time.time()) else None
                     )
                     if budget_note:
                         logger.info("time-budget reminder injected: {}", budget_note[:80])
@@ -2929,12 +3033,15 @@ class AgentLoop:
         # ``outcome.status`` so that pipeline can gate on completion later.
 
         outcome = TurnOutcome(status=status, gate_triggers=gate_triggers, profile_name=self.profile.name)
-        if self._checkpoint is not None:
+        from raven.agent import workdir
+
+        checkpoint = self._checkpoint_for(workdir.current() or self.workspace)
+        if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
             # for both normal and interrupted exits (matches Claude Code/Cursor
             # granularity). Best-effort — commit_turn never raises.
             label = f"turn {session_key or 'anon'} [{status}]"
-            cid, changed = await self._checkpoint.commit_turn(label)
+            cid, changed = await checkpoint.commit_turn(label)
             outcome.checkpoint_id = cid
             if status == "interrupted":
                 outcome.edited_files = changed
@@ -3252,27 +3359,33 @@ class AgentLoop:
         # no result, and providers reject (or models misread) such histories.
         # Must happen before ``turn_start_idx`` is taken: repairs change length.
         initial_messages = self._repair_tool_pairing(initial_messages)
-        turn_start_idx = len(initial_messages) - 1
+        turn_start = {"idx": len(initial_messages) - 1}
+        turn_anchor = initial_messages[turn_start["idx"]]
+        turn_message_ids = {id(turn_anchor)}
 
-        # Incremental persistence for long turns: ``_persisted_upto`` tracks how
+        # Incremental persistence for long turns. ``_persisted_upto`` tracks how
         # far into the message list the session already covers, so the final
-        # save never duplicates. The list is append-only EXCEPT at an in-turn
-        # compaction, whose summary tier returns a shorter one -- the loop
-        # checkpoints on both sides of that swap so this index is re-anchored
-        # onto whatever replaced the list rather than left pointing past its end.
-        _persisted_upto = {"idx": turn_start_idx}
+        # save never duplicates. Compaction checkpoints on both sides of its
+        # in-place swap, which re-anchors this index on the shorter transcript.
+        _persisted_upto = {"idx": turn_start["idx"]}
 
         def _mid_turn_checkpoint(msgs: list[dict]) -> None:
-            # Clamped for the swap's second call, which re-anchors the index on
-            # a list the session already covers whole and must save nothing.
+            anchor_index = next(
+                (index for index, message in enumerate(msgs) if message is turn_anchor),
+                None,
+            )
+            current_index = anchor_index
+            if current_index is None:
+                current_index = next(
+                    (index for index, message in enumerate(msgs) if id(message) in turn_message_ids),
+                    None,
+                )
+            turn_start["idx"] = current_index if current_index is not None else len(msgs)
+            turn_message_ids.update(id(message) for message in msgs[turn_start["idx"] :])
             self._save_turn(session, msgs, min(_persisted_upto["idx"], len(msgs)))
             self.sessions.save(session)
             _persisted_upto["idx"] = len(msgs)
 
-        # The stream buffers exist so a turn that dies mid-answer still has the
-        # text that was already on the reader's screen: the loop only appends an
-        # assistant message once the provider call returns, so a cancel in the
-        # middle of one would otherwise lose exactly what streamed.
         streamed: dict[str, str] = {"text": "", "thought": ""}
 
         async def _tap_token(delta: str) -> None:
@@ -3286,9 +3399,6 @@ class AgentLoop:
                 await on_reasoning_delta(delta)
 
         async def _tap_episode(index: int) -> None:
-            # A new episode is a new stream: without the reset, a buffer that
-            # spans two assistant messages matches neither and would be saved
-            # as a duplicate of text the loop already committed.
             streamed["text"] = ""
             streamed["thought"] = ""
             if on_episode_start is not None:
@@ -3311,24 +3421,26 @@ class AgentLoop:
                 on_checkpoint=_mid_turn_checkpoint,
             )
         except asyncio.CancelledError:
-            # A stop is not a failure, but it is also not amnesia: what already
-            # streamed is work the reader saw, so it lands in the session with a
-            # note saying a person ended the turn. Then the cancel proceeds.
-            #
-            # ``_persisted_upto``, not ``turn_start_idx``: a long turn has
-            # already checkpointed part of itself, and re-saving from the top of
-            # the turn would store those messages twice.
-            self._save_broken_turn(session, initial_messages, _persisted_upto["idx"], streamed, status="cancelled")
+            self._save_broken_turn(
+                session,
+                initial_messages,
+                _persisted_upto["idx"],
+                streamed,
+                status="cancelled",
+            )
             raise
         except Exception as exc:
             self._save_broken_turn(
-                session, initial_messages, _persisted_upto["idx"], streamed, status="failed", reason=str(exc)
+                session,
+                initial_messages,
+                _persisted_upto["idx"],
+                streamed,
+                status="failed",
+                reason=str(exc),
             )
             raise
         self._stash_recovery(key, outcome)
-        if (not self.profile.attended or self.profile.name == "legacy_oneshot") and any(
-            outcome.gate_triggers.values()
-        ):
+        if (not self.profile.attended or self.profile.name == "legacy_oneshot") and any(outcome.gate_triggers.values()):
             # Batch runs capture stdout but disable loguru inside the ``raven``
             # package, so fired-gate counters go to stdout directly or they are
             # lost. Quiet turns print nothing: an orchestrator consuming stdout
@@ -3360,7 +3472,9 @@ class AgentLoop:
         self.sessions.save(session)
         # Recovery scaffolding is index-load-bearing for the saves above but
         # must not reach extraction/indexing.
-        turn_msgs = [m for m in all_msgs[turn_start_idx:] if not m.get("_recovery_synthetic")]
+        turn_msgs = [m for m in all_msgs[turn_start["idx"] :] if not m.get("_recovery_synthetic")]
+        if not any(message is turn_anchor or message == turn_anchor for message in turn_msgs):
+            turn_msgs.insert(0, turn_anchor)
         await self.context_engine.after_turn(
             key,
             {
@@ -3434,66 +3548,64 @@ class AgentLoop:
         status: str,
         reason: str | None = None,
     ) -> None:
-        """Persist what a cancelled or failed turn got as far as producing.
-
-        The tail of the turn plus two kinds of repair, then one closing marker:
-
-        - an assistant message whose tool calls never got results gains a
-          synthetic ``[interrupted]`` result per open call, because a stored
-          history with an unanswered tool call is one strict providers reject
-          on the next turn;
-        - the text that streamed after the last committed message is saved as
-          its own assistant message -- it was on the reader's screen, and the
-          loop only commits a message once the provider call returns;
-        - the marker entry carries ``turn_ended`` so a client can say WHY the
-          transcript stops there, and readable text so the model sees the same.
-
-        Never raises: this runs on the way out of a dying turn, and a rescue
-        that throws replaces one loss with another.
-        """
+        """Persist the useful tail of a cancelled or failed turn."""
         try:
-            tail: list[dict] = [dict(m) for m in messages[skip:]]
+            tail: list[dict] = [dict(message) for message in messages[skip:]]
             open_calls: dict[str, str] = {}
-            for m in tail:
-                if m.get("role") == "assistant":
-                    for tc in m.get("tool_calls") or []:
-                        cid = str(getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "") or "")
-                        if cid:
-                            name = getattr(getattr(tc, "function", None), "name", None) or (
-                                (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
-                            )
-                            open_calls[cid] = str(name or "tool")
-                elif m.get("role") == "tool":
-                    open_calls.pop(str(m.get("tool_call_id") or ""), None)
-            for cid, name in open_calls.items():
+            for message in tail:
+                if message.get("role") == "assistant":
+                    for tool_call in message.get("tool_calls") or []:
+                        call_id = str(
+                            getattr(tool_call, "id", None)
+                            or (tool_call.get("id") if isinstance(tool_call, dict) else "")
+                            or ""
+                        )
+                        if not call_id:
+                            continue
+                        name = getattr(getattr(tool_call, "function", None), "name", None) or (
+                            (tool_call.get("function") or {}).get("name") if isinstance(tool_call, dict) else None
+                        )
+                        open_calls[call_id] = str(name or "tool")
+                elif message.get("role") == "tool":
+                    open_calls.pop(str(message.get("tool_call_id") or ""), None)
+
+            for call_id, name in open_calls.items():
                 tail.append(
                     {
                         "role": "tool",
-                        "tool_call_id": cid,
+                        "tool_call_id": call_id,
                         "name": name,
                         "content": "[interrupted] this call never returned",
                     }
                 )
+
             text = (streamed.get("text") or "").strip()
             if text and not any(
-                m.get("role") == "assistant" and str(m.get("content") or "").strip() == text for m in tail
+                message.get("role") == "assistant" and str(message.get("content") or "").strip() == text
+                for message in tail
             ):
                 partial: dict[str, Any] = {"role": "assistant", "content": streamed["text"]}
-                if (thought := (streamed.get("thought") or "").strip()) and not any(
-                    str(m.get("reasoning_content") or "").strip() == thought for m in tail
+                thought = (streamed.get("thought") or "").strip()
+                if thought and not any(
+                    str(message.get("reasoning_content") or "").strip() == thought for message in tail
                 ):
                     partial["reasoning_content"] = streamed["thought"]
                 tail.append(partial)
-            word = "cancelled by the user" if status == "cancelled" else f"failed: {reason or 'unknown error'}"
-            marker: dict[str, Any] = {
-                "role": "assistant",
-                "content": f"(turn {word})",
-                "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
-            }
-            tail.append(marker)
+
+            ending = "cancelled by the user" if status == "cancelled" else f"failed: {reason or 'unknown error'}"
+            tail.append(
+                {
+                    "role": "assistant",
+                    "content": f"(turn {ending})",
+                    "turn_ended": {
+                        "status": status,
+                        **({"reason": reason} if reason else {}),
+                    },
+                }
+            )
             self._save_turn(session, tail, 0)
             self.sessions.save(session)
-        except Exception:  # noqa: BLE001 - see docstring
+        except Exception:  # noqa: BLE001 - rescue must not hide the original failure
             logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
@@ -3705,21 +3817,25 @@ class AgentLoop:
 
         if usage_sink is None:
             usage_sink = {}
+        from raven.agent import workdir
+
+        turn_workdir = self._session_workdir(cid) or self.workspace
         try:
-            await self._start_executor()
-            await self._connect_mcp()
-            out = await self._process_message(
-                req,
-                session_key=cid,
-                on_progress=on_progress,
-                on_token_delta=on_token if stream else None,
-                on_reasoning_delta=on_reasoning if stream else None,
-                on_tool_event=on_tool,
-                on_episode_start=on_episode if stream else None,
-                usage_sink=usage_sink,
-                origin=req.origin,
-                drain=drain,
-            )
+            with workdir.bind(turn_workdir):
+                await self._start_executor()
+                await self._connect_mcp()
+                out = await self._process_message(
+                    req,
+                    session_key=cid,
+                    on_progress=on_progress,
+                    on_token_delta=on_token if stream else None,
+                    on_reasoning_delta=on_reasoning if stream else None,
+                    on_tool_event=on_tool,
+                    on_episode_start=on_episode if stream else None,
+                    usage_sink=usage_sink,
+                    origin=req.origin,
+                    drain=drain,
+                )
         except Exception:
             await self.close_executor()
             raise

@@ -188,7 +188,8 @@ class _NoopProvider(LLMProvider):
         return "stub"
 
 
-def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
+def _agent_with_checkpoint(workspace: Path, shadow_base: Path | None = None) -> AgentLoop:
+    base = shadow_base if shadow_base is not None else workspace.parent / "checkpoint-state"
     return AgentLoop(
         provider=_NoopProvider(),
         workspace=workspace,
@@ -199,7 +200,7 @@ def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
         empty_recovery=RecoveryLimits(enabled=False),
-        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always", shadow_base=str(base))),
     )
 
 
@@ -308,14 +309,18 @@ async def test_d5_perf_1k_files_commit(workspace, capsys):
 async def test_d2_loop_unaffected_when_shadow_blocked(workspace):
     """Tying D2 back to the loop: if shadow is unusable (blocked by a file),
     the loop still returns cleanly — the safety net never breaks the turn."""
-    (workspace / ".raven").write_text("blocker", encoding="utf-8")
-    agent = _agent_with_checkpoint(workspace)
+    # A FILE where the state partition should be: every mkdir under it fails,
+    # the shadow cannot init, and the turn must still complete.
+    blocked = workspace.parent / "blocked-state"
+    blocked.write_text("blocker", encoding="utf-8")
+    agent = _agent_with_checkpoint(workspace, shadow_base=blocked / "checkpoints")
     final, _u, _m, outcome = await agent._run_agent_loop(
         [{"role": "user", "content": "go"}],
     )
     # _NoopProvider returns no tool calls → natural completion.
     assert outcome.status == "completed"
     assert outcome.checkpoint_id is None  # shadow blocked → degrade
+    assert not (workspace / ".raven").exists()  # and the checkout stays clean
 
 
 # =============================================================================
@@ -578,10 +583,13 @@ def test_d9_nested_relative_path_accepted(workspace):
 async def test_d9_agent_loop_degrades_when_shadow_dir_invalid(workspace):
     """AgentLoop must not crash when the user config contains a bad
     ``shadow_dir`` — checkpoint silently disables so the turn still runs."""
+    # A shadow base INSIDE the workspace defeats the whole point (runtime
+    # files in the checkout): CheckpointService refuses it, and the loop
+    # must degrade rather than crash.
     bad_cfg = RuntimeConfig(
         checkpoint=CheckpointConfig(
             policy="always",
-            shadow_dir="../escape_via_config",
+            shadow_base=str(workspace / "state"),
         )
     )
     agent = AgentLoop(
@@ -737,3 +745,59 @@ async def test_d8_interactive_mode_with_user_gitignore_end_to_end(workspace):
     assert "src.py" in tracked
     assert ".gitignore" in tracked
     assert ".env" not in tracked, f"secret leaked into shadow: {tracked}"
+
+
+async def test_default_shadow_base_hoists_out_of_the_workspace(workspace, monkeypatch):
+    """workspace == config parent (the raven-code ACP layout): the default
+    shadow base must hoist to a sibling instead of disabling checkpoints."""
+    from raven.config import loader as config_loader
+
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: workspace / "config.json")
+    from raven.config import paths as config_paths
+
+    monkeypatch.setattr(config_paths, "get_config_path", lambda: workspace / "config.json", raising=False)
+    agent = AgentLoop(
+        provider=_NoopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+        empty_recovery=RecoveryLimits(enabled=False),
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
+    )
+    assert agent._checkpoint is not None, "checkpoint must survive the collision"
+    base = agent._checkpoint_shadow_base.resolve()
+    ws = workspace.resolve()
+    assert base == ws.parent / "checkpoints"
+    final, _u, _m, outcome = await agent._run_agent_loop([{"role": "user", "content": "go"}])
+    assert outcome.status == "completed"
+    assert not (workspace / ".raven").exists()
+    assert not (workspace / "checkpoints").exists()
+
+
+async def test_empty_shadow_base_means_the_external_default(workspace, monkeypatch):
+    """ "" and unset are the same configuration: the external state partition,
+    never a legacy in-workspace shadow."""
+    from raven.config import paths as config_paths
+
+    monkeypatch.setattr(
+        config_paths, "get_config_path", lambda: workspace.parent / "home" / "config.json", raising=False
+    )
+    agent = AgentLoop(
+        provider=_NoopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+        empty_recovery=RecoveryLimits(enabled=False),
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always", shadow_base="")),
+    )
+    assert agent._checkpoint is not None
+    base = agent._checkpoint_shadow_base
+    assert base == workspace.parent / "home" / "checkpoints"
+    final, _u, _m, outcome = await agent._run_agent_loop([{"role": "user", "content": "go"}])
+    assert outcome.status == "completed"
+    # A no-op turn has nothing to commit, but the shadow initialized in the
+    # external default location - and nowhere inside the workspace.
+    assert list((workspace.parent / "home" / "checkpoints").glob("*/shadow.git"))
+    assert not (workspace / ".raven").exists()

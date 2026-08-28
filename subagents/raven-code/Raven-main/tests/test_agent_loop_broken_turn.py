@@ -214,6 +214,77 @@ async def test_work_after_an_in_turn_compaction_still_reaches_the_session(worksp
 
 
 @pytest.mark.asyncio
+async def test_finished_turn_keeps_prompt_after_real_history_compaction(workspace, monkeypatch):
+    """After-turn consumers receive the request even when compaction summarizes it."""
+
+    class CompactionProvider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.turn_calls = 0
+            self.summary_calls = 0
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            if not tools and any("compacting an agent" in str(m.get("content", "")) for m in messages):
+                self.summary_calls += 1
+                return LLMResponse(content="summary of the active turn", finish_reason="stop")
+            self.turn_calls += 1
+            if self.turn_calls == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="read-large", name="read_file", arguments={"path": "large.txt"})],
+                    finish_reason="tool_calls",
+                    usage={"prompt_tokens": 900_000, "completion_tokens": 10},
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    (workspace / "large.txt").write_text("x" * 30_000)
+    provider = CompactionProvider()
+    agent = _agent(workspace, provider)
+    session = agent.sessions.get_or_create("tui:chat1")
+    for index in range(8):
+        session.record({"role": "user", "content": f"old question {index}"})
+        session.record({"role": "assistant", "content": f"old answer {index}"})
+    agent.sessions.save(session)
+
+    agent._compaction.auto = True
+    after_turn: dict[str, Any] = {}
+    backend_messages: list[dict[str, Any]] = []
+
+    async def capture_after_turn(session_key, payload):
+        after_turn.update(payload)
+
+    async def capture_backend_store(session_key, messages):
+        backend_messages.extend(messages)
+
+    monkeypatch.setattr(agent.context_engine, "after_turn", capture_after_turn)
+    monkeypatch.setattr(agent, "_dispatch_backend_store", capture_backend_store)
+
+    out = await agent._process_message(_make_msg("current question"))
+
+    assert out is not None
+    assert provider.summary_calls > 0, "the real compaction summary path never ran"
+    messages = after_turn["messages"]
+    assert messages[0].get("role") == "user"
+    assert str(messages[0].get("content")).endswith("\n\ncurrent question")
+    assert messages[-1].get("role") == "assistant"
+    assert messages[-1].get("content") == "done"
+    assert backend_messages[0].get("role") == "user"
+    assert str(backend_messages[0].get("content")).endswith("\n\ncurrent question")
+
+
+@pytest.mark.asyncio
 async def test_a_finished_turn_writes_no_marker(workspace):
     agent = _agent(workspace, DyingProvider([LLMResponse(content="done", finish_reason="stop")]))
     out = await agent._process_message(_make_msg("hello"))

@@ -2,7 +2,7 @@ import dataclasses
 
 import pytest
 
-from raven.spine import BusyPolicy, ChatType, Origin, Source, TurnRequest, session_of
+from raven.spine import BusyPolicy, ChatType, Origin, Source, TurnRequest
 
 
 def _src():
@@ -16,8 +16,8 @@ def test_origin_is_closed_five_value_enum_without_system():
         Origin("system")
 
 
-def test_busy_policy_is_closed_four_value_enum():
-    assert {b.value for b in BusyPolicy} == {"append", "inject", "interrupt", "steer"}
+def test_busy_policy_is_closed_three_value_enum():
+    assert {b.value for b in BusyPolicy} == {"append", "inject", "interrupt"}
     with pytest.raises(ValueError):
         BusyPolicy("drop")
 
@@ -83,10 +83,3 @@ def test_turn_request_deliver_text_defaults_none():
     # (~15 call sites) are unaffected.
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
     assert req.deliver_text is None
-
-
-def test_session_of_strips_a_direct_chat_lane_down_to_its_session():
-    assert session_of("acp:20260826_191421_e9a20c") == "acp:20260826_191421_e9a20c"
-    assert session_of("acp:s1#Coder/h1") == "acp:s1"
-    assert session_of("acp:s1#Coder/odd#handle/with#hashes") == "acp:s1"
-    assert session_of("") == ""

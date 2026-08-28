@@ -140,4 +140,14 @@ def login_shell_env() -> dict[str, str]:
     return dict(captured)
 
 
-__all__ = ["login_shell_env"]
+def host_identity_env() -> dict[str, str]:
+    """Return the custom raven home that identifies the spawning host.
+
+    Read at spawn time because tests and ``raven serve`` may point one process
+    at different homes between child launches.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip()
+    return {"RAVEN_HOME": home} if home else {}
+
+
+__all__ = ["host_identity_env", "login_shell_env"]

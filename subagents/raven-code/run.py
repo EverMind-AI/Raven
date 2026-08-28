@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Host-side launcher for the Raven-Code coding agent.
 
-Raven-Code is the `feat/swarm_integration` branch of Raven-X, which is built for
-exactly this shape: an external orchestrator hands work to it as a worker. See
-`Raven-main/README.SWARM.md` for the branch's own contract. This wrapper supplies
-the three things that contract leaves to the caller:
+Raven-Code is the `feat/acp_worktree_integration` branch of Raven-X, which is
+built for exactly this shape: an external orchestrator hands work to it as a
+worker. See `Raven-main/README.SWARM.md` for the branch's own contract. This
+wrapper supplies the three things that contract leaves to the caller:
 
 - **a session identity per conversation.** One call is one turn; the same
   `--session cli:<id>` across calls is a multi-turn conversation. The gateway's
@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -76,23 +77,12 @@ SECRET_SLOTS = {
 }
 REQUIRED_SECRETS = ("CODE_API_KEY",)
 
-# Everything the runtime persists - transcripts above all - lands here rather
-# than in this folder. See `render_config` for why writing the config here is
-# what moves them.
-STATE_ROOT = Path(
-    env_value("CODE_STATE_ROOT") or Path.home() / ".raven" / "workspace" / "subagent_sessions" / "raven-code"
-)
-
-# Our own per-conversation state: the workspace pointer and the launcher log.
-# Distinct from the runtime's own data directory, and kept under the same root
-# so the project folder holds only the files that ship; CODE_RUN_ROOT moves it.
-RUN_ROOT = Path(env_value("CODE_RUN_ROOT") or STATE_ROOT / "runs")
-
-
 # The host raven's config file, read for the fallbacks below. Read as JSON, never
 # imported from raven: this launcher is standard-library only and has to run
 # under a bare python3 that may not have the runtime installed at all.
-HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
+_RAVEN_HOME = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven")
+HOST_CONFIG = _RAVEN_HOME / "config.json"
+_DEFAULT_HOST_WORKSPACE = "~/.raven/workspace"
 
 
 def host_config() -> dict:
@@ -101,6 +91,29 @@ def host_config() -> dict:
         return json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def host_agent_home() -> Path:
+    """Return the Agent home configured by the host raven."""
+    host = host_config()
+    raw = None
+    if isinstance(host, dict):
+        raw = ((host.get("agents") or {}).get("defaults") or {}).get("workspace")
+    if isinstance(raw, str) and raw.strip():
+        configured = raw.strip()
+        if configured == _DEFAULT_HOST_WORKSPACE:
+            return _RAVEN_HOME / "workspace"
+        return Path(configured).expanduser()
+    return _RAVEN_HOME / "workspace"
+
+
+def state_root() -> Path:
+    """Return the root reserved for Raven-Code state under the host Agent home."""
+    raw = env_value("CODE_STATE_ROOT")
+    if raw:
+        override = Path(raw).expanduser()
+        return override if override.is_absolute() else host_agent_home() / override
+    return host_agent_home() / "subagent_sessions" / "raven-code"
 
 
 def dig(data: dict, path: tuple) -> str:
@@ -156,7 +169,7 @@ def inherit_llm(config: dict, host: dict) -> str:
     return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
-def sweep_stale_renders() -> None:
+def sweep_stale_renders(state_dir: Path) -> None:
     """Remove rendered configs whose launcher is gone.
 
     Each file is named for the pid of the launcher that wrote it, and that
@@ -182,7 +195,7 @@ def sweep_stale_renders() -> None:
     Failures are ignored per file: this is hygiene running ahead of a run, and
     it must never be what stops one.
     """
-    for stale in STATE_ROOT.glob(".config.rendered.*.json"):
+    for stale in state_dir.glob(".config.rendered.*.json"):
         try:
             pid = int(stale.name.split(".")[3])
             os.kill(pid, 0)
@@ -192,19 +205,19 @@ def sweep_stale_renders() -> None:
             continue
 
 
-def render_config(source: Path) -> Path:
-    """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
+def render_config(source: Path, state_dir: Path) -> Path:
+    """Write a rendered config into the state partition that will consume it.
 
-    The location is the whole mechanism, not a detail. The runtime derives its
-    data directory from the config file's own parent and offers no separate knob
-    for the session directory, so wherever this file goes, `sessions/` goes with
-    it - which is also exactly what `session_file` resolves against, so the two
-    stay consistent by construction. Writing it under STATE_ROOT is the only way
-    to keep conversation transcripts out of the project directory without
-    patching the checkout, and the checkout is replaced wholesale on every
-    upstream zip, so a patch would not survive.
+    The runtime derives its data directory from the config file's parent but its
+    Agent home from ``agents.defaults.workspace``. Point both at ``state_dir``
+    so sessions, memory and skills stay in the same host-owned partition. The
+    ACP session Working directory remains a separate path used for repository
+    reads, edits and commands.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
+    # Config location controls runtime data, but does not change workspace_path.
+    # Pin it explicitly so Raven-Code does not fall back to ~/.raven/workspace.
+    put(config, ("agents", "defaults", "workspace"), str(state_dir.resolve()))
     host = host_config()
 
     # Each optional key falls back on its own: a missing Serper or Jina key is a
@@ -228,10 +241,10 @@ def render_config(source: Path) -> Path:
             )
         log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
 
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    sweep_stale_renders()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    sweep_stale_renders(state_dir)
 
-    rendered = STATE_ROOT / f".config.rendered.{os.getpid()}.json"
+    rendered = state_dir / f".config.rendered.{os.getpid()}.json"
     # Create it unreadable to anyone else before a single secret byte is in it.
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -274,7 +287,10 @@ def safe_name(value: str) -> str:
 
 
 def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+    executable = shutil.which("git")
+    if executable is None:
+        raise RuntimeError("git is required for Raven-Code workspace allocation")
+    return subprocess.run([executable, *args], cwd=str(cwd), capture_output=True, text=True)
 
 
 def session_file(python: Path, config: Path, workspace: Path, chat_id: str) -> Path | None:
@@ -438,7 +454,6 @@ def resolve_workspace(state_dir: Path, override: str | None) -> Path:
     return workspace
 
 
-
 def _serve_acp(args) -> int:
     """Serve `raven acp` on this process's stdio, under a rendered config.
 
@@ -458,13 +473,23 @@ def _serve_acp(args) -> int:
 
     global _LOG_FILE, _VERBOSE
     _VERBOSE = args.verbose
-    _LOG_FILE = RUN_ROOT / "acp-launcher.log"
-    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    acp_state = state_root() / "acp"
+    _LOG_FILE = acp_state / "launcher.log"
+    acp_state.mkdir(parents=True, exist_ok=True)
 
-    config = render_config(Path(args.config).resolve())
+    config = render_config(Path(args.config).resolve(), acp_state)
     log(f"[run] acp: serving on stdio under {config}")
+    # Arm the first-write workspace gate for the multiplexed server: per-session
+    # allocation records under this partition, repo-level owners/locks/worktrees
+    # under `repos`, and one pinned state bucket so runtime state stays in this
+    # partition no matter which checkout a session serves. Without these the
+    # vendored gate stays unarmed and Raven-Code writes wherever it lands.
+    env = dict(os.environ)
+    env["RAVEN_WORKSPACE_ALLOC_BASE"] = str(acp_state)
+    env["RAVEN_WORKSPACE_ALLOC_REPOS"] = str(state_root() / "repos")
+    env.setdefault("RAVEN_WORKSPACE_STATE_BUCKET", "acp")
     try:
-        proc = subprocess.Popen([str(raven_bin), "acp", "--config", str(config)], cwd=str(root))
+        proc = subprocess.Popen([str(raven_bin), "acp", "--config", str(config)], cwd=str(root), env=env)
         return proc.wait()
     finally:
         # The rendered copy holds the merged secrets at 0600; a served session
@@ -524,14 +549,14 @@ def main() -> int:
         raise SystemExit(f"error: venv missing at {raven_bin}; run `uv sync` in {root}")
 
     conversation = args.session or args.job or f"run-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-    state_dir = RUN_ROOT / "sessions" / safe_name(conversation)
+    state_dir = state_root() / f"instance-{safe_name(conversation)}"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     global _LOG_FILE, _VERBOSE
     _VERBOSE = args.verbose
     _LOG_FILE = state_dir / "launcher.log"
 
-    config = render_config(Path(args.config).resolve())
+    config = render_config(Path(args.config).resolve(), state_dir)
     workspace = resolve_workspace(state_dir, args.workspace)
 
     transcript = session_file(root / ".venv" / "bin" / "python", config, workspace, conversation)
@@ -635,8 +660,7 @@ def main() -> int:
         log(f"[run] TIMEOUT: killed after {args.timeout}s with nothing committed")
         if not args.keep_going:
             print(
-                f"TIMEOUT: Raven-Code was killed after {args.timeout}s before it committed an answer. "
-                f"See {_LOG_FILE}",
+                f"TIMEOUT: Raven-Code was killed after {args.timeout}s before it committed an answer. See {_LOG_FILE}",
                 flush=True,
             )
             return _EXIT_TIMEOUT
