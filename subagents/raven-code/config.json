@@ -61,7 +61,10 @@
         "mode": "http",
         "base_url": "http://localhost:18791"
       }
-    }
+    },
+    "disabled": [
+      "everos-memory"
+    ]
   },
   "skillForge": {
     "rewriteEnabled": false,

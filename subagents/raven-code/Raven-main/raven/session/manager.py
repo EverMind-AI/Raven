@@ -148,6 +148,16 @@ class SessionManager:
         # Sessions live outside the workspace: for a coding agent the workspace
         # is the user's repository, so state written there turns up as untracked
         # files in every run (and the agent spends turns investigating them).
+        #
+        # Deliberately no migration of an in-workspace sessions/ directory.
+        # An older revision moved <workspace>/sessions here on every boot,
+        # which was written for a standalone raven cleaning up after itself.
+        # Run as a sub-agent this raven inherits the HOST agent's working
+        # directory as its workspace, and the host keeps its own transcripts
+        # and direct-chat records under exactly that path -- the migration
+        # stole them mid-turn, so the host's DirectChatRecord.finish() found
+        # its directory gone and silently dropped the reply. The workspace
+        # belongs to the caller; nothing here may move or delete its contents.
         self.sessions_dir = get_workspace_state_dir(workspace, "sessions")
         self._cache: dict[str, Session] = {}
 

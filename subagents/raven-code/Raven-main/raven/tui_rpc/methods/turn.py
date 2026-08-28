@@ -20,15 +20,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from loguru import logger
 from pydantic import ValidationError
 
-from loguru import logger
-
-from raven.spine import BusyPolicy, ChatType, Media, Origin, Source, TurnHandle, TurnRequest
+from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest
 from raven.spine.scheduler import Scheduler, SchedulerDrainingError
 from raven.tui_rpc.errors import RpcError, TurnInProgressError
 from raven.tui_rpc.models import (
-    SessionSteerParams,
     TurnCancelParams,
     TurnSendParams,
     TurnSubscribeParams,
@@ -69,7 +67,6 @@ def clear_active(session_key: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-
 def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
     """Turn the front end's attachment paths into ``Media`` for the spine.
 
@@ -92,7 +89,7 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
     try:
         cfg = load_config()
         workspace = cfg.workspace_path
-        allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
+        allowed = workspace if cfg.tools.restrict_to_workspace else None
     except Exception as exc:
         logger.warning("turn.send: cannot resolve the workspace ({}); attachments dropped", exc)
         return ()
@@ -139,7 +136,9 @@ async def _emit_start_then_error(
     await emitter.emit(session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
     await emitter.emit(
         session_key,
-        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal"}},
+        # turn_id included so an ending-correlating consumer (the ACP prompt)
+        # settles instead of dropping this as some other turn's error.
+        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal", "turn_id": turn_id}},
     )
 
 
@@ -225,37 +224,6 @@ async def turn_send(
         await emitter.emit(parsed.session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
 
     return {"turn_id": turn_id, "accepted": True}
-
-
-
-
-async def session_steer(
-    params: dict[str, Any],
-    *,
-    scheduler: Scheduler | None = None,
-) -> dict[str, Any]:
-    """``session.steer`` -- merge text into the turn this session is running.
-
-    Answers ``{"status": "injected"}`` when the text is in the running turn's
-    mailbox (read before its next model call), ``{"status": "no_turn"}`` when
-    nothing was running. The negative answer starts nothing on purpose: a turn
-    with no ``turn.send`` behind it would stream updates that answer no request,
-    and the caller -- who still has the text -- can send it as a turn instead.
-
-    Not a turn, so nothing here touches the active-turn slot or mints a turn id:
-    the merged text is answered by the turn already in flight.
-    """
-    parsed = SessionSteerParams.model_validate(params)
-    if scheduler is None or not parsed.text.strip():
-        return {"status": "no_turn"}
-    req = TurnRequest(
-        origin=Origin.USER,
-        source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
-        text=parsed.text,
-        conversation=parsed.session_id,
-        busy=BusyPolicy.STEER,
-    )
-    return {"status": "injected" if scheduler.steer(req) else "no_turn"}
 
 
 async def turn_subscribe(
@@ -379,21 +347,14 @@ def register_turn_methods(
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
         return await turn_cancel(params, emitter=emitter)
 
-    async def _steer(params: dict[str, Any]) -> dict[str, Any]:
-        return await session_steer(params, scheduler=scheduler)
-
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)
     dispatcher.register("turn.unsubscribe", _unsubscribe)
     dispatcher.register("turn.cancel", _cancel)
-    # Registered with the turn group rather than session.*: it acts on the
-    # running turn and needs the scheduler, which only this group holds.
-    dispatcher.register("session.steer", _steer)
 
 
 __all__ = [
     "register_turn_methods",
-    "session_steer",
     "turn_send",
     "turn_subscribe",
     "turn_unsubscribe",

@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.errors import ModelNotAvailableError, RpcError, TurnInProgressError
-from raven.tui_rpc.methods.turn import register_turn_methods, session_steer, turn_send
+from raven.tui_rpc.methods.turn import register_turn_methods, turn_send
 
 
 class FakeHandle:
@@ -44,13 +44,6 @@ class FakeScheduler:
             raise self._raises
         self.submitted.append(req)
         return FakeHandle()
-
-    def steer(self, req) -> bool:
-        self.steered.append(req)
-        return self.running
-
-    steered: list = []
-    running = False
 
 
 class FakeEmitter:
@@ -267,46 +260,3 @@ async def test_turn_send_dispatcher_returns_minus_32003_on_concurrent_send(
     assert "error" in resp
     assert resp["error"]["code"] == -32003
     assert resp["error"]["message"] == "turn_in_progress"
-
-
-# --- session.steer ---
-
-
-async def test_session_steer_merges_when_a_turn_is_running() -> None:
-    scheduler = FakeScheduler()
-    scheduler.steered = []
-    scheduler.running = True
-
-    result = await session_steer({"session_id": "tui:default", "text": "look at the tests too"}, scheduler=scheduler)
-
-    assert result == {"status": "injected"}
-    (req,) = scheduler.steered
-    assert (req.conversation, req.text) == ("tui:default", "look at the tests too")
-    assert req.busy.value == "steer"
-    assert scheduler.submitted == []  # a steer is never a turn of its own
-
-
-async def test_session_steer_answers_no_turn_when_nothing_runs_and_starts_nothing() -> None:
-    scheduler = FakeScheduler()
-    scheduler.steered = []
-    scheduler.running = False
-
-    result = await session_steer({"session_id": "tui:default", "text": "hello?"}, scheduler=scheduler)
-
-    assert result == {"status": "no_turn"}
-    assert scheduler.submitted == []
-
-
-async def test_session_steer_with_blank_text_is_no_turn_without_touching_the_scheduler() -> None:
-    scheduler = FakeScheduler()
-    scheduler.steered = []
-    scheduler.running = True
-
-    assert await session_steer({"session_id": "tui:default", "text": "   "}, scheduler=scheduler) == {
-        "status": "no_turn"
-    }
-    assert scheduler.steered == []
-
-
-async def test_session_steer_is_registered_with_the_turn_group(dispatcher: Dispatcher) -> None:
-    assert "session.steer" in dispatcher.methods()

@@ -253,8 +253,6 @@ class AcpMethods:
             return await self._session_prompt(params)
         if method == "session/cancel":
             return await self._session_cancel(params)
-        if method == protocol.STEER_METHOD:
-            return await self._session_steer(params)
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
@@ -457,6 +455,18 @@ class AcpMethods:
         if manager is not None:
             manager.delete(session_id)
         self._titles.pop(session_id, None)
+        # The conversation being gone is what frees the workspace: release the
+        # gate's allocation for this session (primary owner dropped; a worktree
+        # is removed only when provably empty-handed - work is never deleted).
+        # A no-op wherever the launcher never armed the gate.
+        try:
+            from raven.agent.workspace_gate import release_for_session
+
+            released = release_for_session(session_id)
+            if released:
+                logger.info("acp: released workspace allocation for {}: {}", session_id, released)
+        except Exception as exc:  # noqa: BLE001 - the delete itself succeeded
+            logger.warning("acp: workspace release for {} failed: {}", session_id, exc)
         logger.info("acp: deleted session {}", session_id)
         return {}
 
@@ -614,6 +624,18 @@ class AcpMethods:
             stop = await future
         finally:
             self._translator.end_turn(session.session_id)
+        # A session holding a writable allocation (primary or worktree) hands
+        # back the integration facts on every prompt, machine-composed rather
+        # than trusted to the model's prose: manifest v1, JSON between
+        # sentinels (workdir, branch, base, HEAD, dirtiness, readiness).
+        try:
+            from raven.agent.workspace_gate import manifest_for_session
+
+            manifest = manifest_for_session(session.session_id)
+            if manifest:
+                self._say(session, manifest)
+        except Exception as exc:  # noqa: BLE001 - a manifest must not fail the prompt
+            logger.warning("acp: manifest for {} failed: {}", session.session_id, exc)
         self._announce_title(session.session_id)
         return {"stopReason": stop}
 
@@ -641,49 +663,6 @@ class AcpMethods:
         finally:
             self._translator.settle_turn(session.session_id, "cancelled")
         return None
-
-    async def _session_steer(self, params: dict[str, Any]) -> dict[str, Any]:
-        """``_raven/session/steer`` -- merge text into the turn already running.
-
-        Outside the schema, which carries no steering method at all, so it wears
-        the underscore prefix the schema reserves for exactly that and is
-        announced through ``agentCapabilities._meta``
-        (``protocol.STEER_CAPABILITY``). A client that did not read the
-        declaration and calls it anyway gets a method-not-found like any other
-        unknown method; one that did gets this.
-
-        A request rather than a notification because the useful answer is the
-        negative one. A turn ending between the person pressing enter and this
-        frame arriving is ordinary, and ``session.steer`` deliberately starts
-        nothing in that case -- the whole reason being that a turn with no
-        ``session/prompt`` waiting on it would stream updates that answer no
-        request. So the caller is told ``no_turn`` and keeps the text.
-
-        Not a second turn, and so nothing here touches the turn slot: the
-        merged text is answered by the stop reason of the prompt already in
-        flight, which is the one this steers.
-        """
-        session = self._session_for(params)
-        text = params.get("text")
-        if not isinstance(text, str) or not text.strip():
-            # Nothing to merge. ``no_turn`` is the honest answer for the same
-            # reason an empty prompt answers ``end_turn``: no work happened.
-            return {"status": "no_turn"}
-        # ``session_id`` and not ``session_key``: that is the parameter name the
-        # RPC method declares, and what both TUIs already send it. The value is
-        # the same session key every other call here passes.
-        answer = await self._call("session.steer", {"session_id": session.session_key, "text": text})
-        status = answer.get("status") if isinstance(answer, dict) else None
-        status = status if status in ("injected", "no_turn") else "no_turn"
-        if status == "injected":
-            # Announced on the session's stream, or the turn reads as the agent
-            # answering a question nobody asked: the merge happens inside the
-            # model's message list, where no update is generated, so this frame
-            # is the only record that a person said something mid-turn. The
-            # schema has a kind for exactly this, and ``replay`` already draws
-            # replayed user messages with it.
-            self._said_by_user(session, text)
-        return {"status": status}
 
     # -- prompt content ---------------------------------------------------
 
@@ -1019,26 +998,13 @@ class AcpMethods:
 
     def _say(self, session: AcpSession, text: str) -> None:
         """Put one line of agent message on the wire for this session."""
-        self._chunk(session, "agent_message_chunk", text)
-
-    def _said_by_user(self, session: AcpSession, text: str) -> None:
-        """Put one line the *person* contributed on the wire for this session.
-
-        The only place a live turn emits this. Every other user message is
-        already on the client's screen because the client sent it as a prompt;
-        a steer is merged into a turn that is already running, so this frame is
-        what puts it in the transcript in the position it was said.
-        """
-        self._chunk(session, "user_message_chunk", text)
-
-    def _chunk(self, session: AcpSession, kind: str, text: str) -> None:
         self._emit(
             protocol.notification(
                 "session/update",
                 {
                     "sessionId": session.session_id,
                     "update": {
-                        "sessionUpdate": kind,
+                        "sessionUpdate": "agent_message_chunk",
                         "content": {"type": "text", "text": text},
                     },
                 },

@@ -278,9 +278,11 @@ def test_session_manager_find_most_recent_chat_id(tmp_state_dir: Path):
     from raven.session.manager import SessionManager
 
     workspace = tmp_state_dir / "ws"
-    sessions_dir = workspace / "sessions"
-    (sessions_dir / "feishu").mkdir(parents=True)
-    (sessions_dir / "telegram").mkdir(parents=True)
+    # The manager's real store, not <workspace>/sessions: boot-time adoption of
+    # in-workspace sessions is deliberately gone.
+    sessions_dir = SessionManager(workspace).sessions_dir
+    (sessions_dir / "feishu").mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "telegram").mkdir(parents=True, exist_ok=True)
     # Feishu — two sessions, pick newer by updated_at
     (sessions_dir / "feishu" / "ou_old.jsonl").write_text(
         json.dumps({"_type": "metadata", "key": "feishu:ou_old", "updated_at": "2026-06-10T10:00:00"}) + "\n",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from raven.agent import workdir
 from raven.agent.context import ContextBuilder
 from raven.context_engine.base import AssemblyContext
 from raven.context_engine.segments import (
@@ -81,6 +82,24 @@ class TestIdentityBootstrap:
         assert "## AGENTS.md" in seg.text
         assert "repo rules" in seg.text
 
+    async def test_bootstrap_reads_the_bound_workdir(self, tmp_path: Path) -> None:
+        agent_home = tmp_path / "agent-home"
+        checkout = tmp_path / "checkout"
+        agent_home.mkdir()
+        checkout.mkdir()
+        (agent_home / "AGENTS.md").write_text("agent-home rules", encoding="utf-8")
+        (checkout / "AGENTS.md").write_text("checkout rules", encoding="utf-8")
+
+        with workdir.bind(checkout):
+            seg = await BootstrapSegmentBuilder(agent_home).build(_ctx(tmp_path))
+
+        assert seg is not None
+        # Both layers, agent home before the checkout - the three-layer
+        # contract, not a substitution of one directory for the other.
+        assert "agent-home rules" in seg.text
+        assert "checkout rules" in seg.text
+        assert seg.text.index("agent-home rules") < seg.text.index("checkout rules")
+
     async def test_bootstrap_filter_excludes_persona_files(self, tmp_path: Path) -> None:
         (tmp_path / "TOOLS.md").write_text("tool docs", encoding="utf-8")
         profile_dir = tmp_path / "agent_memory" / "profile"
@@ -90,6 +109,22 @@ class TestIdentityBootstrap:
         assert seg is not None
         assert "tool docs" in seg.text
         assert "persona" not in seg.text
+
+    async def test_bootstrap_follows_per_turn_workdir(self, tmp_path: Path) -> None:
+        """The builder is constructed on the agent home, but a turn bound to a
+        checkout elsewhere must inject that checkout's rules files."""
+        from raven.agent import workdir
+
+        state = tmp_path / "state"
+        state.mkdir()
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("checkout rules", encoding="utf-8")
+
+        with workdir.bind(repo):
+            seg = await BootstrapSegmentBuilder(state).build(_ctx(state))
+        assert seg is not None
+        assert "checkout rules" in seg.text
 
 
 class TestMemory:

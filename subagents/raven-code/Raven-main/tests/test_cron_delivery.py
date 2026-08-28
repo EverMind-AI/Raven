@@ -28,7 +28,11 @@ from raven.session.manager import SessionManager
 def populated_sessions(tmp_path: Path) -> SessionManager:
     """SessionManager with three pre-seeded channel sessions so
     find_most_recent_chat_id returns deterministic chat_ids."""
-    sessions = tmp_path / "sessions"
+    # Seeded into the manager's real sessions_dir: the boot-time adoption of an
+    # in-workspace sessions/ tree is deliberately gone (the workspace belongs
+    # to the caller), so a fixture must write where the manager actually reads.
+    manager = SessionManager(tmp_path)
+    sessions = manager.sessions_dir
     for ch, chat_id in [
         ("telegram", "6608552652"),
         ("feishu", "ou_ae6f5d330ca2665cd921bab323b893f9"),
@@ -40,7 +44,7 @@ def populated_sessions(tmp_path: Path) -> SessionManager:
             json.dumps({"_type": "metadata", "key": f"{ch}:{chat_id}"}) + "\n",
             encoding="utf-8",
         )
-    return SessionManager(tmp_path)
+    return manager
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -192,13 +196,13 @@ def test_ephemeral_skip_when_no_session(tmp_path: Path):
     """When SessionManager has no session for a forward target, that target
     is skipped with a warning — other targets still deliver."""
     # Sessions dir has only telegram, no feishu
-    sessions = tmp_path / "sessions"
-    (sessions / "telegram").mkdir(parents=True)
+    session_mgr = SessionManager(tmp_path)
+    sessions = session_mgr.sessions_dir
+    (sessions / "telegram").mkdir(parents=True, exist_ok=True)
     (sessions / "telegram" / "6608552652.jsonl").write_text(
         json.dumps({"_type": "metadata", "key": "telegram:6608552652"}) + "\n",
         encoding="utf-8",
     )
-    session_mgr = SessionManager(tmp_path)
 
     targets, warnings = resolve_cron_delivery(
         channel="cli",
@@ -233,7 +237,7 @@ def test_ephemeral_no_session_manager_skips_everything(tmp_path: Path):
 
 
 def _seed_minted_tui(tmp_path: Path, chat_id: str, updated_at: str) -> None:
-    tui_dir = tmp_path / "sessions" / "tui"
+    tui_dir = SessionManager(tmp_path).sessions_dir / "tui"
     tui_dir.mkdir(parents=True, exist_ok=True)
     (tui_dir / f"{chat_id}.jsonl").write_text(
         json.dumps(

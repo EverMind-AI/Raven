@@ -75,6 +75,20 @@ def _no_update_check(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_global_rules(monkeypatch):
+    """Keep the machine-level rules layer out of every test prompt.
+
+    Segment 2 can inject ``~/.raven/AGENTS.md`` / ``~/.claude/CLAUDE.md``, and
+    on a developer (or CI) machine those files really exist — without this pin
+    every bootstrap assertion would depend on the operator's personal rules.
+    Tests that exercise the layer set ``RAVEN_GLOBAL_RULES=1`` themselves (or
+    unset the variable and pin an attended/unattended profile).
+    """
+    monkeypatch.setenv("RAVEN_GLOBAL_RULES", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_data_dir(tmp_path):
     """Point raven's instance data dir at a temp directory for every test.
 

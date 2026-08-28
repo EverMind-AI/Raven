@@ -258,6 +258,66 @@ async def test_build_tui_honors_configured_pool_sizes():
         await teardown()
 
 
+async def test_acp_stack_serializes_sessions_on_a_shared_loop():
+    import asyncio
+
+    from raven.tui_rpc.bootstrap import build_rpc_stack
+
+    class _Subagents:
+        def set_submit(self, submit):
+            self.submit = submit
+
+    class _BlockingLoop:
+        def __init__(self):
+            self.tools = {}
+            self.subagents = _Subagents()
+            self.started = []
+            self.release = asyncio.Event()
+            self.first_started = asyncio.Event()
+
+        def set_deep_research_broker(self, broker):
+            self.broker = broker
+
+        async def run_turn(
+            self,
+            req,
+            emit,
+            drain,
+            *,
+            stream,
+            inline_tool_stream=False,
+            usage_sink=None,
+            text_sink=None,
+        ):
+            self.started.append(req.conversation)
+            if len(self.started) == 1:
+                self.first_started.set()
+            await self.release.wait()
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    loop = _BlockingLoop()
+    stack = await build_rpc_stack(lambda frame: None, agent_loop=loop)
+    try:
+        for index, session_key in enumerate(("acp:a", "acp:b"), 1):
+            response = await stack.dispatcher.dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": index,
+                    "method": "turn.send",
+                    "params": {"session_key": session_key, "content": "work"},
+                }
+            )
+            assert response["result"]["accepted"] is True
+        await asyncio.wait_for(loop.first_started.wait(), timeout=0.5)
+        await asyncio.sleep(0.05)
+        assert loop.started == ["acp:a"]
+    finally:
+        loop.release.set()
+        await stack.teardown()
+
+    assert loop.started == ["acp:a", "acp:b"]
+
+
 async def test_streaming_turn_emits_token_deltas_then_message_complete():
     emitter = FakeEmitter()
     loop = _RunTurnLoop(

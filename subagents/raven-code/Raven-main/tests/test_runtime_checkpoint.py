@@ -133,6 +133,7 @@ def _loop_agent(workspace: Path, *, checkpoint_enabled: bool) -> AgentLoop:
         runtime_config=RuntimeConfig(
             checkpoint=CheckpointConfig(
                 policy="always" if checkpoint_enabled else "never",
+                shadow_base=str(workspace.parent / "checkpoint-state"),
             ),
         ),
     )
@@ -246,7 +247,9 @@ async def test_completed_status_and_snapshot(workspace):
         model="stub",
         max_iterations=5,
         restrict_to_workspace=True,
-        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
+        runtime_config=RuntimeConfig(
+            checkpoint=CheckpointConfig(policy="always", shadow_base=str(workspace.parent / "checkpoint-state"))
+        ),
     )
     final, _used, _msgs, outcome = await agent._run_agent_loop(
         [{"role": "user", "content": "go"}],
@@ -266,7 +269,9 @@ async def test_error_status(workspace):
         model="stub",
         max_iterations=5,
         restrict_to_workspace=True,
-        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
+        runtime_config=RuntimeConfig(
+            checkpoint=CheckpointConfig(policy="always", shadow_base=str(workspace.parent / "checkpoint-state"))
+        ),
     )
     _final, _used, _msgs, outcome = await agent._run_agent_loop(
         [{"role": "user", "content": "go"}],

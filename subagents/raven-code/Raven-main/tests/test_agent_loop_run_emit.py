@@ -9,13 +9,16 @@ Driven against a real AgentLoop with only the LLM provider + sandbox edges faked
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.deep_research import DeepResearchOfferTool
+from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
 from raven.sandbox import SandboxInitError
@@ -27,6 +30,7 @@ from raven.spine.events import StreamDelta as EvStreamDelta
 from raven.spine.events import Text as EvText
 from raven.spine.events import ToolEvent as EvToolEvent
 from raven.spine.message import ChatType, Source
+from raven.spine.scheduler import OriginPools, Scheduler
 from raven.spine.turn import Origin, TurnRequest
 
 
@@ -176,12 +180,13 @@ def _drain() -> list:
     return []
 
 
-def _req(text: str, *, media=(), origin: Origin = Origin.USER) -> TurnRequest:
+def _req(text: str, *, media=(), origin: Origin = Origin.USER, conversation: str | None = None) -> TurnRequest:
     return TurnRequest(
         origin=origin,
         source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
         text=text,
         media=media,
+        conversation=conversation,
     )
 
 
@@ -237,6 +242,115 @@ async def test_hook_short_circuit_preserves_media_at_outbound_layer(tmp_path):
 
 
 # ── run(req, emit) collapse — emit sequence per category ────────────
+
+
+async def test_session_workdir_drives_default_coding_tools(tmp_path):
+    agent_home = tmp_path / "agent-home"
+    checkout = tmp_path / "checkout"
+    agent_home.mkdir()
+    checkout.mkdir()
+    provider = _FakeChatProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="write",
+                        name="write_file",
+                        arguments={"file_path": "write-marker.txt", "content": "written"},
+                    ),
+                    ToolCallRequest(
+                        id="exec",
+                        name="exec",
+                        arguments={"command": "printf executed > exec-marker.txt"},
+                    ),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=agent_home, restrict_to_workspace=True)
+    _stub_edges(loop)
+    session_key = "acp:pinned-workdir"
+    session = loop.sessions.get_or_create(session_key)
+    session.metadata["workdir"] = str(checkout)
+    loop.sessions.save(session)
+    sink = _EmitCollector()
+    scheduler = Scheduler(AgentTurnRunner(loop, stream=False), OriginPools(user=1, system=1), sink)
+
+    outcome = await scheduler.submit(_req("edit the checkout", conversation=session_key)).result()
+
+    assert outcome is not None
+    assert (checkout / "write-marker.txt").read_text() == "written"
+    assert (checkout / "exec-marker.txt").read_text() == "executed"
+    assert not (agent_home / "write-marker.txt").exists()
+    assert not (agent_home / "exec-marker.txt").exists()
+
+
+async def test_session_workdir_drives_checkpoint_without_snapshotting_agent_home(tmp_path):
+    agent_home = tmp_path / "agent-home"
+    checkout = tmp_path / "checkout"
+    agent_home.mkdir()
+    checkout.mkdir()
+    rendered_config = agent_home / ".config.rendered.123.json"
+    rendered_config.write_text('{"api_key": "sentinel-secret"}', encoding="utf-8")
+    provider = _FakeChatProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="write",
+                        name="write_file",
+                        arguments={"file_path": "edited.py", "content": "changed = True\n"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    state = tmp_path / "state" / "checkpoints"
+    loop = AgentLoop(
+        provider=provider,
+        workspace=agent_home,
+        restrict_to_workspace=True,
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always", shadow_base=str(state))),
+    )
+    _stub_edges(loop)
+    session_key = "acp:pinned-checkpoint-workdir"
+    session = loop.sessions.get_or_create(session_key)
+    session.metadata["workdir"] = str(checkout)
+    loop.sessions.save(session)
+
+    await loop.run_turn(
+        _req("edit the checkout", conversation=session_key),
+        _EmitCollector(),
+        _drain,
+        stream=False,
+    )
+
+    # Neither checkout nor agent home gains any runtime files: the shadow
+    # lives in the state partition, in the CHECKOUT's own bucket.
+    assert not (agent_home / ".raven").exists()
+    assert not (checkout / ".raven").exists()
+    service = loop._checkpoints[checkout.resolve()]
+    shadow = service._git_dir
+    assert shadow.is_relative_to(state)
+    assert shadow.is_dir()
+    files = subprocess.run(
+        ["git", f"--git-dir={shadow}", "ls-tree", "-r", "--name-only", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert "edited.py" in files
+    assert ".config.rendered.123.json" not in files
+    # And the agent home's own bucket (created at loop init) never saw the
+    # rendered credentials either.
+    home_service = loop._checkpoints[agent_home.resolve()]
+    assert home_service._git_dir != shadow
 
 
 async def test_run_streams_then_dissolves_main_response(tmp_path):

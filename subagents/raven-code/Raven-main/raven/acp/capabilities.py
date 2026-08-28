@@ -80,16 +80,6 @@ def agent_capabilities() -> dict[str, Any]:
         # either. Declaring auth.logout would put a method on the wire whose
         # only honest answer is that there was no session to end.
         "auth": {},
-        # The one extension this agent serves, in the schema's only extension
-        # carrier. Named here so a client can find out whether steering exists
-        # without calling a method that may not: an underscore-prefixed method
-        # is outside the schema, and a client that guesses gets a
-        # method-not-found in the middle of somebody else's turn.
-        #
-        # Declared because ``_session_steer`` honours it, which is this file's
-        # standing rule -- a declared capability with nothing behind it is the
-        # worst failure available to an ACP agent.
-        "_meta": {protocol.STEER_CAPABILITY: {}},
     }
 
 

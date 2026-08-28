@@ -77,8 +77,12 @@ def _harness(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(module, "RUN_ROOT", tmp_path / "runs")
-    monkeypatch.setattr(module, "render_config", lambda source: config)
+    if hasattr(module, "state_root"):
+        monkeypatch.setattr(module, "state_root", lambda: tmp_path / "state")
+        monkeypatch.setattr(module, "render_config", lambda source, state_dir: config)
+    else:
+        monkeypatch.setattr(module, "RUN_ROOT", tmp_path / "runs")
+        monkeypatch.setattr(module, "render_config", lambda source: config)
     if hasattr(module, "resolve_workspace"):
         monkeypatch.setattr(module, "resolve_workspace", lambda state_dir, override: workspace)
     # Named but never created when the run produced nothing: "the transcript is
@@ -343,11 +347,10 @@ class TestRenderedConfigSweep:
     """
 
     @pytest.fixture
-    def sweep(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def sweep(self, tmp_path: Path):
         module = _load("raven-code")
         state = tmp_path / "state"
         state.mkdir()
-        monkeypatch.setattr(module, "STATE_ROOT", state)
 
         def write(pid: int, *, age_s: float = 0.0) -> Path:
             path = state / f".config.rendered.{pid}.json"
@@ -357,14 +360,14 @@ class TestRenderedConfigSweep:
                 os.utime(path, (stamp, stamp))
             return path
 
-        return module, write
+        return module, state, write
 
     def test_a_config_left_by_a_dead_launcher_goes(self, sweep):
         """Fresh on disk, and still garbage: age would have kept it for a day."""
-        module, write = sweep
+        module, state, write = sweep
         stranded = write(_NEVER_A_LAUNCHER)
 
-        module.sweep_stale_renders()
+        module.sweep_stale_renders(state)
 
         assert not stranded.exists()
 
@@ -376,31 +379,31 @@ class TestRenderedConfigSweep:
         behind. This is the case a liveness-plus-age rule would break, which is
         why there is no age fallback.
         """
-        module, write = sweep
+        module, state, write = sweep
         held = write(os.getpid(), age_s=90 * 86400)
 
-        module.sweep_stale_renders()
+        module.sweep_stale_renders(state)
 
         assert held.exists()
 
     def test_a_name_with_no_readable_pid_goes(self, sweep):
         """Nothing can be holding a file whose name names no process."""
-        module, write = sweep
-        malformed = module.STATE_ROOT / ".config.rendered.not-a-pid.json"
+        module, state, write = sweep
+        malformed = state / ".config.rendered.not-a-pid.json"
         malformed.write_text("{}", encoding="utf-8")
 
-        module.sweep_stale_renders()
+        module.sweep_stale_renders(state)
 
         assert not malformed.exists()
 
     def test_everything_else_in_the_directory_is_untouched(self, sweep):
         """The glob is all that separates these from the launcher's own logs."""
-        module, write = sweep
-        log = module.STATE_ROOT / "launcher.log"
+        module, state, write = sweep
+        log = state / "launcher.log"
         log.write_text("log", encoding="utf-8")
         mine = write(os.getpid())
 
-        module.sweep_stale_renders()
+        module.sweep_stale_renders(state)
 
         assert log.exists()
         assert mine.exists()

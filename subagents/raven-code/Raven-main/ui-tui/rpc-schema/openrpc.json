@@ -411,6 +411,11 @@
           "name": "sender_id",
           "required": false,
           "schema": { "type": "string" }
+        },
+        {
+          "name": "media",
+          "required": false,
+          "schema": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
         }
       ],
       "result": {
@@ -503,34 +508,6 @@
       "errors": [
         { "$ref": "#/components/errors/SessionNotFound" }
       ]
-    },
-    {
-      "name": "session.steer",
-      "summary": "Merge text into the turn this session is running. Answers no_turn, and starts nothing, when no turn is running.",
-      "params": [
-        {
-          "name": "session_id",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "text",
-          "required": true,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "SessionSteerResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["status"],
-          "properties": {
-            "status": { "type": "string", "enum": ["injected", "no_turn"] }
-          }
-        }
-      },
-      "errors": []
     },
     {
       "name": "mcp.list",

@@ -92,18 +92,13 @@ async def build_rpc_stack(
     turn_ids: dict[str, str] = {}
     turn_teardown = None
     if agent_loop is not None:
-        # Sized like the gateway's, not ``build_tui``'s default of one: this
-        # process serves every session the connecting host opens, and a single
-        # USER slot makes one turn waiting on a question hold up all the others.
-        from raven.config.loader import load_config
-
-        gateway = load_config().gateway
+        # One AgentLoop owns mutable tool and turn state. Keep its user lane
+        # serial until ACP constructs one loop per session; process-level
+        # concurrency belongs to the caller in the meantime.
         turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_tui(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
-            user_pool=gateway.user_pool,
-            system_pool=gateway.system_pool,
         )
         # A sub-agent's result turn is submitted back onto this scheduler; without
         # it a delegated reply is produced and never delivered.

@@ -197,19 +197,15 @@ Skills with available="false" need dependencies installed first - you can try in
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
-        parts = []
+        """Estimate segment 2 by delegating to the real renderer.
 
-        for filename in self.BOOTSTRAP_FILES:
-            file_path = self.workspace / filename
-            if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
-                # Use basename for the section heading so L4 paths like
-                # ``agent_memory/profile/soul.md`` render as ``## SOUL.md``.
-                heading = Path(filename).name
-                parts.append(f"## {heading}\n\n{content}")
+        A mirror implementation drifted once already (no layering, no caps),
+        which skews the token budget the consolidator plans against — so this
+        estimation path and the per-turn segment share one function.
+        """
+        from raven.context_engine.segments import render
 
-        return "\n\n".join(parts) if parts else ""
+        return render.load_bootstrap_files(self.workspace, self.BOOTSTRAP_FILES)
 
     def build_messages(
         self,

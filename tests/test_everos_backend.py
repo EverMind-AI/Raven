@@ -2037,7 +2037,7 @@ class TestConvertMessagesIsReusable:
         assert [row["sender_id"] for row in out] == ["liv", "coder", "coder"]
 
     def test_method_delegates_to_the_function(self) -> None:
-        messages = [{"role": "user", "content": "hi"}]
+        messages = [{"role": "user", "content": "hi", "timestamp": 1755683626693}]
         assert EverosBackend._convert_messages(messages, agent_id="coder", user_id="liv") == convert_messages(
             messages, agent_id="coder", user_id="liv"
         )
