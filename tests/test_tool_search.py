@@ -12,6 +12,7 @@ from raven.agent.tools.tool_search import (
     DEFAULT_ALWAYS_VISIBLE,
     META_TOOL_NAMES,
     TOOL_CALL_NAME,
+    TOOL_SEARCH_NAME,
     ToolCallTool,
     ToolSearchController,
     ToolSearchStrategy,
@@ -230,6 +231,17 @@ def test_default_always_visible_covers_core_and_interaction_primitives() -> None
     }
 
 
+def test_optional_orchestration_and_skill_fetch_stay_searchable() -> None:
+    """A minute-scale sub-agent fan-out and a skill-body fetch are deliberate
+    acts, not per-turn primitives: they are reached through tool_search so the
+    resident tool list does not grow with every optional capability. A deploy
+    that wants either resident adds it via tools.tool_search.always_visible."""
+    always = set(DEFAULT_ALWAYS_VISIBLE)
+    assert "run_subagent_dag" not in always
+    assert "read_skill" not in always
+    assert "use_skill" not in always
+
+
 def test_visible_names_are_stable_and_include_meta() -> None:
     ctrl = ToolSearchController(ToolRegistry(), always_visible={"read_file"})
     assert META_TOOL_NAMES <= ctrl.visible_names()
@@ -286,7 +298,7 @@ async def test_tool_call_forwards_to_registry() -> None:
 async def test_tool_call_rejects_meta_and_missing() -> None:
     ctrl = _controller(ToolRegistry())
     assert "cannot be invoked" in await ctrl.call("tool_search", {})
-    assert "not found" in await ctrl.call("nope", {})
+    assert "not available" in await ctrl.call("nope", {})
 
 
 @pytest.mark.asyncio
@@ -323,13 +335,14 @@ def _registry_with_n(n: int) -> tuple[ToolRegistry, ToolSearchController]:
 
 
 @pytest.mark.asyncio
-async def test_strategy_small_catalog_passthrough_drops_meta() -> None:
+async def test_strategy_small_catalog_passthrough_drops_only_tool_search() -> None:
     reg, ctrl = _registry_with_n(3)
     strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
     tools = reg.get_definitions()
     _, out, _ = await strat.before_llm_call([], tools, "m")
     out_names = {t["function"]["name"] for t in out}
-    assert not (META_TOOL_NAMES & out_names), "meta-tools dropped below threshold"
+    assert TOOL_SEARCH_NAME not in out_names, "nothing to search below threshold"
+    assert TOOL_CALL_NAME in out_names, "schema-hidden tools need a name route at any catalog size"
     assert "extra_0" in out_names, "all real tools exposed below threshold"
 
 
@@ -407,3 +420,343 @@ def test_registry_register_first_runs_before_others() -> None:
     reg.register(_Noop("front"), first=True)
     reg.register(_Noop("back"))
     assert [s.name for s in reg.strategies] == ["front", "a", "b", "back"]
+
+
+# ---- tool_call must not flatten its target's blocking verdict ----
+
+
+def test_tool_call_reports_its_target_as_blocking() -> None:
+    """``tool_call`` is a passthrough, so its blocking verdict is the target's.
+
+    Reading the meta-tool's own flag instead double-wraps a blocking target: the
+    registry applies its default ceiling to the outer ``tool_call`` and kills a
+    sub-agent run that is deliberately deadline-free, and the turn stream is told
+    the call is clockable when it is not.
+    """
+    reg = ToolRegistry()
+    reg.register(_FakeTool("grep", "search files"))
+    blocking = _FakeTool("run_subagent_dag", "orchestrate sub-agents")
+    blocking.blocking_interaction = True
+    reg.register(blocking)
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "run_subagent_dag"}) is True
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "grep"}) is False
+
+
+def test_tool_call_with_an_unknown_or_meta_target_is_not_blocking() -> None:
+    """No target, an unknown one, or a meta-tool: fall back to non-blocking so the
+    registry keeps its backstop on a call that is going to error out anyway."""
+    reg = ToolRegistry()
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    reg.register(ToolSearchTool(ctrl))
+
+    assert reg.is_blocking(TOOL_CALL_NAME, {}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "nope"}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": TOOL_CALL_NAME}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "tool_search"}) is False
+
+
+class _MetadataTool(_FakeTool):
+    def take_metadata(self) -> dict[str, Any] | None:
+        return {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+def test_tool_call_hands_back_its_target_metadata() -> None:
+    """``tool_call`` produces no metadata of its own, so a forwarded tool's
+    payload has to be collected from the target. Reading the forwarder instead
+    strands the payload: the call succeeds, the model is told so, and the UI is
+    handed nothing at all."""
+    reg = ToolRegistry()
+    reg.register(_MetadataTool("deliver_files", "hand files to the user"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    payload = reg.take_metadata(TOOL_CALL_NAME, {"name": "deliver_files", "arguments": {}})
+
+    assert payload == {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+def test_tool_call_with_an_unknown_or_meta_target_has_no_metadata() -> None:
+    """No target, an unknown one, or a meta-tool: fall back to the forwarder's
+    own (absent) metadata rather than raising on a call that already errors."""
+    reg = ToolRegistry()
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    reg.register(ToolSearchTool(ctrl))
+
+    assert reg.take_metadata(TOOL_CALL_NAME, {}) is None
+    assert reg.take_metadata(TOOL_CALL_NAME, {"name": "nope"}) is None
+    assert reg.take_metadata(TOOL_CALL_NAME, {"name": TOOL_CALL_NAME}) is None
+    assert reg.take_metadata("nope", {}) is None
+
+
+def test_direct_call_still_takes_its_own_metadata() -> None:
+    reg = ToolRegistry()
+    reg.register(_MetadataTool("deliver_files", "hand files to the user"))
+
+    assert reg.take_metadata("deliver_files", {}) == {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+@pytest.mark.asyncio
+async def test_tool_call_does_not_timer_kill_a_blocking_target() -> None:
+    """End-to-end: a slow blocking target reached via tool_call outlives the
+    registry ceiling, instead of being cut off by the outer wrapper."""
+    import asyncio
+
+    class _SlowBlocking(_FakeTool):
+        blocking_interaction = True
+
+        async def execute(self, **kwargs: Any) -> str:
+            await asyncio.sleep(0.2)
+            return "ran run_subagent_dag"
+
+    reg = ToolRegistry()
+    reg.DEFAULT_TOOL_TIMEOUT_S = 0.05
+    reg.register(_SlowBlocking("run_subagent_dag", "orchestrate sub-agents"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    out = await reg.execute(TOOL_CALL_NAME, {"name": "run_subagent_dag", "arguments": {}})
+
+    assert out == "ran run_subagent_dag"
+
+
+# ---------------------------------------------------------------------------
+# channel-bound tools: hidden from search must also mean unreachable by name
+# ---------------------------------------------------------------------------
+
+
+class _WebOnlyTool(_FakeTool):
+    channels = frozenset({"web"})
+
+
+def _web_only_registry() -> tuple[ToolRegistry, ToolSearchController]:
+    reg = ToolRegistry()
+    reg.register(_WebOnlyTool("deliver_files", "deliver finished output files to the user"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    ctrl.refresh()
+    return reg, ctrl
+
+
+def test_search_hides_a_tool_this_channel_cannot_use() -> None:
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("whatsapp")
+    assert ctrl.search("deliver files") == []
+
+
+def test_search_surfaces_it_on_its_own_channel() -> None:
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("web")
+    assert [h["name"] for h in ctrl.search("deliver files")] == ["deliver_files"]
+
+
+def test_the_index_itself_stays_channel_independent() -> None:
+    """The BM25 index is keyed on the catalog and shared by concurrent turns, so
+    it must not vary per channel -- filtering happens on the read instead."""
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("whatsapp")
+    ctrl.refresh()
+    assert "deliver_files" in [t.name for t in ctrl._catalog_tools()]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_refuses_a_tool_this_channel_cannot_use() -> None:
+    """Naming it directly is the way around a search-only filter, so tool_call
+    has to apply the same predicate rather than fall through to the registry."""
+    reg, _ = _web_only_registry()
+    reg.set_channel("whatsapp")
+
+    out = await reg.execute(TOOL_CALL_NAME, {"name": "deliver_files", "arguments": {}})
+
+    assert "not available" in out
+    # Worded exactly as an absent tool is: "it exists but not for you" is the
+    # way around the filter that keeping it out of the schema was meant to close.
+    assert out.replace("deliver_files", "ghost") == await reg.execute(
+        TOOL_CALL_NAME, {"name": "ghost", "arguments": {}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_tool_does_not_consume_a_result_slot() -> None:
+    """The filter must run before truncation. With it after, a withheld rank-1
+    hit ate the only slot and the model was told nothing matched while a usable
+    rank-2 tool existed -- worse than not having the filter at all."""
+    reg = ToolRegistry()
+    reg.register(_WebOnlyTool("deliver_files", "deliver files to the user"))
+    reg.register(_FakeTool("message", "send a message with files to the user"))
+    ctrl = _controller(reg)
+    ctrl.refresh()
+
+    # Rank 1 is the web-only tool, so a telegram turn has to fall through to it.
+    assert ctrl._index.search("deliver files to the user", 10)[0] == "deliver_files"
+
+    reg.set_channel("telegram")
+    assert [h["name"] for h in ctrl.search("deliver files to the user", limit=1)] == ["message"]
+
+    reg.set_channel("web")
+    assert [h["name"] for h in ctrl.search("deliver files to the user", limit=1)] == ["deliver_files"]
+
+
+class TestAlwaysVisibleResolvesConfiguredNames:
+    """A configured name has to keep matching after its tool is renamed.
+
+    ``always_visible`` is what a deploy uses to hold a tool resident while the
+    rest of the catalog is folded behind ``tool_search``. It matched by exact
+    set membership, so a namespaced tool whose registered name differs from the
+    configured spelling -- sanitising and the length cap both do that -- dropped
+    out of the resident set and back into the catalog. No error: the model just
+    has to search for it first.
+    """
+
+    def _mcp(self, registry, server: str, tool: str):
+        from raven.mcp.naming import MCPToolRef, tool_name
+
+        name = tool_name(server, tool, taken=registry)
+        registry.register(
+            _FakeTool(name, f"{tool} on {server}"), origin=MCPToolRef(name=name, server=server, tool=tool)
+        )
+        return name
+
+    def test_a_configured_name_that_was_sanitised_still_resolves(self):
+        reg = ToolRegistry()
+        # The registered name loses the slash; the config entry still has it.
+        registered = self._mcp(reg, "gh", "actions/download-logs")
+        assert registered == "mcp_gh_actions_download-logs"
+
+        search = ToolSearchController(reg, always_visible={"mcp_gh_actions/download-logs"})
+        assert registered in search.visible_names()
+
+    def test_an_exactly_named_tool_is_visible(self):
+        reg = ToolRegistry()
+        registered = self._mcp(reg, "gh", "list_repos")
+        search = ToolSearchController(reg, always_visible={registered})
+        assert registered in search.visible_names()
+
+    def test_a_builtin_still_matches_by_its_own_name(self):
+        reg = ToolRegistry()
+        reg.register(_FakeTool("grep", "search files"))
+        search = ToolSearchController(reg, always_visible={"grep"})
+        assert "grep" in search.visible_names()
+
+    def test_a_name_matching_nothing_is_kept_as_written(self):
+        # Usually a tool this deploy does not have, which is ordinary. Dropping
+        # it would hide a typo rather than surface one.
+        search = ToolSearchController(ToolRegistry(), always_visible={"not_installed_here"})
+        assert "not_installed_here" in search.visible_names()
+
+    def test_the_meta_tools_are_always_in(self):
+        search = ToolSearchController(ToolRegistry(), always_visible=set())
+        assert META_TOOL_NAMES <= search.visible_names()
+
+    def test_a_tool_registered_after_construction_resolves(self):
+        # MCP servers attach while raven runs, so resolution cannot happen once
+        # at construction: the tool is not there yet.
+        reg = ToolRegistry()
+        search = ToolSearchController(reg, always_visible={"mcp_gh_actions/download-logs"})
+        assert "mcp_gh_actions_download-logs" not in search.visible_names()
+
+        registered = self._mcp(reg, "gh", "actions/download-logs")
+        assert registered in search.visible_names()
+
+
+class TestAnAbsentNameOnTheFoldedPath:
+    """``tool_call`` answers a name it cannot resolve by pointing at tool_search.
+
+    This surface has a catalog to search, so that is the useful advice --
+    unlike ``ToolRegistry.execute``, which also serves the unfolded surface
+    where there is nothing to search and therefore names both readings instead.
+    A tool whose MCP server was unloaded mid-turn lands here too and the search
+    finds nothing: one wasted hop, and the accepted price of not tracking what
+    used to exist.
+
+    Registering ``ToolSearchTool`` is what makes these the folded path: the
+    pointer is withheld where the fold is off, because ``tool_call`` ships there
+    too and naming a tool the deploy does not have is the broken promise this
+    text is supposed to avoid.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_told_where_the_catalog_is(self):
+        reg = ToolRegistry()
+        reg.register(_FakeTool("real_one", "a cataloged tool"))
+        ctrl = ToolSearchController(reg, always_visible=set(), compaction_threshold=0)
+        reg.register(ToolSearchTool(ctrl))
+        out = await ctrl.call("mcp_ghost_thing", {})
+        assert "not available" in out
+        assert "tool_search" in out
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_not_pointed_at_an_absent_tool_search(self):
+        reg = ToolRegistry()
+        ctrl = ToolSearchController(reg, always_visible=set())
+        out = await ctrl.call("mcp_ghost_thing", {})
+        assert "not available" in out
+        assert "tool_search" not in out
+
+    @pytest.mark.asyncio
+    async def test_it_reads_the_same_way_as_the_direct_path(self):
+        # Both surfaces answer a name that did not resolve, and neither can tell
+        # a hallucinated one from a tool unloaded mid-turn. Saying it two
+        # different ways -- one of them "you got the name wrong" -- was the
+        # disagreement this pins shut. Only the catalog pointer differs, because
+        # only this surface has a catalog the model cannot already see.
+        reg = ToolRegistry()
+        ctrl = ToolSearchController(reg, always_visible=set())
+        folded = await ctrl.call("ghost", {})
+        direct = await reg.execute("ghost", {})
+        for phrase in ("is not available", "may have been unloaded", "the name may be wrong"):
+            assert phrase in folded, phrase
+            assert phrase in direct, phrase
+        assert "tool_search" not in direct
+
+    @pytest.mark.asyncio
+    async def test_an_unregistered_tool_is_answered_the_same_way(self):
+        from raven.mcp.naming import MCPToolRef
+
+        reg = ToolRegistry()
+        name = "mcp_openseo_search"
+        reg.register(_FakeTool(name, "search openseo"), origin=MCPToolRef(name=name, server="openseo", tool="search"))
+        reg.unregister(name)
+        reg.register(_FakeTool("real_one", "a cataloged tool"))
+        ctrl = ToolSearchController(reg, always_visible=set(), compaction_threshold=0)
+        reg.register(ToolSearchTool(ctrl))
+        out = await ctrl.call(name, {})
+        assert "not available" in out
+        assert "tool_search" in out
+        # Same answer as a name that never existed: the registry keeps no record
+        # of what it used to hold, so there is nothing to say differently.
+        assert out.replace(name, "GHOST") == await ctrl.call("GHOST", {})
+
+    @pytest.mark.asyncio
+    async def test_a_channel_withheld_tool_is_refused_as_absent(self):
+        # The channel filter must not become reachable by naming a tool
+        # directly: "it exists but not for you" is the way around the filter
+        # that keeping it out of the schema was meant to close.
+        class _Bound(_FakeTool):
+            channels = frozenset({"web"})
+
+        reg = ToolRegistry()
+        reg.register(_Bound("only_on_web", "web-only tool"))
+        reg.set_channel("telegram")
+        ctrl = ToolSearchController(reg, always_visible=set())
+
+        out = await ctrl.call("only_on_web", {})
+        assert "not available" in out
+        # And it must not read as "it exists, just not for you" -- pointing at
+        # the catalog is safe because ``search`` filters by channel too.
+        assert [h["name"] for h in ctrl.search("web-only tool")] == []
+
+    def test_the_search_index_never_offers_an_unregistered_tool(self):
+        from raven.mcp.naming import MCPToolRef
+
+        reg = ToolRegistry()
+        name = "mcp_openseo_search"
+        reg.register(_FakeTool(name, "search openseo"), origin=MCPToolRef(name=name, server="openseo", tool="search"))
+        reg.unregister(name)
+        ctrl = ToolSearchController(reg, always_visible=set())
+        ctrl.refresh()
+        assert [h["name"] for h in ctrl.search("openseo search")] == []

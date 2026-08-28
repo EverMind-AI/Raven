@@ -17,6 +17,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from raven.channels.adapters.slack import parsing
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.config.schema import SlackConfig
 
@@ -32,6 +33,7 @@ def _transient_slack(err: Exception) -> bool:
 
 
 class SlackChannel(ChannelBase):
+    capabilities = Capabilities(file_attachments=True)
     """Slack channel using Socket Mode."""
 
     config: SlackConfig

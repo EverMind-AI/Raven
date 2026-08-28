@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 Raven is licensed under the Apache License 2.0. It incorporates code from the
-following MIT-licensed projects. Their copyright notices and license texts are
+projects below (MIT unless noted). Their copyright notices and license texts are
 retained in `LICENSES/`.
 
 ## nanobot (base agent runtime)
@@ -34,11 +34,30 @@ retained in `LICENSES/`.
   Triple attribution chain (ink contributors → Nous Research hermes-ink
   → EverMind modifications) is encoded in the 5-line SPDX header of
   every substantial file under `ui-tui/packages/hermes-ink/src/`.
-  Re-evaluation triggers (Nous halts maintenance / severe CVE / community
-  ink converges / patch debt > 500 LOC) are recorded in
-  `docs/RepoMem/temp/tui-fork-hermes-import/02-hermes-ink-vendor-vs-community.md`
-  (to be promoted to `docs/RepoMem/persist/architecture/hermes-fork-strategy.md`
-  at L2 archive time).
+  The fork policy (hard fork, no upstream sync, fixes land in-tree) lives
+  in `ui-tui/packages/hermes-ink/README.md`.
+
+## agentscope (web-service framework)
+- Upstream source: https://github.com/agentscope-ai/agentscope
+- Copyright (c) 2025 Alibaba Group and AgentScope contributors
+- License: Apache-2.0 - see `LICENSES/Apache-2.0-agentscope.txt`
+- Adopted at commit: `c84fd1a54dcc207257a8d616ff63b65470febc95` (the RavenX fork
+  of agentscope 2.0.4, itself based on upstream `4cb58320`)
+- Scope: the vendored tree it was adopted into (`ui-webui/service/agentscope/`,
+  284 files supplying the retired web service's FastAPI app, Redis storage,
+  RAG/knowledge-base managers and sub-agent DAG machinery) was removed with
+  `ui-webui` itself. What remains in this repository, and what this notice is
+  now about, is the code adopted FROM it and rewritten in place:
+  `raven/knowledge/_types.py`, `raven/knowledge/_chunker.py`,
+  `raven/knowledge/_parser.py` and `raven/agent/subagent/dag_projection.py`.
+  Each names its origin in its own module docstring.
+- Modifications: the four modules above are rewritten rather than vendored --
+  they take agentscope's chunking, parsing and DAG-projection logic and nothing
+  else, and they carry no agentscope import. The attribution stays because the
+  derivation does; the licence text is kept at
+  `LICENSES/Apache-2.0-agentscope.txt`. The retired tree's own PROVENANCE.md
+  went with it, and its per-subsystem trimming rationale is only of interest to
+  a tree that no longer exists.
 
 # External Runtime Tools (not vendored)
 

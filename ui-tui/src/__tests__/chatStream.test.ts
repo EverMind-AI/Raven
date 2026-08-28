@@ -17,6 +17,16 @@ import type { TurnEvent, TurnSendResult } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
+import {
+  armEscape,
+  directKey,
+  enterDirect,
+  getDirectChat,
+  getDirectTranscript,
+  leaveDirect,
+  resetDirectChat
+} from '../app/directChatStore.js'
+import { bindInstanceRefresh, resetInstanceRefresh, scheduleInstanceRefresh } from '../app/directChatSync.js'
 import { turnController } from '../app/turnController.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
@@ -312,6 +322,52 @@ describe('createChatStream — cancel preserves streamed content', () => {
     expect(assistant!.text).toContain('[interrupted]')
   })
 
+  it('does not settle the status to ready when a turn starts inside the interrupt cooldown', async () => {
+    vi.useFakeTimers()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ appendMessage: () => {}, rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
+      type: 'error'
+    })
+    expect(getUiState().status).toBe('interrupted')
+
+    // A second prompt inside the 800ms cooldown: the window must not outlive
+    // the idle it was describing.
+    await stream.send('again')
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
+    vi.advanceTimersByTime(2000)
+
+    expect(getUiState().status).not.toBe('ready')
+    expect(getUiState().busy).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('settles the status to ready after an interrupt when nothing else starts', async () => {
+    vi.useFakeTimers()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ appendMessage: () => {}, rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
+      type: 'error'
+    })
+
+    vi.advanceTimersByTime(2000)
+
+    expect(getUiState().status).toBe('ready')
+    vi.useRealTimers()
+  })
+
   it('appends the failure detail to the error line when present', async () => {
     const sysCalls: string[] = []
     const fake = makeFakeRpc()
@@ -408,6 +464,759 @@ describe('createChatStream — cancel preserves streamed content', () => {
 
     expect(appended.some(m => m.role === 'assistant')).toBe(false)
     expect(sysCalls).toContain('interrupted')
+  })
+})
+
+describe('createChatStream — turn artifacts', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  it('appends deliveries and file changes after the completed answer', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: {
+        arguments: { path: '/tmp/report.md' },
+        name: 'write_file',
+        tool_call_id: 'write-1'
+      }
+    })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: {
+          raven_delivery: {
+            files: [{ name: 'report.md', path: '/tmp/report.md', size: 2048 }]
+          }
+        },
+        result_preview: 'Delivered report.md',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Done.' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        turn_id: 'turn-1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+
+    expect(appended.at(-1)).toMatchObject({
+      artifacts: {
+        changes: [{ change: 'new', ext: 'MD', name: 'report.md' }],
+        deliveries: [{ ext: 'MD', missing: false, name: 'report.md', size: 2048, title: 'report.md' }]
+      },
+      kind: 'artifacts'
+    })
+  })
+
+  it.each(['cancelled_by_client', 'internal'] as const)('keeps deliveries after a %s error', async reason => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: { raven_delivery: { files: [{ name: 'report.pdf', path: '/tmp/report.pdf' }] } },
+        result_preview: 'Delivered report.pdf',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32000, message: 'turn failed', reason }
+    })
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        artifacts: expect.objectContaining({
+          deliveries: [expect.objectContaining({ name: 'report.pdf' })]
+        }),
+        kind: 'artifacts'
+      })
+    )
+  })
+
+  it('keeps deliveries after a local force reset with no later terminal event', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: { raven_delivery: { files: [{ name: 'report.pdf', path: '/tmp/report.pdf' }] } },
+        result_preview: 'Delivered report.pdf',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+
+    stream.forceReset()
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
+
+    expect(appended.filter(msg => msg.kind === 'artifacts')).toEqual([
+      expect.objectContaining({
+        artifacts: expect.objectContaining({
+          deliveries: [expect.objectContaining({ name: 'report.pdf' })]
+        })
+      })
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Direct chat: routing by the event's own tag
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — direct-chat routing', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  const attached = async (appended?: Msg[]) => {
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended?.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+    return { fake, stream }
+  }
+
+  it('routes a tagged delta to the instance transcript, not the main one', async () => {
+    const appended: Msg[] = []
+    const { fake } = await attached(appended)
+    enterDirect('Raven-Code', 'refactor-auth')
+
+    fake.__pushEvent({
+      type: 'token.delta',
+      payload: { target: { agent: 'Raven-Code', handle: 'refactor-auth' }, text: 'from the subagent' }
+    })
+
+    expect(getDirectTranscript(directKey('Raven-Code', 'refactor-auth'))).toHaveLength(1)
+    expect(turnController.bufRef).toBe('')
+    expect(appended).toHaveLength(0)
+  })
+
+  it('routes an untagged delta to the main transcript even while in direct mode', async () => {
+    const { fake } = await attached()
+    enterDirect('Raven-Code', 'refactor-auth')
+
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'from raven' } })
+
+    expect(getDirectTranscript(directKey('Raven-Code', 'refactor-auth'))).toHaveLength(0)
+    expect(turnController.bufRef).toBe('from raven')
+  })
+
+  it('routes a delta for a non-active instance to that instance, not the visible one', async () => {
+    // The Esc case: an in-flight direct turn keeps streaming while the user is
+    // back on the main conversation. Routing by "what is visible" rather than
+    // by the tag would corrupt both transcripts.
+    const { fake } = await attached()
+    enterDirect('A', 'one')
+
+    fake.__pushEvent({ type: 'token.delta', payload: { target: { agent: 'B', handle: 'two' }, text: 'late reply' } })
+
+    expect(getDirectTranscript(directKey('B', 'two'))).toHaveLength(1)
+    expect(getDirectTranscript(directKey('A', 'one'))).toHaveLength(0)
+  })
+
+  it('merges a tagged run into one assistant message', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'he' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'llo' } })
+
+    expect(getDirectTranscript(directKey('A', 'one'))).toHaveLength(1)
+    expect(getDirectTranscript(directKey('A', 'one'))[0]?.text).toBe('hello')
+  })
+
+  it('does not commit an empty assistant message to the main transcript on a direct complete', async () => {
+    // recordMessageComplete would flush turnController's buffer into history;
+    // a direct turn never filled it, so calling it appends an empty reply.
+    const appended: Msg[] = []
+    const { fake } = await attached(appended)
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'done' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        target,
+        turn_id: 't1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+
+    expect(appended).toHaveLength(0)
+    expect(getDirectTranscript(directKey('A', 'one')).map(m => m.text)).toEqual(['done'])
+  })
+
+  it('records the in-flight owner from the event, so the other view pauses', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+
+    expect(getDirectChat().running).toEqual([directKey(target.agent, target.handle)])
+  })
+
+  it('releases the slot when a direct turn fails', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', target }
+    })
+
+    expect(getDirectChat().running).toEqual([])
+    expect(getDirectTranscript(directKey('A', 'one')).map(m => m.role)).toEqual(['system'])
+  })
+
+  it('sendTo addresses the instance named, not the view on screen', async () => {
+    const fake = makeFakeRpc()
+    const sent: unknown[] = []
+    const inner = fake.rpc.bind(fake)
+    fake.rpc = (async (method: string, params: unknown) => {
+      if (method === 'turn.send') {
+        sent.push(params)
+      }
+      return inner(method, params)
+    }) as typeof fake.rpc
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    const target = { agent: 'A', handle: 'one' }
+
+    await stream.sendTo(target, 'hi')
+
+    expect(sent).toEqual([{ session_key: 'tui:default', content: 'hi', target }])
+    // The main view stays where it was, and it is the instance that is busy.
+    expect(getDirectChat().active).toBeNull()
+    expect(getDirectChat().running).toEqual([directKey('A', 'one')])
+    expect(stream.isTurnActive()).toBe(false)
+  })
+
+  it('sends the active target with the turn, and omits the key on the main conversation', async () => {
+    const sent: unknown[] = []
+    const fake = makeFakeRpc()
+    const origRpc = fake.rpc.bind(fake)
+    fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+      sent.push([method, params])
+      return origRpc<R, P>(method, params)
+    }
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect('Raven-Code', 'refactor-auth')
+    await stream.send('fix it')
+    // The turn has to land before the next send: one slot per session.
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        target: { agent: 'Raven-Code', handle: 'refactor-auth' },
+        turn_id: 'turn-1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+    leaveDirect()
+    await stream.send('hi')
+
+    const [, direct] = sent[0] as [string, Record<string, unknown>]
+    const [, main] = sent[1] as [string, Record<string, unknown>]
+    expect(direct.target).toEqual({ agent: 'Raven-Code', handle: 'refactor-auth' })
+    expect('target' in main).toBe(false)
+  })
+
+  describe('cancelling from a direct view', () => {
+    const withCapture = async () => {
+      const sent: [string, unknown][] = []
+      const fake = makeFakeRpc()
+      const origRpc = fake.rpc.bind(fake)
+      fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+        sent.push([method, params])
+        return origRpc<R, P>(method, params)
+      }
+      const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+      await stream.attach()
+      return { fake, sent, stream }
+    }
+
+    const cancelParams = (sent: [string, unknown][]) =>
+      sent.filter(([method]) => method === 'turn.cancel').map(([, params]) => params)
+
+    it('names the instance, so the server can find the lane the turn runs on', async () => {
+      const { sent, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      await stream.cancel()
+
+      expect(cancelParams(sent)).toEqual([{ session_key: 'tui:default', target }])
+    })
+
+    it('answers isTurnActive for the view on screen, not for the main agent', async () => {
+      const { stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      expect(stream.isTurnActive()).toBe(true)
+      leaveDirect()
+      expect(stream.isTurnActive()).toBe(false)
+    })
+
+    it('leaves a background direct turn alone when Ctrl+C lands on the main view', async () => {
+      const { sent, stream } = await withCapture()
+      await stream.sendTo({ agent: 'Raven-Code', handle: 'refactor-auth' }, 'fix it')
+
+      await stream.cancel()
+
+      expect(cancelParams(sent)).toEqual([])
+    })
+
+    it('does not carry the main agent\'s arm into a direct view', async () => {
+      // The gap the per-view arm closes. Ctrl+C on the main turn arms; the user
+      // switches to an instance before the cancel lands; the second Ctrl+C used
+      // to read the stale arm and take the LOCAL force-reset rung -- resetting
+      // that pane and never asking the server to stop the sub-agent.
+      // `armEscape` is what the key handler calls; chatStream only cancels.
+      const { sent, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      await stream.sendTo(target, 'take your time')
+      await stream.send('and you too')
+
+      armEscape(null)
+      expect(getUiState().escapeArmed).toBe(true)
+
+      enterDirect(target.agent, target.handle)
+
+      // Same key, a different lane: still the first rung, so it reaches the server.
+      expect(getUiState().escapeArmed).toBe(false)
+      expect(stream.isTurnActive()).toBe(true)
+      await stream.cancel()
+      expect(cancelParams(sent)).toEqual([{ session_key: 'tui:default', target }])
+
+      // And switching back finds the main lane's arm exactly where it was left.
+      leaveDirect()
+      expect(getUiState().escapeArmed).toBe(true)
+    })
+
+    it('keeps a direct arm when the main turn ends beside it', async () => {
+      // The reverse leak: a global disarm at the main turn's end dropped an arm
+      // the direct lane had just placed, turning the user's next Ctrl+C there
+      // into a second cancel instead of the local reset.
+      const { fake, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      await stream.sendTo(target, 'take your time')
+      await stream.send('and you too')
+
+      enterDirect(target.agent, target.handle)
+      armEscape(target)
+      expect(getUiState().escapeArmed).toBe(true)
+
+      fake.__pushEvent({
+        type: 'message.complete',
+        payload: { turn_id: 'turn-1', usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } }
+      })
+
+      expect(getUiState().escapeArmed).toBe(true)
+    })
+
+    it('drops the arm when that lane\'s own cancelled turn comes back', async () => {
+      const { fake, stream } = await withCapture()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+      armEscape(target)
+
+      fake.__pushEvent({
+        type: 'error',
+        payload: { code: -32099, message: 'turn_cancelled', reason: 'cancelled_by_client', target }
+      })
+
+      expect(getUiState().escapeArmed).toBe(false)
+    })
+
+    it('puts the forceReset marker in the instance transcript, not the main one', async () => {
+      const appended: Msg[] = []
+      const sent: [string, unknown][] = []
+      const fake = makeFakeRpc()
+      const origRpc = fake.rpc.bind(fake)
+      fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+        sent.push([method, params])
+        return origRpc<R, P>(method, params)
+      }
+      const stream = createChatStream({
+        appendMessage: m => appended.push(m),
+        rpcClient: fake,
+        sessionKey: 'tui:default'
+      })
+      await stream.attach()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.send('fix it')
+
+      stream.forceReset()
+
+      expect(getDirectTranscript(directKey(target.agent, target.handle)).map(m => m.text)).toContain('interrupted')
+      expect(appended).toHaveLength(0)
+      expect(stream.isTurnActive()).toBe(false)
+      expect(getDirectChat().running).toEqual([])
+      expect(getUiState().busy).toBe(false)
+    })
+  })
+
+  describe('a direct turn ending', () => {
+    // `message.complete` also arms the chip-strip refresh, a real 250ms timer.
+    // Left armed it makes the next `scheduleInstanceRefresh` a no-op, which is
+    // silent and lands on whichever test schedules next.
+    afterEach(() => {
+      resetInstanceRefresh()
+    })
+
+    it('reads the record back, so the steps it just ran appear', async () => {
+      // The steps were a live snapshot until now and the reply streamed in beside
+      // them. Without this read the view keeps both: the only other read is on
+      // entering, and it declines to replace a transcript that holds anything --
+      // which a turn that just ran always does. The turn was invisible until the
+      // TUI restarted.
+      const { fake } = await attached()
+      const target = { agent: 'A', handle: 'one' }
+      const reads: Record<string, unknown>[] = []
+
+      bindInstanceRefresh(
+        async (method, params) => {
+          if (method === 'subagents.instance.history') {
+            reads.push(params ?? {})
+            return {
+              turns: [
+                { call_id: 'log-0', role: 'user', content: 'ask', at_ms: 1 },
+                { call_id: 'log-1', role: 'assistant', content: 'settled answer', at_ms: 2 }
+              ]
+            } as never
+          }
+          return null
+        },
+        () => 's1'
+      )
+
+      fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'partial' } })
+      fake.__pushEvent({ type: 'message.complete', payload: { target, turn_id: 't1', usage: {} } })
+      await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+      expect(reads[0]).toMatchObject({ agent: 'A', handle: 'one', session_key: 's1' })
+      await vi.waitFor(() =>
+        expect(getDirectTranscript(directKey('A', 'one')).map(m => m.text)).toEqual(['ask', 'settled answer'])
+      )
+    })
+
+    it('does not read when nothing bound an rpc handle', async () => {
+      const { fake } = await attached()
+      const target = { agent: 'A', handle: 'one' }
+
+      fake.__pushEvent({ type: 'message.complete', payload: { target, turn_id: 't1', usage: {} } })
+
+      expect(getDirectTranscript(directKey('A', 'one'))).toEqual([])
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The chip strip's refresh signal
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — instance refresh', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+    patchUiState({ sid: 'tui:s1' })
+  })
+
+  afterEach(() => {
+    resetInstanceRefresh()
+    vi.useRealTimers()
+  })
+
+  const withRefresh = async () => {
+    const asked: string[] = []
+    bindInstanceRefresh(
+      (async (method: string) => {
+        asked.push(method)
+        return { instances: [], pending_handoff_count: 0 }
+      }) as never,
+      () => 'tui:s1'
+    )
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:s1' })
+    await stream.attach()
+    return { asked, fake }
+  }
+
+  it('refreshes when a spawn starts', async () => {
+    // Nothing in the runtime emits a subagent.* event, so this is the earliest
+    // signal that an instance is about to exist.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { arguments: {}, name: 'spawn', tool_call_id: 'c1' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('refreshes when a spawn is delivered', async () => {
+    // A row left reading `running` keeps its chip pulsing and its conversation
+    // view polling for a turn that ended -- the registry moved, and nothing
+    // else told the strip.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'subagent.delivered',
+      payload: { label: 'Coder', status: 'ok' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('refreshes when a dag run starts', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { arguments: {}, name: 'run_subagent_dag', tool_call_id: 'c1' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('does not refresh for an ordinary tool', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({ type: 'tool.start', payload: { arguments: {}, name: 'read_file', tool_call_id: 'c1' } })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual([])
+  })
+
+  it('refreshes at the end of every turn, whatever ran in it', async () => {
+    // The backstop: a status only reaches its terminal value at turn end.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: { turn_id: 't1', usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('coalesces a burst into one fetch', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    for (const id of ['c1', 'c2', 'c3']) {
+      fake.__pushEvent({ type: 'tool.start', payload: { arguments: {}, name: 'spawn', tool_call_id: id } })
+    }
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+})
+
+describe('createChatStream — delegated delivery wording', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tells a waiting node it is waiting, not that it finished', async () => {
+    // announce_dag_exception reports status "exception" on this same event --
+    // a suspended node still open for adjudication, not a completed delivery.
+    // A two-way ok/error ternary has no branch for it and falls through to the
+    // finished wording, announcing success for a node that has not resolved.
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default', sys: m => sysCalls.push(m) })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'stuck-node', status: 'exception' } })
+
+    expect(sysCalls.some(m => m.includes('waiting on a decision'))).toBe(true)
+    expect(sysCalls.some(m => m.includes('finished;'))).toBe(false)
+  })
+})
+
+describe('bindInstanceRefresh', () => {
+  afterEach(() => {
+    resetInstanceRefresh()
+    vi.useRealTimers()
+  })
+
+  it('survives an effect re-run that cleans up after its replacement bound', async () => {
+    // React runs the old cleanup after the new effect body. An unconditional
+    // unbind there drops every refresh until something re-binds.
+    vi.useFakeTimers()
+    const asked: string[] = []
+    const rpc = (async (method: string) => {
+      asked.push(method)
+      return { instances: [], pending_handoff_count: 0 }
+    }) as never
+
+    const stale = bindInstanceRefresh(rpc, () => 'tui:s1')
+    bindInstanceRefresh(rpc, () => 'tui:s1') // the effect re-runs...
+    stale() // ...and only then does the previous cleanup arrive
+
+    scheduleInstanceRefresh()
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — concurrent turns', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  /** A client whose `turn.send` records the target it was called with. */
+  const recording = () => {
+    let handler: ((event: TurnEvent) => void) | null = null
+    const sent: (undefined | { agent: string; handle: string })[] = []
+    const client = {
+      async rpc<R, P>(method: string, params: P): Promise<R> {
+        if (method === 'turn.send') {
+          sent.push((params as { target?: { agent: string; handle: string } }).target)
+          return { turn_id: `turn-${sent.length}`, accepted: true } as unknown as R
+        }
+        return {} as R
+      },
+      async subscribe<E, P>(_method: string, _params: P, h: (event: E) => void) {
+        handler = h as unknown as (event: TurnEvent) => void
+        return { subscription_id: 'sub-1', unsubscribe: async () => {} }
+      }
+    }
+    return { client, push: (e: TurnEvent) => handler?.(e), sent }
+  }
+
+  it('sends to a second instance while the first is still answering', async () => {
+    // The regression this pins: the client held one turn slot for the whole
+    // session, so the second send threw locally and never reached the server --
+    // which reads as the second instance simply never answering.
+    const a = { agent: 'Coder', handle: 'h1' }
+    const b = { agent: 'Writer', handle: 'h2' }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+
+    enterDirect(b.agent, b.handle)
+    await expect(stream.send('second')).resolves.toMatchObject({ accepted: true })
+
+    expect(rec.sent).toEqual([a, b])
+  })
+
+  it('still refuses a second prompt to the instance that is mid-reply', async () => {
+    const a = { agent: 'Coder', handle: 'h1' }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+
+    await expect(stream.send('again')).rejects.toThrow(/already in progress/)
+    expect(rec.sent).toEqual([a])
+  })
+
+  it('one instance landing leaves the other turn alone', async () => {
+    const a = { agent: 'Coder', handle: 'h1' }
+    const b = { agent: 'Writer', handle: 'h2' }
+    const usage = { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+    enterDirect(b.agent, b.handle)
+    await stream.send('second')
+    rec.push({ type: 'message.start', payload: { target: b, turn_id: 'turn-2' } })
+
+    // A lands; B is still writing, so B's view stays busy and B still refuses.
+    rec.push({ type: 'message.complete', payload: { target: a, turn_id: 'turn-1', usage } })
+
+    expect(getUiState().busy).toBe(true)
+    await expect(stream.send('again to b')).rejects.toThrow(/already in progress/)
+
+    // And A is free to take a new prompt.
+    enterDirect(a.agent, a.handle)
+    expect(getUiState().busy).toBe(false)
+    await expect(stream.send('again to a')).resolves.toMatchObject({ accepted: true })
   })
 })
 

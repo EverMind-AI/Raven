@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.tools.base import Tool
 from raven.utils.helpers import image_block
 
@@ -141,7 +142,7 @@ class _OpenRouterMediaTool(Tool):
         return override or cfg_model or self.default_model
 
     def _output_path(self, ext: str) -> Path:
-        out_dir = self._workspace / self._output_subdir
+        out_dir = (workdir.current() or self._workspace) / self._output_subdir
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
 
@@ -598,7 +599,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                     # that need the same Authorization header as the API. Only
                     # send it to OpenRouter — never leak the key to a third-party
                     # (pre-signed CDN/S3) host.
-                    dl_headers = headers if video_url.startswith(self.api_base) else None
+                    dl_headers = self._api_headers_for(video_url, headers)
                     dl = await client.get(video_url, headers=dl_headers, timeout=180.0)
                     dl.raise_for_status()
                     data = dl.content
@@ -613,11 +614,38 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         logger.info("video_generate: {} bytes via {} -> {}", len(data), model_id, path)
         return json.dumps({"success": True, "model": model_id, "path": str(path)}, ensure_ascii=False)
 
+    def _is_api_origin(self, url: str) -> bool:
+        """Is this URL on the same origin as the configured API base?
+
+        Parsed, not a string prefix. ``url.startswith(self.api_base)`` was
+        satisfied by any host that merely began with the base string, so
+        ``https://openrouter.ai/api/v1.attacker.example/steal`` passed the test
+        and collected the provider key. Scheme, host and port all have to
+        match; httpx normalizes a default port to None on both sides.
+        """
+        try:
+            target, base = httpx.URL(url), httpx.URL(self.api_base)
+        except Exception:  # noqa: BLE001 - an unparseable URL is not our origin
+            return False
+        return (target.scheme, target.host, target.port) == (base.scheme, base.host, base.port)
+
+    def _api_headers_for(self, url: str, headers: dict[str, str]) -> dict[str, str] | None:
+        """The API headers, but only for the API's own origin.
+
+        Every URL here arrives in a provider response -- the poll target and the
+        content URL both -- so "where the response told us to go" decides where
+        the key would travel. It travels nowhere but home.
+        """
+        if self._is_api_origin(url):
+            return headers
+        logger.warning("media_gen: {} is not the configured API origin; fetching it without credentials", url)
+        return None
+
     async def _poll(self, client: httpx.AsyncClient, poll_url: str, headers: dict[str, str]) -> dict[str, Any]:
         """Poll until the job leaves the pending/processing state or times out."""
         waited = 0.0
         while waited < self._POLL_TIMEOUT_S:
-            r = await client.get(poll_url, headers=headers)
+            r = await client.get(poll_url, headers=self._api_headers_for(poll_url, headers))
             r.raise_for_status()
             job = r.json()
             if job.get("status") not in ("pending", "processing", "queued", "in_progress"):

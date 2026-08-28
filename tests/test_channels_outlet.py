@@ -11,7 +11,7 @@ from raven.spine import (
     ToolEvent,
     ToolPhase,
 )
-from raven.spine.delivery import Outlet
+from raven.spine.delivery import Capabilities, Outlet
 from raven.spine.message import Media
 
 
@@ -22,8 +22,9 @@ def _src(channel="telegram", chat_id="c1") -> Source:
 class _FakeChannel:
     """Records every send — stands in for a real channel's uniform send."""
 
-    def __init__(self, name="telegram") -> None:
+    def __init__(self, name="telegram", *, file_attachments=False) -> None:
         self.name = name
+        self.capabilities = Capabilities(file_attachments=file_attachments)
         self.sent: list[tuple[str, str, list[str] | None]] = []
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
@@ -68,3 +69,51 @@ async def test_deliver_eats_streaming_and_in_turn_events():
     await adapter.deliver(ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="grep", source=src))
     await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", source=src))
     assert ch.sent == []  # all eaten — a non-streaming channel renders only the final reply
+
+
+async def test_deliver_files_uses_native_channel_attachments():
+    ch = _FakeChannel(file_attachments=True)
+    adapter = ChannelOutletAdapter(ch)
+    event = ToolEvent(
+        phase=ToolPhase.COMPLETE,
+        tool_call_id="t1",
+        name="deliver_files",
+        source=_src(),
+        metadata={
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+            }
+        },
+    )
+
+    await adapter.deliver(event)
+
+    assert ch.sent == [("c1", "Final files", ["/tmp/report.pdf"])]
+
+
+async def test_deliver_files_falls_back_to_a_compact_list_without_attachments():
+    ch = _FakeChannel(file_attachments=False)
+    adapter = ChannelOutletAdapter(ch)
+    event = ToolEvent(
+        phase=ToolPhase.COMPLETE,
+        tool_call_id="t1",
+        name="deliver_files",
+        source=_src(),
+        metadata={
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+            }
+        },
+    )
+
+    await adapter.deliver(event)
+
+    assert ch.sent == [
+        (
+            "c1",
+            "Final files\nFiles ready: report.pdf. This channel cannot attach files; open the same session in Raven UI or TUI.",
+            None,
+        )
+    ]

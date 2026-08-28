@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Awaitable, Callable
 from importlib.metadata import PackageNotFoundError, distribution
 from typing import Any
 
@@ -81,6 +82,20 @@ class ChannelManager:
     def __init__(self, config: Config):
         self.config = config
         self.channels: dict[str, Channel] = {}
+        # Hot-started channels' run tasks, held so nothing collects them: the
+        # loop keeps only a weak reference to a task nobody awaits.
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Set by the gateway wiring to register the new channel's outlet on the
+        # DeliveryHub. A callback rather than the hub itself, so this module
+        # stays unaware of the spine -- and so a channel started after launch
+        # can still deliver a reply, which is the whole difference between a
+        # channel that receives and one that only listens.
+        self.on_started: Callable[[Channel], None] | None = None
+        # The other half of it. A channel that has delivered once leaves a
+        # resident outlet worker holding the adapter it started with, so
+        # stopping one without retiring its outlet meant the next start
+        # received on the new adapter and replied through the stopped one.
+        self.on_stopped: Callable[[str], Awaitable[None]] | None = None
 
         self._init_channels()
 
@@ -140,7 +155,14 @@ class ChannelManager:
         tasks = []
         for name, channel in self.channels.items():
             logger.info("Starting {} channel...", name)
-            tasks.append(asyncio.create_task(self._start_channel(name, channel)))
+            task = asyncio.create_task(self._start_channel(name, channel))
+            # Recorded like a hot start's, so `start_one` can tell an adapter
+            # that is coming up from one whose start has finished and left it
+            # not running. Without this the launch path was invisible here and
+            # the two states looked identical.
+            self._tasks[name] = task
+            task.add_done_callback(lambda _t, n=name: self._tasks.pop(n, None))
+            tasks.append(task)
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -153,6 +175,96 @@ class ChannelManager:
                 logger.info("Stopped {} channel", name)
             except Exception as e:
                 logger.error("Error stopping {}: {}", name, e)
+
+    async def start_one(self, name: str) -> str:
+        """Build and start one channel that config now enables, without a restart.
+
+        The page enables an entrance by writing config in its own process, and
+        the adapter lives here -- so before this existed, turning a channel on
+        did nothing until the gateway was restarted: no QR was ever fetched, and
+        a scan-login entrance could not be signed into from the UI at all.
+
+        Answers a word rather than raising, because every outcome is a state the
+        caller draws: ``started``, ``already``, ``unknown`` (no such channel),
+        ``disabled`` (config does not enable it), ``deny_all`` (empty allowFrom,
+        which start-up treats as fatal and a live gateway must not), or
+        ``missing_dep``.
+
+        The section is re-read from disk, not taken from ``self.config``: that is
+        the snapshot this gateway launched with, and in it the channel is still
+        off.
+        """
+        # An adapter in the table is not the same as an adapter that works. A
+        # scan login nobody completed ends with the object still here and
+        # `is_running` false -- weixin gives up after the code expires three
+        # times -- and answering "already" to that made "connect" on a stopped
+        # entrance a no-op for the life of the process: the one press that could
+        # fix it was the one press that did nothing. A start still in flight is a
+        # different thing and keeps its "already": the launch path is a task per
+        # channel that only returns when the adapter stops, so a page write
+        # arriving mid-launch must not tear down what is coming up.
+        existing = self.channels.get(name)
+        if existing is not None:
+            task = self._tasks.get(name)
+            if (task is not None and not task.done()) or getattr(existing, "is_running", False):
+                return "already"
+            await self.stop_one(name)
+        from raven.channels.registry import discover_specs
+        from raven.config.loader import load_config
+
+        spec = discover_specs().get(name)
+        if spec is None:
+            return "unknown"
+        section = getattr(load_config().channels, name, None)
+        if section is None or not getattr(section, "enabled", False):
+            return "disabled"
+        if getattr(section, "allow_from", None) == []:
+            return "deny_all"
+        try:
+            channel = spec.factory(section)
+        except ImportError as e:
+            logger.warning("{} channel not started: missing dependency ({}). {}", name, e, _missing_dep_hint())
+            return "missing_dep"
+        groq = self.config.providers.get("groq")
+        channel.transcription_api_key = getattr(groq, "api_key", "") or ""
+        self.channels[name] = channel
+        if self.on_started is not None:
+            try:
+                self.on_started(channel)
+            except Exception as e:
+                logger.error("Failed to register outlet for channel {}: {}", name, e)
+        logger.info("Starting {} channel (enabled while running)...", name)
+        task = asyncio.create_task(self._start_channel(name, channel))
+        self._tasks[name] = task
+        task.add_done_callback(lambda _t, n=name: self._tasks.pop(n, None))
+        return "started"
+
+    async def stop_one(self, name: str) -> str:
+        """Stop one channel and drop its adapter. ``stopped`` or ``absent``.
+
+        The outlet is retired with it, through ``on_stopped``. Leaving it
+        registered looked safe -- a stopped channel receives nothing, so there
+        is no turn left to reply to -- but the hub's worker is resident and
+        holds the adapter it started with, so the next start of this channel
+        would have received on the new adapter and replied through this one.
+        """
+        channel = self.channels.pop(name, None)
+        if channel is None:
+            return "absent"
+        try:
+            await channel.stop()
+            logger.info("Stopped {} channel", name)
+        except Exception as e:
+            logger.error("Error stopping {}: {}", name, e)
+        task = self._tasks.pop(name, None)
+        if task is not None and not task.done():
+            task.cancel()
+        if self.on_stopped is not None:
+            try:
+                await self.on_stopped(name)
+            except Exception as e:
+                logger.error("Failed to retire outlet for channel {}: {}", name, e)
+        return "stopped"
 
     def get_channel(self, name: str) -> Channel | None:
         """Get a channel by name."""

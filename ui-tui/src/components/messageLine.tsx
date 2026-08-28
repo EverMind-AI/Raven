@@ -7,13 +7,14 @@ import { Ansi, Box, NoSelect, Text } from '@hermes/ink'
 import { memo, useState } from 'react'
 
 import type { Theme } from '../theme.js'
-import type { ActiveTool, DetailsMode, Msg, SectionVisibility } from '../types.js'
+import type { ActiveTool, DetailsMode, Msg, SectionVisibility, TurnArtifactFile } from '../types.js'
 
 import { LONG_MSG } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
 import { userDisplay } from '../domain/messages.js'
 import { ROLE } from '../domain/roles.js'
-import { transcriptBodyWidth, transcriptGutterWidth } from '../lib/inputMetrics.js'
+import { t as tr } from '../i18n/index.js'
+import { TRANSCRIPT_GUTTER_INSET, transcriptBodyWidth, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import {
   boundedHistoryRenderText,
   boundedLiveRenderText,
@@ -31,10 +32,86 @@ import { TodoPanel } from './todoPanel.js'
 
 // Collapse threshold for long system messages (system prompt etc.)
 const SYSTEM_COLLAPSE_CHARS = 400
+const ARTIFACT_CAP = 4
+
+const artifactSize = (bytes?: number): string => {
+  if (!bytes) {
+    return ''
+  }
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${unit ? value.toFixed(value < 10 ? 1 : 0) : Math.round(value)} ${units[unit]}`
+}
+
+function ArtifactSection({
+  files,
+  label,
+  t,
+  changes = false
+}: {
+  files: TurnArtifactFile[]
+  label: string
+  t: Theme
+  changes?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const shown = open ? files : files.slice(0, ARTIFACT_CAP)
+  const rest = files.length - shown.length
+  if (!files.length) {
+    return null
+  }
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text bold color={t.color.muted}>
+        {label} <Text dimColor>{files.length}</Text>
+      </Text>
+      {shown.map((file, index) => {
+        const mark = changes ? (file.change === 'new' ? '+' : '~') : '◆'
+        const meta = file.missing
+          ? tr('gui.arts.missing', '[missing]')
+          : [file.ext, artifactSize(file.size)].filter(Boolean).join(' · ')
+        return (
+          <Text key={`${file.name}:${index}`} color={t.color.muted}>
+            {mark} {file.title || file.name} {meta}
+          </Text>
+        )
+      })}
+      {rest > 0 || open ? (
+        <Box onClick={() => setOpen(value => !value)}>
+          <Text color={t.color.muted} dimColor>
+            {open ? tr('gui.arts.less', 'show less') : tr('gui.arts.more', '{n} more', { n: String(rest) })}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+// A left one-quarter block: the ink sits against the left edge of its cell, so
+// the rule hugs the slab instead of floating a centred `|` a few pixels in. One
+// quarter of a cell is ~2px at a normal font size; `\u258f` (one eighth) is the
+// hairline variant if this reads too heavy. Every side but `left` is a space so
+// a stray corner cannot appear when only the left border is drawn.
+const USER_RULE = {
+  bottom: ' ',
+  bottomLeft: ' ',
+  bottomRight: ' ',
+  left: '\u258e',
+  right: ' ',
+  top: ' ',
+  topLeft: ' ',
+  topRight: ' '
+} as const
 
 export const MessageLine = memo(function MessageLine({
   cols,
   compact,
+  dense = false,
   detailsMode = 'collapsed',
   detailsModeCommandOverride = false,
   isStreaming = false,
@@ -61,7 +138,25 @@ export const MessageLine = memo(function MessageLine({
   const [systemOpen, setSystemOpen] = useState(false)
 
   if (msg.kind === 'episodes') {
-    return <EpisodeMessage cols={cols} compact={compact} msg={msg} t={t} />
+    return <EpisodeMessage cols={cols} compact={compact} dense={dense} msg={msg} t={t} />
+  }
+
+  if (msg.kind === 'artifacts' && msg.artifacts) {
+    return (
+      <Box flexDirection="column" marginLeft={3} marginTop={1}>
+        <ArtifactSection
+          files={msg.artifacts.deliveries}
+          label={tr('gui.arts.delivered', 'Delivered this turn')}
+          t={t}
+        />
+        <ArtifactSection
+          changes
+          files={msg.artifacts.changes}
+          label={tr('gui.arts.changed', 'Files changed this turn')}
+          t={t}
+        />
+      </Box>
+    )
   }
 
   if (msg.kind === 'trail' && msg.todos?.length) {
@@ -193,11 +288,19 @@ export const MessageLine = memo(function MessageLine({
   // against the prose around it.
   const isDiffSegment = msg.kind === 'diff'
 
-  // The person's own prompt rides in a filled block, so it reads as an inserted
-  // card rather than one more line of transcript. The padding is unconditional
-  // and the fill is not: at tier 1 there is no shade between black and
-  // brightBlack to fill with, and estimatedMsgHeight would have to learn the
-  // terminal's color tier to keep the row count honest if the padding moved too.
+  // The person's own prompt rides in a filled block with an accent rule down its
+  // flush-left edge, so it reads as an inserted card rather than one more line of
+  // transcript. The padding is unconditional and the fill is not: at tier 1 there
+  // is no shade between black and brightBlack to fill with, and
+  // estimatedMsgHeight would have to learn the terminal's color tier to keep the
+  // row count honest if the padding moved too.
+  //
+  // The rule is a left border, not a glyph per row, because ink draws a border
+  // across the box's whole computed height -- padding rows included. A repeated
+  // glyph would have to know the wrapped row count, and would still stop short of
+  // the pad rows the slab fills. It costs exactly the one cell the chevron used to
+  // occupy, so transcriptBodyWidth and estimatedMsgHeight are untouched: the
+  // gutter beside it carries the remaining blank.
   const isUser = msg.role === 'user'
 
   return (
@@ -223,11 +326,23 @@ export const MessageLine = memo(function MessageLine({
 
       <Box
         paddingY={isUser ? 1 : 0}
+        {...(isUser && {
+          borderBottom: false,
+          borderLeftColor: prefix,
+          borderRight: false,
+          borderStyle: USER_RULE,
+          borderTop: false
+        })}
         {...(isUser && canFillBackground() && { backgroundColor: t.color.userBg })}
       >
-        <NoSelect flexShrink={0} fromLeftEdge width={gutterWidth}>
+        <NoSelect
+          flexShrink={0}
+          fromLeftEdge
+          paddingLeft={TRANSCRIPT_GUTTER_INSET}
+          width={isUser ? Math.max(1, gutterWidth - 1) : gutterWidth}
+        >
           <Text bold={msg.role === 'user'} color={prefix}>
-            {glyph}{' '}
+            {isUser ? ' ' : `${glyph} `}
           </Text>
         </NoSelect>
 
@@ -240,6 +355,10 @@ export const MessageLine = memo(function MessageLine({
 interface MessageLineProps {
   cols: number
   compact?: boolean
+  /** Trace-box rendering: no breathing rows between segments. The margins that
+   *  read as pacing in the main transcript are blank lines a fixed-height box
+   *  cannot afford (see `fitTraceTail`, whose estimate must agree). */
+  dense?: boolean
   detailsMode?: DetailsMode
   detailsModeCommandOverride?: boolean
   isStreaming?: boolean

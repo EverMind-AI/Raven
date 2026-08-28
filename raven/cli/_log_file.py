@@ -1,8 +1,9 @@
 """Shared loguru→file redirection for long-lived / screen-owning CLI commands.
 
-Both ``gateway`` (foreground long-running) and ``tui`` (Ink owns the terminal)
-need loguru routed to a rotating file instead of stderr. They differ only in
-filename, whether a live stderr sink is kept, and retention — all parameters.
+``gateway`` (foreground long-running), ``tui`` (Ink owns the terminal) and
+``acp`` (fd 1 carries the protocol) all need loguru routed to a rotating file
+instead of stderr. They differ only in filename, whether a live stderr sink is
+kept, and retention — all parameters.
 
 The log directory follows :func:`get_logs_dir`, so a ``--config`` instance
 writes its logs next to its own config rather than always to ``~/.raven``.
@@ -58,7 +59,14 @@ def redirect_loguru_to_file(
         diagnose=False,
     )
     if terminal_level is not None:
-        logger.add(sys.stderr, level=terminal_level)
+        # Same two flags as the file sink, for the same reason plus one. loguru
+        # defaults both to True, so this sink was rendering every frame of every
+        # traceback annotated with the value of every local -- the leak the file
+        # sink above is explicitly configured to avoid, on a stream that is more
+        # exposed rather than less: ``raven acp`` runs as an editor's subprocess
+        # and the editor displays its stderr. The interpreter's own excepthook
+        # still prints the plain traceback, so nothing diagnosable is lost.
+        logger.add(sys.stderr, level=terminal_level, backtrace=False, diagnose=False)
     if os.environ.get("RAVEN_CLI_DEBUG"):
         logger.add(sys.stderr, level="DEBUG")
 

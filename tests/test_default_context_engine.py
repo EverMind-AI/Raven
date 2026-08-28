@@ -11,7 +11,6 @@ recall / router outputs land in the prompt.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Any
 
@@ -195,23 +194,33 @@ class TestTwoTrackConcurrency:
         self,
         builder: ContextBuilder,
     ) -> None:
-        slow_source = _StubSource("local", hits=[], delay_s=0.20)
-        slow_backend = _StubBackend(recall_response=[], delay_s=0.20)
+        """Neither track is let through until both have arrived, so this passes
+        only if they overlap. The wall-clock total this used to assert on raced
+        whatever else the machine was doing, and failed under load."""
+        rendezvous = asyncio.Barrier(2)
+
+        class _RendezvousSource(_StubSource):
+            async def search(self, query, history, k):
+                await rendezvous.wait()
+                return await super().search(query, history, k)
+
+        class _RendezvousBackend(_StubBackend):
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                await rendezvous.wait()
+                return await super().recall(query, user_id=user_id, agent_id=agent_id, top_k=top_k)
+
         eng = _engine(
             builder,
-            router=SkillForgeRouter([slow_source]),
-            backend=slow_backend,
+            router=SkillForgeRouter([_RendezvousSource("local", hits=[])]),
+            backend=_RendezvousBackend(recall_response=[]),
         )
-        t0 = time.monotonic()
-        await eng.assemble(
-            session_key="s1",
-            session_messages=[],
-            budget=_budget(),
-            turn=_turn(),
-        )
-        elapsed = time.monotonic() - t0
-        # Serial would be ~0.40 s. Concurrent ~0.20 s. Loose bound 0.30.
-        assert elapsed < 0.30
+        async with asyncio.timeout(5):
+            await eng.assemble(
+                session_key="s1",
+                session_messages=[],
+                budget=_budget(),
+                turn=_turn(),
+            )
 
     async def test_track_ids_passed_to_recall(
         self,
@@ -387,16 +396,16 @@ class TestNoBackendDegrade:
 
 
 class TestFailureSemantics:
-    async def test_backend_recall_exception_propagates(
+    async def test_backend_recall_exception_degrades_to_no_hits(
         self,
         builder: ContextBuilder,
     ) -> None:
-        """Memory backend outage surfaces to AgentLoop. SkillForgeRouter has
-        its own per-source isolation; the backend recall does NOT."""
+        """Memory backend outage no longer surfaces to AgentLoop: recall is
+        bounded and isolated the same way SkillForgeRouter's sources are."""
         backend = _StubBackend(recall_raises=RuntimeError("backend down"))
         eng = _engine(builder, router=SkillForgeRouter([]), backend=backend)
-        with pytest.raises(RuntimeError, match="backend down"):
-            await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        assert ac.metadata["memory_hits"] == 0
 
     async def test_single_skill_source_failure_isolated(
         self,

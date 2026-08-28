@@ -114,6 +114,21 @@ describe('findStableBoundary', () => {
 
     expect(findStableBoundary(text)).toBe(-1)
   })
+
+  it('allows splitting after a \\[ math block closes', () => {
+    const text = '\\[\nx + y\n\\]\n\nnarration continues'
+    const idx = findStableBoundary(text)
+
+    expect(text.slice(0, idx)).toBe('\\[\nx + y\n\\]\n\n')
+    expect(text.slice(idx)).toBe('narration continues')
+  })
+
+  it('keeps the last safe boundary before mixed open fenced content', () => {
+    const text = `${Array.from({ length: 200 }, (_, i) => `paragraph ${i}`).join('\n\n')}\n\n~~~ts\n$$\n\nstill code`
+    const idx = findStableBoundary(text)
+
+    expect(text.slice(idx)).toBe('~~~ts\n$$\n\nstill code')
+  })
 })
 
 describe('streaming theme assumption', () => {

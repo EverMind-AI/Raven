@@ -3,7 +3,7 @@
 A slash the TUI does not own locally goes out as `slash.exec`, runs Click
 in-process on the Python side, and comes back through the unix socket to be
 rendered by Ink. That round trip is what only a real terminal can prove; the
-dispatch layer itself has 31 dedicated tests in `tests/test_tui_rpc_cli_dispatch.py`
+dispatch layer itself has 31 dedicated tests in `tests/test_rpc_cli_dispatch.py`
 and needs no TUI.
 
 The TUI leg is identical for every dispatched command (`createSlashHandler.ts`

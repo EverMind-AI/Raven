@@ -1,22 +1,25 @@
-"""CLI tests for ``raven tui`` commands — ``_build_tui_agent_loop`` wiring.
+"""CLI tests for ``raven tui`` commands — ``_build_agent_loop`` wiring.
 
 Verifies the memory backend and plugin tools are wired into the AgentLoop
-constructed by ``_build_tui_agent_loop``, mirroring the agent-path coverage
+constructed by ``_build_agent_loop``, mirroring the agent-path coverage
 in ``test_cli_agent_commands.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, sentinel
 
 import pytest
 
+from raven.config.raven import TokenWiseConfig
+
 
 @pytest.fixture
 def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    """Patch all heavy deps of ``_build_tui_agent_loop`` for isolation.
+    """Patch all heavy deps of ``_build_agent_loop`` for isolation.
 
     Mirrors ``patched_tui_build_deps`` in ``test_tui_cron_tool_wired.py``
     but additionally stubs the plugin-stack helpers so we can assert their
@@ -42,15 +45,19 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda _a, _b: config)
+    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
     monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
+    # A real one, not a MagicMock attribute: the loop's TokenWise stack reads
+    # this config's numbers (a breakpoint budget it compares against 1), and a
+    # mock answers every comparison with a TypeError.
+    ec_config.token_wise = TokenWiseConfig()
     ec_config.runtime = MagicMock()
     monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: ec_config)
 
-    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp: MagicMock())
+    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp, **_kw: MagicMock())
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("raven.config.paths.get_cron_dir", lambda: cron_dir)
@@ -87,6 +94,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     captured["fake_backend"] = fake_backend
     captured["fake_tools"] = fake_tools
     captured["config"] = config
+    captured["ec_config"] = ec_config
     return captured
 
 
@@ -96,15 +104,15 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
 
 def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None:
-    """``_build_tui_agent_loop`` must pass ``backend=<non-None>`` to AgentLoop
+    """``_build_agent_loop`` must pass ``backend=<non-None>`` to AgentLoop
     when the plugin stack returns a backend (today it passes nothing, so
     ``AgentLoop.backend`` defaults to ``None`` and store/recall are no-ops)."""
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs.get("backend") is not None, "AgentLoop must receive backend= from _build_tui_agent_loop; got None"
+    assert kwargs.get("backend") is not None, "AgentLoop must receive backend= from _build_agent_loop; got None"
     assert kwargs["backend"] is patched_tui_loop_deps["fake_backend"]
 
 
@@ -114,11 +122,11 @@ def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None
 
 
 def test_tui_agent_loop_receives_plugin_tools(patched_tui_loop_deps) -> None:
-    """``_build_tui_agent_loop`` must pass ``plugin_tools=`` to AgentLoop
+    """``_build_agent_loop`` must pass ``plugin_tools=`` to AgentLoop
     so plugin-contributed tools are registered in the TUI agent's tool registry."""
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert "plugin_tools" in kwargs, "AgentLoop must receive plugin_tools kwarg"
@@ -131,17 +139,126 @@ def test_tui_agent_loop_receives_plugin_tools(patched_tui_loop_deps) -> None:
 
 
 def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> None:
-    """``_build_tui_agent_loop`` must forward ``tool_search_config=`` so the
+    """``_build_agent_loop`` must forward ``tool_search_config=`` so the
     interactive TUI honors ``tools.tool_search`` (progressive disclosure) at
     parity with the ``agent`` / ``gateway`` entrypoints; else the feature is
     silently unavailable in the primary interactive surface."""
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert "tool_search_config" in kwargs, "AgentLoop must receive tool_search_config kwarg"
     assert kwargs["tool_search_config"] is patched_tui_loop_deps["config"].tools.tool_search
+
+
+# ---------------------------------------------------------------------------
+# disabled_tools wired into AgentLoop
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_does_not_forward_disabled_tools(patched_tui_loop_deps) -> None:
+    """The inverse of what this asserted before, and for the reason it asserted it.
+
+    ``tools.disabled_tools`` used to be forwarded here so a blacklisted tool would
+    not stay registered in the primary interactive surface. The loop now reads the
+    file itself, once per assembled tool array, so the switch is honoured either
+    way -- and forwarding it turns the switch one-way: the settings page can take a
+    name back out of the file, but nothing can take it out of a set captured before
+    the process started, so a tool that was off at launch could never be turned
+    back on. The kwarg is left for callers with no config file at all
+    (``benchmarks/appworld/agent_cli.py``).
+
+    That the file's own list still takes effect is asserted where it now happens,
+    in ``test_agent_loop_disabled_tools.py``."""
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    assert "disabled_tools" not in patched_tui_loop_deps["agent_loop_kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# config slices the TUI used to drop on the floor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwarg", "attr_path"),
+    [
+        ("context_config", "context"),
+        ("memory_config", "memory"),
+    ],
+)
+def test_tui_agent_loop_forwards_raven_config_slices(patched_tui_loop_deps, kwarg: str, attr_path: str) -> None:
+    """Slices of the loaded RavenConfig must reach AgentLoop.
+
+    Omitting one is silent: AgentLoop falls back to a default (an empty
+    ContextConfig, no memory config), so the user's configuration is ignored
+    rather than rejected.
+    """
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert kwarg in kwargs, f"AgentLoop must receive {kwarg} kwarg"
+    assert kwargs[kwarg] is getattr(patched_tui_loop_deps["ec_config"], attr_path)
+
+
+def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_deps) -> None:
+    """The TUI forwarded skill_forge_config but not the router slice of the same
+    block, so SkillForge routing behaved differently here than in agent/gateway."""
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert kwargs["skill_forge_router_config"] is patched_tui_loop_deps["ec_config"].skill_forge.router
+
+
+def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
+    """Without it web_fetch silently loses the Jina reader in the TUI only."""
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    assert "jina_api_key" in patched_tui_loop_deps["agent_loop_kwargs"]
+
+
+def test_tui_agent_loop_receives_a_router_slot(patched_tui_loop_deps) -> None:
+    """Model routing (config.routing) used to be reachable from the gateway only,
+    because its builder was module-private there. Routing disabled yields None --
+    what matters is that the wiring exists at all."""
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    assert "router" in patched_tui_loop_deps["agent_loop_kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# third-party sub-agents wired into AgentLoop (gates run_subagent_dag)
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_the_agent_config(patched_tui_loop_deps) -> None:
+    """``_build_agent_loop`` must forward ``agents=``.
+
+    ``AgentLoop.__init__`` registers ``run_subagent_dag`` only when that list is
+    non-empty (``agent/loop/main.py`` -- the tool's nodes dispatch to those
+    agents). Without the kwarg the TUI's loop keeps an empty roster, the tool is
+    never registered, and the model has no way to call it at all -- while the
+    gateway, which does pass it, can. The DAG progress events the TUI renders
+    are emitted by that same tool, so they never fire either.
+    """
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert "agents" in kwargs, "AgentLoop must receive the agents kwarg"
+    assert kwargs["agents"] is patched_tui_loop_deps["config"].subagents.agents
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +286,19 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda _a, _b: config)
+    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
     monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
+    # A real one, not a MagicMock attribute: the loop's TokenWise stack reads
+    # this config's numbers (a breakpoint budget it compares against 1), and a
+    # mock answers every comparison with a TypeError.
+    ec_config.token_wise = TokenWiseConfig()
     ec_config.runtime = MagicMock()
     monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: ec_config)
 
-    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp: MagicMock())
+    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp, **_kw: MagicMock())
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("raven.config.paths.get_cron_dir", lambda: cron_dir)
@@ -206,9 +327,9 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr("raven.cli._plugin_stack.maybe_build_memory_backend", _spy_backend)
     monkeypatch.setattr("raven.cli._plugin_stack.build_plugin_tools", _spy_tools)
 
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     assert call_count["build"] == 1, "build_plugin_registry should be called exactly once"
     backend_reg = next(r for name, r in passed_registries if name == "backend")
@@ -255,15 +376,15 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     ctx["agent_loop"] = fake_agent_loop
 
     monkeypatch.setattr(
-        "raven.cli.tui_commands._build_tui_agent_loop",
-        lambda: fake_agent_loop,
+        "raven.cli.tui_commands._build_agent_loop",
+        lambda *a, **kw: fake_agent_loop,
     )
 
     # Stub RPC machinery so _run_rpc_server_until_done can import + construct
     # without a real socket transport.
     fake_dispatcher = MagicMock()
     fake_dispatcher.register = MagicMock()
-    monkeypatch.setattr("raven.tui_rpc.dispatcher.Dispatcher", lambda: fake_dispatcher)
+    monkeypatch.setattr("raven.rpc.dispatcher.Dispatcher", lambda: fake_dispatcher)
 
     async def _fake_serve_forever():
         await asyncio.sleep(0)
@@ -272,49 +393,49 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     fake_server.send_frame = AsyncMock()
     fake_server.serve_forever = _fake_serve_forever
     monkeypatch.setattr(
-        "raven.tui_rpc.server.RpcServer",
+        "raven.rpc.server.RpcServer",
         lambda **kw: fake_server,
     )
 
     fake_emitter = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.subscriptions.SubscriptionEmitter",
+        "raven.rpc.subscriptions.SubscriptionEmitter",
         lambda **kw: fake_emitter,
     )
 
     # Load the lazily imported module before patching its attributes; otherwise
     # this fixture can depend on test order through Python's import cache.
-    from raven.tui_rpc.methods import system as _system_module
+    from raven.rpc.methods import system as _system_module
 
     assert _system_module is not None
     fake_confirm_broker = MagicMock()
     fake_confirm_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.confirm_broker.ConfirmBroker",
+        "raven.rpc.confirm_broker.ConfirmBroker",
         lambda **kw: fake_confirm_broker,
     )
 
     fake_approval_broker = MagicMock()
     fake_approval_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.approval_broker.ApprovalBroker",
+        "raven.rpc.approval_broker.ApprovalBroker",
         lambda **kw: fake_approval_broker,
     )
 
     fake_question_broker = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.question_broker.QuestionBroker",
+        "raven.rpc.question_broker.QuestionBroker",
         lambda **kw: fake_question_broker,
     )
 
     async def _fake_system_hello(params):
         return {"version": "0.0.0"}
 
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_hello", _fake_system_hello)
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_ping", AsyncMock())
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_version", AsyncMock())
+    monkeypatch.setattr("raven.rpc.methods.system.system_hello", _fake_system_hello)
+    monkeypatch.setattr("raven.rpc.methods.system.system_ping", AsyncMock())
+    monkeypatch.setattr("raven.rpc.methods.system.system_version", AsyncMock())
     monkeypatch.setattr(
-        "raven.tui_rpc.methods.register_aligned_methods_except_system",
+        "raven.rpc.methods.register_aligned_methods_except_system",
         MagicMock(),
     )
 
@@ -325,18 +446,42 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     async def _fake_turn_teardown():
         pass
 
-    fake_build_tui = MagicMock(return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown))
-    monkeypatch.setattr("raven.tui_rpc.spine.build_tui", fake_build_tui)
+    fake_build_rpc_spine = MagicMock(
+        return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown)
+    )
+    monkeypatch.setattr("raven.rpc.spine.build_rpc_spine", fake_build_rpc_spine)
 
     monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
-    monkeypatch.setattr("raven.tui_rpc.methods.turn.clear_active", MagicMock())
+    monkeypatch.setattr("raven.rpc.methods.turn.clear_active", MagicMock())
+
+    # The snapshot backfill walks a real registry; the MagicMock loop has none.
+    fake_schedule_backfill = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        "raven.agent.subagent.probe.schedule_snapshot_verification",
+        fake_schedule_backfill,
+    )
+    ctx["schedule_backfill"] = fake_schedule_backfill
 
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
     ctx["fake_approval_broker"] = fake_approval_broker
-    ctx["fake_build_tui"] = fake_build_tui
+    ctx["fake_build_rpc_spine"] = fake_build_rpc_spine
     ctx["dispatcher"] = fake_dispatcher
     return ctx
+
+
+async def test_the_acp_snapshot_backfill_is_scheduled_on_the_tui_server_path(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """The TUI server is hand-wired rather than mounted through
+    ``build_rpc_stack``, so the backfill hook has to be called here too --
+    unscheduled, a fresh install holds no capability snapshot, every acp row
+    reads stateless, and the ``/new-instance`` picker hides those agents."""
+    ctx = rpc_server_deps
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    ctx["schedule_backfill"].assert_called_once_with(ctx["agent_loop"].subagents)
 
 
 async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):
@@ -395,8 +540,8 @@ async def test_rpc_runner_wires_and_cancels_approval_broker(rpc_server_deps, mon
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     approval_broker = rpc_server_deps["fake_approval_broker"]
-    assert rpc_server_deps["fake_build_tui"].call_args.kwargs["approval_responder"] is approval_broker
-    registration = __import__("raven.tui_rpc.methods", fromlist=["register"])
+    assert rpc_server_deps["fake_build_rpc_spine"].call_args.kwargs["approval_responder"] is approval_broker
+    registration = __import__("raven.rpc.methods", fromlist=["register"])
     register_mock = registration.register_aligned_methods_except_system
     assert register_mock.call_args.kwargs["approval_broker"] is approval_broker
     approval_broker.cancel_all.assert_called_once_with()
@@ -538,6 +683,37 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
         assert "TUI logs" not in result.stderr
 
 
+# ---------------------------------------------------------------------------
+# deliver_files is available in the TUI
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_deliverables_store(patched_tui_loop_deps) -> None:
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.cli.tui_commands import _build_agent_loop
+
+    _build_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert isinstance(kwargs.get("deliverables"), DeliverableStore)
+
+
+# ---------------------------------------------------------------------------
+# --workspace / --home flags
+# ---------------------------------------------------------------------------
+
+
+def test_tui_exposes_a_workspace_flag():
+    from typer.testing import CliRunner
+
+    from raven.cli import tui_commands
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--help"])
+    assert r.exit_code == 0
+    assert "--workspace" in r.output
+    assert "--home" in r.output
+
+
 def test_the_tui_is_told_which_raven_to_call_back_into(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """The picker signs a user in by running ``raven provider login``, and that
     writes a credential. Resolved through PATH it can be a different install --
@@ -602,3 +778,150 @@ def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatc
         source = inspect.getsource(fn)
         assert "child_env()" in source, f"{fn.__name__} builds its own env"
         assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"
+
+
+def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bare ``raven`` calls ``tui`` as a plain function, so typer never fills
+    its defaults: any option the call site forgets arrives as an ``OptionInfo``
+    sentinel instead. That is not inert -- ``--home``'s sentinel is truthy, so
+    ``load_runtime_config`` assigns it over ``agents.defaults.workspace`` and
+    the next ``Path()`` raises TypeError before the TUI ever starts.
+
+    Asserted over the whole signature rather than the two flags that broke, so
+    the next option added to ``tui`` fails here instead of at a user's prompt.
+    """
+    import inspect
+
+    from typer.models import OptionInfo
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, tui_commands
+
+    options = {
+        name
+        for name, param in inspect.signature(tui_commands.tui).parameters.items()
+        if isinstance(param.default, OptionInfo)
+    }
+    received: dict[str, Any] = {}
+
+    def recorder(_ctx, **kwargs: Any) -> None:
+        received.update(kwargs)
+
+    monkeypatch.setattr(tui_commands, "tui", recorder)
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
+
+    assert r.exit_code == 0, r.output
+    assert received.keys() == options
+    assert [name for name, value in received.items() if isinstance(value, OptionInfo)] == []
+
+
+# ---------------------------------------------------------------------------
+# attaching to a running gateway (G2): which engine a launch gets
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tui_launch_spies(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Stub everything past the engine decision so ``tui`` can be invoked
+    headlessly: a fake Node, a fake dist bundle, and recorders in place of
+    both launch paths. Returns the ``calls`` dict the tests inspect."""
+    from raven.cli import _tui_relay, tui_commands
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    calls: dict[str, Any] = {}
+
+    monkeypatch.setattr(tui_commands, "find_node", lambda: ("/usr/bin/node", (22, 0, 0)))
+    dist = tmp_path / "entry.js"
+    dist.write_text("", encoding="utf-8")
+    monkeypatch.setattr(tui_commands, "resolve_dist_entry", lambda: dist)
+    monkeypatch.setattr("raven.cli.update_notice.maybe_refresh_async", lambda: None)
+
+    def embedded(*args: Any, **kwargs: Any) -> int:
+        calls["embedded"] = kwargs
+        return 0
+
+    def attached(*args: Any, **kwargs: Any) -> int:
+        calls["attached"] = kwargs
+        return 0
+
+    monkeypatch.setattr(tui_commands, "run_subprocess_with_rpc", embedded)
+    monkeypatch.setattr(_tui_relay, "run_subprocess_attached", attached)
+    return calls
+
+
+def test_tui_attaches_when_a_gateway_hosts_the_page(tui_launch_spies, monkeypatch, tmp_path) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+    from raven.cli._tui_relay import AttachPlan
+
+    plan = AttachPlan(port=18999, token="tok", workdir=tmp_path)
+    monkeypatch.setattr(_tui_relay, "plan_attach", lambda workspace=None: plan)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, [])
+
+    assert r.exit_code == 0, r.output
+    assert "attached" in tui_launch_spies and "embedded" not in tui_launch_spies
+    assert tui_launch_spies["attached"]["plan"] == plan
+
+
+def test_tui_stays_embedded_when_no_gateway_is_found(tui_launch_spies, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", lambda workspace=None: None)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, [])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_standalone_flag_skips_discovery_entirely(tui_launch_spies, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    def _must_not_be_called(workspace=None):
+        raise AssertionError("--standalone must not discover a gateway")
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", _must_not_be_called)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--standalone"])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_a_pointed_home_skips_discovery_entirely(tui_launch_spies, monkeypatch, tmp_path) -> None:
+    """--home points at another instance's data; the recorded gateway serves
+    the default one, so an attached engine would be the wrong engine."""
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    def _must_not_be_called(workspace=None):
+        raise AssertionError("--home must not discover a gateway")
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", _must_not_be_called)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--home", str(tmp_path / "other")])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
+    """A run still going can hand the backend another write, so draining while
+    the sub-agents live is draining into a queue still being filled -- and
+    closing the adapter under such a write fails it for a reason that has
+    nothing to do with the memory service."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "tui_commands.py").read_text(encoding="utf-8")
+    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    pool = src.index("await close_pool()")
+    drain = src.index("await agent_loop.drain_backend_stores()")
+    stop = src.index("await agent_loop.backend.stop()")
+
+    assert cancel < pool < drain < stop

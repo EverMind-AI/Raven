@@ -50,6 +50,7 @@ class Span:
         "kind",
         "trace_id",
         "span_id",
+        "attempt_id",
         "_parent",
         "_start",
         "_attrs",
@@ -59,6 +60,7 @@ class Span:
         "_session_key",
         "_channel",
         "_chat_id",
+        "_surface",
         "_perf0",
         "_cancelled",
         "_source",
@@ -77,15 +79,19 @@ class Span:
         chat_id,
         start,
         source=None,
+        surface=None,
+        attempt_id=None,
     ):
         self.name = name
         self.kind = kind
         self.trace_id = trace_id
         self.span_id = span_id
+        self.attempt_id = attempt_id
         self._parent = parent
         self._session_key = session_key
         self._channel = channel
         self._chat_id = chat_id
+        self._surface = surface
         self._start = start
         self._source = source
         self._perf0 = time.monotonic()
@@ -174,6 +180,8 @@ class Span:
                     session_key=self._session_key,
                     channel=self._channel,
                     chat_id=self._chat_id,
+                    surface=self._surface,
+                    attempt_id=self.attempt_id,
                     start_time=self._start,
                     end_time=_spans.now_iso(),
                     status_code=self._status_code,
@@ -193,6 +201,7 @@ class _NoopSpan:
     trace_id = ""
     span_id = ""
     name = ""
+    attempt_id = ""
     invocation_source = None
 
     def set(self, *_a, **_k):
@@ -229,7 +238,9 @@ def span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
+    surface: str | None = None,
     detached: bool = False,
+    root: bool = False,
     **kw,
 ) -> Iterator[Any]:
     """Open a span for ``name`` (``<domain>.<verb>``). Yields a :class:`Span` handle.
@@ -245,13 +256,27 @@ def span(
 
     try:
         cur = _ctx.current()
-        trace_id = cur.trace_id if cur else _ctx.new_trace_id()
-        parent = cur.parent_span_id if cur else None
+        # A root span begins a trace instead of joining the ambient one. A turn is
+        # a root by definition, and the grouping a viewer does assumes it: a turn
+        # that inherits an enclosing span becomes a descendant, so two turns end
+        # up in one trace and the tree gains a level that means nothing. Where it
+        # came from is kept as a link rather than as parentage.
+        dispatched_by = (cur.parent_span_id if cur else None) if root else None
+        dispatched_in = (cur.trace_id if cur else None) if root else None
+        trace_id = _ctx.new_trace_id() if root else (cur.trace_id if cur else _ctx.new_trace_id())
+        parent = None if root else (cur.parent_span_id if cur else None)
         # Passed session identity seeds a root span (the turn); otherwise inherit
         # from the active context so children carry the turn's identity.
         session_key = session_key if session_key is not None else (cur.session_key if cur else None)
         channel = channel if channel is not None else (cur.channel if cur else None)
         chat_id = chat_id if chat_id is not None else (cur.chat_id if cur else None)
+        surface = surface if surface is not None else (cur.surface if cur else None)
+        # Children inherit the tree's attempt id; a root span must NOT -- it would
+        # file its fresh trace under the dispatching turn's attempt and group two
+        # unrelated turns as one trajectory. A root resolves from its own session's
+        # open attempt, else this trace is a single-turn attempt.
+        inherited = None if root else (cur.attempt_id if cur else None)
+        attempt_id = inherited or _ctx.current_attempt(session_key) or trace_id
         span_id = _ctx.new_span_id()
         handle = Span(
             name,
@@ -262,10 +287,14 @@ def span(
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
+            surface=surface,
             start=_spans.now_iso(),
             source=cur.source if cur else None,
+            attempt_id=attempt_id,
         )
         handle.set(attributes, **kw)
+        if dispatched_by:
+            handle.set({"trace.dispatched_by_span_id": dispatched_by, "trace.dispatched_in_trace_id": dispatched_in})
         # A detached span is a leaf marker: it does NOT become the active parent,
         # so work done inside it attaches to ITS parent, not to it. Required for
         # cancellable spans (e.g. skill.inject) — otherwise a child that opened
@@ -281,6 +310,8 @@ def span(
                 session_key=session_key,
                 channel=channel,
                 chat_id=chat_id,
+                surface=surface,
+                attempt_id=attempt_id,
             )
         )
     except Exception:  # noqa: BLE001 — open must never break the host
@@ -308,6 +339,8 @@ def span(
                         session_key=handle._session_key,
                         channel=handle._channel,
                         chat_id=handle._chat_id,
+                        surface=handle._surface,
+                        attempt_id=handle.attempt_id,
                         start_time=handle._start,
                         end_time=_spans.now_iso(),
                         status_code=handle._status_code,
@@ -320,7 +353,16 @@ def span(
             _log.debug("tracing: span(%s) emit failed", name, exc_info=True)
 
 
-def instrument(name: str, *, kind: str | None = None, detached: bool = False, seed=None, on_open=None, extract=None):
+def instrument(
+    name: str,
+    *,
+    kind: str | None = None,
+    detached: bool = False,
+    root: bool = False,
+    seed=None,
+    on_open=None,
+    extract=None,
+):
     """Decorator: wrap an async method so each call emits a ``name`` span.
 
     The adopter's integration surface — annotate a method, leave its body
@@ -383,7 +425,7 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
             async def awrapper(*args, **kwargs):
                 if not config.enabled():
                     return await func(*args, **kwargs)
-                with span(name, kind=kind, detached=detached, **_seed(args, kwargs)) as s:
+                with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                     _open(s, args, kwargs)
                     result = exc = None
                     try:
@@ -401,7 +443,7 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
         def swrapper(*args, **kwargs):
             if not config.enabled():
                 return func(*args, **kwargs)
-            with span(name, kind=kind, detached=detached, **_seed(args, kwargs)) as s:
+            with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                 _open(s, args, kwargs)
                 result = exc = None
                 try:
@@ -421,6 +463,50 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
 def current() -> Any | None:
     """The active trace context (or None). Exposed for adopters that need it."""
     return _ctx.current()
+
+
+def use_context(ctx: Any | None) -> Any:
+    """Re-establish a context captured earlier with :func:`current`.
+
+    Context manager. Needed wherever a span is opened outside the turn that
+    scheduled the work: a long-lived task keeps the contextvars snapshot it
+    was forked with, so its spans would otherwise all land in the first turn
+    it ever served. Capture ``trace.current()`` where the work is scheduled,
+    re-enter it here around the span.
+    """
+    return _ctx.use(ctx)
+
+
+def begin_attempt(session_key: str, attempt_id: str | None = None) -> str:
+    """Open a multi-turn attempt for ``session_key``.
+
+    Every span of every turn opened while the attempt is active carries its id
+    as ``attempt.id`` — the stable trajectory address a task spanning several
+    turns groups under. Without an open attempt each turn is its own
+    single-turn attempt (``attempt.id`` = trace id). No-throw; returns the id.
+    """
+    try:
+        return _ctx.begin_attempt(session_key, attempt_id)
+    except Exception:  # noqa: BLE001 — tracing must never break the host
+        _log.debug("tracing: begin_attempt failed", exc_info=True)
+        return attempt_id or ""
+
+
+def end_attempt(session_key: str) -> str | None:
+    """Close the open attempt for ``session_key`` (no-op if none). No-throw."""
+    try:
+        return _ctx.end_attempt(session_key)
+    except Exception:  # noqa: BLE001
+        _log.debug("tracing: end_attempt failed", exc_info=True)
+        return None
+
+
+def current_attempt(session_key: str | None) -> str | None:
+    """The open attempt id for ``session_key``, or None. No-throw."""
+    try:
+        return _ctx.current_attempt(session_key)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def enabled() -> bool:

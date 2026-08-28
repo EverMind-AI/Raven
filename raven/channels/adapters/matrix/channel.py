@@ -29,6 +29,7 @@ from nio.exceptions import EncryptionError
 
 from raven.channels.adapters.matrix import content
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_data_dir, get_media_dir
 from raven.config.schema import MatrixConfig
@@ -70,6 +71,7 @@ def _bridge_nio_logging() -> None:
 
 
 class MatrixChannel(ChannelBase):
+    capabilities = Capabilities(file_attachments=True)
     """Matrix (Element) channel driven by matrix-nio long-poll sync."""
 
     config: MatrixConfig

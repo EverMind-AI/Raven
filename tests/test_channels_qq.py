@@ -9,18 +9,35 @@ testing.
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 pytest.importorskip("botpy")
 
+
+@pytest.fixture
+def resolves_public(monkeypatch):
+    """Every hostname resolves to one ordinary public address.
+
+    Opt-in, not autouse: the media fetch path validates its target before each
+    hop, so a test about the transport would otherwise depend on live DNS (and
+    on names like ``dt.example``, which is reserved and never resolves) -- but
+    a test about the guard REFUSING something must keep the real answer.
+    """
+    monkeypatch.setattr("socket.getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 0))])
+
+
+from raven.channels.adapters.qq import channel as qq_channel
 from raven.channels.adapters.qq import parsing as qp
-from raven.channels.adapters.qq.channel import QQChannel
+from raven.channels.adapters.qq.channel import QQChannel, _Fetched
 
 
 def _channel():
-    ch = QQChannel(SimpleNamespace(app_id="a", secret="s"))
+    # allow_from mirrors a configured channel: the intake gate is deny-by-default,
+    # and _on_message consults it before downloading anything.
+    ch = QQChannel(SimpleNamespace(app_id="a", secret="s", allow_from=["*"]))
     ch.intake.publish = AsyncMock()
     return ch
 
@@ -96,6 +113,231 @@ def test_on_message_empty_content_skipped():
     ch = _channel()
     asyncio.run(ch._on_message(_group_msg(content="   "), is_group=True))
     ch.intake.publish.assert_not_awaited()
+
+
+def _att(url="//example.com/a.png", ctype="image/png", name="a.png", size=1):
+    return SimpleNamespace(url=url, content_type=ctype, filename=name, id="a1", size=size)
+
+
+def test_on_message_image_only_reaches_the_agent():
+    """A message carrying just an image used to be dropped for having no text,
+    so the agent never learned one had been sent."""
+    ch = _channel()
+    ch._download_attachment = AsyncMock(return_value=_Fetched("/media/a.png"))
+    msg = _group_msg(content="")
+    msg.attachments = [_att()]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    kwargs = ch.intake.publish.await_args.kwargs
+    assert kwargs["media"] == ["/media/a.png"]
+    assert "[image: /media/a.png]" in kwargs["content"]
+
+
+def test_on_message_keeps_text_alongside_an_image():
+    ch = _channel()
+    ch._download_attachment = AsyncMock(return_value=_Fetched("/media/a.png"))
+    msg = _group_msg(content="look at this")
+    msg.attachments = [_att()]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    kwargs = ch.intake.publish.await_args.kwargs
+    assert kwargs["content"] == "look at this\n[image: /media/a.png]"
+    assert kwargs["media"] == ["/media/a.png"]
+
+
+def test_on_message_reports_a_failed_download_instead_of_dropping_it():
+    """An expired url must still tell the agent something arrived."""
+    ch = _channel()
+    ch._download_attachment = AsyncMock(return_value=_Fetched(None, "download failed"))
+    msg = _group_msg(content="")
+    msg.attachments = [_att()]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    kwargs = ch.intake.publish.await_args.kwargs
+    assert kwargs["media"] is None
+    assert "download failed" in kwargs["content"]
+
+
+def test_on_message_does_not_download_for_a_denied_sender():
+    """The allow-list is checked before the fetch, so a blocked sender cannot
+    make the bot pull bytes it will immediately discard."""
+    ch = _channel()
+    ch.is_allowed = lambda sender_id: False
+    ch._download_attachment = AsyncMock(return_value=_Fetched("/media/a.png"))
+    msg = _group_msg(content="hi")
+    msg.attachments = [_att()]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    ch._download_attachment.assert_not_awaited()
+    ch.intake.publish.assert_not_awaited()
+
+
+class _Resp:
+    """Enough of an httpx response for the download path.
+
+    ``status_code`` and ``headers`` are read by the guarded fetch, which walks
+    a redirect chain one checked hop at a time -- a stand-in without them is a
+    stand-in for a client nobody uses.
+    """
+
+    def __init__(self, content=b"bytes", error=None, status_code=200, headers=None):
+        self.content = content
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._error = error
+
+    def raise_for_status(self):
+        if self._error:
+            raise self._error
+
+
+class _Http:
+    """Stands in for the client `start()` opens and `stop()` closes."""
+
+    def __init__(self, resp=None, error=None):
+        self.resp = resp or _Resp()
+        self.error = error
+        self.urls: list[str] = []
+        self.kwargs: list[dict] = []
+
+    async def get(self, url, **kwargs):
+        # ``follow_redirects`` is passed explicitly by the guarded fetch: the
+        # chain is walked one checked hop at a time, so the client must not
+        # walk it. Accepted here because a real client accepts it.
+        self.urls.append(url)
+        self.kwargs.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.resp
+
+
+def _with_media(monkeypatch, saver=None):
+    monkeypatch.setattr(
+        "raven.channels.adapters.qq.channel.save_media_bytes",
+        saver or (lambda channel, data, name: f"/media/{name}"),
+    )
+
+
+def test_download_attachment_adds_the_missing_scheme(resolves_public, monkeypatch):
+    """QQ hands back scheme-relative urls, which httpx rejects outright."""
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = _Http()
+
+    out = asyncio.run(ch._download_attachment(_att(url="//gchat.qpic.cn/x.png")))
+
+    assert ch._http.urls == ["https://gchat.qpic.cn/x.png"]
+    assert out.path == "/media/a.png"
+
+
+def test_download_attachment_reuses_one_client(resolves_public, monkeypatch):
+    """A client per attachment is a TLS handshake per image; the house pattern
+    holds one on the channel."""
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = _Http()
+
+    asyncio.run(ch._download_attachment(_att()))
+    asyncio.run(ch._download_attachment(_att()))
+
+    assert len(ch._http.urls) == 2
+
+
+def test_download_attachment_gives_up_on_a_non_2xx(resolves_public, monkeypatch):
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = _Http(resp=_Resp(error=httpx.HTTPError("404")))
+
+    assert asyncio.run(ch._download_attachment(_att())).path is None
+
+
+def test_download_attachment_without_a_url_is_skipped(monkeypatch):
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = _Http()
+
+    assert asyncio.run(ch._download_attachment(_att(url=None))).path is None
+    assert ch._http.urls == []
+
+
+def test_a_write_failure_degrades_like_a_fetch_failure(resolves_public, monkeypatch):
+    """An OSError from the media dir used to escape this helper and be caught by
+    `_on_message`, dropping the whole message, text included."""
+
+    def _boom(channel, data, name):
+        raise OSError("No space left on device")
+
+    _with_media(monkeypatch, _boom)
+    ch = _channel()
+    ch._http = _Http()
+
+    assert asyncio.run(ch._download_attachment(_att())).path is None
+
+
+def test_an_oversized_attachment_is_refused_before_the_fetch(monkeypatch):
+    """`resp.content` buffers the whole body, so the size has to be refused
+    rather than measured."""
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = _Http()
+
+    out = asyncio.run(ch._download_attachment(_att(size=21 * 1024 * 1024)))
+
+    assert out.path is None
+    assert out.reason == "too large", "a refusal is not a failure; saying so sends the model chasing a network fault"
+    assert ch._http.urls == []
+
+
+def test_download_attachment_without_a_client_is_a_noop(monkeypatch):
+    """`stop()` closes the client; a late event must not resurrect one."""
+    _with_media(monkeypatch)
+    ch = _channel()
+    ch._http = None
+
+    assert asyncio.run(ch._download_attachment(_att())).path is None
+
+
+def test_a_denied_sender_is_still_logged():
+    """Returning early skips the rejection Intake.publish used to log, and that
+    line is how an operator finds out why the bot is ignoring someone."""
+    ch = _channel()
+    ch.is_allowed = lambda sender_id: False
+    seen: list[str] = []
+    with patch.object(qq_channel.logger, "warning", lambda msg, *a: seen.append(msg)):
+        asyncio.run(ch._on_message(_group_msg(content="hi"), is_group=True))
+
+    assert any("Access denied for sender" in m for m in seen)
+
+
+def test_an_oversized_attachment_is_not_reported_as_a_failure():
+    """It was refused, not broken. "download failed" sends the model looking for
+    a network fault and tells the operator to check a url that is fine."""
+    ch = _channel()
+    ch._download_attachment = AsyncMock(return_value=_Fetched(None, "too large"))
+    msg = _group_msg(content="")
+    msg.attachments = [_att(name="clip.mp4")]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    content = ch.intake.publish.await_args.kwargs["content"]
+    assert "clip.mp4 - too large" in content
+    assert "download failed" not in content
+
+
+def test_a_failed_download_keeps_the_filename():
+    """`[image: download failed]` says something broke but not what."""
+    ch = _channel()
+    ch._download_attachment = AsyncMock(return_value=_Fetched(None, "download failed"))
+    msg = _group_msg(content="")
+    msg.attachments = [_att(name="photo.png")]
+
+    asyncio.run(ch._on_message(msg, is_group=True))
+
+    assert "photo.png - download failed" in ch.intake.publish.await_args.kwargs["content"]
 
 
 # ── channel: outbound ──────────────────────────────────────────────────

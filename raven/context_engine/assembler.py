@@ -22,6 +22,7 @@ segment.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -32,12 +33,56 @@ from raven.context_engine.base import (
     ContextEngine,
     SegmentBuilder,
 )
+from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import render
 from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
     from raven.context_engine.curator import TurnContext
     from raven.providers.base import LLMProvider
+
+
+_SEG_SEP = "\n\n---\n\n"
+
+
+def _stable_prefix_chars(parts: list[tuple[int, str, bool]], *, tail_follows: bool = False) -> int:
+    """Characters of the system prefix that read the same on the next turn.
+
+    Only the unbroken run of stable segments at the *start* counts. A prompt
+    cache keys on everything up to its breakpoint, so the first volatile segment
+    ends the run: a stable segment behind it would be cached under a key that
+    changes every turn, paying the write and never reading it back.
+
+    The separator that follows the run is counted in, so the boundary falls
+    between two segments rather than inside the join.
+
+    ``tail_follows`` says something is appended after these parts -- phase B,
+    which is the Curator. It decides the case where the run *is* every phase-A
+    part. On its own that boundary would sit at the end of the message and cache
+    nothing the end-of-message breakpoint does not, so it is not declared. With
+    volatile text appended after it, it is the only breakpoint in the message
+    that survives a turn, and declining to declare it gave up the whole point of
+    measuring this: identity and bootstrap present, memory and both skill
+    segments contributing nothing, Curator appending -- a reachable
+    configuration, and one where the assembled message went out as
+    ``IDENTITY<sep>CURATOR`` with no key at all.
+
+    A stable phase-B builder would extend the head further; none exists, and
+    treating phase B as volatile only caches less than it could, never wrongly.
+    """
+    run = 0
+    for _, text, stable in parts:
+        if not stable:
+            break
+        run += 1
+    if run == 0:
+        return 0
+    if run < len(parts):
+        return len(_SEG_SEP.join(text for _, text, _ in parts[:run])) + len(_SEG_SEP)
+    if tail_follows:
+        return len(_SEG_SEP.join(text for _, text, _ in parts)) + len(_SEG_SEP)
+    return 0
 
 
 class ContextAssembler(ContextEngine):
@@ -48,11 +93,17 @@ class ContextAssembler(ContextEngine):
         builders: list[SegmentBuilder],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         now_fn: Callable[[], datetime] | None = None,
+        get_tool_notices: Callable[[], list[str]] | None = None,
+        scent: "ScentMenu | None" = None,
     ) -> None:
+        self._scent = scent
+        self.skills_router = None
+        """Set by the factory: the SkillForgeRouter behind find_skill."""
         self._builders = sorted(builders, key=lambda b: b.order)
         self._phase_a = [b for b in self._builders if not b.needs_prefix]
         self._phase_b = [b for b in self._builders if b.needs_prefix]
         self.get_tool_definitions = get_tool_definitions
+        self.get_tool_notices = get_tool_notices
         self._now_fn = now_fn or datetime.now
 
     @property
@@ -90,6 +141,7 @@ class ContextAssembler(ContextEngine):
             describe_tool=turn.describe_tool,
             channel=turn.channel,
             chat_id=turn.chat_id,
+            surface=turn.surface,
             session_messages=session_messages,
             budget=budget,
         )
@@ -97,16 +149,24 @@ class ContextAssembler(ContextEngine):
         # ── Phase A — independent segment builders, concurrent ──────
         a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a])
         meta: dict[str, Any] = {}
-        prefix_parts: list[tuple[int, str]] = []
+        prefix_parts: list[tuple[int, str, bool]] = []
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None:
                 continue
             meta |= seg.meta
             if seg.text:
-                prefix_parts.append((builder.order, seg.text))
+                prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
         prefix_parts.sort(key=lambda t: t[0])
-        system_prefix = "\n\n---\n\n".join(text for _, text in prefix_parts)
+        system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
 
+        if self._scent is not None:
+            scent = await self._scent.build(ctx.current_message, ctx.session_messages)
+            if scent:
+                ctx = replace(ctx, scent_text=scent.text)
+                # Under pull no SkillsSegmentBuilder runs, so the menu is the
+                # only writer of this key: the after-turn backend feedback
+                # (FB-1) keeps receiving the skills the model was offered.
+                meta |= {"injected_skill_ids": list(scent.skill_ids)}
         user_msg = self._build_user(ctx)
 
         # ── Phase B — prefix-dependent builders (Curator), serial ───
@@ -135,7 +195,16 @@ class ContextAssembler(ContextEngine):
         for _, text in seg6_parts:
             system = system + "\n\n---\n\n" + text
 
-        messages = [{"role": "system", "content": system}, *_coalesce_assistant(history), user_msg]
+        # Measured now, not after phase A: whether the stable run reaches the end
+        # of the message depends on whether phase B appended anything to it.
+        stable_chars = _stable_prefix_chars(prefix_parts, tail_follows=bool(seg6_parts))
+
+        system_msg: dict[str, Any] = {"role": "system", "content": system}
+        if stable_chars:
+            # Phase B only ever appends, so the boundary measured over the phase-A
+            # parts still points at the same character of the finished message.
+            system_msg[STABLE_PREFIX_KEY] = stable_chars
+        messages = [system_msg, *_coalesce_assistant(history), user_msg]
         return AssembledContext(
             messages=messages,
             metadata=meta | {"engine": self.name},
@@ -162,8 +231,27 @@ class ContextAssembler(ContextEngine):
                 setter(tokens)
 
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
-        """The single structural user message: runtime context + content."""
-        runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id)
+        """The single structural user message: runtime context + content.
+
+        The scent menu (pull-mode skill discovery) rides the same envelope
+        as the clock: per-turn material belongs at the sequence tail, where
+        appending never invalidates the cached prefix.
+
+        The menu must stay inside the envelope's *first* paragraph: the
+        session persist (``AgentLoop._save_turn``) strips the runtime-context
+        block from a stored user message by dropping everything before the
+        first blank line, and the menu is per-turn material that must go with
+        it — stored as the user's own text it would render as such on resume
+        and feed the next turn's novelty window its own output. Hence the
+        single-newline join and the collapse of any blank lines within.
+        """
+        notices = self.get_tool_notices() if self.get_tool_notices is not None else None
+        runtime_ctx = render.build_runtime_context(
+            self._now_fn, ctx.channel, ctx.chat_id, surface=ctx.surface, tool_notices=notices
+        )
+        if ctx.scent_text:
+            scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())
+            runtime_ctx = f"{runtime_ctx}\n{scent}"
         user_content = render.build_user_content(
             ctx.current_message,
             ctx.media,

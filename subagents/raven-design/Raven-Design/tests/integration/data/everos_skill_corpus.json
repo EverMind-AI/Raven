@@ -1,0 +1,52 @@
+{
+  "_README": "Seed corpus for everos memory extraction tests. user_facts seeds user-track episodes/profiles. skill_demo repeats one reusable procedure (with REAL tool round-trips — assistant tool_calls + tool results) across sessions so everos's agent_case clustering yields an agent_skill; per the EverMe openclaw plugin, case/skill extraction only fires on trajectories that carry tool round-trips. expect_keywords drive the semantic (non-exact) assertions.",
+
+  "user_facts": {
+    "expect_keywords": ["dark", "oauth2", "alice", "postgres"],
+    "messages": [
+      {"role": "user", "content": "A couple of things about how I like to work: I always use dark mode in every editor and terminal, it's easier on my eyes."},
+      {"role": "assistant", "content": "Got it — I'll assume dark mode is your default preference."},
+      {"role": "user", "content": "Also, our backend project authenticates with OAuth2, and the primary datastore is Postgres."},
+      {"role": "assistant", "content": "Noted: OAuth2 for auth, Postgres as the main datastore."},
+      {"role": "user", "content": "One more: Alice is the project lead, so route design decisions to her."},
+      {"role": "assistant", "content": "Understood — Alice leads the project and owns design decisions."}
+    ]
+  },
+
+  "skill_demo": {
+    "query": "how do I rotate a deploy key safely",
+    "expect_keywords": ["rotate", "deploy key", "rotation", "revoke"],
+    "sessions": [
+      {
+        "messages": [
+          {"role": "user", "content": "Rotate the deploy key for our GitHub repo without breaking CI."},
+          {"role": "assistant", "content": "I'll add a new key first, verify CI, then revoke the old one.", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "run_shell", "arguments": "{\"cmd\": \"ssh-keygen -t ed25519 -f ./deploy_new -N ''\"}"}}]},
+          {"role": "tool", "tool_call_id": "c1", "content": "Generated ./deploy_new and ./deploy_new.pub"},
+          {"role": "assistant", "content": "Registering the new public key and switching the CI secret to it.", "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "github_add_deploy_key", "arguments": "{\"repo\": \"acme/api\", \"key_file\": \"./deploy_new.pub\"}"}}]},
+          {"role": "tool", "tool_call_id": "c2", "content": "Deploy key added; CI secret updated; test pipeline passed."},
+          {"role": "assistant", "content": "Pipeline is green on the new key, so I'll revoke the old deploy key to finish the rotation. Always add-then-verify-then-revoke so CI never has a window without a valid key."}
+        ]
+      },
+      {
+        "messages": [
+          {"role": "user", "content": "We need to rotate the deploy key on our GitLab mirror too."},
+          {"role": "assistant", "content": "Same safe rotation: new keypair, register, verify, then revoke.", "tool_calls": [{"id": "c3", "type": "function", "function": {"name": "run_shell", "arguments": "{\"cmd\": \"ssh-keygen -t ed25519 -f ./gl_new -N ''\"}"}}]},
+          {"role": "tool", "tool_call_id": "c3", "content": "Generated ./gl_new and ./gl_new.pub"},
+          {"role": "assistant", "content": "Adding the new key and repointing the CI variable.", "tool_calls": [{"id": "c4", "type": "function", "function": {"name": "gitlab_add_deploy_key", "arguments": "{\"project\": \"acme/api-mirror\", \"key_file\": \"./gl_new.pub\"}"}}]},
+          {"role": "tool", "tool_call_id": "c4", "content": "Deploy key registered; CI variable updated; pipeline passed."},
+          {"role": "assistant", "content": "New key verified, revoking the previous GitLab deploy key now to complete the rotation."}
+        ]
+      },
+      {
+        "messages": [
+          {"role": "user", "content": "Rotate the deploy key for the staging server next."},
+          {"role": "assistant", "content": "Generating a fresh keypair and installing it alongside the existing one first.", "tool_calls": [{"id": "c5", "type": "function", "function": {"name": "run_shell", "arguments": "{\"cmd\": \"ssh-keygen -t ed25519 -f ./stg_new -N ''\"}"}}]},
+          {"role": "tool", "tool_call_id": "c5", "content": "Generated ./stg_new and ./stg_new.pub"},
+          {"role": "assistant", "content": "Installing the new public key and running a test deploy with the new private key.", "tool_calls": [{"id": "c6", "type": "function", "function": {"name": "deploy", "arguments": "{\"target\": \"staging\", \"key_file\": \"./stg_new\"}"}}]},
+          {"role": "tool", "tool_call_id": "c6", "content": "Test deploy succeeded on the new key."},
+          {"role": "assistant", "content": "Deploy works on the new key, so I'll remove the old staging deploy key. Keeping both keys valid until the new one is verified is what makes the rotation zero-downtime."}
+        ]
+      }
+    ]
+  }
+}

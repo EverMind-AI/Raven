@@ -29,6 +29,24 @@ function resolveEverosRoot(framework) {
   return path.join(os.homedir(), '.everos', app);
 }
 
+// Directories that cannot hold a deposit and are expensive to descend: the
+// engine's own virtualenv, whose site-packages alone costs more to walk than
+// every deposit in the tree, and its index storage including the dated backups
+// left beside it.
+//
+// A denylist rather than a list of known deposit directories, because a deposit
+// directory's name is not knowable: the engine writes agent cases to `.cases`
+// and skills to `skills/`, neither of which appears in DIR_TYPE, and those
+// files reach the index through fileType's basename fallback instead. Excluding
+// anything DIR_TYPE does not name drops them.
+const SKIP_DIR_NAMES = new Set(['.tmp', '.git', 'node_modules', 'site-packages']);
+
+function isSkippedDir(name) {
+  if (SKIP_DIR_NAMES.has(name)) return true;
+  if (name.startsWith('.index')) return true;
+  return name.endsWith('venv');
+}
+
 function walkFiles(root, out = []) {
   let entries;
   try {
@@ -39,13 +57,33 @@ function walkFiles(root, out = []) {
   for (const ent of entries) {
     const full = path.join(root, ent.name);
     if (ent.isDirectory()) {
-      if (ent.name === '.index' || ent.name === '.tmp') continue;
+      if (isSkippedDir(ent.name)) continue;
       walkFiles(full, out);
     } else if (ent.isFile() && ent.name.endsWith('.md')) {
       out.push(full);
     }
   }
   return out;
+}
+
+// Identity of the deposit tree as the index sees it: which files matter, and
+// their size and mtime. Cheap enough to run per request now that the walk skips
+// the venv, so a caller can tell a rebuilt index from a reusable one without
+// reading a single deposit.
+function depositsFingerprint(everosRoot) {
+  const parts = [];
+  for (const file of walkFiles(everosRoot)) {
+    if (!fileType(file)) continue;
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    parts.push(`${file}:${stat.size}:${stat.mtimeMs}`);
+  }
+  parts.sort();
+  return parts.join('|');
 }
 
 function fileType(filePath) {
@@ -99,7 +137,19 @@ function parseEntries(text, type) {
 
 // Build: Map<sessionId, Array<familyGroup>> where a familyGroup is all entries
 // sharing one parent_id (one turn's memcell) grouped by type.
+let depositIndexCache = null;
+
 function buildDepositIndex(everosRoot) {
+  const fingerprint = depositsFingerprint(everosRoot);
+  if (depositIndexCache && depositIndexCache.root === everosRoot && depositIndexCache.fingerprint === fingerprint) {
+    return depositIndexCache.index;
+  }
+  const index = buildDepositIndexUncached(everosRoot);
+  depositIndexCache = { root: everosRoot, fingerprint, index };
+  return index;
+}
+
+function buildDepositIndexUncached(everosRoot) {
   const files = walkFiles(everosRoot);
   const byParent = new Map();
   for (const file of files) {
@@ -170,4 +220,11 @@ function summarize(deposit) {
   return parts.join(' · ');
 }
 
-module.exports = { resolveEverosRoot, buildDepositIndex, resolveDeposit, summarize, parseEntries };
+module.exports = {
+  resolveEverosRoot,
+  buildDepositIndex,
+  depositsFingerprint,
+  resolveDeposit,
+  summarize,
+  parseEntries
+};

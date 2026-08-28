@@ -1975,7 +1975,7 @@ def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
     tokens, so the schema is where an absurd one is refused."""
     import pydantic
 
-    from raven.tui_rpc.models import TurnSendParams
+    from raven.rpc.models import TurnSendParams
 
     ok = TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 64)
     assert len(ok.media) == 64

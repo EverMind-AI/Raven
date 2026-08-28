@@ -21,11 +21,18 @@ import type { GatewayClient } from './gatewayClientStub.js'
 
 import { GatewayClientCompat } from './gatewayClientCompat.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
+import { startLoopLagMonitor } from './lib/loopLag.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
 import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
-import { resetTerminalModes } from './lib/terminalModes.js'
+import { resetTerminalModes, resetTerminalModesOnStart } from './lib/terminalModes.js'
+import { installWriteLog } from './lib/writeLog.js'
 import { DEFAULT_THEME } from './theme.js'
+
+// Ahead of every other write, including the mode reset below: a recording that
+// starts mid-session cannot be replayed, because the terminal state it began
+// from is not in it.
+installWriteLog()
 
 // `raven tui --print-colors` is a no-IPC diagnostic: dump the resolved
 // palette as swatches and exit. Runs before the TTY guard so it works when
@@ -49,8 +56,10 @@ if (!process.stdin.isTTY) {
 }
 
 // Start from a clean slate. If a previous TUI crashed or was kill -9'd, the
-// terminal tab can still have mouse/focus/paste modes enabled.
-resetTerminalModes()
+// terminal tab can still have mouse/focus/paste modes enabled. The startup
+// variant, because the shell's screen is still the one on display here -- see
+// TERMINAL_MODE_RESET_ON_START.
+resetTerminalModesOnStart()
 
 // `raven tui --check` is a no-IPC smoke path: import chain + terminal
 // reset succeeding is the signal we want. The socket transport made
@@ -125,7 +134,15 @@ if (process.env.RAVEN_HEAPDUMP_ON_START === '1') {
   void performHeapDump('manual')
 }
 
-process.on('beforeExit', () => stopMemoryMonitor())
+// Records main-thread stalls out of band. A stall long enough to matter is a
+// stall that eats Ctrl+C too -- the key reaches the app as a keystroke, not a
+// signal -- so the session it explains is usually one that got killed.
+const stopLoopLagMonitor = startLoopLagMonitor()
+
+process.on('beforeExit', () => {
+  stopMemoryMonitor()
+  stopLoopLagMonitor()
+})
 
 const [ink, { App }, { logFrameEvent }, { trackFrame }] = await Promise.all([
   import('@hermes/ink'),

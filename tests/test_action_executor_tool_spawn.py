@@ -195,7 +195,7 @@ class _StubSubagentManager:
         self,
         task: str,
         *,
-        label: str | None = None,
+        task_summary: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
@@ -203,13 +203,13 @@ class _StubSubagentManager:
         self.calls.append(
             {
                 "task": task,
-                "label": label,
+                "task_summary": task_summary,
                 "origin_channel": origin_channel,
                 "origin_chat_id": origin_chat_id,
                 "session_key": session_key,
             }
         )
-        return f"Subagent [{label or task[:30]}] started (id: stub-1234)."
+        return f"Subagent [{task_summary or task[:30]}] started (id: stub-1234)."
 
 
 @pytest.mark.asyncio
@@ -295,7 +295,7 @@ class _StubProvider:
 
 @pytest.mark.asyncio
 async def test_discoverer_records_dispatched_into_feedback(tmp_path: Path):
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     (workspace / "memory").mkdir(parents=True)
     memory = MemoryStore(workspace)
     memory.write_long_term("## User Information\n- name: Alice")

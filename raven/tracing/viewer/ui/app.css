@@ -616,6 +616,40 @@ body.app-view-api .api-only {
   border-color: var(--accent-border);
 }
 
+/* Traces are fetched per session, so the pane shows the shape of what is coming
+   instead of an empty state that reads as "this session has nothing in it". */
+.trace-group.is-loading {
+  pointer-events: none;
+}
+
+.trace-skeleton-line {
+  height: 12px;
+  margin: 10px 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: trace-skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+.trace-skeleton-line.is-short {
+  width: 45%;
+}
+
+@keyframes trace-skeleton-sweep {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-skeleton-line {
+    animation: none;
+  }
+}
+
 .trace-header {
   display: flex;
   justify-content: space-between;

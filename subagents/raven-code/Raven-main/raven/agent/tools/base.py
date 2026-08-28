@@ -1,0 +1,267 @@
+"""Base class for agent tools."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass
+class ToolResult:
+    """A tool's output split into the model-facing text and an optional
+    human-facing display string.
+
+    ``execute`` may return a bare ``str`` (model text only — the UI falls back
+    to a generic preview of it) or this, when the tool wants a cleaner
+    transcript rendering than what it feeds the model. ``display_text`` must be
+    built from the tool's own execution data, not by re-parsing ``model_text``.
+    """
+
+    model_text: str
+    display_text: str | None = None
+
+
+class ToolOutput(str):
+    """What :meth:`ToolRegistry.execute` hands back: the model-facing text with
+    the optional display string attached.
+
+    A ``str`` subclass on purpose. Every caller of the registry boundary --
+    the sentinel action executor, the subagent manager,
+    tracing -- puts the return value straight into a message, a preview or an
+    artifact, so the boundary has to return something that *is* a str; handing
+    them a :class:`ToolResult` would format its repr into model context and
+    user-facing replies. The agent loop reads ``display_text`` off it to render
+    the transcript row.
+    """
+
+    display_text: str | None
+
+    def __new__(cls, model_text: str, display_text: str | None = None) -> "ToolOutput":
+        out = super().__new__(cls, model_text)
+        out.display_text = display_text
+        return out
+
+
+class Tool(ABC):
+    """
+    Abstract base class for agent tools.
+
+    Tools are capabilities that the agent can use to interact with
+    the environment, such as reading files, executing commands, etc.
+    """
+
+    # Hard ceiling (seconds) the registry enforces via asyncio.wait_for, so a
+    # tool that lacks its own timeout can't wedge the whole agent loop. None ->
+    # the registry default. Tools with a longer legitimate runtime (exec,
+    # video generation, spawn) raise this; see ToolRegistry.execute.
+    timeout_seconds: float | None = None
+
+    # Tools that intentionally block waiting on a human (ask_user,
+    # request_permissions, future human-approval gates) set this True so the
+    # registry does NOT wrap them in a timeout — they manage their own
+    # auto-resolution instead of being killed mid-wait.
+    blocking_interaction: bool = False
+
+    # Alternative names this tool stays reachable by after a rename. Hidden:
+    # never emitted in schemas, only resolved by the registry at call time.
+    aliases: tuple[str, ...] = ()
+
+    # Legacy parameter names accepted at the execute boundary: {old: new}.
+    # The schema exposes only the new names; ToolRegistry.execute remaps
+    # before validation so callers still using an old name keep working.
+    param_aliases: dict[str, str] = {}
+
+    _TYPE_MAP = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Tool name used in function calls."""
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Description of what the tool does."""
+        pass
+
+    @property
+    @abstractmethod
+    def parameters(self) -> dict[str, Any]:
+        """JSON Schema for tool parameters."""
+        pass
+
+    @abstractmethod
+    async def execute(self, **kwargs: Any) -> "str | ToolResult":
+        """
+        Execute the tool with given parameters.
+
+        Args:
+            **kwargs: Tool-specific parameters.
+
+        Returns:
+            The model-facing result as a ``str``, or a :class:`ToolResult` when
+            the tool wants a distinct human-facing display string.
+        """
+        pass
+
+    def display_call(self, args: dict[str, Any]) -> str | None:
+        """Human-facing one-line summary of a call to this tool.
+
+        ``None`` (the default) lets the UI derive a generic summary from the
+        arguments. Override only when a tool wants a cleaner label than the
+        generic one (e.g. ask_user showing just its question, not the raw
+        arguments blob).
+        """
+        return None
+
+    def resolve_param_aliases(self, params: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """Map legacy parameter names onto their current ones.
+
+        Returns the remapped params plus a note for the tool result — non-empty
+        only when both the old and the new name were given (the new name wins).
+        """
+        if not self.param_aliases or not isinstance(params, dict):
+            return params, ""
+        notes: list[str] = []
+        out = dict(params)
+        for old, new in self.param_aliases.items():
+            if old not in out:
+                continue
+            legacy_value = out.pop(old)
+            if new in out:
+                notes.append(f"both {new!r} and its legacy alias {old!r} were given; {new!r} wins")
+            else:
+                out[new] = legacy_value
+        note = f"[note: {'; '.join(notes)}]\n" if notes else ""
+        return out, note
+
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Apply safe schema-driven casts before validation."""
+        schema = self.parameters or {}
+        if schema.get("type", "object") != "object":
+            return params
+
+        return self._cast_object(params, schema)
+
+    def _cast_object(self, obj: Any, schema: dict[str, Any]) -> dict[str, Any]:
+        """Cast an object (dict) according to schema."""
+        if not isinstance(obj, dict):
+            return obj
+
+        props = schema.get("properties", {})
+        result = {}
+
+        for key, value in obj.items():
+            if key in props:
+                result[key] = self._cast_value(value, props[key])
+            else:
+                result[key] = value
+
+        return result
+
+    def _cast_value(self, val: Any, schema: dict[str, Any]) -> Any:
+        """Cast a single value according to schema."""
+        target_type = schema.get("type")
+
+        if target_type == "boolean" and isinstance(val, bool):
+            return val
+        if target_type == "integer" and isinstance(val, int) and not isinstance(val, bool):
+            return val
+        if target_type in self._TYPE_MAP and target_type not in ("boolean", "integer", "array", "object"):
+            expected = self._TYPE_MAP[target_type]
+            if isinstance(val, expected):
+                return val
+
+        if target_type == "integer" and isinstance(val, str):
+            try:
+                return int(val)
+            except ValueError:
+                return val
+
+        if target_type == "number" and isinstance(val, str):
+            try:
+                return float(val)
+            except ValueError:
+                return val
+
+        if target_type == "string":
+            return val if val is None else str(val)
+
+        if target_type == "boolean" and isinstance(val, str):
+            val_lower = val.lower()
+            if val_lower in ("true", "1", "yes"):
+                return True
+            if val_lower in ("false", "0", "no"):
+                return False
+            return val
+
+        if target_type == "array" and isinstance(val, list):
+            item_schema = schema.get("items")
+            return [self._cast_value(item, item_schema) for item in val] if item_schema else val
+
+        if target_type == "object" and isinstance(val, dict):
+            return self._cast_object(val, schema)
+
+        return val
+
+    def validate_params(self, params: dict[str, Any]) -> list[str]:
+        """Validate tool parameters against JSON schema. Returns error list (empty if valid)."""
+        if not isinstance(params, dict):
+            return [f"parameters must be an object, got {type(params).__name__}"]
+        schema = self.parameters or {}
+        if schema.get("type", "object") != "object":
+            raise ValueError(f"Schema must be object type, got {schema.get('type')!r}")
+        return self._validate(params, {**schema, "type": "object"}, "")
+
+    def _validate(self, val: Any, schema: dict[str, Any], path: str) -> list[str]:
+        t, label = schema.get("type"), path or "parameter"
+        if t == "integer" and (not isinstance(val, int) or isinstance(val, bool)):
+            return [f"{label} should be integer"]
+        if t == "number" and (not isinstance(val, self._TYPE_MAP[t]) or isinstance(val, bool)):
+            return [f"{label} should be number"]
+        if t in self._TYPE_MAP and t not in ("integer", "number") and not isinstance(val, self._TYPE_MAP[t]):
+            return [f"{label} should be {t}"]
+
+        errors = []
+        if "enum" in schema and val not in schema["enum"]:
+            errors.append(f"{label} must be one of {schema['enum']}")
+        if t in ("integer", "number"):
+            if "minimum" in schema and val < schema["minimum"]:
+                errors.append(f"{label} must be >= {schema['minimum']}")
+            if "maximum" in schema and val > schema["maximum"]:
+                errors.append(f"{label} must be <= {schema['maximum']}")
+        if t == "string":
+            if "minLength" in schema and len(val) < schema["minLength"]:
+                errors.append(f"{label} must be at least {schema['minLength']} chars")
+            if "maxLength" in schema and len(val) > schema["maxLength"]:
+                errors.append(f"{label} must be at most {schema['maxLength']} chars")
+        if t == "object":
+            props = schema.get("properties", {})
+            for k in schema.get("required", []):
+                if k not in val:
+                    errors.append(f"missing required {path + '.' + k if path else k}")
+            for k, v in val.items():
+                if k in props:
+                    errors.extend(self._validate(v, props[k], path + "." + k if path else k))
+        if t == "array" and "items" in schema:
+            for i, item in enumerate(val):
+                errors.extend(self._validate(item, schema["items"], f"{path}[{i}]" if path else f"[{i}]"))
+        return errors
+
+    def to_schema(self) -> dict[str, Any]:
+        """Convert tool to OpenAI function schema format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }

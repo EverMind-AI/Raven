@@ -583,7 +583,7 @@ def _match_provider_by_url(base_url: Optional[str]) -> Optional[str]:
 _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     "llm": {
         "label": ("Memory LLM", "记忆 LLM"),
-        "example": "qwen/qwen3.8-flash",
+        "example": "gpt-4.1-mini",
         "optional": False,
         "verify": True,
         "purpose": (
@@ -594,8 +594,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         # the user's own main model, because a recommended id is only reachable
         # if their key carries it. This tells them how to judge their own.
         "recommendation": (
-            "Capability floor: [bold]qwen/qwen3.8-flash[/bold] -- weaker models degrade extraction",
-            "能力下限参考 [bold]qwen/qwen3.8-flash[/bold]：低于这个水平会明显影响提取质量",
+            "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
+            "能力下限参考 [bold]gpt-4.1-mini[/bold]：低于这个水平会明显影响提取质量",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
@@ -637,7 +637,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
-        "example": "qwen/qwen3-reranker-8b",
+        "example": "Qwen/Qwen3-Reranker-4B",
         "optional": True,
         "verify": True,
         "purpose": (
@@ -649,8 +649,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "[accent]（可选，建议配置）[/accent]",
         ),
         "recommendation": (
-            "Recommended: [bold]qwen/qwen3-reranker-8b[/bold]",
-            "推荐 [bold]qwen/qwen3-reranker-8b[/bold]",
+            "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+            "推荐 [bold]Qwen/Qwen3-Reranker-4B[/bold]",
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
@@ -660,7 +660,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "multimodal": {
         "label": ("Memory multimodal", "记忆多模态"),
-        "example": "google/gemini-3.7-flash",
+        "example": "google/gemini-3-flash-preview",
         "optional": True,
         "verify": True,
         "purpose": (
@@ -673,8 +673,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "不配置：这类文件不进入记忆；有这类文件并不等于需要，确有此需求时再配即可。",
         ),
         "recommendation": (
-            "Recommended: [bold]google/gemini-3.7-flash[/bold]",
-            "推荐 [bold]google/gemini-3.7-flash[/bold]",
+            "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
+            "推荐 [bold]google/gemini-3-flash-preview[/bold]",
         ),
         "skip_note": (
             "  [dim]Skipped; nothing else is affected -- configure it if you come to need\n  multimodal memory.[/dim]",
@@ -834,8 +834,8 @@ def _fetch_multimodal_models(
 def _match_everos_default(example: str, models: list[str]) -> str:
     """Find the best match for ``example`` in the fetched model list.
 
-    The example (e.g. ``qwen/qwen3.8-flash``) is a bare model name, while
-    ``models`` may carry provider prefixes (``openrouter/qwen/qwen3.8-flash``).
+    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while
+    ``models`` may carry provider prefixes (``openai/gpt-4.1-mini``).
     Returns the first model whose id ends with ``/example`` or equals
     ``example`` exactly; falls back to the bare example string so the
     autocomplete input is pre-filled even if no exact match exists.
@@ -1368,9 +1368,16 @@ def _stop_for_reload(root: Path | str) -> bool:
 
 
 def _port_is_free(port: int) -> bool:
-    """Whether a local TCP port can still be bound."""
+    """Whether a local TCP port can still be bound.
+
+    Out-of-range ports answer False without touching the socket: ``bind``
+    raises ``OverflowError`` (not ``OSError``) above 65535, and port 0
+    silently binds an ephemeral port, so neither may reach it.
+    """
     import socket
 
+    if not (0 < port <= 65535):
+        return False
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -1380,7 +1387,7 @@ def _port_is_free(port: int) -> bool:
     return True
 
 
-def _ask_managed_port(root: Path | str) -> int:
+def _ask_managed_port(root: Path | str, *, default: int | None = None, force_prompt: bool = False) -> int:
     """Where a raven-managed server should listen.
 
     Silent while the intended port is free, which is nearly always. 18791 is a
@@ -1389,47 +1396,92 @@ def _ask_managed_port(root: Path | str) -> int:
     case that had no way forward is the occupied one: the start failed and the
     wizard had nothing to offer, so that is where the question belongs.
 
-    The default offered is whatever is already recorded, not the shipped
-    constant, so a second run does not quietly undo a port the user moved to by
-    inviting them to press Enter on the old one.
+    ``default`` overrides what to check, for callers whose intended port is not
+    raven's recorded one -- the reuse lane checks the address the root itself
+    declares. Without it the offered default is whatever is already recorded,
+    not the shipped constant, so a second run does not quietly undo a port the
+    user moved to by inviting them to press Enter on the old one.
+
+    A typed answer is checked the same way the initial port was: an occupied or
+    out-of-range one asks again, so the question cannot hand the start a port
+    it knows is bad. An empty answer keeps the offered default -- accepting it
+    is the user's call, and a start into it still meets the failure menu.
+
+    ``force_prompt`` skips the silent pass-through. Change port is an explicit
+    request to move, and the start may have failed for reasons no port fixes --
+    silently deciding the port is fine and rerunning the identical start makes
+    the menu item look broken.
     """
     from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
     # Creating a root is the other question, and here a recorded address is the
     # best answer available: ignoring it is what "start the everos server at
     # its configured address, not the default" was about.
-    slice_ = _recorded_memory_slice()
-    recorded = slice_.get("port")
-    if not (isinstance(recorded, int) and recorded > 0):
-        recorded = urlparse(str(slice_.get("base_url") or "")).port
-    current = recorded or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
-    if _port_is_free(current):
-        return int(current)
-    # A bind test cannot tell a stranger from our own service. When the holder
-    # of this root's lock is the thing listening there, the port is not taken --
-    # it is ours, and the step is about to restart into it.
-    holder = _lock_holder(root)
-    if holder is not None and holder.port == current:
-        return int(current)
-    oc.console.print(
-        oc._t(
-            f"  [yellow]! Port {current} is already in use by something else.[/yellow]",
-            f"  [yellow]⚠ 端口 {current} 已被别的程序占用。[/yellow]",
-        )
-    )
-    answer = _prompt_text(
-        oc._t("Memory service port:", "记忆服务端口:"),
-        default=str(current),
-    )
-    if not str(answer).isdigit():
+    if default is None:
+        slice_ = _recorded_memory_slice()
+        recorded = slice_.get("port")
+        if not (isinstance(recorded, int) and recorded > 0):
+            recorded = urlparse(str(slice_.get("base_url") or "")).port
+        current = recorded or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
+    else:
+        current = int(default)
+    if not force_prompt:
+        if _port_is_free(current):
+            return current
+        # A bind test cannot tell a stranger from our own service. When the
+        # holder of this root's lock is the thing listening there, the port is
+        # not taken -- it is ours, and the step is about to restart into it.
+        holder = _lock_holder(root)
+        if holder is not None and holder.port == current:
+            return current
         oc.console.print(
             oc._t(
-                f"  [dim]Not a port ({answer}); keeping {current}.[/dim]",
-                f"  [dim]不是合法端口（{answer}），仍用 {current}。[/dim]",
+                f"  [yellow]! Port {current} is already in use by something else.[/yellow]",
+                f"  [yellow]⚠ 端口 {current} 已被别的程序占用。[/yellow]",
             )
         )
-        return int(current)
-    return int(answer)
+    while True:
+        answer = _prompt_text(
+            oc._t("Memory service port:", "记忆服务端口:"),
+            default=str(current),
+        )
+        text = str(answer)
+        if not text:
+            oc.console.print(
+                oc._t(
+                    f"  [dim]Keeping {current}.[/dim]",
+                    f"  [dim]仍用 {current}。[/dim]",
+                )
+            )
+            return current
+        if not text.isdigit():
+            oc.console.print(
+                oc._t(
+                    f"  [dim]Not a port ({answer}).[/dim]",
+                    f"  [dim]不是合法端口（{answer}）。[/dim]",
+                )
+            )
+            continue
+        port = int(text)
+        if not (0 < port <= 65535):
+            oc.console.print(
+                oc._t(
+                    f"  [dim]Not a valid port ({port}); range is 1-65535.[/dim]",
+                    f"  [dim]不是合法端口（{port}），范围是 1-65535。[/dim]",
+                )
+            )
+            continue
+        if _port_is_free(port):
+            return port
+        holder = _lock_holder(root)
+        if holder is not None and holder.port == port:
+            return port
+        oc.console.print(
+            oc._t(
+                f"  [yellow]! Port {port} is also in use.[/yellow]",
+                f"  [yellow]⚠ 端口 {port} 也被占用。[/yellow]",
+            )
+        )
 
 
 def _retry_or_skip_address() -> str:
@@ -1624,6 +1676,12 @@ def _set_base_url(base_url: str) -> None:
     set_plugin_config_fields("everos-memory", fields)
 
 
+def _with_port(target: str, port: int) -> str:
+    """``target`` with its port swapped for ``port``, host and scheme kept."""
+    parsed = urlparse(target)
+    return parsed._replace(netloc=f"{parsed.hostname or 'localhost'}:{port}").geturl()
+
+
 def _adopt_root(root: Any) -> None:
     """Record ``root`` as raven's own, retracting an address that was not raven's.
 
@@ -1730,6 +1788,12 @@ def _use_found_root(state: Any) -> None:
     Nothing is stopped, moved or reconfigured: the user asked to use this
     directory as it is, and the address its own server answers on is the answer.
 
+    The declared address is still checked before starting into it: a listener
+    that does not answer /health reads as "not running" to discovery, so the
+    occupied-port question that the fresh-build lane asks is asked here too.
+    A start that fails anyway -- free at the check, taken by bind -- offers
+    retry, a different port, or skipping memory for this session.
+
     One memory directory admits one engine, so a root whose data is held by
     something raven cannot reach over HTTP has no way forward here. That one is
     reported -- with the pid and the command line -- instead of being worked
@@ -1775,9 +1839,32 @@ def _use_found_root(state: Any) -> None:
         )
         return
 
-    if _restart_here(state.root, state.declared_url or _configured_target_url()):
-        _set_memory_backend("everos")
-        _report_everos_capabilities()
+    target = state.declared_url or _configured_target_url()
+    target = _with_port(target, _ask_managed_port(state.root, default=urlparse(target).port))
+    while True:
+        if _restart_here(state.root, target):
+            _set_memory_backend("everos")
+            _report_everos_capabilities()
+            return
+        questionary = oc._require_questionary()
+        from raven.cli._styles import RAVEN_STYLE
+
+        action = questionary.select(
+            oc._t("What to do?", "怎么办？"),
+            choices=[
+                questionary.Choice(oc._t("Retry", "重试"), value="retry"),
+                questionary.Choice(oc._t("Change port", "换个端口"), value="change"),
+                questionary.Choice(oc._t("Skip", "跳过"), value="skip"),
+            ],
+            style=RAVEN_STYLE,
+            qmark=oc._QMARK,
+        ).ask()
+        if action is None:
+            raise typer.Exit(1)
+        if action == "skip":
+            return
+        if action == "change":
+            target = _with_port(target, _ask_managed_port(state.root, default=urlparse(target).port, force_prompt=True))
 
 
 def _step4_memory(
@@ -2002,6 +2089,7 @@ def _step4_memory(
                 oc._t("What to do?", "怎么办？"),
                 choices=[
                     questionary.Choice(oc._t("Retry", "重试"), value="retry"),
+                    questionary.Choice(oc._t("Change port", "换个端口"), value="change"),
                     questionary.Choice(
                         oc._t(
                             "Leave it for later (settings kept, Raven retries next start)",
@@ -2020,6 +2108,12 @@ def _step4_memory(
             if action is None:
                 raise typer.Exit(1) from exc
             if action == "retry":
+                continue
+            if action == "change":
+                base_url = _with_port(
+                    base_url, _ask_managed_port(root, default=urlparse(base_url).port, force_prompt=True)
+                )
+                _set_base_url(base_url)
                 continue
             if action == "defer":
                 _set_memory_backend("everos")

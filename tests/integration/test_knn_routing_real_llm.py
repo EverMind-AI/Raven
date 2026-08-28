@@ -126,7 +126,7 @@ async def test_knn_routing_end_to_end(tmp_path):
         interactive=False,
     )
 
-    async def _noop():
+    async def _noop(**_kw):
         return None
 
     loop._start_executor = _noop

@@ -1,0 +1,369 @@
+diff --git a/raven/cli/agent_commands.py b/raven/cli/agent_commands.py
+index a0e2f90..d6adb47 100644
+--- a/raven/cli/agent_commands.py
++++ b/raven/cli/agent_commands.py
+@@ -28,6 +28,14 @@ from rich.markdown import Markdown
+ from rich.text import Text
+ 
+ from raven import __logo__
++from raven.agent.tools.web import (
++    selected_fetch_fallback,
++    selected_fetch_key,
++    selected_fetch_provider,
++    selected_search_key,
++    selected_search_provider,
++    web_provider_keys,
++)
+ from raven.cli._helpers import (
+     exit_memory_service_unavailable,
+     load_runtime_config,
+@@ -389,7 +397,7 @@ def register(app: typer.Typer) -> None:
+         strategies = install_from_config(
+             ec_config.token_wise,
+             telemetry_dir=config.workspace_path / ".token_wise",
+-            supports_caching=getattr(provider, "supports_prompt_caching", None),
++            supports_caching=provider.supports_prompt_caching,
+         )
+         if strategies.get("cache_optimizer") is not None and hasattr(
+             provider, "disable_auto_cache_control"
+@@ -418,8 +426,12 @@ def register(app: typer.Typer) -> None:
+             context_window_authoritative=config.agents.defaults.context_window_authoritative,
+             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+-            brave_api_key=config.tools.web.search.api_key or None,
+-            jina_api_key=config.tools.web.jina_api_key or None,
++            brave_api_key=selected_search_key(config.tools.web)[1] or None,
++            web_search_provider=selected_search_provider(config.tools.web.search),
++            jina_api_key=selected_fetch_key(config.tools.web)[1] or None,
++            web_fetch_provider=selected_fetch_provider(config.tools.web.fetch),
++            web_fetch_fallback=selected_fetch_fallback(config.tools.web.fetch),
++            web_provider_keys=web_provider_keys(config.tools.web),
+             web_proxy=config.tools.web.proxy or None,
+             web_corpus_endpoint=config.tools.web.corpus_endpoint or None,
+             web_benchmark_containment=config.tools.web.benchmark_containment,
+diff --git a/raven/cli/gateway_commands.py b/raven/cli/gateway_commands.py
+index be48c6a..b3ba525 100644
+--- a/raven/cli/gateway_commands.py
++++ b/raven/cli/gateway_commands.py
+@@ -18,6 +18,14 @@ from loguru import logger
+ from rich.console import Console
+ 
+ from raven import __logo__
++from raven.agent.tools.web import (
++    selected_fetch_fallback,
++    selected_fetch_key,
++    selected_fetch_provider,
++    selected_search_key,
++    selected_search_provider,
++    web_provider_keys,
++)
+ from raven.cli._helpers import (
+     load_runtime_config,
+     make_provider,
+@@ -209,7 +217,7 @@ def register(app: typer.Typer) -> None:
+         strategies = install_from_config(
+             ec_config.token_wise,
+             telemetry_dir=config.workspace_path / ".token_wise",
+-            supports_caching=getattr(provider, "supports_prompt_caching", None),
++            supports_caching=provider.supports_prompt_caching,
+         )
+         if strategies.get("cache_optimizer") is not None and hasattr(
+             provider, "disable_auto_cache_control"
+@@ -238,8 +246,12 @@ def register(app: typer.Typer) -> None:
+             context_window_authoritative=config.agents.defaults.context_window_authoritative,
+             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+-            brave_api_key=config.tools.web.search.api_key or None,
+-            jina_api_key=config.tools.web.jina_api_key or None,
++            brave_api_key=selected_search_key(config.tools.web)[1] or None,
++            web_search_provider=selected_search_provider(config.tools.web.search),
++            jina_api_key=selected_fetch_key(config.tools.web)[1] or None,
++            web_fetch_provider=selected_fetch_provider(config.tools.web.fetch),
++            web_fetch_fallback=selected_fetch_fallback(config.tools.web.fetch),
++            web_provider_keys=web_provider_keys(config.tools.web),
+             web_proxy=config.tools.web.proxy or None,
+             web_corpus_endpoint=config.tools.web.corpus_endpoint or None,
+             web_benchmark_containment=config.tools.web.benchmark_containment,
+diff --git a/raven/providers/base.py b/raven/providers/base.py
+index 6e77f4a..fe11c5a 100644
+--- a/raven/providers/base.py
++++ b/raven/providers/base.py
+@@ -844,6 +844,21 @@ class LLMProvider(ABC):
+         """
+         return False
+ 
++    def supports_prompt_caching(self, model: str) -> bool:
++        """Whether a request this provider sends for ``model`` may carry
++        ``cache_control`` breakpoints.
++
++        The public form of the question ``providers.prompt_cache`` answers, so a
++        token strategy can put it to the object that will actually send the
++        request instead of guessing from the id -- an id names a vendor, not the
++        wire it travels on, and only the provider knows the second.
++
++        Default False: the base class knows no dialect, and a provider that can
++        carry the field says so. Answering from the model id here would put the
++        guess back into the one place that has the wire in hand.
++        """
++        return False
++
+     @trace.instrument("llm.call", extract=semconv.llm_call)
+     async def chat_with_retry(
+         self,
+diff --git a/raven/providers/endpoint_rotor.py b/raven/providers/endpoint_rotor.py
+index c0a265e..30e1020 100644
+--- a/raven/providers/endpoint_rotor.py
++++ b/raven/providers/endpoint_rotor.py
+@@ -356,6 +356,30 @@ class EndpointRotorProvider(LLMProvider):
+         endpoint under one rotor shares it."""
+         return self._inners[0].wire_model_id(model)
+ 
++    def supports_prompt_caching(self, model: str) -> bool:
++        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
++        whether the wire can carry the field is a property of the section every
++        inner was built from, not of the endpoint that happens to answer."""
++        return self._inners[0].supports_prompt_caching(model)
++
++    @property
++    def disable_auto_cache_control(self) -> bool:
++        return getattr(self, "_disable_auto_cache_control", False)
++
++    @disable_auto_cache_control.setter
++    def disable_auto_cache_control(self, value: bool) -> None:
++        """Push it down to every inner, exactly as ``generation`` is pushed.
++
++        The caller assigns this on whatever ``make_provider`` returned, once it
++        knows CacheOptimizer is placing the breakpoints. Landing it on the rotor
++        alone leaves every inner -- the objects that actually build requests --
++        still marking a system block of their own, which spends a breakpoint the
++        operator's ``maxCacheBreakpoints`` did not budget for.
++        """
++        self._disable_auto_cache_control = value
++        for inner in getattr(self, "_inners", []):
++            inner.disable_auto_cache_control = value
++
+     @property
+     def model_overrides(self) -> dict[str, dict[str, Any]]:
+         """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+diff --git a/raven/providers/litellm_provider.py b/raven/providers/litellm_provider.py
+index 527509a..41745dc 100644
+--- a/raven/providers/litellm_provider.py
++++ b/raven/providers/litellm_provider.py
+@@ -278,6 +278,10 @@ class LiteLLMProvider(LLMProvider):
+         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
+         return spec is not None and (spec.is_local or spec.name == "custom")
+ 
++    def supports_prompt_caching(self, model: str) -> bool:
++        """See ``LLMProvider.supports_prompt_caching``."""
++        return self._supports_cache_control(model)
++
+     def _supports_cache_control(self, model: str) -> bool:
+         """Return True when this request may carry cache_control blocks.
+ 
+diff --git a/raven/providers/rates.py b/raven/providers/rates.py
+index 6c52786..5b0ea27 100644
+--- a/raven/providers/rates.py
++++ b/raven/providers/rates.py
+@@ -50,6 +50,10 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16384
+ _FALLBACK_PRICING: dict[str, tuple[float, float]] = {
+     # OpenRouter model pages (snapshot 2026-03)
+     "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M
++    # OpenRouter model pages (snapshot 2026-08). Priced under the stored id
++    # rather than the wire one: an id that does not name OpenRouter never
++    # reaches the live catalogue, and this is the id the loop asks about.
++    "openai/gpt-5.6-sol-pro": (2e-6, 10e-6),  # $2.00/$10.00 per 1M
+ }
+ 
+ # Live OpenRouter price table, fetched lazily and cached 1h in-process.
+diff --git a/tests/test_cli_agent_commands.py b/tests/test_cli_agent_commands.py
+index e36b198..29eee2d 100644
+--- a/tests/test_cli_agent_commands.py
++++ b/tests/test_cli_agent_commands.py
+@@ -101,6 +101,7 @@ def _invoke_agent_capturing_session(
+ 
+     from raven.config.loader import get_config_path, save_config
+     from raven.config.schema import Config
++    from raven.providers.base import LLMProvider
+     from raven.spine import Text, TurnOutcome, Usage
+ 
+     cfg = Config()
+@@ -146,7 +147,19 @@ def _invoke_agent_capturing_session(
+     # catchable SystemExit so the CliRunner sees a clean exit instead of the
+     # whole pytest process dying.
+     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+-    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
++
++    class _StubProvider(LLMProvider):
++        """Subclassed rather than faked with ``object()``: the CLI reads capability
++        probes off whatever ``make_provider`` returns, so a stub that inherits them
++        stays honest as probes are added instead of failing on the next one."""
++
++        async def chat(self, *args, **kwargs):
++            raise AssertionError("the loop is stubbed here; no LLM call is reached")
++
++        def get_default_model(self) -> str:
++            return "stub"
++
++    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: _StubProvider())
+     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
+     # This test exercises session keying, not memory: don't boot the real
+     # (bundled) everos backend / plugin tools inside the CliRunner (the
+diff --git a/tests/test_provider_prompt_cache.py b/tests/test_provider_prompt_cache.py
+index 928183c..4315a89 100644
+--- a/tests/test_provider_prompt_cache.py
++++ b/tests/test_provider_prompt_cache.py
+@@ -568,3 +568,130 @@ def test_the_refusal_verdict_survives_a_provider_that_swallows_the_exception():
+     assert LLMProvider.classify_error(None, "Error calling LLM: 400 context_length_exceeded").refuses_prompt_cache is (
+         False
+     )
++
++
++# --- The probe the construction sites hand to the strategies ---
++
++
++def test_every_provider_answers_the_question_the_strategies_ask_it():
++    """The name the callers ask for has to be the name the providers answer to.
++
++    It was not: the clients spelled it ``_supports_cache_control`` and nothing
++    anywhere defined ``supports_prompt_caching``, which is the name all three
++    ``AgentLoop`` construction sites read off the provider. Every one of them
++    resolved to None and ``CacheOptimizer`` fell back to the id-only lookup for
++    the whole life of the field -- silently, because the fallback answers.
++
++    Asserted as agreement with the private answer rather than as ``hasattr``: a
++    method that exists and answers on its own is the second copy this file has
++    been preventing since the first three disagreed.
++    """
++    from raven.providers.endpoint_rotor import EndpointRotorProvider
++    from raven.providers.endpoints import ResolvedEndpoint
++    from raven.providers.litellm_provider import LiteLLMProvider
++
++    cases = [
++        ("openrouter", "openrouter/anthropic/claude-fable-5", True),
++        ("openrouter", "openrouter/google/gemini-3.5-flash", False),
++        ("custom", "anthropic/claude-fable-5", False),
++        ("anthropic", "anthropic/claude-fable-5", True),
++    ]
++    for provider_name, model, expected in cases:
++        client = LiteLLMProvider(api_key="k", default_model=model, provider_name=provider_name)
++        assert client.supports_prompt_caching(model) is expected, model
++        assert client.supports_prompt_caching(model) is client._supports_cache_control(model), model
++
++        rotor = EndpointRotorProvider(
++            [ResolvedEndpoint(label="a", api_key="k", api_base=None, extra_headers=None)],
++            lambda _ep, _n=provider_name, _m=model: LiteLLMProvider(api_key="k", default_model=_m, provider_name=_n),
++            default_model=model,
++        )
++        assert rotor.supports_prompt_caching(model) is expected, f"rotor lost the answer for {model}"
++
++
++def test_no_construction_site_reads_the_probe_through_a_default():
++    """The failure mode was an argument that was always None, and the wiring test
++    that guards these sites is source-level -- it asserts the kwarg is *present*,
++    which ``getattr(provider, "...", None)`` satisfies while passing nothing.
++
++    So the shape itself is what has to be excluded: read the attribute directly
++    and a rename fails loudly at the first turn instead of degrading to the
++    id-only answer for good.
++    """
++    import pathlib
++
++    root = pathlib.Path(__file__).resolve().parents[1] / "raven" / "cli"
++    readers, offenders = set(), []
++    for path in sorted(root.rglob("*.py")):
++        source = path.read_text(encoding="utf-8")
++        if "supports_prompt_caching" not in source:
++            continue
++        readers.add(path.name)
++        if 'getattr(provider, "supports_prompt_caching"' in source:
++            offenders.append(path.name)
++
++    # Positive half: an empty sweep passes the negative assertion too, and a
++    # renamed probe would empty it silently. Subset, not equality -- the module
++    # that declares the parameter names it in its docstring and is not a site.
++    sites = {"acp_commands.py", "agent_commands.py", "gateway_commands.py"}
++    assert sites <= readers, f"construction sites that stopped asking: {sorted(sites - readers)}"
++    assert not offenders, "read provider.supports_prompt_caching directly:\n" + "\n".join(offenders)
++
++
++def test_the_injected_probe_overrules_an_id_that_names_the_wrong_wire():
++    """Why the probe is worth resolving at all.
++
++    ``anthropic/claude-fable-5`` pointed at an OpenAI-shaped endpoint is a shape
++    the config matcher produces on purpose. The id-only fallback reads it as
++    Anthropic's wire and marks the request; the client then strips every
++    breakpoint back off. Both answers are safe -- neither doubles a bill -- but
++    only the injected one stops the strategy doing the work at all.
++    """
++    import asyncio
++
++    from raven.providers.litellm_provider import LiteLLMProvider
++    from raven.token_wise.cache_optimizer import CacheOptimizer
++
++    model = "anthropic/claude-fable-5"
++    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
++    client = LiteLLMProvider(api_key="k", default_model=model, provider_name="custom")
++
++    id_only, _, _ = asyncio.run(CacheOptimizer().before_llm_call(list(messages), None, model))
++    assert "cache_control" in str(id_only), "premise: the id alone reads as Anthropic's wire"
++
++    injected, _, _ = asyncio.run(
++        CacheOptimizer(supports_caching=client.supports_prompt_caching).before_llm_call(list(messages), None, model)
++    )
++    assert "cache_control" not in str(injected)
++
++
++def test_the_rotor_does_not_swallow_the_auto_marking_switch():
++    """CacheOptimizer's breakpoint budget is only a budget if nothing else marks.
++
++    ``acp_commands`` sets ``disable_auto_cache_control`` on whatever
++    ``make_provider`` handed back once the strategy is installed. A section with
++    more than one endpoint gets a rotor, and a rotor that only holds the flag
++    leaves every inner -- the objects that build the requests -- still marking a
++    system block on top of the strategy's. Measured on the sibling trunk before
++    this fix: at ``maxCacheBreakpoints: 1`` the request carried 2.
++
++    ``hasattr`` at the call site cannot catch it: the attribute exists on
++    ``LiteLLMProvider`` instances and not on the rotor, so the guard reads False
++    and the assignment is skipped without a word.
++    """
++    from raven.providers.endpoint_rotor import EndpointRotorProvider
++    from raven.providers.endpoints import ResolvedEndpoint
++    from raven.providers.litellm_provider import LiteLLMProvider
++
++    def inner():
++        return LiteLLMProvider(api_key="k", default_model="m", provider_name="openrouter")
++
++    assert inner().disable_auto_cache_control is False, "premise: the inner starts un-suppressed"
++
++    rotor = EndpointRotorProvider(
++        [ResolvedEndpoint(label="a", api_key="k", api_base=None, extra_headers=None)],
++        lambda _ep: inner(),
++        default_model="m",
++    )
++    rotor.disable_auto_cache_control = True
++    assert all(i.disable_auto_cache_control for i in rotor._inners)
+diff --git a/tests/test_provider_rates.py b/tests/test_provider_rates.py
+index ec03095..67eb043 100644
+--- a/tests/test_provider_rates.py
++++ b/tests/test_provider_rates.py
+@@ -229,6 +229,19 @@ def test_the_manual_table_answers_a_model_too_new_for_the_others():
+     assert _rate_cost(model, 1000, 500) == pytest.approx(1000 * p_rate + 500 * c_rate, rel=0.01)
+ 
+ 
++def test_a_shipped_agents_own_model_is_priced_by_something():
++    """An unpriced model does not report itself as unpriced.
++
++    ``token_rates`` degrades to None honestly, but the agent loop writes
++    ``estimate_cost_usd(...) or 0.0`` into its telemetry, so None lands on disk
++    as 0.0 -- a call that cost nothing and a call nobody could price read the
++    same there. The tokens are still counted beside it, which is what makes the
++    zero easy to miss. So a model this repo ships a configured agent for has to
++    reach a rate through some tier of the ladder.
++    """
++    assert token_rates("openai/gpt-5.6-sol-pro") is not None
++
++
+ # --- Context windows ---
+ 
+ 

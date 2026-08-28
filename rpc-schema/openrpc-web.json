@@ -1,0 +1,2098 @@
+{
+  "openrpc": "1.2.6",
+  "info": {
+    "title": "Raven Web RPC",
+    "description": "JSON-RPC 2.0 contract for the gateway's web channel: the raven.* namespace served by raven/web_rpc over ws://<host>:<port>/ws and spoken by a WebSocket client. The terminal-dialect methods the same dispatcher also serves (system.*, turn.*, subagents.instance*) are declared in rpc-schema/openrpc.json, not here. Pydantic v2 models live in raven/web_rpc/models.py; drift is caught in CI by tests/test_web_rpc_schema_match.py.",
+    "version": "0.1.0",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "methods": [
+    {
+      "name": "raven.subagents.list",
+      "params": [],
+      "result": {
+        "name": "raven.subagents.list.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "agents": {
+              "description": "Configured third-party sub-agent entries, validated config dicts (by alias).",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "required": [
+            "agents"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.set",
+      "params": [
+        {
+          "name": "agents",
+          "required": false,
+          "schema": {
+            "description": "Full replacement list of third-party sub-agent config entries.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "count": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count",
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.presets",
+      "params": [],
+      "result": {
+        "name": "raven.subagents.presets.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "presets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "required": [
+            "presets"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.probe",
+      "params": [],
+      "result": {
+        "name": "raven.subagents.probe.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "results": {
+              "type": "array",
+              "items": {
+                "description": "Wire shape of ``ProbeResult.to_wire``.",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "detail": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  },
+                  "elapsedMs": {
+                    "type": "integer"
+                  },
+                  "lastTest": {
+                    "description": "One remembered ``raven.subagents.test`` verdict (TestStateStore).",
+                    "type": "object",
+                    "properties": {
+                      "ok": {
+                        "type": "boolean"
+                      },
+                      "detail": {
+                        "type": "string"
+                      },
+                      "testedAtMs": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "detail",
+                      "ok",
+                      "testedAtMs"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "detail",
+                  "elapsedMs",
+                  "kind",
+                  "name",
+                  "source",
+                  "status",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "results"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.test",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "description": "Which configured entry or preset to test, by name only.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "description": "'config' (default) or 'preset'.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.test.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "description": "Wire shape of ``TestResult.to_wire``.",
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "reply": {
+                  "type": "string"
+                },
+                "elapsedMs": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "detail",
+                "elapsedMs",
+                "name",
+                "ok",
+                "source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.instances",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.instances.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "instances": {
+              "description": "Registry rows, reconciled against what is still alive on the agent loop.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "required": [
+            "instances"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.instances.delete",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.instances.delete.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "removed": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "removed"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.instances.cancel",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "agent",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "handle",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.instances.cancel.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "cancelled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cancelled"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.dag.cancel",
+      "params": [
+        {
+          "name": "run_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.dag.cancel.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "cancelled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cancelled"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.dag.get",
+      "params": [
+        {
+          "name": "run_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.dag.get.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "run": {
+              "description": "One DAG run's structure and per-node state, from its run dir.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.subagents.dag.node",
+      "params": [
+        {
+          "name": "run_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "node",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "max_output_chars",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.subagents.dag.node.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "node": {
+              "description": "One node's rendered prompt and (truncated) output.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": [
+            "node"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.session.model.get",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.session.model.get.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "description": "The session's own override, or null when unset.",
+              "type": "string"
+            },
+            "default": {
+              "description": "agents.defaults.model, what an unset session routes on.",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.session.model.set",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "description": "Model id to pin, or null to clear the override.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.session.model.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.session.workdir.get",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.session.workdir.get.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "workdir": {
+              "description": "The session's own override, or null when unset.",
+              "type": "string"
+            },
+            "default": {
+              "description": "The directory the next turn would run in without an override.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "default"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.session.workdir.set",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "workdir",
+          "required": false,
+          "schema": {
+            "description": "Absolute directory to pin, or null to clear the override.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.session.workdir.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "workdir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.list",
+      "params": [],
+      "result": {
+        "name": "raven.channels.list.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "specs": {
+                    "description": "Reflected field specs, dotted-path -> spec.",
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/JsonValue"
+                    }
+                  },
+                  "config": {
+                    "description": "Current config, dotted-path -> value, secrets redacted.",
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/JsonValue"
+                    }
+                  }
+                },
+                "required": [
+                  "config",
+                  "enabled",
+                  "name",
+                  "specs"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "channels"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.set",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.qr",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.qr.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "qr": {
+              "description": "Login QR as a PNG data URI, or null when none is pending.",
+              "type": "string"
+            },
+            "qr_text": {
+              "description": "Raw scan payload when the gateway cannot rasterise a PNG.",
+              "type": "string"
+            },
+            "connected": {
+              "type": "boolean"
+            },
+            "running": {
+              "type": "boolean"
+            },
+            "rebind": {
+              "description": "Null for a channel that does not offer rebinding.",
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+                  "type": "string"
+                },
+                "refreshes": {
+                  "description": "Codes reissued so far, against max_refreshes.",
+                  "type": "integer"
+                },
+                "max_refreshes": {
+                  "type": "integer"
+                },
+                "code_age_s": {
+                  "description": "Seconds since the current code was issued; null when none is up.",
+                  "type": "number"
+                },
+                "detail": {
+                  "description": "Why it failed, when it did: expired | no_token | error.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "phase",
+                "refreshes",
+                "max_refreshes",
+                "detail"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "connected",
+            "running"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.start",
+      "summary": "Start or stop one channel's adapter now, without a gateway restart.",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "False stops the adapter; anything else starts it."
+        }
+      ],
+      "result": {
+        "name": "raven.channels.start.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "description": "started | already | stopped | absent | disabled | deny_all | missing_dep | unknown | no_manager.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.rebind",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.rebind.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "started": {
+              "type": "boolean"
+            },
+            "reason": {
+              "description": "'' when started; else not_running | already_rebinding | unsupported.",
+              "type": "string"
+            },
+            "phase": {
+              "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+              "type": "string"
+            },
+            "refreshes": {
+              "type": "integer"
+            },
+            "max_refreshes": {
+              "type": "integer"
+            },
+            "code_age_s": {
+              "type": "number"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "started",
+            "reason",
+            "phase"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.rebind.cancel",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.rebind.cancel.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+              "type": "string"
+            },
+            "refreshes": {
+              "type": "integer"
+            },
+            "max_refreshes": {
+              "type": "integer"
+            },
+            "code_age_s": {
+              "type": "number"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "phase"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.live",
+      "params": [],
+      "result": {
+        "name": "raven.channels.live.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "connected": {
+                    "description": "Three-valued: null means the channel does not report a pairing at all.",
+                    "type": "boolean"
+                  },
+                  "qr_login": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "qr_login",
+                  "running"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "channels"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.gateway.restart",
+      "params": [],
+      "result": {
+        "name": "raven.gateway.restart.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.tools.list",
+      "params": [],
+      "result": {
+        "name": "raven.tools.list.result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "tools": {
+              "items": {
+                "additionalProperties": false,
+                "description": "One configurable tool row.\n\nTwo shapes share this model: the web-search row carries ``maxResults``, and\na media row carries the model/base fields plus ``configured`` (a media tool\nthe user never configured stays off even with a chat key present). The\nvariant fields are optional rather than split into two models because the\npage renders one list from both.",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "registered": {
+                    "type": "boolean"
+                  },
+                  "settingPath": {
+                    "type": "string"
+                  },
+                  "envKey": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  },
+                  "keySource": {
+                    "type": "string"
+                  },
+                  "maxResults": {
+                    "type": "integer"
+                  },
+                  "configured": {
+                    "type": "boolean"
+                  },
+                  "apiBase": {
+                    "type": "string"
+                  },
+                  "defaultApiBase": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "defaultModel": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiKey",
+                  "envKey",
+                  "keySource",
+                  "kind",
+                  "registered",
+                  "settingPath",
+                  "tool"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "raven.tools.set",
+      "params": [
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.tools.set.result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "raven.skills.get",
+      "params": [],
+      "result": {
+        "name": "raven.skills.get.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "skillforge": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": [
+            "skillforge"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.set",
+      "params": [
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.list",
+      "params": [],
+      "result": {
+        "name": "raven.skills.list.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "description",
+                  "id",
+                  "name",
+                  "path",
+                  "source"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "skills"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.body",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.body.result",
+        "schema": {
+          "description": "Union of the local-catalog shape and the hub-fetch shape.\n\nA local/installed skill carries path/description/tags/files; a hub catalog\nitem that was never installed carries version. ``skillMd`` and ``name`` are\nthe only fields both shapes always produce.",
+          "type": "object",
+          "properties": {
+            "skillMd": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            },
+            "license": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source_url": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "skillMd"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.hub.test",
+      "params": [
+        {
+          "name": "endpoint",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "apiKey",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.hub.test.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "detail",
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.hub.search",
+      "params": [
+        {
+          "name": "q",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "category",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "sort",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.hub.search.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "description": "Hub catalog entries, passed through as-is.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.hub.install",
+      "params": [
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.hub.install.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.remove",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.remove.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "removed": {
+              "description": "The skill folder that was deleted.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "removed"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.skills.zip",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.skills.zip.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string"
+            },
+            "b64": {
+              "description": "The zipped skill folder, base64-encoded.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "b64",
+            "filename"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.get",
+      "params": [],
+      "result": {
+        "name": "raven.everos.get.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "everos": {
+              "description": "Writable everos.toml sections, api_key redacted.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "backend": {
+              "description": "memory.backend actually in force, or null (native memory).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "everos"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.set",
+      "params": [
+        {
+          "name": "section",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        },
+        {
+          "name": "reuse_key_from",
+          "required": false,
+          "schema": {
+            "description": "Sibling section whose stored key to copy.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "credential_provider",
+          "required": false,
+          "schema": {
+            "description": "Provider slug whose Credentials-page key to copy.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.everos.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.clear",
+      "params": [
+        {
+          "name": "section",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.everos.clear.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.test",
+      "params": [
+        {
+          "name": "section",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        },
+        {
+          "name": "reuse_key_from",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "credential_provider",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.everos.test.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "detail",
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.providers",
+      "params": [],
+      "result": {
+        "name": "raven.everos.providers.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "label_zh": {
+                    "type": "string"
+                  },
+                  "base_url": {
+                    "type": "string"
+                  },
+                  "supports": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rerank_provider": {
+                    "type": "string"
+                  },
+                  "rerank_base_url": {
+                    "type": "string"
+                  },
+                  "chat_models": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "has_credential": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "base_url",
+                  "chat_models",
+                  "has_credential",
+                  "label",
+                  "label_zh",
+                  "name",
+                  "supports"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "providers"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.everos.models",
+      "params": [
+        {
+          "name": "section",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "base_url",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "api_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "provider_name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "reuse_key_from",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "credential_provider",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.everos.models.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "models": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "models"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.mcp.list",
+      "params": [],
+      "result": {
+        "name": "raven.mcp.list.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "servers": {
+              "description": "Configured entries with live state merged in (connected, tools).",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "connected": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "connected",
+            "servers"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.mcp.set",
+      "params": [
+        {
+          "name": "servers",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.mcp.set.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "restart_required"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.cron.list",
+      "params": [],
+      "result": {
+        "name": "raven.cron.list.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "items": {
+                "description": "Wire shape of ``_serialize_cron_job``.",
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "schedule": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "expr": {
+                        "type": "string"
+                      },
+                      "every_ms": {
+                        "type": "integer"
+                      },
+                      "at_ms": {
+                        "type": "integer"
+                      },
+                      "tz": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "channel": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "next_run_at_ms": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "id",
+                  "message",
+                  "name",
+                  "schedule"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "jobs"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.cron.add",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "schedule",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "description": "'at', 'every', or 'cron' (default).",
+                "type": "string"
+              },
+              "at_ms": {
+                "type": "integer"
+              },
+              "every_ms": {
+                "type": "integer"
+              },
+              "expr": {
+                "type": "string"
+              },
+              "tz": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "message",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "deliver",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "channel",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.cron.add.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "job": {
+              "description": "Wire shape of ``_serialize_cron_job``.",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "schedule": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "expr": {
+                      "type": "string"
+                    },
+                    "every_ms": {
+                      "type": "integer"
+                    },
+                    "at_ms": {
+                      "type": "integer"
+                    },
+                    "tz": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "message": {
+                  "type": "string"
+                },
+                "channel": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "next_run_at_ms": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "enabled",
+                "id",
+                "message",
+                "name",
+                "schedule"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "job"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.cron.remove",
+      "params": [
+        {
+          "name": "job_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.cron.remove.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "removed"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "JsonValue": {
+        "description": "Recursive JSON value type. Implemented as an unconstrained object in JSON Schema; downstream Pydantic uses typing.Any.",
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean",
+          "null",
+          "array",
+          "object"
+        ]
+      }
+    }
+  }
+}

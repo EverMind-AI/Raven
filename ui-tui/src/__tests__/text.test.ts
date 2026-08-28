@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   clipToWidth,
+  clipToWidthFromEnd,
   boundedHistoryRenderText,
   boundedLiveRenderText,
   buildToolTrailLine,
@@ -20,7 +21,8 @@ import {
   pasteTokenLabel,
   sameToolTrailGroup,
   splitToolDuration,
-  thinkingPreview
+  thinkingPreview,
+  toolResultPreview
 } from '../lib/text.js'
 
 describe('isToolTrailResultLine', () => {
@@ -132,6 +134,30 @@ describe('boundedHistoryRenderText', () => {
   })
 })
 
+describe('toolResultPreview', () => {
+  it('keeps a short result whole', () => {
+    expect(toolResultPreview('two\nlines')).toBe('two\nlines')
+  })
+
+  it('drops the line the budget cut in half instead of leaving a stump', () => {
+    // The real symptom: a directory listing whose last entry read "updat".
+    const listing = ['a-file', 'b-file', 'c-file', 'd-file', 'updated-file'].join('\n')
+    const budget = listing.indexOf('updated-file') + 5
+
+    const out = toolResultPreview(listing, budget)
+
+    expect(out).toBe('a-file\nb-file\nc-file\nd-file')
+    expect(out).not.toContain('updat')
+  })
+
+  it('falls back to an ellipsis when the whole result is one unbreakable line', () => {
+    const out = toolResultPreview('x'.repeat(300), 40)
+
+    expect(out).toHaveLength(40)
+    expect(out.endsWith('…')).toBe(true)
+  })
+})
+
 describe('edgePreview', () => {
   it('keeps both ends for long text', () => {
     expect(edgePreview('Vampire Bondage ropes slipped from her neck, still stained with blood', 8, 18)).toBe(
@@ -189,5 +215,24 @@ describe('clipToWidth', () => {
 
   it('treats a non-positive budget as no clipping', () => {
     expect(clipToWidth('abc', 0)).toBe('abc')
+  })
+})
+
+describe('clipToWidthFromEnd', () => {
+  it('leaves text that already fits, collapsing whitespace', () => {
+    expect(clipToWidthFromEnd('hello world', 20)).toBe('hello world')
+    expect(clipToWidthFromEnd('  a\n\tb  ', 20)).toBe('a b')
+  })
+
+  it('keeps the end and marks the cut at the front', () => {
+    expect(clipToWidthFromEnd('hello world', 8)).toBe('\u2026o world')
+  })
+
+  it('counts display cells, not code points, so wide glyphs do not overflow', () => {
+    expect(clipToWidthFromEnd('\u4e2d\u6587\u5b57\u7b26\u6d4b\u8bd5', 6)).toBe('\u2026\u6d4b\u8bd5')
+  })
+
+  it('yields nothing when there is no room, rather than a bare ellipsis', () => {
+    expect(clipToWidthFromEnd('abc', 0)).toBe('')
   })
 })

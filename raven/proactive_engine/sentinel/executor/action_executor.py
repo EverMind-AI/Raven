@@ -301,7 +301,7 @@ class ActionExecutor:
         try:
             ack = await self.subagent_manager.spawn(
                 task=task_description,
-                label=option.title or None,
+                task_summary=option.title or None,
                 origin_channel=channel,
                 origin_chat_id=to,
                 session_key=f"{channel}:{to}",

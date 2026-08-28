@@ -26,6 +26,11 @@ from raven.utils.portable_lock import LockTimeoutError, file_lock
 
 _POLL_INTERVAL = 0.5
 
+_API_PROBE_PATH = "/api/v2/memory/search"
+"""One route off the prefix the backend client uses (see ``backend.py``). Kept
+beside the client's own constant in spirit: if that prefix ever moves, this is
+the other place that has to move with it, or the handshake stops handshaking."""
+
 
 DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
 
@@ -79,6 +84,27 @@ def _probe_health(base_url: str) -> bool:
     return probe_health(base_url) is ProbeResult.OK
 
 
+def _speaks_our_api(base_url: str) -> bool:
+    """Whether the server on ``base_url`` serves the prefix our client uses.
+
+    ``/health`` answers on every EverOS version, so it proves the port is alive
+    and nothing more. An older server passes it and then 404s every call the
+    client makes -- which is silent: a store failure is swallowed per turn, so
+    the pairing can run for days looking healthy while nothing is written and
+    nothing is recalled.
+
+    Probed with a deliberately empty body: a served route rejects that with 422
+    (or 400), a missing one answers 404. Either way no memory is written.
+    """
+    import httpx
+
+    try:
+        r = httpx.post(f"{base_url}{_API_PROBE_PATH}", json={}, timeout=3.0)
+    except Exception:  # noqa: BLE001 — an unreachable server is handled by the health probe
+        return False
+    return r.status_code != 404
+
+
 def _lock_path() -> Path:
     return get_data_dir() / "everos-server.lock"
 
@@ -91,94 +117,6 @@ def server_log_path() -> Path:
     not exist.
     """
     return get_logs_dir() / "everos-server.log"
-
-
-_INOTIFY_LIMIT_PATH = Path("/proc/sys/fs/inotify/max_user_instances")
-_INOTIFY_LIMIT_FLOOR = 1024
-_PROC_ROOT = Path("/proc")
-
-
-def _inotify_usage() -> tuple[int, int] | None:
-    """(inotify instances held by this user, the kernel cap), or ``None``.
-
-    ``max_user_instances`` limits instances per real user id, and the spawned
-    server inherits this process's uid, so only same-uid instances count. An
-    instance is an fd whose ``/proc/<pid>/fd`` link reads ``anon_inode:inotify``;
-    fdinfo cannot be the marker because a freshly created instance carries no
-    ``inotify`` lines until its first watch, yet still consumes the cap. When
-    procfs is absent or unreadable (non-Linux), ``None`` lets callers skip the
-    check rather than guess.
-    """
-    try:
-        limit = int(_INOTIFY_LIMIT_PATH.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        return None
-    me = os.getuid()
-    used = 0
-    for pid_dir in _PROC_ROOT.glob("[0-9]*"):
-        try:
-            if pid_dir.stat().st_uid != me:
-                continue
-            for entry in (pid_dir / "fd").iterdir():
-                try:
-                    if os.readlink(entry) == "anon_inode:inotify":
-                        used += 1
-                except OSError:
-                    continue
-        except OSError:
-            continue
-    return used, limit
-
-
-def _try_raise_inotify_limit() -> int | None:
-    """Raise the per-user inotify cap when the kernel allows it, else ``None``.
-
-    Writing ``/proc/sys`` needs root (or a dedicated capability); when that
-    fails the caller falls back to spelling out the command, because the cap is
-    the documented remedy and there is no raven-side substitute for it.
-    """
-    try:
-        current = int(_INOTIFY_LIMIT_PATH.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        return None
-    target = max(_INOTIFY_LIMIT_FLOOR, current * 2)
-    try:
-        _INOTIFY_LIMIT_PATH.write_text(str(target), encoding="ascii")
-    except OSError:
-        return None
-    return target
-
-
-def _inotify_gate() -> str | None:
-    """``None`` when a spawn can proceed, else the diagnosis + fix text.
-
-    With the cap exhausted a spawned server dies immediately on a cryptic
-    OSError, so exhaustion is caught here instead: raise the cap when the
-    kernel lets us (root), otherwise hand back the fix so the caller fails
-    before spawning a process that cannot start.
-    """
-    usage = _inotify_usage()
-    if usage is None:
-        return None
-    used, limit = usage
-    if used < limit:
-        return None
-    raised = _try_raise_inotify_limit()
-    after = _inotify_usage()
-    if after is not None and after[0] < after[1]:
-        if raised is not None:
-            logger.info("raised fs.inotify.max_user_instances to {} so EverOS can start", raised)
-        return None
-    used, limit = after if after is not None else (used, limit)
-    target = _INOTIFY_LIMIT_FLOOR if limit < _INOTIFY_LIMIT_FLOOR else limit * 2
-    return (
-        f"EverOS needs an inotify instance to watch its memory directory, but this user "
-        f"already holds {used} of the {limit} allowed "
-        f"(fs.inotify.max_user_instances). Raise it with:\n"
-        f"  sudo sysctl -w fs.inotify.max_user_instances={target}\n"
-        f"To make the change permanent:\n"
-        f"  echo 'fs.inotify.max_user_instances={target}' | sudo tee /etc/sysctl.d/99-inotify-limits.conf"
-    )
 
 
 class EverosBinaryMissingError(RuntimeError):
@@ -287,11 +225,18 @@ def _is_everos_server(pid: int) -> bool:
     number been handed to something unrelated. Checking the command line is what
     keeps a port-convergence restart from killing an innocent process. ``ps -p``
     is POSIX and needs no extra dependency; the EverOS path is POSIX-only anyway.
+
+    ``-ww`` because the marker sits at the *end* of the command line, after the
+    interpreter path. Without it ``ps`` truncates its output to ``$COLUMNS``,
+    defaulting to 80, and the answer then depends on how deep this raven is
+    installed: past that column the marker is cut off and a genuine server reads
+    as somebody else's process. The failure is the dangerous direction -- the
+    caller concludes its own server is gone and starts a second one.
     """
     ps = shutil.which("ps") or "/bin/ps"
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-p", str(pid), "-o", "command="],
+            [ps, "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=5,
@@ -477,11 +422,15 @@ def _proc_locks_pid(lock: Path) -> int | None:
 
 
 def _cmdline_of(pid: int) -> str:
-    """The full command line of ``pid``, or an empty string."""
+    """The full command line of ``pid``, or an empty string.
+
+    ``-ww`` is what makes "full" true: ``ps`` otherwise truncates to ``$COLUMNS``
+    (80 when unset), which silently turns this into "the first 80 characters".
+    """
     ps = shutil.which("ps") or "/bin/ps"
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
+            [ps, "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -810,20 +759,20 @@ async def ensure_everos_server(
     for.
     """
     if await asyncio.to_thread(_probe_health, base_url):
-        logger.info("everos server already running at {}", base_url)
-        return None
+        if await asyncio.to_thread(_speaks_our_api, base_url):
+            logger.info("everos server already running at {}", base_url)
+            return None
+        # Alive, ours by address, and unable to serve us. Adopting it is what
+        # makes the failure silent, so refuse instead and say which port.
+        raise RuntimeError(
+            f"an EverOS server is running at {base_url} but does not serve "
+            f"{_API_PROBE_PATH}, so it is too old for this raven. Stop it and let "
+            f"raven start its own, or upgrade that server to match."
+        )
 
     # Only on the spawn path: a server that answers /health has already built
     # its LLM client, so its credentials are proven by the probe above.
     _require_llm_configured()
-
-    # A machine whose per-user inotify cap is exhausted cannot hold a spawned
-    # server: its watcher dies at boot with an OSError the log buries. Catch it
-    # here -- raising the cap when this process may, failing with the commands
-    # when it may not -- instead of spawning a child that cannot start.
-    inotify_block = await asyncio.to_thread(_inotify_gate)
-    if inotify_block:
-        raise RuntimeError(inotify_block)
 
     if on_wait is not None:
         on_wait()
@@ -850,10 +799,6 @@ async def ensure_everos_server(
         # child of ours to inspect and polling health is all we can do.
         if proc is not None and proc.poll() is not None:
             detail = await asyncio.to_thread(_last_error_line)
-            if "inotify" in detail.lower():
-                hint = await asyncio.to_thread(_inotify_gate)
-                if hint:
-                    detail = f"{detail} {hint}"
             raise RuntimeError(
                 f"EverOS server exited with code {proc.returncode} while starting at {base_url}. "
                 + (f"{detail} " if detail else "")

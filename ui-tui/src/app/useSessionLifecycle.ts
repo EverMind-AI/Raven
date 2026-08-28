@@ -7,7 +7,7 @@ import type { ScrollBoxHandle } from '@hermes/ink'
 
 import { evictInkCaches } from '@hermes/ink'
 import { writeFileSync } from 'node:fs'
-import { type RefObject, useCallback } from 'react'
+import { type RefObject, useCallback, useRef } from 'react'
 
 import type {
   SessionCloseResponse,
@@ -21,10 +21,15 @@ import type { Msg, PanelSection, SessionInfo, Usage } from '../types.js'
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
 
 import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
-import { introMsg, toTranscriptMessages } from '../domain/messages.js'
+import { hydrateDagRuns, hydrateSpawnRuns, introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { resetSpawnOpen } from '../lib/spawnOpen.js'
+import { resetDagNodeTraces } from './dagNodeStore.js'
+import { resetDirectChat } from './directChatStore.js'
+import { resetFolds } from './foldStore.js'
+import { resetLiveAgents } from './liveAgentsStore.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -96,7 +101,6 @@ export interface UseSessionLifecycleOptions {
   setHistoryItems: StateSetter<Msg[]>
   setLastUserMsg: StateSetter<string>
   setSessionStartedAt: StateSetter<number>
-  setStickyPrompt: StateSetter<string>
   setVoiceProcessing: StateSetter<boolean>
   setVoiceRecording: StateSetter<boolean>
   sys: (text: string) => void
@@ -113,7 +117,6 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     setHistoryItems,
     setLastUserMsg,
     setSessionStartedAt,
-    setStickyPrompt,
     setVoiceProcessing,
     setVoiceRecording,
     sys
@@ -125,19 +128,42 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     [rpc]
   )
 
+  // Minted once per newSession()/resumeById() call, at that call's own entry --
+  // before any request it makes is issued. Each then re-checks its captured
+  // value after every await that could let a later switch land first:
+  // resumeById when session.resume answers and again after hydrateDagRuns
+  // (mirroring /compress's guard around the same await), newSession after
+  // setup.status and after session.create. Minting at entry rather than on the
+  // way back is what makes invocation order decide the winner, whichever round
+  // trip returns first.
+  const resumeEpochRef = useRef(0)
+
   const resetSession = useCallback(() => {
     turnController.fullReset()
     setVoiceRecording(false)
     setVoiceProcessing(false)
     patchUiState({ bgTasks: new Set(), info: null, sid: null, usage: ZERO })
+    // Instances, their transcripts and the active target all belong to the
+    // session being left; carrying them over would show the new session chips
+    // it never used. The folds go with them: they are keyed by view and by
+    // message, and both of those die with the session, so a set left behind only
+    // grows for as long as the process lives. Each watched dag node's trace goes
+    // too: a trace belongs to the conversation on screen, and a resumed one is a
+    // different conversation. So do the delegated runs behind the Live Agents
+    // Strip: its graph lines are kept for the session deliberately, so nothing
+    // else would ever take them off it.
+    resetDirectChat()
+    resetFolds()
+    resetDagNodeTraces()
+    resetSpawnOpen()
+    resetLiveAgents()
     setHistoryItems([])
     setLastUserMsg('')
-    setStickyPrompt('')
     composerActions.setPasteSnips([])
     // Half-prune: new session has new keys, but keep a warm pool in case
     // the user resumes back to the prior session.
     evictInkCaches('half')
-  }, [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
+  }, [composerActions, setHistoryItems, setLastUserMsg, setVoiceProcessing, setVoiceRecording])
 
   const resetVisibleHistory = useCallback(
     (info: null | SessionInfo = null) => {
@@ -147,18 +173,33 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       turnController.persistedToolLabels.clear()
 
       setHistoryItems(info ? [introMsg(info)] : [])
-      setStickyPrompt('')
       setLastUserMsg('')
       composerActions.setPasteSnips([])
       patchTurnState({ activity: [] })
       patchUiState({ info, usage: usageFrom(info) })
     },
-    [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt]
+    [composerActions, setHistoryItems, setLastUserMsg]
   )
 
   const newSession = useCallback(
     async (msg?: string, title?: string) => {
+      // Minted before setup.status is issued, for the same reason resumeById
+      // mints at its own entry: a switch that starts during either await below
+      // has to outrank this one. Minting after session.create returned meant
+      // this call bumped the ref itself and then matched what it had just
+      // written, so it passed its own staleness check.
+      resumeEpochRef.current += 1
+      const epoch = resumeEpochRef.current
+
       const setup = await rpc<SetupStatusResponse>('setup.status', {})
+
+      // Checked before the provider branch as well as before the close: a
+      // newer switch owns the status line by now, and closeSession picks its
+      // target by reading the live sid, so a stale call reaching it would tear
+      // down the backend session that switch just made active.
+      if (epoch !== resumeEpochRef.current) {
+        return
+      }
 
       if (setup?.provider_configured === false) {
         panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
@@ -170,6 +211,10 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       await closeSession(getUiState().sid)
 
       const r = await rpc<SessionCreateResponse>('session.create', { cols: colsRef.current })
+
+      if (epoch !== resumeEpochRef.current) {
+        return
+      }
 
       if (!r) {
         return patchUiState({ status: 'ready' })
@@ -240,6 +285,15 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const resumeById = useCallback(
     (id: string) => {
+      // Minted before setup.status/closeSession/session.resume are even issued,
+      // so a second resumeById (or newSession) that starts later always mints a
+      // higher value regardless of which round trip below answers first. The
+      // previous guard captured this after session.resume resolved, which let a
+      // response delayed past a newer switch still read the epoch that switch
+      // had just landed and pass the check.
+      resumeEpochRef.current += 1
+      const epoch = resumeEpochRef.current
+
       patchOverlayState({ picker: false })
       patchUiState({ status: 'resuming…' })
 
@@ -254,7 +308,14 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         closeSession(getUiState().sid === id ? null : getUiState().sid).then(() =>
           gw
             .request<SessionResumeResponse>('session.resume', { cols: colsRef.current, session_id: id })
-            .then(raw => {
+            .then(async raw => {
+              // A newer switch may have been minted while session.resume was in
+              // flight; resetSession() below would otherwise clear the state
+              // that switch already landed.
+              if (epoch !== resumeEpochRef.current) {
+                return
+              }
+
               const r = asRpcResult<SessionResumeResponse>(raw)
 
               if (!r) {
@@ -266,7 +327,20 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               resetSession()
               setSessionStartedAt(Date.now())
 
-              const resumed = toTranscriptMessages(r.messages)
+              const resumed = await hydrateSpawnRuns(
+                r.messages,
+                await hydrateDagRuns(r.messages, toTranscriptMessages(r.messages), rpc, r.session_id),
+                rpc,
+                r.session_id
+              )
+
+              // hydrateDagRuns awaits one dag.get per run; re-check staleness
+              // after it too, so a second switch minted during that fetch can't
+              // land this response's history over the newer one's, mirroring
+              // /compress's own guard around its hydrateDagRuns await.
+              if (epoch !== resumeEpochRef.current) {
+                return
+              }
 
               setHistoryItems(r.info ? [introMsg(r.info), ...resumed] : resumed)
 

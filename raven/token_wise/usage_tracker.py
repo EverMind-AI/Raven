@@ -26,7 +26,12 @@ from raven.token_wise.base import TokenStrategy, UsageSnapshot
 
 
 def _default_telemetry_dir() -> Path:
-    return Path.home() / ".raven" / "telemetry"
+    # Through raven_home() rather than a literal ~/.raven: RAVEN_HOME moves the
+    # whole installation, and telemetry written outside it is telemetry the
+    # matching reader (settings.usage) will never find.
+    from raven.config.loader import raven_home
+
+    return raven_home() / "telemetry"
 
 
 class UsageTracker(TokenStrategy):

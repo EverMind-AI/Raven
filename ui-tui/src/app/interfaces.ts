@@ -61,8 +61,20 @@ export interface CompletionItem {
   text: string
 }
 
+export interface RpcOptions {
+  /**
+   * Suppress the helper's automatic `error: …` transcript line and rethrow
+   * instead, so the caller's own catch decides what the user sees.
+   *
+   * Without this the helper both reports and swallows, which makes a
+   * `.catch(() => {})` at the call site a no-op — the line is already in the
+   * transcript by the time it runs. Every best-effort call needs this.
+   */
+  quiet?: boolean
+}
+
 export interface GatewayRpc {
-  <T extends object = RpcResult>(method: string, params?: Record<string, unknown>): Promise<null | T>
+  <T extends object = RpcResult>(method: string, params?: Record<string, unknown>, opts?: RpcOptions): Promise<null | T>
 }
 
 export interface GatewayServices {
@@ -83,6 +95,8 @@ export interface GatewayProviderProps {
 
 export interface OverlayState {
   agents: boolean
+  /** A row id the overlay should open straight into detail on; consumed once. */
+  agentsFocusId: null | string
   agentsInitialHistoryIndex: number
   approval: ApprovalReq | null
   clarify: ClarifyReq | null
@@ -91,10 +105,12 @@ export interface OverlayState {
   // selection it makes must change the new-session default, not this
   // conversation. Plain `true` is the session-scoped open.
   modelPicker: boolean | 'default'
+  newInstance: boolean
   pager: null | PagerState
   picker: boolean
   secret: null | SecretReq
   skillsHub: boolean
+  subagentsHub: boolean
   sudo: null | SudoReq
 }
 
@@ -122,6 +138,12 @@ export interface UiState {
    * turn ends (see `turnController.idle`).
    */
   escapeArmed: boolean
+  /**
+   * Set by the first Esc while the composer holds a line, and cleared by the
+   * second one (which drops the line), by any other keypress, or by the
+   * `ESC_CLEAR_WINDOW_MS` timeout. Drives the input's `esc again to clear` hint.
+   */
+  escClearArmed: boolean
   detailsMode: DetailsMode
   detailsModeCommandOverride: boolean
   info: null | SessionInfo
@@ -350,7 +372,6 @@ export interface AppLayoutActions {
   deleteSessionWithFallback: (id: string) => Promise<boolean>
   onModelSelect: (model: string, providerSlug: string) => void
   resumeById: (id: string) => void
-  setStickyPrompt: (value: string) => void
 }
 
 export interface AppLayoutComposerProps {
@@ -377,9 +398,7 @@ export interface AppLayoutStatusProps {
   cwdLabel: string
   goodVibesTick: number
   sessionStartedAt: null | number
-  showStickyPrompt: boolean
   statusColor: string
-  stickyPrompt: string
   turnStartedAt: null | number
   voiceLabel: string
 }

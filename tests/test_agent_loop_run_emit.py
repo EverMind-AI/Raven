@@ -9,6 +9,7 @@ Driven against a real AgentLoop with only the LLM provider + sandbox edges faked
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 import pytest
@@ -189,7 +190,7 @@ def _req(text: str, *, media=(), origin: Origin = Origin.USER) -> TurnRequest:
 def _stub_edges(loop: AgentLoop) -> None:
     """No-op the sandbox/MCP bring-up so a text-only turn runs without a VM."""
 
-    async def _noop() -> None:
+    async def _noop(**_kw) -> None:
         return None
 
     loop._start_executor = _noop
@@ -316,6 +317,41 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
+
+
+@pytest.mark.parametrize("blocking", [True, False])
+async def test_tool_start_event_carries_the_registry_blocking_verdict(tmp_path, blocking):
+    """ToolEvent(START).blocking must mirror the registered tool's own flag.
+
+    This is the whole chain the web channel depends on: registry -> loop payload
+    -> ToolEvent -> wire. A blocking tool runs a sub-agent with no automatic
+    deadline and emits nothing until it finishes, so a client that clocks the
+    stream has to learn from this field that the silence is expected.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    tool = _FakeTool()
+    tool.blocking_interaction = blocking
+    loop.tools.register(tool)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase == ToolPhase.START)
+    assert start.blocking is blocking
 
 
 async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
@@ -556,6 +592,132 @@ async def test_inject_message_merged_before_next_iteration(tmp_path):
     assert any(m.get("role") == "user" and "also check the logs" in str(m.get("content", "")) for m in second), (
         f"injected message not merged into the second iteration: {second}"
     )
+
+
+async def test_autofill_rows_are_written_in_as_a_tool_call(tmp_path):
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    messages: list[dict] = []
+    loop._flush_autofill(
+        messages,
+        [
+            {
+                "agent": "raven-code",
+                "instance": "a1b2",
+                "summary": "Which branch? -> feat/x (answered for you)",
+            }
+        ],
+    )
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["tool_calls"][0]["function"]["name"] == "answer_for_user"
+    assert messages[1]["role"] == "tool"
+    # The pairing the Chat Completions transport rejects when it is broken.
+    assert messages[1]["tool_call_id"] == messages[0]["tool_calls"][0]["id"]
+    assert "feat/x" in messages[1]["content"]
+    # Host-minted fields only. The sub-agent's own wording would arrive here
+    # unfenced -- nothing wraps an assistant message's arguments, while the
+    # summary above went through `add_tool_result` and is wrapped.
+    arguments = json.loads(messages[0]["tool_calls"][0]["function"]["arguments"])
+    assert arguments == {"agent": "raven-code", "instance": "a1b2"}
+
+
+async def test_no_rows_writes_nothing(tmp_path):
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    messages: list[dict] = []
+    loop._flush_autofill(messages, [])
+    assert messages == []
+
+
+class _RecordingAutofill:
+    """Stands in for the turn's Autofill.
+
+    ``set_snapshot`` keeps a copy rather than the live reference the real one
+    stores, so a test can tell what the list held at publish time.
+    """
+
+    def __init__(self) -> None:
+        self._rows: list[dict] = []
+        self.snapshots: list[list[dict]] = []
+
+    def record(self, row: dict) -> None:
+        self._rows.append(row)
+
+    def pending_rows(self) -> list[dict]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def set_snapshot(self, messages: list[dict]) -> None:
+        self.snapshots.append(list(messages))
+
+
+async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_path):
+    # The seam: a sub-agent's question is answered while its spawn tool is still
+    # running, which is why the row can only be written at the next iteration's
+    # top -- splicing it in mid-batch would orphan the running tool_call.
+    from raven.agent.acp.asker import start_ask_turn
+
+    auto = _RecordingAutofill()
+
+    class _AskingTool(_FakeTool):
+        """A spawn stand-in: its sub-agent asks while the tool is still running."""
+
+        async def execute(self, **kwargs) -> str:
+            auto.record(
+                {
+                    "agent": "raven-code",
+                    "instance": "a1b2",
+                    "summary": "Which branch? -> feat/x (answered for you)",
+                }
+            )
+            return "spawned"
+
+    class _RecordingStreamToolProvider:
+        def __init__(self, scripts):
+            self._scripts = scripts
+            self._i = 0
+            self.calls: list[list[dict]] = []
+
+        async def chat_stream(self, **kwargs):
+            self.calls.append(list(kwargs.get("messages") or []))
+            script = self._scripts[min(self._i, len(self._scripts) - 1)]
+            self._i += 1
+            for chunk in script:
+                yield chunk
+
+        def get_default_model(self) -> str:
+            return "fake/model"
+
+    provider = _RecordingStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_AskingTool())
+    start_ask_turn(None, auto, conversation_id="tui:c1")
+
+    await loop.run_turn(_req("start"), _EmitCollector(), _drain, stream=True)
+
+    def _row(messages: list[dict]) -> dict | None:
+        return next((m for m in messages if m.get("role") == "tool" and m.get("name") == "answer_for_user"), None)
+
+    assert _row(provider.calls[0]) is None  # nothing had been answered yet
+    row = _row(provider.calls[1])
+    assert row is not None, f"autofill row not written into the second iteration: {provider.calls[1]}"
+    assert "feat/x" in row["content"]
+    # Published on every iteration, not once, and after the flush -- so the
+    # second publish carries what the first turn's questions were answered with.
+    assert len(auto.snapshots) == 2
+    assert _row(auto.snapshots[0]) is None
+    assert _row(auto.snapshots[1]) is not None
 
 
 async def test_run_slash_emits_text_not_streamed(tmp_path):
@@ -870,7 +1032,7 @@ async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_
     stored: list = []
 
     class _FakeBackend:
-        async def store(self, key, messages) -> None:
+        async def store(self, key, messages, *, metadata=None) -> None:
             stored.append((key, messages))
 
     loop = AgentLoop(provider=_NoCallProvider(), workspace=tmp_path)
@@ -894,6 +1056,7 @@ async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_
 
     session = loop.sessions.get_or_create("weixin:c")
     assert any(m.get("role") == "assistant" and m.get("content") == "FULL REPORT [1]" for m in session.messages)
+    await loop.drain_backend_stores(timeout=5.0)
     assert stored and stored[0][0] == "weixin:c"
     assert stored[0][1][0]["content"] == "FULL REPORT [1]"
 
@@ -981,3 +1144,135 @@ async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     loop._set_tool_context = _spy
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain, stream=False)
     assert seen["message_id"] is None  # empty extras -> metadata={} -> no message_id
+
+
+async def test_a_failing_display_call_costs_the_label_not_the_turn(tmp_path):
+    """``display_call`` gets the model's raw arguments -- the registry's cast and
+    validation run later, on the execute path -- so it sees shapes the schema
+    forbids. It only labels a transcript row, yet an exception from it used to
+    leave the emit and end the turn with no reply at all: that is how a
+    JSON-encoded array argument took a turn down.
+
+    Driven through ``run_turn`` rather than against the helper, so that inlining
+    the guard back into the call site fails here instead of passing quietly.
+    """
+
+    class _ExplodingLabel(Tool):
+        @property
+        def name(self) -> str:
+            return "exploding"
+
+        @property
+        def description(self) -> str:
+            return "raises from display_call"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def display_call(self, args: dict) -> str | None:
+            raise AttributeError("'str' object has no attribute 'get'")
+
+        async def execute(self, **kwargs) -> str:
+            return "tool-ran"
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "exploding", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ExplodingLabel())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display is None  # the label is what was lost
+    complete = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert complete.result_preview == "tool-ran"  # the tool still ran
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)  # the turn finished
+
+
+async def test_a_working_display_call_still_labels_the_row(tmp_path):
+    class _LabelledTool(Tool):
+        @property
+        def name(self) -> str:
+            return "labelled"
+
+        @property
+        def description(self) -> str:
+            return "labels its row"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def display_call(self, args: dict) -> str | None:
+            return "the label"
+
+        async def execute(self, **kwargs) -> str:
+            return "tool-ran"
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "labelled", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_LabelledTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display == "the label"
+
+
+async def test_run_turn_hands_the_mcp_connect_off_instead_of_awaiting_it(tmp_path):
+    """The call site, not just the mechanism.
+
+    This replaces a test that asserted the turn passed a 90s bound. The bound is
+    gone with the wait: a server parked at the browser-authorization step blocks
+    on a human, and a turn that waits on it at all is the defect (measured once at
+    10m35s). The turn must reach ``prewarm_mcp`` and must not await a connect.
+    """
+    prewarms = 0
+    awaited = 0
+
+    loop = AgentLoop(provider=_FakeStreamProvider([StreamDelta(content="hi")]), workspace=tmp_path)
+    _stub_edges(loop)
+
+    def _prewarm() -> None:
+        nonlocal prewarms
+        prewarms += 1
+
+    async def _connect() -> None:  # pragma: no cover - reaching this is the failure
+        nonlocal awaited
+        awaited += 1
+
+    loop.prewarm_mcp = _prewarm
+    loop._connect_mcp = _connect
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert prewarms == 1
+    assert awaited == 0
