@@ -9,6 +9,7 @@ import { Fragment, memo, useMemo, useRef } from 'react'
 
 import type { AppLayoutProps } from '../app/interfaces.js'
 
+import { $copyNotice } from '../app/copyNoticeStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiState } from '../app/uiStore.js'
@@ -178,6 +179,7 @@ const ComposerPane = memo(function ComposerPane({
 }: Pick<AppLayoutProps, 'actions' | 'composer' | 'status'>) {
   const ui = useStore($uiState)
   const isBlocked = useStore($isBlocked)
+  const copyNotice = useStore($copyNotice)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
   const promptText = sh ? '$' : ui.theme.brand.prompt
   const promptWidth = composerPromptWidth(promptText)
@@ -256,6 +258,8 @@ const ComposerPane = memo(function ComposerPane({
       )}
 
       <StatusRulePane at="top" composer={composer} status={status} />
+
+      {copyNotice && <Text color={ui.theme.color.muted}>{copyNotice}</Text>}
 
       {/* When a blocking overlay opens the input rows unmount, collapsing this
           box to height 0. At statusBar='bottom' the StatusRule sibling then
