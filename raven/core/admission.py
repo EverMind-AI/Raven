@@ -88,6 +88,11 @@ def admit_slice(
             # central models spell optionality as `str | None`, and the door
             # must not turn an explicit unset into a rejection or a default.
             continue
+        if want == "object" and hasattr(value, "model_dump"):
+            # Transition form: while the central typed models still exist, an
+            # object-declared key may arrive as a nested model. It dumps to a
+            # mapping, which is the shape the declaration promises.
+            continue
         if not isinstance(value, expected):
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, "

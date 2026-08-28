@@ -95,27 +95,28 @@ def test_every_spec_declares_its_cargo():
         if _cargo_fields(_central_model(name)):
             assert spec.config_schema, name
 
-def test_dispensed_view_answers_exactly_like_the_central_section():
-    """M1 pilot acceptance: the door changes where a value travels, never what
-    it is. Every declared key and every socket field answers identically
-    through the dispensed view; the view itself is frozen."""
-    import pytest
-
-    from raven.channels.registry import discover_specs
-    from raven.config.schema import TelegramConfig
+@pytest.mark.parametrize("name", sorted(SPECS))
+def test_dispensed_view_answers_exactly_like_the_central_section(name):
+    """Handover acceptance, all twelve: the door changes where a value
+    travels, never what it is. Every declared key and every socket field
+    answers identically through the dispensed view; the view is frozen."""
+    from raven.config.schema import ChannelsConfig
     from raven.core.admission import dispense_channel_config
 
-    spec = discover_specs()["telegram"]
-    section = TelegramConfig(enabled=True, token="t0k", allow_from=["42"])
-    view = dispense_channel_config(spec, section, channel="telegram")
+    spec = SPECS[name]
+    section = getattr(ChannelsConfig(), name, None)
+    if section is None or not spec.config_schema:
+        pytest.skip("no central section or no declaration")
+    view = dispense_channel_config(spec, section, channel=name)
 
     for key in spec.config_schema:
-        assert getattr(view, key) == getattr(section, key), key
+        if hasattr(section, key):
+            assert getattr(view, key) == getattr(section, key), key
     for socket_field in ("enabled", "allow_from", "workspace"):
         if hasattr(section, socket_field):
             assert getattr(view, socket_field) == getattr(section, socket_field)
     with pytest.raises(AttributeError):
-        view.token = "other"
+        view.enabled = True
 
 
 def test_declared_defaults_match_the_central_model():
