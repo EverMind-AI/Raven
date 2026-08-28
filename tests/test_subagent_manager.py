@@ -963,6 +963,109 @@ def test_reference_roots_do_not_create_a_session_directory_to_find_one(tmp_path:
     assert not (tmp_path / "sessions").exists()
 
 
+class _BindingBackend:
+    """A backend that takes the two hand-overs an acp agent needs."""
+
+    def __init__(self) -> None:
+        self.resolver: Any = None
+        self.sink: Any = None
+
+    def bind_session_dir(self, resolver: Any) -> None:
+        self.resolver = resolver
+
+    def bind_event_sink(self, sink: Any) -> None:
+        self.sink = sink
+
+
+class _PlainBackend:
+    """A backend that takes neither, like the in-process loop."""
+
+
+class _OneBackendRegistry:
+    """Stands in for the agent table so the real _resolve_backend can run."""
+
+    def __init__(self, backend: Any) -> None:
+        self._backend = backend
+
+    def backend(self, agent: str) -> Any:
+        return self._backend
+
+
+def test_dispatch_hands_a_binding_backend_the_session_dir_rule(tmp_path: Path) -> None:
+    """Every test that wanted a non-default backend stubbed _resolve_backend
+    out, so the hand-over itself ran for the first time in the TUI, against an
+    attribute the manager does not have."""
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    backend = _BindingBackend()
+    mgr.registry = _OneBackendRegistry(backend)
+
+    assert mgr._resolve_backend("Coder") is backend
+    # Compared by equality, not identity: a bound method is a fresh object on
+    # every attribute access.
+    assert backend.resolver == mgr.session_dir_for
+    assert backend.sink == mgr._emit_event
+
+
+def test_the_bound_rule_answers_for_a_manager_built_without_a_resolver(tmp_path: Path) -> None:
+    """Why it is ``session_dir_for`` and not ``session_dir``: the recorder on
+    the far side no-ops on ``None``, so handing over the raw optional would
+    lose an unprompted turn's record for every manager using the fallback."""
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    assert mgr.session_dir is None
+    backend = _BindingBackend()
+    mgr.registry = _OneBackendRegistry(backend)
+
+    mgr._resolve_backend("Coder")
+
+    resolved = backend.resolver("web:sess1")
+    assert isinstance(resolved, Path)
+    assert str(resolved).startswith(str(tmp_path))
+
+
+def test_dispatch_leaves_a_backend_that_takes_neither_hand_over_alone(tmp_path: Path) -> None:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    backend = _PlainBackend()
+    mgr.registry = _OneBackendRegistry(backend)
+
+    assert mgr._resolve_backend("Coder") is backend
+
+
+async def test_the_hand_over_reaches_the_recorder_a_real_acp_backend_builds(tmp_path: Path) -> None:
+    """The cases above hand a fake backend, so they can only show what the
+    manager passed. This drives the real ``AcpAgentBackend`` and the real router
+    through to what the hand-over is for: the unprompted-turn recorder, which
+    declines to write when it holds no resolver and emits nothing when it holds
+    no sink. Both hand-overs are checked, because neither had ever run -- the
+    dispatch died on the first, two lines above the second."""
+    from raven.agent.acp.pool import _SessionRouter
+    from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    async def delivery(session_key: str, event: dict[str, Any]) -> None:
+        seen.append((session_key, event))
+
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    mgr.set_delivery_sink(delivery)
+    backend = AcpAgentBackend(name="oncall", command="true", registry=InstanceRegistry(tmp_path / "instances.json"))
+    mgr.registry = _OneBackendRegistry(backend)
+
+    mgr._resolve_backend("oncall")
+    connection = SimpleNamespace(router=_SessionRouter("oncall"))
+    backend._ensure_unprompted_recorder(connection)
+
+    # Built best-effort: a failure is logged and leaves the resident sink unset,
+    # which would make every assertion below vacuous.
+    recorder = connection.router._resident
+    assert recorder is not None
+    assert Path(recorder._session_dir_for("web:s1")).is_relative_to(tmp_path)
+
+    recorder._emit_sink("web:s1", {"type": "message.start", "payload": {}})
+    await asyncio.sleep(0)
+    assert [key for key, _ in seen] == ["web:s1"]
+
+
 class _RecordingSpawnManager:
     """Enough of the manager for the spawn tool, recording what it was handed."""
 

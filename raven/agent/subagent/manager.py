@@ -304,7 +304,7 @@ class SubagentManager:
         # answer is the one dispatching.
         binder = getattr(backend, "bind_session_dir", None)
         if callable(binder):
-            binder(self._session_dir)
+            binder(self.session_dir_for)
         # And where its wire events go, for the same turn: the recorder renders
         # an unprompted turn through the same message.start/token.delta/
         # message.complete a typed direct-chat turn uses, and _emit_event is the

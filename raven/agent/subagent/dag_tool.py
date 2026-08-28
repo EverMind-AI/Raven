@@ -679,7 +679,17 @@ class SubAgentDagTool(Tool):
         every playbook node unattributable in a trace.
         """
         build = _NodeBuild(skills_allow=node.skills) if node.skills is not None else None
-        return self._registry.backend(node.subagent, build=build)
+        backend = self._registry.backend(node.subagent, build=build)
+        # Where this conversation keeps its records, handed over for the same
+        # reason ``SubagentManager._resolve_backend`` hands it over, and because
+        # this lane can be the one that goes first: an acp backend builds its
+        # resident unprompted-turn recorder on the first prompt it sends and
+        # keeps the resolver bound by then, so a graph dispatching before any
+        # spawn or direct chat would leave that connection unable to record.
+        binder = getattr(backend, "bind_session_dir", None)
+        if callable(binder):
+            binder(self._session_dir_for)
+        return backend
 
     def _validation_error(self, exc: DagValidationError) -> str:
         """Render a rejected graph as the tool result, with the way back.
