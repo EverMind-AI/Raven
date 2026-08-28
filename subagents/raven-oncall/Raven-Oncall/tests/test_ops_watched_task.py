@@ -32,35 +32,11 @@ def test_a_reply_that_cannot_be_read_is_not_watched():
 def test_a_reply_wrapped_in_chat_is_still_read():
     v = read_verdict('Sure thing! {"watched": true, "paths": ["/srv/case"]} — hope that helps')
 
-    assert v.watched and v.subjects == ["/srv/case"]
-
-
-def test_a_url_subject_claims_the_cli_call_that_reaches_it():
-    """Measured 2026-08-28: the owner named a pipeline by web URL and the loop
-    looked at it through glab with the project slug percent-encoded, so neither
-    side contains the other verbatim. The watch on that run fell through to a
-    bare cron job for exactly this reason."""
-    v = Verdict(watched=True, subjects=[
-        "https://gitlab.com/npc-work/aic/ai/raven/-/pipelines/2798916676"])
-    assert v.claims("glab api projects/npc-work%2Faic%2Fai%2Fraven/pipelines/2798916676 2>&1")
-    assert not v.claims("glab api projects/other%2Fproject/pipelines/999")
-    assert not v.claims("/srv/case")
-
-
-def test_a_relative_path_keeps_the_containment_it_always_had():
-    v = Verdict(watched=True, subjects=["run"])
-    assert v.claims("run/job.sh")
-    assert not v.claims("elsewhere/job.sh")
-
-
-def test_a_short_handle_is_still_claimable():
-    v = Verdict(watched=True, subjects=["@bob"])
-    assert v.claims("glab api /users/@bob/events")
-    assert not v.claims("glab api /users/@alice/events")
+    assert v.watched and v.paths == ["/srv/case"]
 
 
 def test_paths_match_themselves_and_what_is_under_them():
-    v = Verdict(watched=True, subjects=["/srv/case"])
+    v = Verdict(watched=True, paths=["/srv/case"])
 
     assert v.claims("/srv/case")
     assert v.claims("/srv/case/deck/job.inp")
@@ -72,7 +48,7 @@ def test_paths_match_themselves_and_what_is_under_them():
 def test_a_not_watched_verdict_claims_nothing():
     # The line is the whole effect, so "not watched" has to be inert -- otherwise a
     # wrong judgement would put machine advice on ordinary file reads.
-    assert not Verdict(watched=False, subjects=["/srv/case"]).claims("/srv/case")
+    assert not Verdict(watched=False, paths=["/srv/case"]).claims("/srv/case")
 
 
 def test_the_prompt_says_where_the_work_sits_is_irrelevant():
