@@ -182,7 +182,7 @@ def run() -> None:
         # The gate is decided in `providers.auth` because three entry points ask
         # it; printing and exiting is this one's idiom, so it happens here rather
         # than there. Rendered once for every command, like ConfigReadError.
-        from raven.cli._helpers import console
+        from raven.core.helpers import console
 
         console.print(f"[red]Error: {exc.summary}.[/red]")
         if exc.remedy:
@@ -202,7 +202,7 @@ def run() -> None:
         # `gateway` say so up front, and an unsaid notice is lost rather than
         # deferred: the watermark leaves the next load with nothing to report.
         # So this is the catch-all for every other command.
-        from raven.cli._helpers import print_config_migration_notices
+        from raven.core.helpers import print_config_migration_notices
 
         print_config_migration_notices()
 

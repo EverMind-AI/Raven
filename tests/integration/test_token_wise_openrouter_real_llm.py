@@ -29,8 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.cli._token_wise_stack import install_from_config
 from raven.config.raven import TokenWiseConfig
+from raven.core.token_wise_stack import install_from_config
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.registry import StrategyRegistry
 

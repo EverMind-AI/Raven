@@ -198,7 +198,7 @@ def playbook_create(
         raise typer.Exit(code=1)
 
     from raven.agent.subagent.registry import AgentRegistry
-    from raven.cli._helpers import make_provider
+    from raven.core.helpers import make_provider
     from raven.playbook import PlaybookGenerator, agent_profiles_from_registry, live_inventory
 
     registry = AgentRegistry()
@@ -296,7 +296,7 @@ def playbook_run(
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
-    from raven.cli._helpers import make_provider
+    from raven.core.helpers import make_provider
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
     from raven.playbook.mcp import (
         declared_mcp_names,

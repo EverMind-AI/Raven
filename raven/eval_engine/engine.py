@@ -85,7 +85,7 @@ class EvalEngine:
 # ---------------------------------------------------------------------------
 
 
-from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.eval_engine.judge.judge import JudgeVerdict
 
 

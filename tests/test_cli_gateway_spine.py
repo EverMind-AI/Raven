@@ -5,8 +5,8 @@ import pytest
 from raven.agent.acp.asker import AskViaTool, current_ask, current_autofill
 from raven.agent.acp.resolver import Autofill
 from raven.agent.tools.ask_user import AskUserTool
-from raven.cli._gateway_spine import build_gateway
 from raven.config.raven import SubagentQuestionsConfig
+from raven.core.gateway_spine import build_gateway
 from raven.spine import (
     ChatType,
     MediaOut,

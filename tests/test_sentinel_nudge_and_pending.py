@@ -404,8 +404,8 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     """Health check: require_confirm=True without an LLM provider
     works for clear yes/no but ambiguous replies fall through. Operator
     should be warned at startup."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     # Build a minimal runner stub with phase4 stash but provider=None
     class _StubRunner:
@@ -457,8 +457,8 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
 
 def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
     """Same setup but with provider configured — no warning."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubProvider:
         async def chat_with_retry(self, **kw):
@@ -511,8 +511,8 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
     PendingDecisionStore is never updated."""
     from raven.agent.hook.adapters import DecisionConsumerAdapter
     from raven.agent.hook.composite import CompositeHook
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()
@@ -551,8 +551,8 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
     re-runs the helper."""
     from raven.agent.hook.adapters import DecisionConsumerAdapter
     from raven.agent.hook.composite import CompositeHook
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()
@@ -588,8 +588,8 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
     tmp_path,
 ):
     """If require_confirm=False, the warning is irrelevant."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()

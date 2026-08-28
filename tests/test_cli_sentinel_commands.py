@@ -318,7 +318,7 @@ def test_discover_now_happy_path(runner, monkeypatch):
             stop_called["called"] = True
 
     monkeypatch.setattr(
-        "raven.cli._proactive_stack.build_sentinel_stack",
+        "raven.core.proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (_StubRunner(), None, None),
     )
 
@@ -369,7 +369,7 @@ def test_discover_now_cleans_up_runner_on_exception(runner, monkeypatch):
             stop_called["called"] = True
 
     monkeypatch.setattr(
-        "raven.cli._proactive_stack.build_sentinel_stack",
+        "raven.core.proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (_CrashRunner(), None, None),
     )
 
@@ -531,7 +531,7 @@ def _patch_ticks_stack(monkeypatch, runner_obj):
         lambda *a, **kw: MagicMock(),
     )
     monkeypatch.setattr(
-        "raven.cli._proactive_stack.build_sentinel_stack",
+        "raven.core.proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (runner_obj, None, None),
     )
 

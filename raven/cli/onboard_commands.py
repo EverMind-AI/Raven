@@ -40,12 +40,12 @@ from rich.console import Console
 from rich.panel import Panel
 
 from raven.cli import onboard_channels, onboard_everos, onboard_web
-from raven.cli._helpers import (
+from raven.cli._theme import POINTER, QMARK
+from raven.core.helpers import (
     DEFAULT_PROBE_MESSAGE,
     print_probe_troubleshooting,
     send_probe,
 )
-from raven.cli._theme import POINTER, QMARK
 from raven.providers.registry import (
     CRED_ENDPOINT,
     CRED_LOCAL,

@@ -51,7 +51,7 @@ class ResolvingProvider(LLMProvider):
         return built
 
     def _build(self, model: str) -> LLMProvider:
-        from raven.cli._helpers import make_provider
+        from raven.core.helpers import make_provider
 
         sub = LazyProvider(
             factory=lambda: make_provider(self._config, model),

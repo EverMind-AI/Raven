@@ -150,7 +150,7 @@ def test_create_lands_in_the_user_layer_usable(library, monkeypatch):
     make a playbook the user just created immediately invisible to a running
     agent, since the deny list is read live -- and the undo for that is the
     command this one would be telling them to run."""
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: object())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: object())
     monkeypatch.setattr("raven.playbook.PlaybookGenerator", _FakeGenerator)
 
     r = runner.invoke(app, ["playbook", "create", "weekly-scan", "--input", "scan competitors weekly"])
@@ -167,7 +167,7 @@ def test_create_lands_in_the_user_layer_usable(library, monkeypatch):
 
 
 def test_create_refuses_an_existing_name(library, monkeypatch):
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: object())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: object())
     monkeypatch.setattr("raven.playbook.PlaybookGenerator", _FakeGenerator)
     _write_md(library["builtin"], "weekly-scan", "already shipped")
 
@@ -213,7 +213,7 @@ class _FakeProvider:
 
 def test_run_executes_by_name_with_kv_params(library, monkeypatch):
     _write_md(library["user"], "mine", "the user one")
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
 
     r = runner.invoke(app, ["playbook", "run", "mine", "target=acme"])
@@ -237,7 +237,7 @@ def test_run_takes_fills_for_a_field_the_playbook_left_blank(library, monkeypatc
     sub-agent nothing to do.
     """
     _write_md(library["user"], "mine", "the user one")
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
 
     r = runner.invoke(
@@ -290,7 +290,7 @@ def test_delete_unshadows_the_builtin(library):
 
 
 def test_create_refuses_a_non_kebab_name(library, monkeypatch):
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: object())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: object())
     monkeypatch.setattr("raven.playbook.PlaybookGenerator", _FakeGenerator)
     r = runner.invoke(app, ["playbook", "create", "../escape", "--input", "whatever"])
     assert r.exit_code == 1
@@ -404,7 +404,7 @@ def test_run_wires_the_playbooks_own_servers_over_the_hosts(library, monkeypatch
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
     seen = _capture_source(monkeypatch)
 
@@ -449,7 +449,7 @@ def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
 
     from raven.mcp import oauth as mcp_oauth

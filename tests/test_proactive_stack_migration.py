@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.cli._proactive_stack import _migrate_legacy_feedback_log
+from raven.core.proactive_stack import _migrate_legacy_feedback_log
 
 
 def test_no_op_when_legacy_absent(tmp_path: Path) -> None:

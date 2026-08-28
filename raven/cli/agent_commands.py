@@ -20,7 +20,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from raven import __logo__
-from raven.cli._helpers import (
+from raven.core.helpers import (
     build_model_routing,
     load_runtime_config,
     make_provider,
@@ -28,7 +28,7 @@ from raven.cli._helpers import (
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
-from raven.cli._plugin_stack import (
+from raven.core.plugin_stack import (
     build_plugin_registry,
     build_plugin_tools,
     maybe_build_memory_backend,
@@ -165,12 +165,12 @@ def register(app: typer.Typer) -> None:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-        from raven.cli._proactive_stack import (
+        from raven.config.raven import load_raven_config
+        from raven.core.proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
         )
-        from raven.config.raven import load_raven_config
         from raven.session.manager import SessionManager, new_chat_id
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
@@ -272,8 +272,8 @@ def register(app: typer.Typer) -> None:
             registry=plugin_registry,
         )
         from raven.agent.tools._deliverables import DeliverableStore
-        from raven.cli._token_wise_stack import caching_probe, install_from_config
         from raven.config.paths import get_deliverables_path
+        from raven.core.token_wise_stack import caching_probe, install_from_config
         from raven.providers.pool import ProviderPool
 
         strategies = install_from_config(

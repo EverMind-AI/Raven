@@ -30,8 +30,8 @@ from rich.table import Table
 
 console = Console()
 
-from raven.cli._helpers import make_provider, parse_fake_now
 from raven.config.paths import get_sentinel_dir, get_workspace_path
+from raven.core.helpers import make_provider, parse_fake_now
 
 sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 
@@ -202,7 +202,7 @@ def sentinel_tick(
     # user_memory/attention.md and (optionally) writes
     # user_memory/behaviors.md — without it both files stay at 0 bytes
     # even after a successful Planner cycle.
-    from raven.cli._proactive_stack import build_attention_path
+    from raven.core.proactive_stack import build_attention_path
     from raven.proactive_engine.sentinel.executor.pending_decision import (
         PendingDecisionStore,
     )
@@ -334,7 +334,7 @@ def sentinel_ticks(
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
-    from raven.cli._proactive_stack import build_sentinel_stack
+    from raven.core.proactive_stack import build_sentinel_stack
     from raven.session.manager import SessionManager
 
     # ── Honor --config redirect (per-persona isolation for parallel eval) ──
@@ -851,7 +851,7 @@ def _sentinel_discover_now_inproc(
 
     from loguru import logger
 
-    from raven.cli._proactive_stack import build_sentinel_stack
+    from raven.core.proactive_stack import build_sentinel_stack
     from raven.session.manager import SessionManager
 
     config = ec_config.base

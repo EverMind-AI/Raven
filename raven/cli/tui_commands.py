@@ -485,14 +485,14 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
         from raven.agent.tools._deliverables import DeliverableStore
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._cron_handler import chain_cron_activity_reset
-        from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
-        from raven.cli._plugin_stack import (
+        from raven.config.paths import get_cron_dir, get_deliverables_path
+        from raven.config.raven import load_raven_config
+        from raven.core.helpers import build_model_routing, load_runtime_config, make_lazy_provider
+        from raven.core.plugin_stack import (
             build_plugin_registry,
             build_plugin_tools,
             maybe_build_memory_backend,
         )
-        from raven.config.paths import get_cron_dir, get_deliverables_path
-        from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.session.manager import SessionManager
@@ -539,7 +539,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             registry=plugin_registry,
         )
 
-        from raven.cli._token_wise_stack import caching_probe, install_from_config
+        from raven.core.token_wise_stack import caching_probe, install_from_config
         from raven.providers.pool import ProviderPool
 
         strategies = install_from_config(
@@ -1250,7 +1250,7 @@ def tui(
     # surfaced on the user's first chat message instead of a launch-time error.
     if workspace is not None:
         from raven.agent.workdir import validate_override
-        from raven.cli._helpers import load_runtime_config
+        from raven.core.helpers import load_runtime_config
 
         try:
             validate_override(workspace, load_runtime_config(None, home=home).workspace_path)

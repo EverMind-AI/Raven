@@ -45,8 +45,8 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
+    monkeypatch.setattr("raven.core.helpers.load_runtime_config", lambda *a, **kw: config)
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
@@ -78,15 +78,15 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     fake_tools = [sentinel.fake_tool_1]
 
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.build_plugin_registry",
+        "raven.core.plugin_stack.build_plugin_registry",
         lambda cfg: fake_registry,
     )
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.maybe_build_memory_backend",
+        "raven.core.plugin_stack.maybe_build_memory_backend",
         lambda ws, cfg, *, registry=None: fake_backend,
     )
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.build_plugin_tools",
+        "raven.core.plugin_stack.build_plugin_tools",
         lambda ws, cfg, *, registry=None: fake_tools,
     )
 
@@ -286,8 +286,8 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
+    monkeypatch.setattr("raven.core.helpers.load_runtime_config", lambda *a, **kw: config)
+    monkeypatch.setattr("raven.core.helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
@@ -323,9 +323,9 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
         passed_registries.append(("tools", registry))
         return []
 
-    monkeypatch.setattr("raven.cli._plugin_stack.build_plugin_registry", _spy_registry)
-    monkeypatch.setattr("raven.cli._plugin_stack.maybe_build_memory_backend", _spy_backend)
-    monkeypatch.setattr("raven.cli._plugin_stack.build_plugin_tools", _spy_tools)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", _spy_registry)
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", _spy_backend)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", _spy_tools)
 
     from raven.cli.tui_commands import _build_agent_loop
 

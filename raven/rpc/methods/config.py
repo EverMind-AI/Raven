@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.cli._helpers import load_runtime_config, make_provider
+from raven.core.helpers import load_runtime_config, make_provider
 from raven.providers.auth import MissingCredentialsError
 from raven.providers.wire import stored_model_id
 from raven.rpc.errors import (
