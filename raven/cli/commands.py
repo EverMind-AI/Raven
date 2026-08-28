@@ -128,6 +128,7 @@ from raven.cli.acp_commands import acp_app
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
 from raven.cli.deep_research_commands import deep_research_app
+from raven.cli.ops_connection_commands import ops_app
 from raven.cli.playbook_commands import playbook_app
 from raven.cli.provider_commands import provider_app
 from raven.cli.sandbox_commands import sandbox_app
@@ -138,6 +139,7 @@ from raven.cli.trajectory_commands import trajectory_app
 app.add_typer(acp_app, name="acp")
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
+app.add_typer(ops_app, name="ops")
 app.add_typer(deep_research_app, name="deep-research")
 app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")

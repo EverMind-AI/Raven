@@ -1121,6 +1121,14 @@ class ThirdPartyCliSubagentConfig(Base):
     name: str
     kind: Literal["cli"] = "cli"
     description: str = ""
+    runs_on_machines: bool = False
+    """This agent runs work on the owner's registered machines (the on-call
+    shape). The host's pre-dispatch machine check and the watch-work nudge key
+    on it: an agent so marked is refused a dispatch while the registry is
+    empty, and is the one a run-and-watch request is steered toward. Declared
+    in the manifest rather than probed off the checkout's binary -- the probe
+    was a subprocess per roster per process, and what it really asked was this
+    one bit."""
     preset: str | None = None
     """Which built-in preset this entry was created from, or ``None`` for a
     hand-written one.
@@ -1410,6 +1418,14 @@ class ThirdPartyAcpSubagentConfig(Base):
     """Operator override for the roster line. Blank means "use what the handshake
     reported" (``agentInfo.name`` plus version), which is the point of ACP: the
     agent describes itself, so a human does not have to."""
+    runs_on_machines: bool = False
+    """This agent runs work on the owner's registered machines (the on-call
+    shape). The host's pre-dispatch machine check and the watch-work nudge key
+    on it: an agent so marked is refused a dispatch while the registry is
+    empty, and is the one a run-and-watch request is steered toward. Declared
+    in the manifest rather than probed off the checkout's binary -- the probe
+    was a subprocess per roster per process, and what it really asked was this
+    one bit."""
     preset: str | None = None
     """Which built-in preset this entry was created from, or ``None`` for a
     hand-written one. Provenance only -- see the cli config for why the web UI

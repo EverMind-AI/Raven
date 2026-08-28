@@ -342,6 +342,37 @@ class SpawnTool(Tool):
             return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
         if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
+        # The same pre-dispatch question the DAG runner asks (dag_tool.py, "Last
+        # of the pre-dispatch checks"): an agent that runs work on the owner's
+        # machines is asked whether it has one, and a task whose work has
+        # nowhere to go is refused while the owner is still here to be asked.
+        # It was only on the DAG path, and the failure that bought this line was
+        # a single spawn: the on-call agent booted, found the registry empty,
+        # and the owner learned it minutes in, one sub-agent run too late.
+        # Silent when nothing could be established -- see dag_machines.
+        if subagent:
+            from raven.agent.subagent.dag_machines import refusal as machines_refusal
+            from raven.agent.subagent.dag_machines import verdict_for_async
+
+            if (verdict := await verdict_for_async([subagent])) and verdict.usable == 0:
+                # Registration has to be one runnable line. Measured 2026-08-27,
+                # before `ops connection` was lifted into this install: the model
+                # collected every answer from the owner, found no command to put
+                # them in, and hand-ran the work over ssh instead.
+                return machines_refusal(verdict) + (
+                    "\n\nOnce the owner has answered, register the machine yourself "
+                    "and spawn again:\n"
+                    "  raven ops connection add --non-interactive --id <id> "
+                    "--name <name> --transport ssh --host <addr> --port <port> "
+                    "--user <user> --key <keypath> --software '<installed, with paths>' "
+                    "--budget-unit minute --concurrency 1\n"
+                    "When the machine is this very computer, use --transport local with "
+                    "no host/port/user/key -- everything it asks is knowable here, so "
+                    "you may register without waiting for the owner, but tell them in "
+                    "your reply what you wrote down (name, budget unit, jobs at once): "
+                    "the registry is theirs, and this row is what every later campaign "
+                    "reads as fact."
+                )
         if inputs is not None and not isinstance(inputs, dict):
             return (
                 "Error: `inputs` must be an object keyed by input name -- "
