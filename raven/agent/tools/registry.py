@@ -1,9 +1,11 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+import copy
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -14,6 +16,89 @@ from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.mcp.naming import MCPToolRef
+
+
+class ToolAdmissionError(TypeError):
+    """A tool refused at the registry's door: an authored member is missing or
+    mis-shaped. Raised at registration, where the author sees it — not deep
+    inside the turn that first calls the tool."""
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """The admitted, frozen shape of one registered tool.
+
+    Dispensed once at the door (:func:`admit_tool`) and the only thing the
+    registry's own machinery reads afterwards — a consumer that kept reading
+    members off the live object let the de-facto contract widen silently
+    (measured: 4 authored members on the paper, 13 consumed). Behaviour
+    (``execute`` / ``blocking_for`` / ``metadata_owner`` / ``cast_params``)
+    stays on ``tool``, the body; data rides here, frozen at admission. Same
+    declare→check→dispense pattern as manifest and config-slice admission.
+    """
+
+    name: str
+    schema: dict[str, Any]
+    # An AUTHORED ``to_schema`` override is a signed declaration of a dynamic
+    # shape (load_playbook regenerates its enum per render); the registry then
+    # serves the live call instead of the snapshot. Undeclared mutation of
+    # ``parameters`` still cannot leak — that path stays frozen.
+    schema_dynamic: bool
+    channels: frozenset[str] | None
+    timeout_seconds: float | None
+    truncation_hint: str | None
+    incomplete_hint: str | None
+    tool: Tool
+
+
+def admit_tool(tool: Tool) -> ToolSpec:
+    """Check the four authored members, normalize the optional ones, dispense
+    the frozen spec.
+
+    The advertised schema is derived HERE, from the authored members, and
+    deep-copied: the base class's ``to_schema`` is sugar, not the ticket (a
+    duck with the four members boards without it), and a shallow snapshot
+    would alias the tool's live ``parameters`` dict — a later mutation of the
+    object must not leak into what the model is shown. The one sanctioned
+    escape is an authored ``to_schema`` override: writing one declares the
+    schema dynamic, and the registry serves it live."""
+    name = getattr(tool, "name", None)
+    if not isinstance(name, str) or not name:
+        raise ToolAdmissionError(f"tool {tool!r} declares no usable name")
+    description = getattr(tool, "description", None)
+    if not isinstance(description, str):
+        raise ToolAdmissionError(f"tool {name!r}: description must be a string")
+    parameters = getattr(tool, "parameters", None)
+    if not isinstance(parameters, dict):
+        raise ToolAdmissionError(f"tool {name!r}: parameters must be a JSON-schema mapping")
+    if not callable(getattr(tool, "execute", None)):
+        raise ToolAdmissionError(f"tool {name!r}: execute is not callable")
+    channels = getattr(tool, "channels", None)
+    timeout = getattr(tool, "timeout_seconds", None)
+    if timeout is not None and not isinstance(timeout, (int, float)):
+        raise ToolAdmissionError(f"tool {name!r}: timeout_seconds must be a number or None")
+    truncation = getattr(tool, "truncation_hint", None)
+    incomplete = getattr(tool, "incomplete_hint", None)
+    schema = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": copy.deepcopy(parameters),
+        },
+    }
+    own_to_schema = getattr(type(tool), "to_schema", None)
+    dynamic = own_to_schema is not None and own_to_schema is not Tool.to_schema
+    return ToolSpec(
+        name=name,
+        schema=schema,
+        schema_dynamic=dynamic,
+        channels=frozenset(channels) if channels is not None else None,
+        timeout_seconds=float(timeout) if timeout is not None else None,
+        truncation_hint=truncation if isinstance(truncation, str) else None,
+        incomplete_hint=incomplete if isinstance(incomplete, str) else None,
+        tool=tool,
+    )
 
 # Where the agent loop parks a tool call's arguments when they do not parse as
 # JSON. Named here, next to the only code that must recognise it, so the two
@@ -69,6 +154,10 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        # The admitted, frozen specs, keyed like ``_tools``. The registry's own
+        # machinery reads data from here and calls behaviour on the body; the
+        # pair is written together in register() and nowhere else.
+        self._specs: dict[str, ToolSpec] = {}
         # The one record of where a namespaced tool came from, keyed by the name
         # it is registered under. Every question about an MCP tool -- which
         # server owns it, what it is called there, which registered names a
@@ -203,9 +292,11 @@ class ToolRegistry:
         registration rather than read back off the tool afterwards, so the
         record cannot disagree with the registration that created it.
         """
-        self._tools[tool.name] = tool
+        spec = admit_tool(tool)
+        self._tools[spec.name] = tool
+        self._specs[spec.name] = spec
         if origin is not None:
-            self._origins[tool.name] = origin
+            self._origins[spec.name] = origin
 
     def unregister(self, name: str) -> None:
         """Unregister a tool by name -- the only way a tool leaves.
@@ -214,6 +305,7 @@ class ToolRegistry:
         flight, and why the miss is worded the way it is, is in :meth:`execute`.
         """
         self._tools.pop(name, None)
+        self._specs.pop(name, None)
         self._origins.pop(name, None)
 
     def origin_of(self, name: str) -> "MCPToolRef | None":
@@ -378,11 +470,22 @@ class ToolRegistry:
         runs.
         """
         withheld = self.withheld_names()
-        return [
-            tool.to_schema()
-            for tool in self._visible_tools().values()
-            if self.offers(tool, withheld) and tool.name not in self._schema_hidden
-        ]
+        # Served from the admitted snapshot, not the live object: what the
+        # model is shown is what the door checked, whatever the object has
+        # grown or mutated since. A tool that AUTHORED its own to_schema has
+        # declared a dynamic shape (load_playbook's per-render enum) and is
+        # served live -- declared dynamism, not silent widening. A session
+        # overlay tool never passed the door and keeps its live schema.
+        out: list[dict[str, Any]] = []
+        for name, tool in self._visible_tools().items():
+            if not self.offers(tool, withheld) or name in self._schema_hidden:
+                continue
+            spec = self._specs.get(name)
+            if spec is None or spec.schema_dynamic:
+                out.append(tool.to_schema())
+            else:
+                out.append(spec.schema)
+        return out
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
@@ -416,6 +519,9 @@ class ToolRegistry:
         # The channel half of ``offers`` cannot move in here: its ContextVar is
         # unset on internally-initiated calls, so testing it would refuse them all.
         tool = self._visible(name)
+        # A registered tool answers data questions from its admitted spec; a
+        # session overlay tool never passed the door and answers live.
+        spec = self._specs.get(name) if tool is not None and self._tools.get(name) is tool else None
         if not tool or name in self.withheld_names():
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
@@ -442,7 +548,7 @@ class ToolRegistry:
             # and adds ``truncation`` to that same run_meta, so a streamed reply cut
             # mid-arguments arrives carrying all three -- the flag, the verdict, and
             # the parked text.
-            hint = tool.truncation_hint
+            hint = (spec or tool).truncation_hint
             return truncation.as_error(name) + (f" {hint}" if hint else "") + _received_tail(params)
         if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
             # Two facts, two readings, and nothing here to choose between them.
@@ -452,7 +558,7 @@ class ToolRegistry:
             # branch rather than one being asserted: a model told to split up a
             # call it merely misspelled goes looking for a size problem it does
             # not have. Longer than a verdict, and the length is the point.
-            hint = tool.incomplete_hint
+            hint = (spec or tool).incomplete_hint
             limit_branch = (
                 f"\n\nIf it was the output limit: {hint}"
                 if hint
@@ -484,7 +590,7 @@ class ToolRegistry:
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
-            ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
+            ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
                 result = await tool.execute(**params)
