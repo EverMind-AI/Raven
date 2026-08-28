@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from raven.plugin.memory.everos._server import (
+from raven.plugins.memory.everos._server import (
     DEFAULT_EVEROS_BASE_URL,
     _probe_health,
     ome_lock_held,

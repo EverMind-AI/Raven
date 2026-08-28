@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugin import (
+from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
     MemoryBackendContribution,

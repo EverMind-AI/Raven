@@ -482,9 +482,9 @@ def _display_name(name: str) -> str:
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
-    from raven.channels.manager import _missing_dep_hint, missing_dependency_channels
     from raven.channels.registry import discover_channel_names
     from raven.config.loader import load_config
+    from raven.gateway.manager import _missing_dep_hint, missing_dependency_channels
 
     config = load_config()
     missing = set(missing_dependency_channels(config))

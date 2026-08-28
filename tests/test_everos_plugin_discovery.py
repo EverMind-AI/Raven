@@ -1,7 +1,7 @@
 """everos plugin skeleton + end-to-end plugin discovery.
 
 The EverOS backend ships **bundled** inside raven at
-``raven/plugin/memory/everos/`` (not as an external entry-point
+``raven/plugins/memory/everos/`` (not as an external entry-point
 package), so discovery here points at the bundled source.
 
 Verifies:
@@ -27,7 +27,7 @@ import pytest
 
 import raven
 from raven.memory_engine import Memory, MemoryBackend
-from raven.plugin import (
+from raven.plugins import (
     PluginDiscovery,
     ServiceLocator,
     Source,
@@ -35,7 +35,7 @@ from raven.plugin import (
 )
 
 # Real bundled-plugins root inside the installed raven package.
-_BUNDLED = Path(raven.__path__[0]) / "plugin" / "memory"
+_BUNDLED = Path(raven.__path__[0]) / "plugins" / "memory"
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ _BUNDLED = Path(raven.__path__[0]) / "plugin" / "memory"
 
 class TestPackageSurface:
     def test_imports_clean(self) -> None:
-        import raven.plugin.memory.everos
-        from raven.plugin.memory.everos.backend import EverosBackend, make_backend
+        import raven.plugins.memory.everos
+        from raven.plugins.memory.everos.backend import EverosBackend, make_backend
 
-        assert raven.plugin.memory.everos.__version__ == "1.1.0"
+        assert raven.plugins.memory.everos.__version__ == "1.1.0"
         assert callable(make_backend)
         assert EverosBackend is not None
 
@@ -57,7 +57,7 @@ class TestPackageSurface:
         installed wheel — accessible via importlib.resources."""
         from importlib.resources import files
 
-        manifest = files("raven.plugin.memory.everos").joinpath("raven-plugin.toml")
+        manifest = files("raven.plugins.memory.everos").joinpath("raven-plugin.toml")
         assert manifest.is_file()
         text = manifest.read_text(encoding="utf-8")
         assert 'id                 = "everos-memory"' in text
@@ -101,7 +101,7 @@ class TestBundledDiscovery:
             "\n"
             "[[plugin.contributes.memory_backends]]\n"
             'name = "everos"\n'
-            'factory = "raven.plugin.memory.everos.backend:make_backend"\n',
+            'factory = "raven.plugins.memory.everos.backend:make_backend"\n',
             encoding="utf-8",
         )
         d = PluginDiscovery(bundled_dir=_BUNDLED, user_dir=user_dir)
@@ -145,7 +145,7 @@ class TestActivationAndFactory:
 
 @pytest.fixture
 def backend(tmp_path: Path):
-    from raven.plugin.memory.everos.backend import ServiceState, _NoOpAdapter
+    from raven.plugins.memory.everos.backend import ServiceState, _NoOpAdapter
 
     reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
     be = reg.build_memory_backend(
@@ -197,7 +197,7 @@ class TestStubBehavior:
 
 class TestConfigPassthrough:
     def test_default_constructs_http_adapter(self, tmp_path: Path) -> None:
-        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
+        from raven.plugins.memory.everos.backend import _HttpEverosAdapter
 
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
@@ -208,7 +208,7 @@ class TestConfigPassthrough:
         assert isinstance(backend._adapter, _HttpEverosAdapter)
 
     def test_base_url_passed_through(self, tmp_path: Path) -> None:
-        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
+        from raven.plugins.memory.everos.backend import _HttpEverosAdapter
 
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(

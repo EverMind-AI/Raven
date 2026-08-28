@@ -12,15 +12,15 @@ from raven.channels.contract import (
     SupportsLogin,
     SupportsStreaming,
 )
-from raven.channels.manager import ChannelManager
 
 # Public surface = the contract types adapters implement. Validation helpers
-# (capability_violations) live in channels.contract.
+# (capability_violations) live in channels.contract. ChannelManager moved to
+# raven.gateway.manager -- re-exporting it here would make this package import
+# the gateway package, which imports the contract back (a cycle).
 __all__ = [
     "Capabilities",
     "Channel",
     "ChannelBase",
-    "ChannelManager",
     "ChannelSpec",
     "SupportsLogin",
     "SupportsStreaming",

@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.plugin.discover import PluginDiscovery
-from raven.plugin.registry import PluginRegistry
+from raven.plugins.discover import PluginDiscovery
+from raven.plugins.registry import PluginRegistry
 
 
 def assemble_plugin_registry(

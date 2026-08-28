@@ -15,9 +15,9 @@ import json
 import pytest
 
 from raven.agent.tools.plughub import PluginTool
-from raven.plughub import install as install_mod
-from raven.plughub import ledger as ledger_mod
-from raven.plughub.ledger import read_ledger
+from raven.market import install as install_mod
+from raven.market import ledger as ledger_mod
+from raven.market.ledger import read_ledger
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,7 @@ def _patch_catalog(monkeypatch, *entries):
     async def detail(entry_id: str):
         return by_id.get(entry_id)
 
-    monkeypatch.setattr("raven.plughub.catalog_detail", detail)
+    monkeypatch.setattr("raven.market.catalog_detail", detail)
     return by_id
 
 

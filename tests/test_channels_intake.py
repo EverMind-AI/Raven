@@ -5,8 +5,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from raven.channels.intake import Intake
 from raven.channels.transcribe import transcribe_audio
+from raven.gateway.intake import Intake
 
 # ── Intake: permission ────────────────────────────────────────────────
 

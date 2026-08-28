@@ -1,7 +1,7 @@
 """Phase C — ``raven plugins`` CLI command.
 
 Smoke-tests the command renders the registered entry-points plugin
-(raven.plugin.memory.everos) without invoking any plugin runtime (no
+(raven.plugins.memory.everos) without invoking any plugin runtime (no
 ``MemoryBackend.start`` is awaited). Verifies the three branches in
 the backend-selection block: present-active / present-unknown /
 explicitly-disabled.
@@ -40,7 +40,7 @@ def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     rather than a narrow terminal.
 
     Reproduce by importing the CLI at 80 columns before the test runs: the
-    failure is `assert 'raven.plugin.memory.everos.backend:make_backend' in`
+    failure is `assert 'raven.plugins.memory.everos.backend:make_backend' in`
     a string that ends `...___/`.
     """
     from rich.console import Console
@@ -185,4 +185,4 @@ class TestVerboseFlag:
         result = _invoke(args, tmp_path)
         assert result.exit_code == 0
         # The factory reference is the canonical ``module:callable`` form.
-        assert "raven.plugin.memory.everos.backend:make_backend" in result.stdout
+        assert "raven.plugins.memory.everos.backend:make_backend" in result.stdout

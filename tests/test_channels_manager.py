@@ -1,4 +1,4 @@
-"""Tests for raven.channels.manager.ChannelManager — spec-based init
+"""Tests for raven.gateway.manager.ChannelManager — spec-based init
 (incl. the missing-dependency / ImportError path), allow_from validation, and
 status accessors. Outbound delivery moved to the spine outlets (no longer the
 manager's job)."""
@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from raven.channels.contract import Capabilities, ChannelSpec
-from raven.channels.manager import ChannelManager, _missing_dep_hint
 from raven.config.schema import ProvidersConfig
+from raven.gateway.manager import ChannelManager, _missing_dep_hint
 
 
 class _FakeChannel:
@@ -112,7 +112,7 @@ def _patch_direct_url(monkeypatch, read_text_result):
         def read_text(self, name):
             return read_text_result
 
-    monkeypatch.setattr("raven.channels.manager.distribution", lambda pkg: _Dist())
+    monkeypatch.setattr("raven.gateway.manager.distribution", lambda pkg: _Dist())
 
 
 def test_hint_editable_syncs_the_umbrella_extra_inexactly(monkeypatch):
@@ -138,7 +138,7 @@ def test_hint_editable_syncs_the_umbrella_extra_inexactly(monkeypatch):
 def test_hint_non_editable_points_to_installer(monkeypatch, raw):
     """Any non-editable / malformed direct_url.json -> installer hint, never raises."""
     _patch_direct_url(monkeypatch, raw)
-    monkeypatch.setattr("raven.channels.manager.sys.platform", "linux")
+    monkeypatch.setattr("raven.gateway.manager.sys.platform", "linux")
     hint = _missing_dep_hint()
     assert "uv sync" not in hint
     assert "install.sh" in hint
@@ -150,8 +150,8 @@ def test_hint_package_not_found_points_to_installer(monkeypatch):
     def _raise(pkg):
         raise PackageNotFoundError(pkg)
 
-    monkeypatch.setattr("raven.channels.manager.distribution", _raise)
-    monkeypatch.setattr("raven.channels.manager.sys.platform", "darwin")
+    monkeypatch.setattr("raven.gateway.manager.distribution", _raise)
+    monkeypatch.setattr("raven.gateway.manager.sys.platform", "darwin")
     assert "install.sh" in _missing_dep_hint()
 
 
@@ -162,7 +162,7 @@ def test_hint_package_not_found_points_to_installer(monkeypatch):
 def test_hint_installer_matches_os(monkeypatch, platform, marker):
     """Wheel install picks the installer for the running OS (irm vs curl)."""
     _patch_direct_url(monkeypatch, _WHEEL_JSON)
-    monkeypatch.setattr("raven.channels.manager.sys.platform", platform)
+    monkeypatch.setattr("raven.gateway.manager.sys.platform", platform)
     assert marker in _missing_dep_hint()
 
 
@@ -180,7 +180,7 @@ def test_init_warning_carries_install_hint(monkeypatch, direct_url, platform, ex
     from loguru import logger
 
     _patch_direct_url(monkeypatch, direct_url)
-    monkeypatch.setattr("raven.channels.manager.sys.platform", platform)
+    monkeypatch.setattr("raven.gateway.manager.sys.platform", platform)
 
     def boom(config):
         raise ImportError("No module named 'lark_oapi'")
@@ -223,7 +223,7 @@ def test_missing_dependency_channels_reports_only_enabled_import_failures(monkey
     """An enabled channel whose SDK is absent is reported; a disabled one is not,
     and neither is a channel that fails to build for some other reason -- that is
     a different diagnosis than "install the dependency"."""
-    from raven.channels.manager import missing_dependency_channels
+    from raven.gateway.manager import missing_dependency_channels
 
     def no_sdk(config):
         raise ImportError("No module named 'telegram'")

@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from raven.plughub import install as install_mod
-from raven.plughub import ledger as ledger_mod
-from raven.plughub.ledger import read_ledger
+from raven.market import install as install_mod
+from raven.market import ledger as ledger_mod
+from raven.market.ledger import read_ledger
 from raven.rpc.errors import ConfigValidationError, InternalError
 from raven.rpc.methods import plughub as rpc_plughub
 
@@ -134,7 +134,7 @@ def _patch_catalog(monkeypatch, entry):
     async def detail(entry_id: str):
         return entry if entry_id == entry["id"] else None
 
-    monkeypatch.setattr("raven.plughub.catalog_detail", detail)
+    monkeypatch.setattr("raven.market.catalog_detail", detail)
 
 
 def _server_in_cfg(fixture, name: str) -> bool:
@@ -407,7 +407,7 @@ async def test_toggle_and_remove_accept_a_hand_written_server_name(_isolated, mo
     server name is never used as one. The user was told their own server name
     was "not a usable catalog id", with no way to act on it.
     """
-    import raven.plughub as plughub_pkg
+    import raven.market as plughub_pkg
 
     toggled: list = []
     removed: list = []
@@ -456,7 +456,7 @@ def test_a_ledger_read_answers_for_an_unnameable_id() -> None:
     """An id that cannot name a file provably has no ledger, so the read is a
     None rather than a raise -- which is what lets the handlers above ask the
     question at all."""
-    from raven.plughub.ledger import read_ledger
+    from raven.market.ledger import read_ledger
 
     assert read_ledger("_dev") is None
     assert read_ledger("my server") is None

@@ -1,6 +1,6 @@
 """Bundled memory-backend plugins.
 
-Subpackages here are discovered by :class:`raven.plugin.PluginDiscovery`
+Subpackages here are discovered by :class:`raven.plugins.PluginDiscovery`
 via their ``raven-plugin.toml`` manifests (the bundled source). Keep
 these packages' ``__init__`` modules empty/cheap: resource resolution
 imports them during discovery, and a heavy import here would defeat the

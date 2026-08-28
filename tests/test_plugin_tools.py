@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from raven.plugin import (
+from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
     PluginConflictError,
@@ -80,7 +80,7 @@ class TestManifestTools:
             version = "0.1.0"
             [[plugin.contributes.tools]]
             name = "understand_media"
-            factory = "raven.plugin.memory.everos.tools:make_understand_media_tool"
+            factory = "raven.plugins.memory.everos.tools:make_understand_media_tool"
         """)
         mf = PluginManifest.from_toml_str(toml)
         assert [t.name for t in mf.contributes.tools] == ["understand_media"]
@@ -109,7 +109,7 @@ class TestManifestTools:
 
     def test_backend_and_tool_may_share_name(self) -> None:
         # Uniqueness is per-kind; a backend and a tool named the same is fine.
-        from raven.plugin import MemoryBackendContribution
+        from raven.plugins import MemoryBackendContribution
 
         mf = PluginManifest(
             id="p",
@@ -359,15 +359,15 @@ class TestRenderAttachments:
 
 
 # ---------------------------------------------------------------------------
-# EverOS understand_media tool (needs raven.plugin.memory.everos importable)
+# EverOS understand_media tool (needs raven.plugins.memory.everos importable)
 # ---------------------------------------------------------------------------
 
-from raven.plugin.memory.everos.tools import UnderstandMediaTool, make_understand_media_tool
+from raven.plugins.memory.everos.tools import UnderstandMediaTool, make_understand_media_tool
 
 
 class TestUnderstandMediaTool:
     def test_factory_returns_tool_when_extra_available(self, monkeypatch) -> None:
-        import raven.plugin.memory.everos.tools as tools_mod
+        import raven.plugins.memory.everos.tools as tools_mod
         from raven.agent.tools.base import Tool
 
         # Gate on the parser extra; force it "available" so the assertion
@@ -381,7 +381,7 @@ class TestUnderstandMediaTool:
     def test_factory_returns_none_when_extra_missing(self, monkeypatch) -> None:
         # No everos[multimodal] extra → factory declines to contribute the
         # tool (returns None) so the host never registers it.
-        import raven.plugin.memory.everos.tools as tools_mod
+        import raven.plugins.memory.everos.tools as tools_mod
 
         monkeypatch.setattr(tools_mod, "_multimodal_available", lambda: False)
         assert make_understand_media_tool(None) is None
@@ -400,8 +400,8 @@ class TestUnderstandMediaTool:
         # When the multimodal runtime is unavailable, understand_files
         # raises MultimodalUnavailableError and the tool surfaces one clear
         # error message rather than propagating the exception.
-        import raven.plugin.memory.everos.tools as tools_mod
-        from raven.plugin.memory.everos.multimodal import MultimodalUnavailableError
+        import raven.plugins.memory.everos.tools as tools_mod
+        from raven.plugins.memory.everos.multimodal import MultimodalUnavailableError
 
         async def fake_unavailable(paths):
             raise MultimodalUnavailableError("multimodal extra not configured")
@@ -411,7 +411,7 @@ class TestUnderstandMediaTool:
         assert "unavailable" in out.lower()
 
     async def test_formats_results(self, monkeypatch) -> None:
-        import raven.plugin.memory.everos.tools as tools_mod
+        import raven.plugins.memory.everos.tools as tools_mod
 
         async def fake_understand(paths):
             return [
@@ -433,7 +433,7 @@ class TestContentItemRouting:
     """
 
     def test_http_url_detection(self) -> None:
-        from raven.plugin.memory.everos.multimodal import _is_http_url
+        from raven.plugins.memory.everos.multimodal import _is_http_url
 
         assert _is_http_url("https://example.com/page")
         assert _is_http_url("http://example.com")
@@ -442,7 +442,7 @@ class TestContentItemRouting:
         assert not _is_http_url("relative/path.pdf")
 
     def test_url_becomes_uri_item(self) -> None:
-        from raven.plugin.memory.everos.multimodal import _content_item_for
+        from raven.plugins.memory.everos.multimodal import _content_item_for
 
         item = _content_item_for("https://example.com/doc")
         # uri-backed → everalgo fetches + dispatches by Content-Type;
@@ -454,7 +454,7 @@ class TestContentItemRouting:
         }
 
     def test_local_file_becomes_base64_item(self, tmp_path: Path) -> None:
-        from raven.plugin.memory.everos.multimodal import _content_item_for
+        from raven.plugins.memory.everos.multimodal import _content_item_for
 
         f = tmp_path / "hello.txt"
         f.write_text("hi")
@@ -464,7 +464,7 @@ class TestContentItemRouting:
         assert "base64" in item and "uri" not in item
 
     def test_missing_local_file_raises(self) -> None:
-        from raven.plugin.memory.everos.multimodal import _content_item_for
+        from raven.plugins.memory.everos.multimodal import _content_item_for
 
         with pytest.raises(FileNotFoundError):
             _content_item_for("/no/such/file.pdf")
@@ -497,7 +497,7 @@ class TestEverosParserContract:
         return f
 
     async def test_local_file_parses_through_real_enrich(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.plugin.memory.everos.multimodal import understand_files
+        from raven.plugins.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
             assert raw_file.content == b"payload"
@@ -512,7 +512,7 @@ class TestEverosParserContract:
         # A TypeError out of the parser means our call no longer matches
         # everos's API -- true of every file, so it must not be reported as
         # one file the parser could not read.
-        from raven.plugin.memory.everos.multimodal import (
+        from raven.plugins.memory.everos.multimodal import (
             MultimodalUnavailableError,
             understand_files,
         )
@@ -528,7 +528,7 @@ class TestEverosParserContract:
     async def test_one_failed_file_does_not_abort_the_batch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from raven.plugin.memory.everos.multimodal import understand_files
+        from raven.plugins.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
             if raw_file.content == b"payload":
@@ -548,7 +548,7 @@ class TestEverosParserContract:
     ) -> None:
         from everos.core.errors import UnsupportedModalityError
 
-        from raven.plugin.memory.everos.multimodal import understand_files
+        from raven.plugins.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
             if raw_file.content == b"payload":
@@ -569,7 +569,7 @@ class TestEverosParserContract:
         # would come back once per attachment.
         import everos.component.llm.client as llm_client
 
-        from raven.plugin.memory.everos.multimodal import (
+        from raven.plugins.memory.everos.multimodal import (
             MultimodalUnavailableError,
             understand_files,
         )
@@ -593,7 +593,7 @@ class TestEverosParserContract:
     async def test_missing_parser_extra_fails_the_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import everos.component.parser as component_parser
 
-        from raven.plugin.memory.everos.multimodal import (
+        from raven.plugins.memory.everos.multimodal import (
             MultimodalUnavailableError,
             understand_files,
         )
@@ -607,7 +607,7 @@ class TestEverosParserContract:
         # parsed_content); understand_files must surface that as the error.
         from everalgo.llm import LLMError
 
-        from raven.plugin.memory.everos.multimodal import understand_files
+        from raven.plugins.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
             raise LLMError("upstream 500")
@@ -617,7 +617,7 @@ class TestEverosParserContract:
         assert await understand_files([str(f)]) == [{"path": str(f), "name": "shot.png", "error": "LLMError"}]
 
     async def test_missing_file_is_reported_not_fatal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.plugin.memory.everos.multimodal import understand_files
+        from raven.plugins.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
             return types.SimpleNamespace(text="fine")

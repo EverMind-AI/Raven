@@ -15,7 +15,7 @@ from raven.agent.acp.asker import AskViaTool, start_ask_turn
 from raven.agent.acp.resolver import Autofill
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.ask_user import AskUserTool
-from raven.channels.outlet import ChannelOutletAdapter
+from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import OriginPools, Scheduler
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted

@@ -34,7 +34,7 @@ _cache: tuple[float, dict[str, dict[str, Any]]] | None = None
 def _endpoint() -> tuple[str, str] | None:
     """``(ws_url, token)`` for the live gateway, or None when none is running."""
     try:
-        from raven.cli._gateway_lock import read_status
+        from raven.gateway.lock import read_status
 
         info = read_status(time.time())
     except Exception:

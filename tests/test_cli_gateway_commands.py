@@ -103,7 +103,7 @@ def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
 
     save_config(Config())
 
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     def _raise(now: float):
         raise _gateway_lock.GatewayAlreadyRunningError(

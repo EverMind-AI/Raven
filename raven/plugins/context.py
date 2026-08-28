@@ -62,7 +62,7 @@ class PluginContext:
     config: dict[str, Any]
     services: ServiceLocator
     logger: logging.Logger = field(
-        default_factory=lambda: logging.getLogger("raven.plugin"),
+        default_factory=lambda: logging.getLogger("raven.plugins"),
     )
 
 

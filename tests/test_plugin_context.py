@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugin import PluginContext, ServiceLocator
+from raven.plugins import PluginContext, ServiceLocator
 
 
 class TestServiceLocator:
@@ -46,12 +46,12 @@ class TestPluginContext:
             services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(ctx.logger, logging.Logger)
-        # Default name lands under the raven.plugin namespace so
+        # Default name lands under the raven.plugins namespace so
         # plugin output is grep-able alongside host output.
-        assert ctx.logger.name.startswith("raven.plugin")
+        assert ctx.logger.name.startswith("raven.plugins")
 
     def test_explicit_logger(self, tmp_path: Path) -> None:
-        my_logger = logging.getLogger("raven.plugin.everos")
+        my_logger = logging.getLogger("raven.plugins.everos")
         ctx = PluginContext(
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),

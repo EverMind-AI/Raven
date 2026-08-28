@@ -668,7 +668,7 @@ class TestTheSupervisor:
         engine without channels, which is where this surface already was and is
         one `raven gateway` away from right.
         """
-        from raven.cli import _gateway_lock
+        from raven.gateway import lock as _gateway_lock
 
         def _explode(now: float) -> None:
             raise OSError("lock unreadable")
@@ -1151,7 +1151,7 @@ class TestAGatewayHostedPage:
     serve.json's pid are the same process."""
 
     def _lock_says(self, monkeypatch, pid: int | None) -> None:
-        from raven.cli import _gateway_lock
+        from raven.gateway import lock as _gateway_lock
 
         info = None if pid is None else _gateway_lock.LockInfo(pid=pid, started_at=0.0, config_path="")
         monkeypatch.setattr(_gateway_lock, "read_status", lambda now: info)

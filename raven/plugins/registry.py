@@ -30,8 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from raven.plugin.discover import DiscoveredPlugin, Source
-from raven.plugin.manifest import PluginManifest
+from raven.plugins.discover import DiscoveredPlugin, Source
+from raven.plugins.manifest import PluginManifest
 from raven.tracing import semconv, trace
 
 logger = logging.getLogger(__name__)
@@ -272,13 +272,13 @@ class PluginRegistry:
         host. Any exception from the factory propagates so the host
         sees the real cause rather than a wrapped one.
         """
-        from raven.plugin.context import PluginContext  # local: cycle-safe
+        from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_memory_backend_factory(name)
         ctx = PluginContext(
             config=config,
             services=services,
-            logger=logger or logging.getLogger(f"raven.plugin.{name}"),
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
         )
         return factory(ctx)
 
@@ -299,13 +299,13 @@ class PluginRegistry:
         cause. The host registers the returned tool into the agent's
         :class:`ToolRegistry`.
         """
-        from raven.plugin.context import PluginContext  # local: cycle-safe
+        from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_tool_factory(name)
         ctx = PluginContext(
             config=config,
             services=services,
-            logger=logger or logging.getLogger(f"raven.plugin.{name}"),
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
         )
         return factory(ctx)
 
@@ -314,7 +314,7 @@ class PluginRegistry:
 # import cost is paid only when someone reads the class — and to avoid
 # the circular hit at module-load time (registry is imported from
 # __init__ before context is).
-from raven.plugin.context import ServiceLocator  # noqa: E402
+from raven.plugins.context import ServiceLocator  # noqa: E402
 
 __all__ = [
     "MemoryBackendFactory",

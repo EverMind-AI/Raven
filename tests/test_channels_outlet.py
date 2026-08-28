@@ -1,4 +1,4 @@
-from raven.channels.outlet import ChannelOutletAdapter
+from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import (
     ChatType,
     MediaOut,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from raven.plugin import (
+from raven.plugins import (
     DiscoveredPlugin,
     PluginDiscovery,
     Source,

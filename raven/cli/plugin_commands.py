@@ -105,7 +105,7 @@ def register(app: typer.Typer) -> None:
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
         from raven.cli._plugin_stack import plugin_discovery_sources
-        from raven.plugin import (
+        from raven.plugins import (
             PluginDiscovery,
             PluginRegistry,
         )
@@ -155,7 +155,7 @@ def _render_plugin_table(
         console.print(
             "[yellow]No plugins discovered.[/yellow] The everos backend "
             "ships bundled — run [bold]uv sync[/bold] — or drop a manifest "
-            "under [bold]~/.raven/plugin/[/bold].",
+            "under [bold]~/.raven/plugins/[/bold].",
         )
         return
 
@@ -202,7 +202,7 @@ def _render_plugin_table(
 
 def _source_label(source) -> str:
     """Friendly label for a :class:`Source` enum value."""
-    from raven.plugin import Source
+    from raven.plugins import Source
 
     return {
         Source.ENTRY_POINTS: "entry_points",

@@ -252,7 +252,7 @@ def register_aligned_methods_except_system(
     register_playbooks_methods(dispatcher)
     # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
     # already runs: skills (memory_engine.skill_forge) and plugins
-    # (raven.plugin). Registered unconditionally so a network failure reads as a
+    # (raven.plugins). Registered unconditionally so a network failure reads as a
     # handler error a caller can show, not as -32601.
     register_skillhub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_plughub_methods(dispatcher, agent_loop_factory=agent_loop_factory)

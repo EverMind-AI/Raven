@@ -64,7 +64,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     from raven.cli._plugin_stack import plugin_discovery_sources
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
-    from raven.plugin.discover import PluginDiscovery
+    from raven.plugins.discover import PluginDiscovery
 
     loop = _safe_loop(agent_loop_factory)
     ec = load_raven_config()
@@ -887,7 +887,7 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     try:
         import time
 
-        from raven.cli._gateway_lock import read_status
+        from raven.gateway.lock import read_status
 
         gateway_running = read_status(time.time()) is not None
     except Exception:
@@ -899,7 +899,7 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     # into the first is how a working channel came to read as broken.
     live = None
     try:
-        from raven.channels.live_probe import channel_liveness
+        from raven.gateway.live_probe import channel_liveness
 
         live = await channel_liveness()
     except Exception:
@@ -977,7 +977,7 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     # could ever appear, and the page said "reopen Raven App" instead of
     # signing anyone in. Ask the gateway to start (or stop) it now.
     if enabled is not None:
-        from raven.channels.live_probe import channel_start, reset_cache
+        from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
             await channel_start(name, enabled=enabled)
@@ -1003,7 +1003,7 @@ async def channels_qr(params: dict) -> dict:
     """
     name = str(params.get("name") or "")
     try:
-        from raven.channels.live_probe import channel_qr
+        from raven.gateway.live_probe import channel_qr
 
         answer = await channel_qr(name)
     except Exception:
