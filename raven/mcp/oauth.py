@@ -817,6 +817,130 @@ def _preregistered_client(server: str, oauth: Any, uri: str) -> Any:
         return None
 
 
+_REFRESH_LOCKS: dict[str, asyncio.Lock] = {}
+_REFRESH_WAIT = 5.0
+"""How long a caller that cannot park waits for another provider's refresh
+before giving up its server.
+
+Sized to what is being waited for -- one POST to a token endpoint -- and to
+nothing larger, because holding a dispatch behind somebody else's browser is the
+worse failure. Past the bound the server is dropped for this dispatch rather
+than refreshed unserialized: the holder may not have stored its replacement yet,
+and two flows consuming one rotating token leaves a credential somebody has to
+repair by hand. One turn without one optional server does not.
+"""
+
+
+@lru_cache(maxsize=4)
+def _coordinated_provider_class(base: type) -> type:
+    """``base`` with its token view refreshed from storage, and rotation serialized.
+
+    The SDK loads the stored tokens once and keeps them in memory for the life of
+    the provider. That is fine while a server has one provider, and this host has
+    two: the connection manager holds one for its own connection, and a bridged
+    dispatch needs another for the endpoint's upstream (the relay is transparent,
+    so each downstream gets its own upstream session).
+
+    Two providers on one stored credential race a rotating refresh token. Both
+    load the same one; the first refresh stores the replacement and invalidates
+    what the second still holds; the second gets ``invalid_grant`` and falls into
+    browser authorization, which for a dispatch means losing the server.
+
+    Two halves fix it, and only together. Re-reading storage on every flow means
+    a provider never submits a token another one has already replaced. The lock
+    closes the window where both read the same token before either stores its
+    replacement -- and the waiter re-reads inside it, so it usually finds a valid
+    access token and never refreshes at all.
+    """
+
+    class CoordinatedOAuthClientProvider(base):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, server_name: str, can_park: bool = True, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._server_name = server_name
+            self._can_park = can_park
+
+        async def _adopt_stored_tokens(self) -> None:
+            """This provider's view of the credential, brought level with the file.
+
+            The first pass goes through the SDK's own ``initialize``: it loads the
+            client registration as well as the tokens, and skipping it leaves
+            ``can_refresh_token`` false, so an expired token is sent as-is instead
+            of being refreshed. After that only the tokens can have moved.
+            """
+            if not self._initialized:
+                await self._initialize()
+                return
+            tokens = await self.context.storage.get_tokens()
+            if tokens is not None:
+                self.context.current_tokens = tokens
+                # The deadline travels with the token. Adopting one without it
+                # left this provider judging a fresh access token against the
+                # expiry of the one it replaced, so a waiter that had just been
+                # handed a working credential refreshed it again immediately --
+                # spending a generation of a rotating token to learn nothing.
+                self.context.update_token_expiry(tokens)
+
+        async def async_auth_flow(self, request):  # type: ignore[no-untyped-def]
+            await self._adopt_stored_tokens()
+            if self.context.current_tokens is None or self.context.is_token_valid():
+                # Nothing to rotate: either there is no credential yet, or the one
+                # on disk still works. Taking the lock here would serialize every
+                # ordinary request behind every other.
+                inner = super().async_auth_flow(request)
+                reply: Any = None
+                try:
+                    while True:
+                        try:
+                            outgoing = await inner.asend(reply)
+                        except StopAsyncIteration:
+                            return
+                        reply = yield outgoing
+                finally:
+                    await inner.aclose()
+            lock = _REFRESH_LOCKS.setdefault(self._server_name, asyncio.Lock())
+            held = False
+            try:
+                if self._can_park:
+                    await lock.acquire()
+                    held = True
+                else:
+                    try:
+                        await asyncio.wait_for(lock.acquire(), timeout=_REFRESH_WAIT)
+                    except asyncio.TimeoutError:
+                        # Give up this server rather than refresh unserialized.
+                        # Proceeding here was the whole bug in miniature: the
+                        # holder may not have stored its replacement yet, so this
+                        # flow would re-read the same token and consume it in
+                        # parallel -- one of the two then gets `invalid_grant`,
+                        # which is a credential the operator has to repair. A
+                        # dispatch losing one optional server for this turn is
+                        # the cheaper failure, and the next turn finds the
+                        # refreshed token already on disk.
+                        raise OAuthUnavailableError(
+                            f"'{self._server_name}' is being re-authorized by another connection"
+                        ) from None
+                    held = True
+                # Inside the lock, because whoever held it may have just stored a
+                # replacement -- and then there is nothing left to refresh.
+                await self._adopt_stored_tokens()
+                inner = super().async_auth_flow(request)
+                reply = None
+                try:
+                    while True:
+                        try:
+                            outgoing = await inner.asend(reply)
+                        except StopAsyncIteration:
+                            return
+                        reply = yield outgoing
+                finally:
+                    await inner.aclose()
+            finally:
+                if held:
+                    lock.release()
+
+    return CoordinatedOAuthClientProvider
+
+
 @lru_cache(maxsize=1)
 def _seeded_provider_class(base: type) -> type:
     """``base`` with the discovery requests answered from a :class:`_CatalogSeed`.
@@ -882,12 +1006,14 @@ async def provider_for(
     storage = FileTokenStorage(server, uri)
     seed = _seed_for(server, cfg, uri, storage)
     kwargs: dict[str, Any] = {}
-    cls: Any = OAuthClientProvider
+    cls: Any = _coordinated_provider_class(OAuthClientProvider)
     if seed is not None:
         if seed.client_info is not None:
             storage.use_preregistered_client(seed.client_info)
-        cls = _seeded_provider_class(OAuthClientProvider)
+        cls = _coordinated_provider_class(_seeded_provider_class(OAuthClientProvider))
         kwargs = {"seed": seed, "on_rejected": lambda: storage.disarm_seed(seed.fingerprint)}
+    kwargs["server_name"] = server
+    kwargs["can_park"] = can_park
     provider = cls(
         server_url=cfg.url,
         client_metadata=OAuthClientMetadata(
