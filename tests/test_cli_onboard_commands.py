@@ -2884,30 +2884,24 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_seeds_extension_blocks(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bootstrap materializes the memory / plugins / skillForge safe subset so a
-    fresh config exposes the knobs without writing optional service endpoints
-    or bearer tokens into the user's plaintext config."""
+def test_fresh_bootstrap_stays_sparse(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap records nothing the user did not set: a default that lands on
+    disk stops following its declaration, so the extension blocks are not
+    materialized -- their readers answer from the declared defaults."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
+    for block in ("memory", "plugins", "skillForge"):
+        assert block not in data, f"fresh config must not seed {block}"
+    from raven.config.raven import load_raven_config
 
-    assert data["memory"]["backend"] == "everos"  # schema default seeded
-    assert data["memory"]["memoryTopK"] == 5
-    assert "mode" not in data["plugins"]["config"]["everos-memory"]
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
-    assert data["skillForge"]["everos"] == {"enabled": True}
-    assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
-    assert data["skillForge"]["router"]["hub"]["apiKey"] is None
-    # No optional service fields written to the user's plaintext config.
-    for leaked in ("embeddingApiKey", "rerankerApiKey", "massLibraryDb"):
-        assert leaked not in data["skillForge"]
+    rc = load_raven_config()
+    assert rc.memory.backend == "everos"  # from the declaration, not the file
 
 
-def test_bootstrap_backfills_preexisting_config(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A config that predates the extension blocks gets them backfilled on the
-    next onboard — without clobbering values the user already set."""
-    # Simulate an older config: populated, memory.backend set, but no plugins
-    # / skillForge blocks and a hand-tuned memoryTopK.
+def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A config that predates the extension blocks is not backfilled: what the
+    user set stays byte-for-byte, and the keys they never set answer from the
+    declarations instead of being materialized."""
     tmp_env.write_text(
         json.dumps(
             {
@@ -2921,14 +2915,15 @@ def test_bootstrap_backfills_preexisting_config(tmp_env: Path, monkeypatch: pyte
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
 
-    # Pre-existing values untouched.
     assert data["providers"]["openai"]["apiKey"] == "sk-keep"
     assert data["memory"]["backend"] == "everos"
     assert data["memory"]["memoryTopK"] == 20
-    # Missing blocks / keys backfilled.
-    assert data["memory"]["userId"] == "default"
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
-    assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
+    assert "userId" not in data["memory"]  # not backfilled
+    assert "plugins" not in data and "skillForge" not in data
+    from raven.config.raven import load_raven_config
+
+    rc = load_raven_config()
+    assert rc.memory.memory_top_k == 20  # the user's value
 
 
 def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.MonkeyPatch) -> None:

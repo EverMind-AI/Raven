@@ -304,93 +304,6 @@ def set_sandbox_backend(
     return prev
 
 
-def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
-    """Seed the user-facing subset of the memory / plugins / skillForge
-    extension blocks into a fresh ``~/.raven/config.json``.
-
-    Called once by the onboarding bootstrap so a new config shows these knobs
-    at their schema defaults — discoverable and editable without reading the
-    source. Each field is only written when absent (``setdefault``), so this is
-    idempotent and never clobbers a value the user (or an earlier wizard step)
-    already set. ``memory.backend`` is seeded to its schema default
-    (``"everos"``); a fresh install with no EverOS models configured degrades
-    gracefully (empty recall + a warning, never a crash), and the wizard's
-    Step 4 / skip-guard resolve it back to ``None`` when memory is opted out or
-    left unconfigured.
-
-    Defaults are pulled from the Pydantic models so this seed can't drift from
-    the schema, with three deliberate onboard-time overrides:
-      - ``skillForge.everos.enabled`` is seeded ``True`` (per-turn extraction on
-        for a fresh install) even though the schema default is conservative-off;
-      - ``skillForge.router.hub.endpoint`` is seeded to the live Skill Hub URL
-        (the schema default is ``None`` so programmatic loads stay Hub-off);
-        ``apiKey`` is left null for the user to fill with their own token;
-      - ``plugins.config["everos-memory"]`` is seeded with only ``base_url`` so
-        the block is never empty and the user can see/edit it. Identity
-        (``user_id`` / ``agent_id``) is deliberately NOT duplicated here — it
-        comes from ``memory.userId`` / ``memory.agentId`` via the host's
-        ``ServiceLocator`` at plugin activation time.
-
-    The optional service fields on ``SkillForgeConfig`` (``embedding_url`` /
-    ``embedding_api_key`` / ``reranker_url`` / ``reranker_api_key`` /
-    ``mass_library_db``) are deliberately NOT written. They stay at public
-    schema defaults and deployments that need hosted services add explicit
-    values by hand.
-
-    Key casing follows each block's convention: ``memory`` / ``skillForge`` use
-    camelCase (the file-level alias); ``plugins.config`` is a verbatim
-    pass-through dict whose keys stay snake_case (each plugin owns its schema).
-    """
-    from raven.config.raven import (
-        MemoryConfig,
-        PluginsConfig,
-        SkillForgeRouterConfig,
-    )
-
-    path = config_path or get_config_path()
-
-    def _apply(_text: str | None) -> tuple[str, None]:
-        data = read_raw_or_raise(path)
-
-        mem = MemoryConfig()
-        memory = data.setdefault("memory", {})
-        memory.setdefault("backend", mem.backend)
-        memory.setdefault("userId", mem.user_id)
-        memory.setdefault("agentId", mem.agent_id)
-        memory.setdefault("memoryTopK", mem.memory_top_k)
-
-        plugins = data.setdefault("plugins", {})
-        plugins.setdefault("disabled", list(PluginsConfig().disabled))
-        # snake_case keys: plugins.config is handed to the plugin factory verbatim.
-        # Identity is not seeded here — it comes from ServiceLocator, sourced from
-        # memory.userId / memory.agentId at plugin activation, not duplicated.
-        plugins.setdefault("config", {}).setdefault(
-            "everos-memory",
-            {"base_url": _DEFAULT_EVEROS_BASE_URL},
-        )
-
-        router_defaults = SkillForgeRouterConfig()
-        skill_forge = data.setdefault("skillForge", {})
-        skill_forge.setdefault("enabled", True)
-        # Onboard turns per-turn extraction ON (schema default is off for
-        # non-onboard programmatic use).
-        skill_forge.setdefault("everos", {}).setdefault("enabled", True)
-        router = skill_forge.setdefault("router", {})
-        router.setdefault("enabled", router_defaults.enabled)
-        router.setdefault("weights", dict(router_defaults.weights))
-        hub = router.setdefault("hub", {})
-        # Default the Hub source ON, pointed at the shared Skill Hub. apiKey stays
-        # null — the user fills in their own Bearer token; a baked placeholder would
-        # be sent verbatim as auth. timeoutS / minSafety surface the tunable knobs.
-        hub.setdefault("endpoint", _DEFAULT_SKILL_HUB_ENDPOINT)
-        hub.setdefault("apiKey", router_defaults.hub.api_key)
-        hub.setdefault("timeoutS", router_defaults.hub.timeout_s)
-        hub.setdefault("minSafety", router_defaults.hub.min_safety)
-
-        return json.dumps(data, indent=2, ensure_ascii=False), None
-
-    atomic_update(path, _apply)
-    logger.info("config/update: seeded memory/plugins/skillForge extension defaults")
 
 
 def set_plugin_config_fields(
@@ -501,5 +414,4 @@ __all__ = [
     "set_memory_backend",
     "set_skill_blocked",
     "set_playbook_disabled",
-    "init_extension_block_defaults",
 ]

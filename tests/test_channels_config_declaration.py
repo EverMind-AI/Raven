@@ -94,3 +94,43 @@ def test_every_spec_declares_its_cargo():
     for name, spec in SPECS.items():
         if _cargo_fields(_central_model(name)):
             assert spec.config_schema, name
+
+def test_dispensed_view_answers_exactly_like_the_central_section():
+    """M1 pilot acceptance: the door changes where a value travels, never what
+    it is. Every declared key and every socket field answers identically
+    through the dispensed view; the view itself is frozen."""
+    import pytest
+
+    from raven.channels.registry import discover_specs
+    from raven.config.schema import TelegramConfig
+    from raven.core.admission import dispense_channel_config
+
+    spec = discover_specs()["telegram"]
+    section = TelegramConfig(enabled=True, token="t0k", allow_from=["42"])
+    view = dispense_channel_config(spec, section, channel="telegram")
+
+    for key in spec.config_schema:
+        assert getattr(view, key) == getattr(section, key), key
+    for socket_field in ("enabled", "allow_from", "workspace"):
+        if hasattr(section, socket_field):
+            assert getattr(view, socket_field) == getattr(section, socket_field)
+    with pytest.raises(AttributeError):
+        view.token = "other"
+
+
+def test_declared_defaults_match_the_central_model():
+    """Transition guard: until the central cargo fields retire, a declared
+    default and the central model default must be the same value -- two
+    sources of one default is how they drift."""
+    from raven.channels.registry import discover_specs
+    from raven.config.schema import ChannelsConfig
+
+    for name, spec in discover_specs().items():
+        section_model = type(getattr(ChannelsConfig(), name, None))
+        if section_model is type(None) or not spec.config_schema:
+            continue
+        defaults = section_model()
+        for key, decl in spec.config_schema.items():
+            if "default" in decl and hasattr(defaults, key):
+                assert decl["default"] == getattr(defaults, key), f"{name}.{key}"
+

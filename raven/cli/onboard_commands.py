@@ -443,8 +443,9 @@ def _bootstrap_empty_config() -> None:
 
     path = get_config_path()
     if not path.exists():
-        save_config(load_config())  # writes default Config() to disk
-    onboard_everos._init_extension_block_defaults()
+        # Creates the file; save_config dumps with exclude_defaults, so a
+        # fresh config is sparse -- it records what the user set, nothing else.
+        save_config(load_config())
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace)
