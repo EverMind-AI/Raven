@@ -22,6 +22,8 @@ from scripts.check_vendored_invariants import (
     _check,
     _unguarded_lines,
     main,
+    unchecked_forks,
+    vendored_folders,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -43,6 +45,27 @@ def test_every_invariant_names_a_path_that_exists_in_every_fork() -> None:
     for inv in INVARIANTS:
         for rel in (*inv.trunk, *(p for paths in inv.forks.values() for p in paths)):
             assert (REPO / rel).is_file(), f"[{inv.id}] {rel} is gone"
+
+
+def test_every_invariant_names_every_fork_on_disk() -> None:
+    """A fork absent from an invariant is checked for nothing and reported as
+    holding it, which is how ``raven-design`` sat outside the web-search gate
+    while the other four were covered.
+
+    Naming it in ``forks`` is the only way to account for it. Waiving it means
+    naming it there *and* in ``exempt`` -- so a waiver still says which files it
+    covers, and the test below can hold it to a reason."""
+    for inv in INVARIANTS:
+        missing = unchecked_forks(inv)
+        assert missing == [], f"[{inv.id}] these folders ship but the invariant does not name them: {missing}"
+
+
+def test_the_folder_scan_finds_the_shipped_forks() -> None:
+    """The list the check above stands on. A scan that silently returned nothing
+    would make that test vacuous, so what it finds is pinned to the tree."""
+    found = vendored_folders()
+    assert found, "no vendored folders found; the completeness check would pass vacuously"
+    assert all((REPO / "subagents" / name / "subagent.json").is_file() for name in found)
 
 
 def test_an_exemption_carries_a_reason() -> None:
@@ -153,30 +176,69 @@ def test_a_missing_path_fails_rather_than_passes(tmp_path: Path) -> None:
     assert problem is not None and "cannot read" in problem
 
 
-def _run(monkeypatch, invariants: tuple[GuardedRegistration, ...]) -> int:
+def _run(monkeypatch, invariants: tuple[GuardedRegistration, ...], tmp_path: Path) -> int:
+    """Drive ``main`` over a synthetic registry, on a tree that registry matches.
+
+    These cases name one fork on purpose, to isolate one verdict. ``main`` now
+    also refuses a fork the registry does not name, so the real five-folder tree
+    would add four unrelated failures to every one of them. The tree is patched
+    instead of the completeness check being made optional: a gate with an off
+    switch is one an omission can be waved through, which is the defect these
+    tests sit next to.
+    """
+    # Created first, so an invariant naming no fork at all still leaves a tree to
+    # scan rather than an `iterdir` on a missing directory.
+    tree = tmp_path / "subagents"
+    tree.mkdir(parents=True, exist_ok=True)
+    for inv in invariants:
+        for fork in inv.forks:
+            (tree / fork).mkdir(parents=True, exist_ok=True)
+            (tree / fork / "subagent.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr("scripts.check_vendored_invariants.INVARIANTS", invariants)
+    monkeypatch.setattr("scripts.check_vendored_invariants.VENDOR_ROOT", tree)
     return main([])
 
 
-def test_a_lagging_fork_fails_the_run(monkeypatch, capsys) -> None:
+def test_a_lagging_fork_fails_the_run(monkeypatch, capsys, tmp_path: Path) -> None:
     lagging = replace(
         WEB_SEARCH,
         forks={"raven-oncall": ("subagents/raven-oncall/Raven-Oncall/raven/agent/tools/web.py",)},
     )
-    assert _run(monkeypatch, (lagging,)) == 1
+    assert _run(monkeypatch, (lagging,), tmp_path) == 1
     assert "raven-oncall" in capsys.readouterr().err
 
 
-def test_an_exempt_fork_is_not_checked(monkeypatch) -> None:
+def test_an_exempt_fork_is_not_checked(monkeypatch, tmp_path: Path) -> None:
     exempted = replace(
         WEB_SEARCH,
         forks={"raven-oncall": ("subagents/raven-oncall/Raven-Oncall/raven/agent/tools/web.py",)},
         exempt={"raven-oncall": "not this fork's job"},
     )
-    assert _run(monkeypatch, (exempted,)) == 0
+    assert _run(monkeypatch, (exempted,), tmp_path) == 0
 
 
-def test_a_trunk_that_moved_fails_the_run(monkeypatch, capsys) -> None:
+def test_the_executable_fails_when_a_manifested_fork_is_unnamed(monkeypatch, capsys) -> None:
+    """The gate itself, on the real tree, not just the assertion above it.
+
+    Reporting completeness only from the test suite left
+    ``python3 scripts/check_vendored_invariants.py`` and the invariant half of
+    ``make lint`` exiting 0 on the omission they exist to catch -- so the one
+    command a contributor runs gave a false green. Drops ``raven-design`` from
+    the shipped registry and requires the executable to refuse it.
+    """
+    omitted = replace(WEB_SEARCH, forks={f: p for f, p in WEB_SEARCH.forks.items() if f != "raven-design"})
+    monkeypatch.setattr("scripts.check_vendored_invariants.INVARIANTS", (omitted,))
+
+    assert main([]) == 1
+    err = capsys.readouterr().err
+    assert "raven-design" in err
+    # The remedy, not just the name: an omission and a lagging fork are fixed
+    # differently, and one message covering both would misdirect whichever it
+    # was not written for.
+    assert "does not list" in err
+
+
+def test_a_trunk_that_moved_fails_the_run(monkeypatch, capsys, tmp_path: Path) -> None:
     moved = replace(WEB_SEARCH, trunk=("raven/agent/tools/web.py",), forks={})
-    assert _run(monkeypatch, (moved,)) == 1
+    assert _run(monkeypatch, (moved,), tmp_path) == 1
     assert "trunk" in capsys.readouterr().err
