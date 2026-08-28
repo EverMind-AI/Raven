@@ -684,3 +684,50 @@ def test_a_wrapping_provider_forwards_the_id_its_inner_will_send() -> None:
     assert not offenders, (
         "these providers hand a chat call to an inner but answer wire_model_id themselves: " + "; ".join(offenders)
     )
+
+
+def test_every_concrete_chat_accepts_a_per_call_timeout() -> None:
+    """The flow gates slice their budget into short attempts and pass the
+    deadline as ``timeout=``; the retry ladder forwards it to ``chat``. A
+    concrete ``chat`` that lacks the parameter turns every sliced call into a
+    TypeError-shaped error response whose text ("unexpected keyword argument
+    'timeout'") classifies as retryable network -- the reviewer then burns its
+    whole retry ladder and silently fail-opens on that provider. Found as three
+    signatures that predated the parameter; swept so the next provider cannot
+    reintroduce it.
+    """
+    import importlib
+    import inspect
+    import pkgutil
+
+    import raven.providers
+    from raven.providers.base import LLMProvider
+
+    # Import every module in the package so ``__subclasses__`` sees the full
+    # tree -- a hardcoded class list is exactly what would let the next
+    # provider skip the sweep.
+    for info in pkgutil.iter_modules(raven.providers.__path__):
+        importlib.import_module(f"raven.providers.{info.name}")
+
+    def _all_subclasses(cls: type) -> set[type]:
+        out = set()
+        for sub in cls.__subclasses__():
+            out.add(sub)
+            out |= _all_subclasses(sub)
+        return out
+
+    # In-tree classes only: a full-suite run has already imported test modules
+    # whose local stubs subclass LLMProvider with deliberately legacy signatures.
+    swept = [LLMProvider, *sorted(
+        (c for c in _all_subclasses(LLMProvider) if c.__module__.startswith("raven.providers")),
+        key=lambda c: c.__name__,
+    )]
+    assert len(swept) >= 6, "the sweep lost sight of the provider tree"
+    for cls in swept:
+        if "chat" not in cls.__dict__ and cls is not LLMProvider:
+            continue  # inherits a compliant chat; the definer is swept
+        params = inspect.signature(cls.chat).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            continue  # forwards **kwargs (the rotor shape), same guarantee
+        assert "timeout" in params, f"{cls.__name__}.chat lacks the per-call timeout parameter"
+        assert params["timeout"].default is None, f"{cls.__name__}.chat: timeout must default to None"

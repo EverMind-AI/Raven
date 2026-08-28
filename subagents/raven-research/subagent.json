@@ -1,7 +1,7 @@
 {
   "name": "Raven-Research",
   "kind": "acp",
-  "description": "A powerful research agent that can research a topic by searching and reading the live web, then commits a sourced report. Use this agent to get comprehensive information. IMPORTANT: Only ask this agent to generate a research report.",
+  "description": "A research agent that answers a question by searching and reading the live web, then commits a sourced report. IMPORTANT: Only ask this agent to generate a research report.",
   "owns": "owns research: anything needing the live web read and a sourced write-up. Do not research it yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py",

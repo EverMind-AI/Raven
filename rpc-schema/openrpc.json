@@ -2239,6 +2239,65 @@
       "errors": []
     },
     {
+      "name": "subagents.instance.set_mode",
+      "summary": "Report, set or clear the operating mode of one direct-chat instance. Neither field reports; clear=true restores the agent's own default; mode=<id> switches from the next turn on. Always answers with the mode in force and the whole menu, so one reply is enough to draw the control.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "mode",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": { "type": "boolean" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceSetModeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "mode": {
+              "type": ["string", "null"],
+              "description": "The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error."
+            },
+            "availableModes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "system.hello",
       "summary": "Initial handshake (must be the first RPC call from client).",
       "params": [

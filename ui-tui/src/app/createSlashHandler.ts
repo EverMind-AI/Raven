@@ -9,20 +9,30 @@ import type { SlashRunCtx } from './slash/types.js'
 
 import { parseSlashCommand } from '../domain/slash.js'
 import { asCommandDispatch, rpcErrorMessage } from '../lib/rpc.js'
+import { getDirectChat, panelInTarget, sysInTarget } from './directChatStore.js'
 import { findSlashCommand } from './slash/registry.js'
 import { getUiState } from './uiStore.js'
 
 export function createSlashHandler(ctx: SlashHandlerContext): (cmd: string) => boolean {
   const { gw } = ctx.gateway
   const { catalog } = ctx.local
-  const { page, send, sys } = ctx.transcript
+  const { page, send } = ctx.transcript
 
   const handler = (cmd: string): boolean => {
     const flight = ++ctx.slashFlightRef.current
     const ui = getUiState()
     const sid = ui.sid
+    // Captured for the same reason `sid` is, one line up: the answer to a slash
+    // command usually arrives from an RPC, and the view can move while it is in
+    // flight. Both halves of the reply -- the routing here and the instance the
+    // command names in its own text -- have to mean the chat that asked.
+    const target = getDirectChat().active
     const parsed = parseSlashCommand(cmd)
     const argTail = parsed.arg ? ` ${parsed.arg}` : ''
+
+    const sys = (text: string) => sysInTarget(ctx.transcript.sys, target, text)
+    const panel = (title: string, sections: Parameters<typeof ctx.transcript.panel>[1]) =>
+      panelInTarget(ctx.transcript.panel, target, title, sections)
 
     const stale = () => flight !== ctx.slashFlightRef.current || getUiState().sid !== sid
 
@@ -40,7 +50,16 @@ export function createSlashHandler(ctx: SlashHandlerContext): (cmd: string) => b
       }
     }
 
-    const runCtx: SlashRunCtx = { ...ctx, flight, guarded, guardedErr, sid, stale, ui }
+    const runCtx: SlashRunCtx = {
+      ...ctx,
+      flight,
+      guarded,
+      guardedErr,
+      sid,
+      stale,
+      transcript: { ...ctx.transcript, panel, sys },
+      ui
+    }
 
     const found = findSlashCommand(parsed.name)
 

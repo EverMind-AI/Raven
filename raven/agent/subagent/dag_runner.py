@@ -152,6 +152,7 @@ async def run_dag(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     auto_instances: frozenset[str] = frozenset(),
     everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     desk: AdjudicationDesk | None = None,
     adjudication_timeout_s: float = 600.0,
@@ -409,6 +410,7 @@ async def run_dag(
                         progress_publisher=progress_publisher,
                         state_for=state_for,
                         everos_for=everos_for,
+                        mode_for=mode_for,
                         capabilities=capabilities,
                         session_key=session_key,
                         subagents_root=subagents_root,
@@ -909,6 +911,7 @@ async def _run_group(
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -947,6 +950,7 @@ async def _run_group(
             semaphore=semaphore,
             state_for=state_for,
             everos_for=everos_for,
+            mode_for=mode_for,
             capabilities=capabilities,
             progress_publisher=progress_publisher,
             session_key=session_key,
@@ -1078,6 +1082,7 @@ async def _run_node(
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1157,6 +1162,11 @@ async def _run_node(
                 if (state_for is not None and node.instance)
                 else None
             )
+            # The effort level, on the same terms. The `instance` goes in rather
+            # than the handle this node dispatches under: a node that names none
+            # runs at the agent's own default, which the resolver answers for it
+            # rather than each lane deciding again.
+            node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same
             # account of its tool calls and token cost that a spawned call gets,
@@ -1198,6 +1208,7 @@ async def _run_node(
                             executor=sandbox,
                             session_key=session_key,
                             instance=node.instance,
+                            mode=node_mode,
                             **state_kwargs,
                         )
                     finally:

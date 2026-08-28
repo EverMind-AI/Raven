@@ -983,7 +983,14 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
           setSessionStartedAt
         },
         slashFlightRef,
-        transcript: { page, panel, send, setHistoryItems, sys, trimLastExchange: session.trimLastExchange },
+        transcript: {
+          page,
+          panel,
+          send,
+          setHistoryItems,
+          sys,
+          trimLastExchange: session.trimLastExchange
+        },
         voice: { setVoiceEnabled, setVoiceRecordKey }
       }),
     [
@@ -995,9 +1002,9 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       hasSelection,
       maybeWarn,
       page,
-      panel,
       paste,
       selection,
+      panel,
       send,
       session,
       sys

@@ -20,6 +20,7 @@ from raven.rpc.methods.instances import (
     instances_forget,
     instances_history,
     instances_list,
+    instances_set_mode,
     instances_steer,
 )
 
@@ -1481,3 +1482,177 @@ def test_log_turns_carry_the_steer_mark_and_nothing_else_grows_one() -> None:
     )
     assert "steer" not in turns[0]
     assert turns[1]["steer"] is True
+
+
+# --- instance modes ---------------------------------------------------------
+
+
+class _ModedManager(_FakeManager):
+    """A manager whose agent offers two modes, recording what was set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from raven.agent.acp.capabilities import AcpMode
+
+        self._modes = (AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer"))
+        self.applied: list[tuple[str, str, str, str | None]] = []
+        self.held: dict[tuple[str, str, str], str] = {}
+
+    def agent_modes(self, agent: str):
+        return self._modes if agent == "Researcher" else ()
+
+    def instance_mode(self, session_key, agent, handle):
+        return self.held.get((session_key or "", agent, handle))
+
+    def set_instance_mode(self, session_key, agent, handle, mode):
+        if mode is not None and mode not in [m.id for m in self.agent_modes(agent)]:
+            raise ValueError(f"{agent!r} has no mode {mode!r}; it offers fast, deep")
+        self.applied.append((session_key, agent, handle, mode))
+        key = (session_key or "", agent, handle)
+        if mode is None:
+            self.held.pop(key, None)
+        else:
+            self.held[key] = mode
+        return mode
+
+
+async def test_setting_a_mode_answers_with_the_whole_menu(_isolated_registry: Any) -> None:
+    """One reply is enough to draw the control: a caller that had to ask for the
+    catalogue separately would render the new mode against a stale list."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModedManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1", "mode": "deep"}
+
+    out = await instances_set_mode(params, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert out["mode"] == "deep"
+    assert [m["id"] for m in out["availableModes"]] == ["fast", "deep"]
+    assert out["availableModes"][1]["description"] == "searches longer"
+    assert manager.applied == [("tui:s1", "Researcher", "h1", "deep")]
+
+
+async def test_clearing_is_asked_for_by_its_own_field_not_a_reserved_mode_id(_isolated_registry: Any) -> None:
+    """An agent is free to call one of its own modes "default", so the clear is a
+    separate field; a bare call with neither field only reports."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModedManager()
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+    await instances_set_mode({**key, "mode": "deep"}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    reported = await instances_set_mode(dict(key), agent_loop_factory=lambda: _FakeLoop(manager))
+    cleared = await instances_set_mode({**key, "clear": True}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert reported["mode"] == "deep"
+    assert cleared["mode"] is None
+    assert manager.applied == [
+        ("tui:s1", "Researcher", "h1", "deep"),
+        ("tui:s1", "Researcher", "h1", None),
+    ]
+
+
+async def test_an_unknown_mode_is_refused_rather_than_silently_dropped(_isolated_registry: Any) -> None:
+    """A silent no-op would leave the next turn at the old effort with the UI
+    showing the new one."""
+    from raven.rpc.errors import ConfigValidationError
+
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModedManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1", "mode": "turbo"}
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await instances_set_mode(params, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert "turbo" in caught.value.detail and "fast, deep" in caught.value.detail
+    assert manager.applied == []
+
+
+async def test_a_mode_set_on_an_unknown_handle_is_refused_not_echoed_back(_isolated_registry: Any) -> None:
+    """The override is held per instance, so one stored against a handle that does
+    not exist is written where nothing will ever read it -- and the reply would
+    still say it landed. Reads stay tolerant; only the write is checked."""
+    from raven.rpc.errors import ConfigValidationError
+
+    manager = _ModedManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "typo", "mode": "deep"}
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await instances_set_mode(params, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert "Researcher/typo" in caught.value.detail
+    assert manager.applied == []
+
+
+async def test_a_write_without_a_manager_is_an_error_not_a_silent_no_op(_isolated_registry: Any) -> None:
+    """A read degrades to empty like every read here; a write must not, or the
+    caller renders the mode it asked for over an override never recorded."""
+    from raven.rpc.errors import ConfigValidationError
+
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+
+    assert await instances_set_mode(dict(key), agent_loop_factory=None) == {"mode": None, "availableModes": []}
+
+    with pytest.raises(ConfigValidationError):
+        await instances_set_mode({**key, "mode": "deep"}, agent_loop_factory=None)
+    with pytest.raises(ConfigValidationError):
+        await instances_set_mode({**key, "clear": True}, agent_loop_factory=None)
+
+
+async def test_forgetting_an_instance_drops_its_mode_override(_isolated_registry: Any) -> None:
+    """A handle is reusable, so an override left behind would put a later instance
+    of the same name at an effort level nobody chose for it."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModedManager()
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+    await instances_set_mode({**key, "mode": "deep"}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    out = await instances_forget(dict(key), agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert out == {"removed": True}
+    assert manager.applied[-1] == ("tui:s1", "Researcher", "h1", None)
+
+
+async def test_an_agent_with_no_modes_reports_an_empty_menu(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_spawn("tui:s1", "Coder", "h1", "completed")
+    manager = _ModedManager()
+    params = {"session_key": "tui:s1", "agent": "Coder", "handle": "h1"}
+
+    out = await instances_set_mode(params, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert out == {"mode": None, "availableModes": []}
+
+
+async def test_every_set_mode_answer_satisfies_the_published_result_schema(_isolated_registry: Any) -> None:
+    """The wire contract, checked against what the handler actually returns.
+
+    ``tests/test_rpc_schema_match.py`` strips the null branch off both sides
+    before comparing (it says so at the top), so a nullable Pydantic field over
+    a non-nullable OpenRPC one is invisible to it. That gap let this method ship
+    declaring ``mode`` a bare string while three of its four answers -- both
+    reads and every clear -- carry null, which a generated client types as
+    ``string`` and a schema-validating client rejects outright.
+    """
+    from jsonschema import Draft7Validator
+
+    schema = json.loads((Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json").read_text())
+    method = next(m for m in schema["methods"] if m["name"] == "subagents.instance.set_mode")
+    validator = Draft7Validator(method["result"]["schema"])
+
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModedManager()
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+
+    def loop() -> Any:
+        return _FakeLoop(manager)
+
+    answers = {
+        "read with no override": await instances_set_mode(dict(key), agent_loop_factory=loop),
+        "set": await instances_set_mode({**key, "mode": "deep"}, agent_loop_factory=loop),
+        "read with one": await instances_set_mode(dict(key), agent_loop_factory=loop),
+        "clear": await instances_set_mode({**key, "clear": True}, agent_loop_factory=loop),
+        "no agent loop": await instances_set_mode(dict(key), agent_loop_factory=None),
+    }
+
+    assert [a["mode"] for a in answers.values()] == [None, "deep", "deep", None, None]
+    for label, answer in answers.items():
+        assert not list(validator.iter_errors(answer)), f"{label}: {[e.message for e in validator.iter_errors(answer)]}"

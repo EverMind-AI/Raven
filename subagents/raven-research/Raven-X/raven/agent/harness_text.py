@@ -104,21 +104,48 @@ def fetch_gate_notice() -> str:
     )
 
 
+SUFFICIENCY_PREFIX = "Research is sufficient for this task:"
+"""Opening of the sufficiency gate's note (``flow.sufficiency``).
+
+Its own wording for the same reason the fetch gate has one: three rules now write a
+sentence into a trajectory and a reader who finds one has to be able to tell which fired.
+This one is also the only note of the three that RELEASES rather than restricts, which is
+the distinction most worth keeping legible.
+"""
+
+
+def sufficiency_notice() -> str:
+    """The one sentence the sufficiency gate writes when the evidence already decides it.
+
+    No interpolation, for the reason ``fetch_gate_notice`` gives at length: a varying
+    string forces the strict recogniser below to reconstruct it across a range of values.
+    The verdict's reason and the judge's latency belong in ``counters()`` and the ledger,
+    where something can aggregate them.
+    """
+    return (
+        f"{SUFFICIENCY_PREFIX} an independent review of the pages you have opened "
+        "finds they already decide the answer. Do not open new leads. Write the "
+        "final answer now from the evidence above: the answer itself first, then "
+        "the evidence that decides it with source URLs."
+    )
+
+
 # Permissive recognisers: (name, matcher). Used only where a false positive is
 # free. Keep the names stable - they are the diagnostic a reader gets back.
 _HARNESS_BODIES: tuple[tuple[str, object], ...] = (
     ("tool_output_elided", lambda s: TOOL_OUTPUT_ELIDED in s),
     ("search_closed", lambda s: s.lstrip().startswith(SEARCH_CLOSED_PREFIX)),
 )
-# ``fetch_gate`` is deliberately absent from the permissive table, which inverts
-# the rule stated at the top of this module. The reason is that it is the first
-# harness body that does not occupy a message of its own: the gate appends its
-# sentence to the newest tool result, because a turn whose tool list just shrank
-# needs the explanation attached to what it is already reading. So a permissive
-# match on it would condemn the *real tool result it rides on*, and the stated
-# price of a permissive false positive - "the pack reaches one item further
-# back" - is not what would be paid; the pack would lose evidence. Strict-only,
-# below, where the whole-string test cannot mistake a note for its host.
+# ``fetch_gate`` and ``sufficiency`` are deliberately absent from the permissive
+# table, which inverts the rule stated at the top of this module. The reason is that
+# they are the two harness bodies that do not occupy a message of their own: each
+# appends its sentence to the newest tool result, because a turn whose tool list just
+# shrank - or whose research was just called finished - needs the explanation attached
+# to what it is already reading. So a permissive match would condemn the *real tool
+# result the note rides on*, and the stated price of a permissive false positive - "the
+# pack reaches one item further back" - is not what would be paid; the pack would lose
+# evidence. Strict-only, below, where the whole-string test cannot mistake a note for
+# its host.
 
 
 def is_elided_tool_output(content: object) -> bool:
@@ -183,6 +210,8 @@ def is_harness_echo(answer: object) -> bool:
         return True
     if s == fetch_gate_notice():
         return True
+    if s == sufficiency_notice():
+        return True
     # ``k`` is a small configured integer (``saturation.k``, default 10). Rather
     # than plumb the live value into every caller - which would make the check
     # depend on config and therefore fail open when the config is absent - the
@@ -193,6 +222,7 @@ def is_harness_echo(answer: object) -> bool:
 
 __all__ = [
     "FETCH_GATE_PREFIX",
+    "SUFFICIENCY_PREFIX",
     "SEARCH_CLOSED_PREFIX",
     "TOOL_OUTPUT_ELIDED",
     "fetch_gate_notice",
@@ -201,4 +231,5 @@ __all__ = [
     "is_harness_authored",
     "is_harness_echo",
     "search_closed_notice",
+    "sufficiency_notice",
 ]

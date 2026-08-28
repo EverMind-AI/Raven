@@ -443,6 +443,7 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -454,6 +455,9 @@ class LLMProvider(ABC):
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
             tool_choice: Tool selection strategy ("auto", "required", or specific tool dict).
+            timeout: Per-call deadline in seconds; ``None`` uses the provider's
+                generation default. Part of the abstract signature so a sliced
+                caller (verify/sufficiency) works against every in-tree provider.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -727,6 +731,7 @@ class LLMProvider(ABC):
         temperature: object,
         reasoning_effort: object,
         tool_choice: str | dict[str, Any] | None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Run a single model through the retry ladder, classifying each failure.
 
@@ -744,6 +749,13 @@ class LLMProvider(ABC):
         for attempt in range(1, total_attempts + 1):
             exc: Exception | None = None
             try:
+                # Forwarded only when set, so an unset deadline stays
+                # byte-identical to the calls every arm was measured under.
+                # Every in-tree ``chat`` accepts the parameter (it is in the
+                # abstract signature); a third-party subclass that predates it
+                # only breaks for sliced callers, and then as a classified
+                # error naming the unexpected keyword (the ladder converts the
+                # TypeError) rather than a silently dropped deadline.
                 response = await self.chat(
                     messages=messages,
                     tools=tools,
@@ -752,6 +764,7 @@ class LLMProvider(ABC):
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     tool_choice=tool_choice,
+                    **({"timeout": timeout} if timeout is not None else {}),
                 )
             except asyncio.CancelledError:
                 raise
@@ -857,6 +870,7 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
         fallback_models: list[str] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient failures, then fall back models.
 
@@ -869,7 +883,9 @@ class LLMProvider(ABC):
 
         Parameters default to ``self.generation`` when not explicitly passed,
         so callers no longer need to thread temperature / max_tokens /
-        reasoning_effort through every layer.
+        reasoning_effort through every layer. ``timeout`` is per-call: forwarded
+        to ``chat`` only when set, so an unset value keeps the provider's
+        configured deadline byte-for-byte.
         """
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
@@ -919,6 +935,7 @@ class LLMProvider(ABC):
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
+                timeout=timeout,
             )
             if response.finish_reason != "error":
                 # Judged here, not by the caller: this runs inside the
