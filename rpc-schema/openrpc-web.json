@@ -2,7 +2,7 @@
   "openrpc": "1.2.6",
   "info": {
     "title": "Raven Web RPC",
-    "description": "JSON-RPC 2.0 contract for the gateway's web channel: the raven.* namespace served by raven/web_rpc over ws://<host>:<port>/ws and spoken by ui-webui/service. The terminal-dialect methods the same dispatcher also serves (system.*, turn.*, subagents.instance*) are declared in rpc-schema/openrpc.json, not here. Pydantic v2 models live in raven/web_rpc/models.py; drift is caught in CI by tests/test_web_rpc_schema_match.py.",
+    "description": "JSON-RPC 2.0 contract for the gateway's web channel: the raven.* namespace served by raven/web_rpc over ws://<host>:<port>/ws and spoken by a WebSocket client. The terminal-dialect methods the same dispatcher also serves (system.*, turn.*, subagents.instance*) are declared in rpc-schema/openrpc.json, not here. Pydantic v2 models live in raven/web_rpc/models.py; drift is caught in CI by tests/test_web_rpc_schema_match.py.",
     "version": "0.1.0",
     "license": {
       "name": "MIT",

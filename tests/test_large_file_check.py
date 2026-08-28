@@ -71,8 +71,8 @@ def test_detects_blocked_assets_even_when_small(tmp_path: Path) -> None:
 
 
 def test_allows_blocked_extensions_inside_application_source(tmp_path: Path) -> None:
-    entry = tmp_path / "ui-webui" / "frontend" / "index.html"
-    logo = tmp_path / "ui-webui" / "frontend" / "src" / "assets" / "logo.svg"
+    entry = tmp_path / "ui-tui" / "index.html"
+    logo = tmp_path / "ui-tui" / "src" / "assets" / "logo.svg"
     tui_icon = tmp_path / "ui-tui" / "src" / "icon.svg"
     bridge_page = tmp_path / "bridge" / "src" / "panel.html"
     for target in (entry, logo, tui_icon, bridge_page):
@@ -81,8 +81,8 @@ def test_allows_blocked_extensions_inside_application_source(tmp_path: Path) -> 
 
     violations = check_large_files.find_blocked_asset_files(
         [
-            "ui-webui/frontend/index.html",
-            "ui-webui/frontend/src/assets/logo.svg",
+            "ui-tui/index.html",
+            "ui-tui/src/assets/logo.svg",
             "ui-tui/src/icon.svg",
             "bridge/src/panel.html",
         ],
@@ -134,27 +134,23 @@ def test_raven_design_skill_reference_images_still_obey_size_limit(tmp_path: Pat
 
 
 def test_still_blocks_report_assets_that_merely_mention_an_app_tree(tmp_path: Path) -> None:
-    shot = tmp_path / "docs" / "ui-webui-overview.png"
+    shot = tmp_path / "docs" / "webui-overview.png"
     shot.parent.mkdir(parents=True)
     shot.write_bytes(b"x")
 
-    violations = check_large_files.find_blocked_asset_files(["docs/ui-webui-overview.png"], root=tmp_path)
+    violations = check_large_files.find_blocked_asset_files(["docs/webui-overview.png"], root=tmp_path)
 
-    assert violations == [check_large_files.BlockedAssetViolation(path="docs/ui-webui-overview.png", extension=".png")]
+    assert violations == [check_large_files.BlockedAssetViolation(path="docs/webui-overview.png", extension=".png")]
 
 
 def test_application_source_exemption_does_not_lift_the_size_limit(tmp_path: Path) -> None:
-    bundle = tmp_path / "ui-webui" / "frontend" / "public" / "hero.png"
+    bundle = tmp_path / "ui-tui" / "public" / "hero.png"
     bundle.parent.mkdir(parents=True)
     bundle.write_bytes(b"x" * 32)
 
-    violations = check_large_files.find_oversized_files(
-        ["ui-webui/frontend/public/hero.png"], max_bytes=16, root=tmp_path
-    )
+    violations = check_large_files.find_oversized_files(["ui-tui/public/hero.png"], max_bytes=16, root=tmp_path)
 
-    assert violations == [
-        check_large_files.FileSizeViolation(path="ui-webui/frontend/public/hero.png", size=32, limit=16)
-    ]
+    assert violations == [check_large_files.FileSizeViolation(path="ui-tui/public/hero.png", size=32, limit=16)]
 
 
 def test_changed_paths_reads_added_and_modified_files(monkeypatch) -> None:

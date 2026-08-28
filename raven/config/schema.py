@@ -732,8 +732,14 @@ class GatewayLogConfig(Base):
 
 
 class GatewayWebConfig(ChannelBase):
-    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint the
-    web backend connects to as a client (ui-webui P1).
+    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint a
+    client connects to over a WebSocket.
+
+    Configured off by default, but the gateway starts the endpoint either way --
+    see ``raven/cli/gateway_commands.py``: this flag decides whether the
+    configured host/port/token are used, not whether the channel exists, because
+    the endpoint is also how any other process asks a live channel adapter what
+    it is actually doing.
 
     Off by default. When enabled, the gateway hosts a ``web`` channel — its own
     streaming spine (build_web) plus a WS server — alongside the IM channels,
