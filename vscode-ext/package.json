@@ -1,0 +1,65 @@
+{
+  "name": "raven-vscode",
+  "displayName": "Raven",
+  "description": "Open the Raven TUI inside the VS Code integrated terminal.",
+  "version": "0.1.0",
+  "publisher": "evermind",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=22"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished", "onCommand:raven.openTui"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "raven.openTui",
+        "title": "Raven: Open TUI",
+        "icon": "$(terminal)"
+      }
+    ],
+    "configuration": {
+      "title": "Raven",
+      "properties": {
+        "raven.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the raven executable. Leave empty to resolve it from PATH or via uv."
+        },
+        "raven.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra arguments passed after `raven tui`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "type-check": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "fmt": "prettier --check 'src/**/*.{ts,tsx}'",
+    "fix": "npm run lint:fix && prettier --write 'src/**/*.{ts,tsx}'",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8",
+    "@typescript-eslint/parser": "^8",
+    "eslint": "^9",
+    "eslint-plugin-perfectionist": "^5",
+    "eslint-plugin-unused-imports": "^4",
+    "prettier": "^3",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.3"
+  }
+}
