@@ -1872,7 +1872,7 @@ class AgentLoop:
             ask.set_wake_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
 
     _WATCHED_TOOLS = {"list_dir": "path", "read_file": "path", "grep": "path",
-                      "find": "path", "exec": "command"}
+                      "find": "path", "exec": "command", "web_fetch": "url"}
 
     async def _note_watched_path(
         self, name: str, args: dict[str, Any], result: str, message: str
@@ -1941,7 +1941,18 @@ class AgentLoop:
             # swallowed it into one debug line, so the nudge had never once
             # reached an exec call, which is the tool that does most of the
             # looking. The judgement had run and been paid for every time.
-            hits = re.findall(r"(/[^\s'\"|;&>]+)", subject) if key == "command" else [subject]
+            # A command is searched for paths and URLs, and offered whole: the
+            # subject the owner named rarely reappears verbatim -- a pipeline
+            # named by web URL is looked at through a CLI call carrying the
+            # project slug percent-encoded -- and the whole-command hit is what
+            # lets anchor matching see it (a path-typed subject never matches a
+            # whole command, so paths lose nothing).
+            if key == "command":
+                hits = re.findall(r"(/[^\s'\"|;&>]+)", subject)
+                hits += re.findall(r"(https?://[^\s'\"|;&>]+)", subject)
+                hits.append(subject)
+            else:
+                hits = [subject]
             if any(verdict.claims(h) for h in hits):
                 return result + watched.provenance_line()
         except Exception:  # noqa: BLE001 -- a look must not fail over a judgement

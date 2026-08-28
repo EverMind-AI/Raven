@@ -22,7 +22,7 @@ from raven.agent.subagent import watch_work
 
 def test_a_clean_yes_carries_its_paths():
     v = watch_work.read_verdict('{"watched": true, "paths": ["/tmp/arena"]}')
-    assert v.watched and v.paths == ["/tmp/arena"]
+    assert v.watched and v.subjects == ["/tmp/arena"]
 
 
 def test_prose_around_the_json_is_tolerated():
@@ -36,7 +36,7 @@ def test_everything_unreadable_or_unsure_is_a_quiet_no(reply):
 
 
 def test_claims_covers_the_path_and_what_sits_under_it():
-    v = watch_work.Verdict(watched=True, paths=["/tmp/arena"])
+    v = watch_work.Verdict(watched=True, subjects=["/tmp/arena"])
     assert v.claims("/tmp/arena")
     assert v.claims("/tmp/arena/runs/t1/config.json")
     assert not v.claims("/tmp/elsewhere")
@@ -44,7 +44,46 @@ def test_claims_covers_the_path_and_what_sits_under_it():
 
 
 def test_a_no_claims_nothing_even_with_paths():
-    assert watch_work.Verdict(watched=False, paths=["/tmp/arena"]).claims("/tmp/arena") is False
+    assert watch_work.Verdict(watched=False, subjects=["/tmp/arena"]).claims("/tmp/arena") is False
+
+
+def test_a_legacy_paths_reply_still_reads():
+    v = watch_work.read_verdict('{"watched": true, "paths": ["/tmp/arena"]}')
+    assert v.watched and v.subjects == ["/tmp/arena"]
+
+
+def test_a_url_subject_claims_the_cli_call_that_reaches_it():
+    """The measured shape (2026-08-28): the owner names a pipeline by web URL,
+    and every look arrives as a glab call carrying the project slug
+    percent-encoded. Neither side contains the other verbatim."""
+    v = watch_work.Verdict(watched=True, subjects=["https://gitlab.com/npc-work/aic/ai/raven/-/pipelines/2798916676"])
+    assert v.claims("glab api projects/npc-work%2Faic%2Fai%2Fraven/pipelines/2798916676 2>&1")
+    assert v.claims("https://gitlab.com/npc-work/aic/ai/raven/-/pipelines/2798916676")
+    assert not v.claims("glab api projects/other%2Fproject/pipelines/999")
+    assert not v.claims("ls /tmp")
+
+
+def test_a_relative_path_keeps_the_containment_it_always_had():
+    """The review's counterexample: a leading-slash dispatch lost this claim,
+    while the prior unconditional Path containment granted it."""
+    v = watch_work.Verdict(watched=True, subjects=["run"])
+    assert v.claims("run/job.sh")
+    assert v.claims("run")
+    assert not v.claims("elsewhere/job.sh")
+    assert not v.claims("run-old/job.sh"), "a sibling with a longer name is not under it"
+
+
+def test_a_short_handle_is_still_claimable():
+    v = watch_work.Verdict(watched=True, subjects=["@bob"])
+    assert v.claims("glab api /users/@bob/events")
+    assert not v.claims("glab api /users/@alice/events")
+
+
+def test_a_url_subject_never_claims_a_mere_path_and_vice_versa():
+    url = watch_work.Verdict(watched=True, subjects=["https://gitlab.com/g/p/-/pipelines/12345678"])
+    assert not url.claims("/tmp/arena/runs/t1")
+    path = watch_work.Verdict(watched=True, subjects=["/tmp/arena"])
+    assert not path.claims("glab api projects/g%2Fp/pipelines/12345678")
 
 
 # --- asked_for: the judgement reads the owner's words, not the runtime glue ---

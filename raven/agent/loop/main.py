@@ -2743,7 +2743,14 @@ class AgentLoop:
     # web config surface. Kept as a name only: both apply the whole list.
     apply_third_party_subagents = apply_agents
 
-    _WATCHED_TOOLS = {"list_dir": "path", "read_file": "path", "grep": "path", "find": "path", "exec": "command"}
+    _WATCHED_TOOLS = {
+        "list_dir": "path",
+        "read_file": "path",
+        "grep": "path",
+        "find": "path",
+        "exec": "command",
+        "web_fetch": "url",
+    }
 
     async def _note_watch_work(self, state: Any, name: str, args: dict[str, Any], result: str, message: str) -> str:
         """Add one line when a look landed on a path the owner asked about.
@@ -2817,7 +2824,18 @@ class AgentLoop:
                 return result
             import re as _re
 
-            hits = _re.findall(r"(/[^\s'\"|;&>]+)", subject) if key == "command" else [subject]
+            # A command is searched for paths and URLs, and offered whole: the
+            # subject the owner named rarely reappears verbatim -- a pipeline
+            # named by web URL is looked at through a CLI call carrying the
+            # project slug percent-encoded -- and the whole-command hit is what
+            # lets anchor matching see it (a path-typed subject never matches a
+            # whole command, so paths lose nothing).
+            if key == "command":
+                hits = _re.findall(r"(/[^\s'\"|;&>]+)", subject)
+                hits += _re.findall(r"(https?://[^\s'\"|;&>]+)", subject)
+                hits.append(subject)
+            else:
+                hits = [subject]
             if any(verdict.claims(h) for h in hits):
                 if state.machineless:
                     return result + watch_work.machineless_nudge(agent)
