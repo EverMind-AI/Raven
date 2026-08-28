@@ -66,6 +66,8 @@ EXTENSION_KEYS = (
     # omitted: the block fails base Config validation instead of being read.
     "subagentDag",
     "subagent_dag",
+    "subagentQuestions",
+    "subagent_questions",
 )
 
 # Global variable to store current config path (for multi-instance support)

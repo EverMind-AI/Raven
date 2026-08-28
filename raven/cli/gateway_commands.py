@@ -412,6 +412,7 @@ def register(app: typer.Typer) -> None:
             context_config=ec_config.context,
             runtime_config=ec_config.runtime,
             subagent_dag_config=ec_config.subagent_dag,
+            subagent_questions_config=ec_config.subagent_questions,
             # Gateway sessions are inherently multi-turn (each RPC session
             # gets a key and can receive a recovery block on its next call).
             interactive=True,

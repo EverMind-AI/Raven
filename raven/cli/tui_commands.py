@@ -580,6 +580,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             context_config=ec_config.context,
             memory_config=ec_config.memory,
             subagent_dag_config=ec_config.subagent_dag,
+            subagent_questions_config=ec_config.subagent_questions,
             backend=backend,
             plugin_tools=plugin_tools,
             deliverables=DeliverableStore(get_deliverables_path()),

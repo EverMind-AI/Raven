@@ -52,6 +52,73 @@ class _Answers:
         return self.answer
 
 
+class _RecordingAsker:
+    """The `Asker` half of the round trip, without a broker."""
+
+    def __init__(self, answer: str = "") -> None:
+        self.asked: list[tuple[str, list[str] | None]] = []
+        self._answer = answer
+
+    async def ask(self, prompt, choices, conversation_id):
+        self.asked.append((prompt, choices))
+        return self._answer
+
+
+class _StubAutofill:
+    """Whatever the resolver would have decided, without a model.
+
+    Keyed by field name; `""` is the single-question route's key.
+    """
+
+    def __init__(self, decisions: dict[str, tuple[str, str]]) -> None:
+        self._decisions = decisions
+
+    async def resolve(self, questions, *, agent, instance):
+        from raven.agent.acp import autofill
+
+        out = []
+        for question in questions:
+            status, payload = self._decisions.get(question.key, ("defer", ""))
+            if status == "answer":
+                out.append(autofill.Resolution(status="answer", answer=payload))
+            elif status == "partial":
+                out.append(autofill.Resolution(status="partial", known=payload))
+            else:
+                out.append(autofill.Resolution(status="defer"))
+        return out
+
+
+async def _ask_with(asker, autofill_obj, question: str = "Which branch?") -> str:
+    """One question, through a real `AskUserResponder`, with the turn bound as a turn binds it.
+
+    Bound before the `AskUserResponder` is constructed because that is where both the
+    asker and the autofill are read; bound after, the responder would have neither.
+    """
+    from raven.agent.acp.ask_user import AskUserResponder
+    from raven.agent.acp.asker import start_ask_turn
+
+    sent: list[dict] = []
+
+    async def respond(params: dict) -> None:
+        sent.append(params)
+
+    start_ask_turn(asker, autofill_obj, conversation_id="tui:c1")
+    frame = {
+        "sessionId": "s1",
+        "update": {
+            "sessionUpdate": "ask_user_request",
+            "requestId": "q-1",
+            "question": question,
+            "choices": [],
+        },
+    }
+    responder = AskUserResponder("raven-code", "a1b2", respond)
+    responder.dispatch(frame)
+    for _ in range(20):
+        await asyncio.sleep(0)
+    return sent[0]["answer"] if sent else ""
+
+
 async def _settle() -> None:
     """Let the tasks `dispatch` created run to completion."""
     for _ in range(20):
@@ -286,7 +353,7 @@ async def test_an_elicitation_form_and_a_question_share_the_lock() -> None:
     sent = _Recorder()
 
     class Slow:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             order.append(f"start:{prompt.split(':')[0]}")
             await asyncio.sleep(0.02)
             order.append(f"end:{prompt.split(':')[0]}")
@@ -436,3 +503,97 @@ async def test_a_responder_that_raises_does_not_kill_the_read_loop() -> None:
     await handle("session/update", _frame())
 
     assert routed == ["session/update"]
+
+
+async def test_an_answered_question_never_reaches_the_asker() -> None:
+    asker = _RecordingAsker()
+    answer = await _ask_with(asker, _StubAutofill({"": ("answer", "feat/x")}), "Which branch?")
+    assert answer == "feat/x"
+    assert asker.asked == []
+
+
+async def test_a_deferred_question_reaches_the_asker_unchanged() -> None:
+    asker = _RecordingAsker("feat/y")
+    answer = await _ask_with(asker, _StubAutofill({"": ("defer", "")}), "Which branch?")
+    assert answer == "feat/y"
+    assert asker.asked[0][0] == "raven-code(a1b2): Which branch?"
+
+
+async def test_a_partial_question_reaches_the_asker_with_its_note() -> None:
+    asker = _RecordingAsker("feat/y")
+    await _ask_with(asker, _StubAutofill({"": ("partial", "you said feat/x earlier")}), "Which branch?")
+    assert "you said feat/x earlier" in asker.asked[0][0]
+
+
+async def test_an_answered_question_never_takes_the_conversation_lock() -> None:
+    from raven.agent.acp.asker import question_lock
+
+    lock = question_lock("tui:c1")
+    await lock.acquire()
+    try:
+        answer = await asyncio.wait_for(
+            _ask_with(_RecordingAsker(), _StubAutofill({"": ("answer", "feat/x")}), "Which branch?"),
+            timeout=1.0,
+        )
+    finally:
+        lock.release()
+    assert answer == "feat/x"
+
+
+async def test_an_answered_question_does_not_answer_for_a_run_that_ended() -> None:
+    """An answered question still has to notice its run is gone.
+
+    `resolve` awaits a model call, and `cancel` can land during it. The lock path
+    re-checks the flag after its own wait for exactly this; the answered path
+    skips the lock, so it needs a check of its own.
+
+    The swallow below is what leaves the flag as the only trace: `cancel` marks
+    the run and cancels the waiting task, and an absorbed cancellation -- what
+    `QuestionBroker` does to the one on the asking side -- takes the other half.
+    """
+    import contextlib
+
+    from raven.agent.acp import autofill
+    from raven.agent.acp.ask_user import AskUserResponder
+    from raven.agent.acp.asker import start_ask_turn
+
+    held: dict = {}
+
+    class _CancellingAutofill:
+        async def resolve(self, questions, *, agent, instance):
+            held["responder"].cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.sleep(0)
+            return [autofill.Resolution(status="answer", answer="feat/x") for _ in questions]
+
+    asker, sent = _RecordingAsker("asked the user"), _Recorder()
+    start_ask_turn(asker, _CancellingAutofill(), conversation_id="tui:c1")
+    held["responder"] = AskUserResponder("raven-code", "a1b2", sent)
+    held["responder"].dispatch(_frame("Which branch?", choices=[]))
+    await _settle()
+
+    assert sent.sent[0]["answer"] == ""
+    assert asker.asked == []
+
+
+async def test_the_autofill_is_read_at_construction_not_when_the_question_lands() -> None:
+    """The autofill must be read at construction, in the run's own context.
+
+    A question arrives on the connection's read loop, whose ContextVars are a
+    copy of whichever turn first opened the connection, and the pool keeps that
+    connection for the life of the process. The rebinding below stands for that
+    drift: a responder reading at question time would see the newest turn's
+    autofill -- here, none -- and put a question raven could have answered.
+    """
+    from raven.agent.acp.ask_user import AskUserResponder
+    from raven.agent.acp.asker import start_ask_turn
+
+    asker, sent = _RecordingAsker("asked the user"), _Recorder()
+    start_ask_turn(asker, _StubAutofill({"": ("answer", "feat/x")}), conversation_id="tui:c1")
+    responder = AskUserResponder("raven-code", "a1b2", sent)
+    start_ask_turn(asker, None, conversation_id="tui:c1")
+    responder.dispatch(_frame("Which branch?", choices=[]))
+    await _settle()
+
+    assert sent.sent[0]["answer"] == "feat/x"
+    assert asker.asked == []
