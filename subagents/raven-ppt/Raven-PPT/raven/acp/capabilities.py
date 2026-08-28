@@ -39,11 +39,11 @@ def _agent_info() -> dict[str, str]:
 def agent_capabilities() -> dict[str, Any]:
     """The ``AgentCapabilities`` object sent in the initialize result."""
     return {
-        # False because replaying a stored transcript as ``session/update``
-        # notifications needs a transcript renderer this checkout does not have.
-        # A client that reopens a session on a true promise here would show a
-        # person an empty history for a conversation that has one.
-        "loadSession": False,
+        # The transcript is on disk -- ``SessionManager`` appends every turn to
+        # ``sessions/{channel}/{chat_id}.jsonl`` under the session's own job
+        # directory -- so ``session/load`` replays it as ``session/update``
+        # notifications and the reopened session answers with its history intact.
+        "loadSession": True,
         "promptCapabilities": {
             # No image path on the prompt side: a deck is built from documents,
             # and an inbound screenshot has nowhere to go that the material
@@ -60,14 +60,16 @@ def agent_capabilities() -> dict[str, Any]:
         # session. Declaring http/sse would invite exactly the request that has
         # to be refused.
         "mcpCapabilities": {"http": False, "sse": False},
-        # An empty object is how the schema spells "supported", so this declares
-        # ``close`` alone. ``resume`` is deliberately absent: a deck's workspace
-        # IS its session, and the host reads this flag as
-        # ``AcpAgentBackend.is_stateful`` -- declaring it would have the host bind
-        # an instance handle to a session that cannot be reopened. ``list`` and
-        # ``delete`` are absent because each one declared is a method that must
-        # then work.
-        "sessionCapabilities": {"close": {}},
+        # An empty object is how the schema spells "supported". ``resume`` travels
+        # with ``loadSession`` above and cannot be dropped on its own: the
+        # consuming raven reads ``sessionCapabilities.resume`` for
+        # ``AcpAgentBackend.is_stateful`` and will not look up a stored session id
+        # without it, then gates the ``session/load`` call itself on
+        # ``loadSession`` -- so either one missing silently makes every task a new
+        # session however well the other half works. ``list`` and ``delete`` stay
+        # absent because each declared key is a method that must then work, and
+        # neither is served here.
+        "sessionCapabilities": {"close": {}, "resume": {}},
         # No auth: authMethods is empty, so there is nothing to log out of
         # either. Declaring auth.logout would put a method on the wire whose only
         # honest answer is that there was no session to end.

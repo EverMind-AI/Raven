@@ -164,18 +164,22 @@ def test_every_declared_capability_is_one_that_is_served():
     a client route work into a method that answers with an error, or silently
     disable its own tools."""
     caps = agent_capabilities()
-    # Replaying a transcript needs a renderer this build does not have.
-    assert caps["loadSession"] is False
+    # True since the transcript on disk is replayed as session/update frames;
+    # `session/load` therefore has to answer, which the next assertion pins.
+    assert caps["loadSession"] is True
+    assert "session/load" not in UNIMPLEMENTED_METHODS
     # Nothing consumes an inline image or audio on the prompt side.
     assert caps["promptCapabilities"]["image"] is False
     assert caps["promptCapabilities"]["audio"] is False
     assert caps["promptCapabilities"]["embeddedContext"] is True
     # MCP is per engine, not per session.
     assert caps["mcpCapabilities"] == {"http": False, "sse": False}
-    # ``resume`` absent is what keeps the host from binding an instance handle to
-    # a session whose workspace it could not find again; ``list`` / ``delete``
-    # absent because each declared one is a method that must then work.
-    assert caps["sessionCapabilities"] == {"close": {}}
+    # ``resume`` travels with ``loadSession``: the consuming raven reads this key
+    # for statefulness and will not look up a stored id without it, so either one
+    # missing makes every task a fresh session. ``list`` / ``delete`` absent
+    # because each declared one is a method that must then work.
+    assert caps["sessionCapabilities"] == {"close": {}, "resume": {}}
+    assert "session/resume" not in UNIMPLEMENTED_METHODS
     # And every capability named here must have no method that answers -32601.
     declared = {f"session/{name}" for name in caps["sessionCapabilities"]}
     assert declared.isdisjoint(UNIMPLEMENTED_METHODS)
@@ -238,6 +242,264 @@ async def test_a_request_with_a_falsy_id_is_still_answered(harness):
 async def test_a_string_id_is_answered_on_the_same_id(harness):
     result = await harness.call("initialize", {}, request_id="req-1")
     assert result["id"] == "req-1"
+
+
+# -- session/load -------------------------------------------------------------
+
+
+def _transcript(root: Path, session_id: str, channel: str = "acp") -> None:
+    """A stored conversation, written the way SessionManager stores one."""
+    from raven.session.manager import SessionManager
+
+    stored = SessionManager(root).get_or_create(session_id)
+    stored.add_message("user", "build me a deck about convolution")
+    stored.add_message("assistant", "eighteen pages, published")
+    SessionManager(root).save(stored)
+
+
+async def test_a_returning_session_id_keeps_its_job_and_its_history(harness):
+    """The symptom this answers: every call to the same instance was a fresh
+    conversation, because the id is the raven session key and a new key reads an
+    empty transcript beside the previous one instead of continuing it."""
+    first = await harness.new_session()
+    root = harness.jobs_root / first.split(":", 1)[1]
+    assert root.is_dir()
+
+    again = await harness.call("session/new", {"cwd": str(harness.cwd), "sessionId": first})
+    assert again["result"]["sessionId"] == first, "a held session id was minted over"
+    assert harness.jobs_root / again["result"]["sessionId"].split(":", 1)[1] == root
+
+    # And an id this machine does not hold is not an error here: resuming is an
+    # offer, so the client gets a working new session rather than a refusal.
+    fresh = await harness.call("session/new", {"cwd": str(harness.cwd), "sessionId": "acp:20260101_000000_abcdef"})
+    assert fresh["result"]["sessionId"] != first
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        "acp:../../etc",
+        "acp:..",
+        "acp:sub/dir",
+        "acp:",
+        "other:20260101_000000_abcdef",
+        "no-separator",
+        12,
+    ],
+)
+async def test_an_id_that_reaches_outside_the_jobs_root_is_not_resumed(harness, session_id):
+    """The id arrives from the far side of a socket and becomes a path. Anything
+    that is not one segment of this channel's own jobs directory gets a new
+    session instead, and `session/load` refuses it outright."""
+    await harness.handshake()
+    minted = await harness.call("session/new", {"cwd": str(harness.cwd), "sessionId": session_id})
+    assert minted["result"]["sessionId"].startswith("acp:")
+    assert minted["result"]["sessionId"] != session_id
+
+    for method in ("session/load", "session/resume"):
+        refused = await harness.call(method, {"cwd": str(harness.cwd), "sessionId": session_id})
+        assert refused["error"]["code"] == protocol.RESOURCE_NOT_FOUND, method
+
+
+async def test_loading_a_session_replays_its_turns_oldest_first(harness):
+    """The half the person sees. The model gets its history from disk by key; the
+    client gets it as the update frames the spec has a loaded session emit."""
+    session_id = await harness.new_session()
+    root = harness.jobs_root / session_id.split(":", 1)[1]
+    _transcript(root, session_id)
+    await harness.methods._sessions.release(session_id)
+    harness.frames.clear()
+
+    result = await harness.call("session/load", {"cwd": str(harness.cwd), "sessionId": session_id})
+
+    assert "error" not in result
+    replayed = [
+        (u["sessionUpdate"], u["content"]["text"])
+        for u in harness.updates()
+        if u["sessionUpdate"] in {"user_message_chunk", "agent_message_chunk"}
+    ]
+    assert replayed == [
+        ("user_message_chunk", "build me a deck about convolution"),
+        ("agent_message_chunk", "eighteen pages, published"),
+    ]
+
+
+async def test_a_session_never_started_here_is_refused_rather_than_minted(harness):
+    """A client asked for one conversation. Handing it a different empty one under
+    the same promise is what the spec's own error table exists for."""
+    await harness.handshake()
+    result = await harness.call("session/load", {"cwd": str(harness.cwd), "sessionId": "acp:20260101_000000_ffffff"})
+    assert result["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+
+async def test_loading_a_session_that_is_already_open_does_not_build_a_second_engine(harness):
+    session_id = await harness.new_session()
+    built = len(harness.engines)
+
+    result = await harness.call("session/load", {"cwd": str(harness.cwd), "sessionId": session_id})
+
+    assert "error" not in result
+    assert len(harness.engines) == built, "loading an open session built a second engine on one job"
+
+
+async def test_resume_restores_the_session_without_replaying_it(harness):
+    """The one difference from ``session/load``, and the reason both exist: the
+    client still has the transcript on screen, so sending it again would paint
+    every turn twice. What the two establish is otherwise identical."""
+    session_id = await harness.new_session()
+    root = harness.jobs_root / session_id.split(":", 1)[1]
+    _transcript(root, session_id)
+    await harness.methods._sessions.release(session_id)
+    harness.frames.clear()
+
+    result = await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": session_id})
+
+    assert "error" not in result
+    # Same state as a load: the session is back on the table, on its own job.
+    restored = harness.methods._sessions.get(session_id)
+    assert restored is not None and restored.root == root
+    assert restored.engine is not None, "a resumed session must be promptable"
+    # And nothing was repainted.
+    assert harness.updates() == [], "resume replayed a transcript the client already has"
+    # The history the model reads is the transcript's, which is the whole point.
+    from raven.session.manager import SessionManager
+
+    assert len(SessionManager(root).get_or_create(session_id).messages) == 2
+
+
+async def test_resume_and_load_reach_the_same_state(harness):
+    """Both go through one recovery path, so a fix to either cannot miss the
+    other. Asserted on the state rather than on the code so the sharing is what
+    is pinned, not the shape of it."""
+    loaded_id = await harness.new_session()
+    loaded_root = harness.jobs_root / loaded_id.split(":", 1)[1]
+    await harness.methods._sessions.release(loaded_id)
+    await harness.call("session/load", {"cwd": str(harness.cwd), "sessionId": loaded_id})
+    loaded = harness.methods._sessions.get(loaded_id)
+
+    resumed_id = await harness.new_session()
+    resumed_root = harness.jobs_root / resumed_id.split(":", 1)[1]
+    await harness.methods._sessions.release(resumed_id)
+    await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": resumed_id})
+    resumed = harness.methods._sessions.get(resumed_id)
+
+    assert (loaded.root, loaded.cwd) == (loaded_root, str(harness.cwd))
+    assert (resumed.root, resumed.cwd) == (resumed_root, str(harness.cwd))
+    assert (loaded.engine is not None) == (resumed.engine is not None) is True
+
+
+async def test_resuming_an_open_session_does_not_build_a_second_engine(harness):
+    session_id = await harness.new_session()
+    built = len(harness.engines)
+
+    result = await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": session_id})
+
+    assert "error" not in result
+    assert len(harness.engines) == built, "resume built a second engine on one job"
+
+
+async def test_a_returning_id_still_open_is_answered_with_the_session_it_names(harness, tmp_path):
+    """``SessionTable.add`` overwrites, and the table is the only handle on an
+    engine: a replacement entry would leave the former one running on the same job
+    with no route to a teardown -- not ``session/close``, which looks the id up,
+    and not the connection teardown, which walks the table. ``session/new`` answers
+    a returning id the way ``session/load`` does, which is what keeps the two
+    entry points from disagreeing about one open session."""
+    session_id = await harness.new_session()
+    first = harness.sessions.get(session_id)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    again = await harness.call("session/new", {"cwd": str(elsewhere), "sessionId": session_id})
+
+    assert again["result"]["sessionId"] == session_id
+    assert len(harness.engines) == 1, "session/new built a second engine on one job"
+    assert harness.sessions.get(session_id) is first, "the table entry was replaced"
+    # The delivery destination is the client's and this call is where it says so.
+    assert first.cwd == str(elsewhere)
+
+    await harness.call("session/close", {"sessionId": session_id})
+    assert harness.engines[0].torn_down, "the engine the first session/new built was never released"
+
+
+async def test_a_reopened_session_still_holds_the_material_it_staged(harness, tmp_path):
+    """The bookkeeping ``stage`` keeps does not survive the process and the job
+    root does. Unrecovered, the first follow-up prompt claims nothing is staged,
+    and a second source of a name already used overwrites the copy that has it."""
+    first = tmp_path / "one" / "report.txt"
+    first.parent.mkdir()
+    first.write_text("first source", encoding="utf-8")
+    second = tmp_path / "two" / "report.txt"
+    second.parent.mkdir()
+    second.write_text("second source", encoding="utf-8")
+
+    session_id = await harness.new_session()
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": str(first)}]})
+    await harness.methods._sessions.release(session_id)
+    await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": session_id})
+    session = harness.sessions.get(session_id)
+    assert [target.name for _, target in session.staged] == ["report.txt"]
+    assert session.taken == {"report.txt"}
+
+    # A follow-up that names nothing new is still working from staged material.
+    await harness.call(
+        "session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "now add a summary page"}]}
+    )
+    follow_up = harness.engines[-1].scheduler.requests[0].text
+    assert "No material staged for this run" not in follow_up
+    assert str(session.materials / "report.txt") in follow_up
+
+    # And a different source of the same basename is suffixed, not written over.
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": str(second)}]})
+    assert (session.materials / "report.txt").read_text(encoding="utf-8") == "first source"
+    assert (session.materials / "report-2.txt").read_text(encoding="utf-8") == "second source"
+
+
+async def test_a_reopened_session_does_not_stage_a_source_it_already_holds(harness, tmp_path):
+    """The other half of the same invariant, and the reason the recovered pairing
+    cannot be compared by path: a follow-up repeats its declared block, and where
+    each copy was copied from is recorded nowhere on disk. Staged again, the prompt
+    would list one document twice and the deck would be grounded twice in it."""
+    notes = tmp_path / "notes.md"
+    notes.write_text("facts", encoding="utf-8")
+    task = '```raven-ppt\n{"materials": ["%s"]}\n```' % notes
+
+    session_id = await harness.new_session()
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
+    await harness.methods._sessions.release(session_id)
+    await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": session_id})
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
+
+    session = harness.sessions.get(session_id)
+    assert sorted(path.name for path in session.materials.iterdir()) == ["notes.md"]
+    assert len(session.staged) == 1
+
+
+async def test_a_repeat_of_two_same_named_sources_stages_neither_again(harness, tmp_path):
+    """The same invariant where one basename holds more than one copy. Comparing a
+    returning source against the copy of its exact name alone leaves the second of
+    the two matched against the first's copy, so the directory grows a third file
+    and the prompt lists one document twice."""
+    first = tmp_path / "one" / "report.txt"
+    first.parent.mkdir()
+    first.write_text("first source", encoding="utf-8")
+    second = tmp_path / "two" / "report.txt"
+    second.parent.mkdir()
+    second.write_text("second source", encoding="utf-8")
+    task = '```raven-ppt\n{"materials": ["%s", "%s"]}\n```' % (first, second)
+
+    session_id = await harness.new_session()
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
+    staged_names = sorted(path.name for path in harness.sessions.get(session_id).materials.iterdir())
+    assert staged_names == ["report-2.txt", "report.txt"]
+
+    await harness.methods._sessions.release(session_id)
+    await harness.call("session/resume", {"cwd": str(harness.cwd), "sessionId": session_id})
+    await harness.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]})
+
+    session = harness.sessions.get(session_id)
+    assert sorted(path.name for path in session.materials.iterdir()) == staged_names
+    assert len(session.staged) == 2
 
 
 # -- session/new --------------------------------------------------------------
