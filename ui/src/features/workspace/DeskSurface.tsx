@@ -20,7 +20,6 @@ import * as workspace from './store'
 
 import type { DeskArrangement, SlotRect } from './deskDrag'
 import type { DeskPane } from './deskTypes'
-import type { DeliveryRow } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 function FullscreenIcon({ active }: { active: boolean }): JSX.Element {
@@ -35,28 +34,6 @@ function FullscreenIcon({ active }: { active: boolean }): JSX.Element {
   )
 }
 
-/* What a delivered file is, above what it contains. Only a path this session
-   handed over gets one: the same viewer opened from an answer's path chip is
-   showing a file, not a product, and has nothing to put here. */
-function DeliveryStrip({ row }: { row: DeliveryRow }): JSX.Element {
-  const size = deliveries.humanSize(row.size)
-  const when = row.turn === workspace.currentTurn()
-    ? t('gui.ws.dlv_here')
-    : row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
-  return (
-    <div className="dlv-strip">
-      <b>{row.title}</b>
-      {row.description ? <p>{row.description}</p> : null}
-      <div className="dlv-meta">
-        {row.ext ? <i>{row.ext.toUpperCase()}</i> : null}
-        {size ? <i>{size}</i> : null}
-        {when ? <i>{when}</i> : null}
-        {row.missing ? <i className="bad">{t('gui.arts.missing')}</i> : null}
-      </div>
-    </div>
-  )
-}
-
 interface PaneProps {
   pane: DeskPane
   /* The header is the handle: the body scrolls and selects, the chrome moves
@@ -68,11 +45,6 @@ interface PaneProps {
 
 function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  /* Looked up rather than carried on the pane: a file reaches this viewer from
-     the shelf, from the transcript's delivery card, from a changed-file row and
-     from a path in an answer, and it is one pane whichever door was used. */
-  const delivery = pane.kind === 'file' ? deliveries.byPath(pane.file.path) : null
   const full = state.solo === pane.id
   const title = pane.kind === 'agent'
     ? pane.row.title || pane.row.nodeId || pane.row.handle
@@ -107,7 +79,6 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         </button>
         <button onClick={() => desk.closePane(pane.id)} aria-label={t('gui.close')}>×</button>
       </header>
-      {delivery ? <DeliveryStrip row={delivery} /> : null}
       <div className="desk-pane-body">
         {pane.kind === 'diff' ? <ChgDiff c={pane.change} /> : null}
         {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}

@@ -35,7 +35,6 @@ export interface WsUrl {
 
 export interface WsFile {
   path: string
-  downloadPath?: string
   kind: string
   raw: boolean
   text: string | null
