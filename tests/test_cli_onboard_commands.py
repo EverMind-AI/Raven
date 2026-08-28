@@ -5336,6 +5336,46 @@ def test_installers_send_first_run_to_bare_raven() -> None:
         assert "raven onboard" not in first_run, name
 
 
+def test_installers_build_both_web_assets_for_an_editable_install() -> None:
+    """An editable install of a checkout has to build the served page too.
+
+    ``ui/dist/index.html`` and ``ui-tui/dist/entry.js`` are both gitignored, so
+    a release wheel carries them and a clone install gets neither. The bundle
+    was built here from the start; the page was not, which left ``raven web``
+    refusing to start on every source install until someone ran ui/build.py by
+    hand. Both now share one node/npm probe, so its skip path has to name both
+    consequences rather than only the TUI's.
+    """
+    root = Path(__file__).resolve().parents[1]
+    for name, page, assembler, tui_skip in (
+        ("install.sh", "ui/dist/index.html", "ui/build.py", "skipping TUI build"),
+        ("install.ps1", r"ui\dist\index.html", r"ui\build.py", "skipping TUI bundle build"),
+    ):
+        text = (root / name).read_text()
+        assert page in text, f"{name}: does not probe for a built page"
+        assert assembler in text, f"{name}: never runs the page assembler"
+        assert tui_skip in text, f"{name}: lost the TUI bundle's own skip warning"
+        assert "raven web will not start" in text, f"{name}: page skip names no consequence"
+
+
+def test_the_windows_installer_reads_back_every_npm_exit_code() -> None:
+    """No unchecked native call may decide a build succeeded.
+
+    PowerShell's ``$ErrorActionPreference`` does not cover native commands, and
+    the variable that would change that, ``$PSNativeCommandUseErrorActionPreference``,
+    is False by default as late as 7.6.5 -- so this is not a 5.1-only hazard. An
+    unchecked ``npm`` failure returns to the caller, runs the next ``npm``
+    anyway, and the installer goes on to report success with no artifact. The
+    bundle's own build was the one that did this, which left bare ``raven`` --
+    the TUI -- unusable after a green install.
+    """
+    lines = (Path(__file__).resolve().parents[1] / "install.ps1").read_text().splitlines()
+    calls = [i for i, line in enumerate(lines) if "$npm.Source" in line]
+    assert calls, "no npm invocation found; this test no longer guards anything"
+    unchecked = [lines[i].strip() for i in calls if "$LASTEXITCODE" not in (lines[i + 1] if i + 1 < len(lines) else "")]
+    assert not unchecked, f"npm invocations with no exit-code check: {unchecked}"
+
+
 def test_installers_tell_an_upgrade_apart_from_a_first_run() -> None:
     """A re-run over an existing config is an upgrade: say so instead of
     repeating first-time-setup wording, and name the in-place path (which keeps

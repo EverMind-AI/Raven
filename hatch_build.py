@@ -15,7 +15,10 @@ force-include map *only when it exists*, and emit a warning otherwise.
 Release builds run ``npm ci && npm run build`` first (see
 .github/workflows/release.yml), so the published wheel always carries the
 bundle; dev builds without it simply fall back to the source tree at runtime
-(see resolve_dist_entry() in raven/cli/tui_commands.py).
+(see resolve_dist_entry() in raven/cli/tui_commands.py). That fallback is also
+why an editable build carries neither artifact: the checkout it reads is the
+one it was built from, so a packaged copy there is dead weight. All three trees
+this hook maps are therefore skipped for ``version == "editable"``.
 
 ``subagents/`` is force-included file by file rather than as one directory,
 because a directory entry would ship the working copy rather than the source.
@@ -50,6 +53,31 @@ def _is_secret(relative_path: str) -> bool:
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:
+        self._include_prebuilt_assets(build_data, version)
+        self._include_vendored_subagents(build_data, version)
+
+    def _include_prebuilt_assets(self, build_data: dict, version: str) -> None:
+        """Map the prebuilt TUI bundle and served page into ``raven/``.
+
+        Skipped for an editable build, for the reason the sub-agent tree below
+        records: hatchling honours this map for editable builds too, and there
+        both resolvers read the checkout's own copy first
+        (``resolve_dist_entry`` and ``resolve_ui_dist`` try the packaged path,
+        which for an editable install points inside the checkout's ``raven/``
+        and does not exist). So every ``uv sync`` was copying 4.6 MB uncompressed
+        into a site-packages directory nothing ever opens -- measured by building
+        the editable wheel both ways: 4,647,584 B of force-included files before,
+        65,052 B after, the remainder being ``bridge`` from pyproject.toml.
+
+        The warnings go with it rather than firing mode-blind: they tell the
+        reader what to run *before building a release wheel*, which an editable
+        build is not, and a checkout missing an artifact is already told so by
+        the command that needs it -- ``raven tui`` names both candidate paths
+        and the npm command, ``raven web`` names ``ui/build.py``.
+        """
+        if version == "editable":
+            return
+
         dist = Path(self.root) / "ui-tui" / "dist"
         if dist.is_dir() and (dist / "entry.js").is_file():
             # Map source -> path inside the wheel's `raven` package.
@@ -74,8 +102,6 @@ class CustomBuildHook(BuildHookInterface):
                 "`raven serve` from this wheel will answer / with the placeholder; "
                 "run `python ui/build.py` before building a release wheel."
             )
-
-        self._include_vendored_subagents(build_data, version)
 
     def _include_vendored_subagents(self, build_data: dict, version: str) -> None:
         """Map each committed file of ``subagents/`` into ``raven/subagents``.
