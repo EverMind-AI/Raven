@@ -547,3 +547,71 @@ async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
 
     assert seen["executor_provider"] is provider
     assert seen["disabled_tools"] == frozenset({"mcp_echo_ping"})
+
+
+async def test_a_bridged_oauth_server_is_dialled_with_the_hosts_credential(
+    tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
+) -> None:
+    """The endpoint opens its own upstream, so it needs what the host attaches.
+
+    Without it an OAuth server answered the bridge with 401 while the same
+    server was connected and listed on the host: nothing on the host side looked
+    wrong, and the sub-agent saw a server that never finished connecting. The
+    401 then surfaced as an ExceptionGroup naming no cause, so neither half of
+    the failure said what it was.
+
+    The credential is used on the host's side of the relay; the sub-agent still
+    receives only frames.
+    """
+    opened: dict[str, Any] = {}
+    real_open = McpEndpoints.open
+
+    async def spy(self, node_id, server, cfg, http_auth=None):
+        opened[server] = http_auth
+        return await real_open(self, node_id, server, cfg, http_auth=http_auth)
+
+    monkeypatch.setattr(McpEndpoints, "open", spy)
+
+    sentinel = object()
+
+    async def fake_provider_for(name, cfg, **kwargs):
+        opened["can_park"] = kwargs.get("can_park")
+        return sentinel
+
+    monkeypatch.setattr("raven.mcp.oauth.provider_for", fake_provider_for)
+
+    backend = _backend(raven_on_the_adapter_path)
+    cfg = _idle_config()
+    cfg.auth = "oauth"
+    backend.set_mcp_source(_Source({"echo": cfg}))
+
+    with contextlib.suppress(Exception):
+        async with backend._mcp_endpoints("node-auth", backend.resolve_mcp_grant(["echo"])):
+            pass
+
+    assert opened.get("echo") is sentinel
+    # A dispatch cannot wait on a browser: a stored token attaches and works, and
+    # one that needs authorizing costs this server rather than the node.
+    assert opened.get("can_park") is False
+
+
+async def test_a_bridged_server_without_oauth_is_dialled_with_no_credential(
+    tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
+) -> None:
+    """The other half: nothing is fabricated for a server that declares no auth."""
+    opened: dict[str, Any] = {}
+    real_open = McpEndpoints.open
+
+    async def spy(self, node_id, server, cfg, http_auth=None):
+        opened[server] = http_auth
+        return await real_open(self, node_id, server, cfg, http_auth=http_auth)
+
+    monkeypatch.setattr(McpEndpoints, "open", spy)
+    backend = _backend(raven_on_the_adapter_path)
+    backend.set_mcp_source(_Source({"echo": _idle_config()}))
+
+    with contextlib.suppress(Exception):
+        async with backend._mcp_endpoints("node-plain", backend.resolve_mcp_grant(["echo"])):
+            pass
+
+    assert opened.get("echo") is None

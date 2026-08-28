@@ -505,6 +505,33 @@ class _TurnCollector:
         )
 
 
+async def _bridged_auth(name: str, cfg: Any) -> Any:
+    """The credential the host uses for ``name``, for the endpoint's own upstream.
+
+    The endpoint dials the real server once per downstream connection, so it
+    needs what the host's connection manager attaches to its own -- without it
+    an OAuth server answers the bridge with 401 and the sub-agent sees a server
+    that never finished connecting, while the same server is connected and
+    listed on the host.
+
+    Nothing about this crosses the socket: the token is used on the host's side
+    of the relay, and the sub-agent still receives only JSON-RPC frames.
+
+    ``can_park=False`` because this connect is a dispatch: a stored token is
+    attached and works, and one that needs a browser degrades this server now
+    rather than holding the node for the flow timeout.
+    """
+    if getattr(cfg, "auth", "none") != "oauth":
+        return None
+    from raven.mcp.oauth import provider_for
+
+    try:
+        return await provider_for(name, cfg, can_park=False)
+    except Exception as exc:  # noqa: BLE001 - an unusable credential costs this server, not the turn
+        logger.warning("acp: no credential for bridged MCP server {!r}: {}", name, exc)
+        return None
+
+
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
@@ -822,7 +849,12 @@ class AcpAgentBackend:
                 yield []
                 return
             paths = {
-                server.name: str(await endpoints.open(node_id, server.name, server.config)) for server in grant.granted
+                server.name: str(
+                    await endpoints.open(
+                        node_id, server.name, server.config, http_auth=await _bridged_auth(server.name, server.config)
+                    )
+                )
+                for server in grant.granted
             }
             yield grant.with_endpoints(paths).for_acp(argv)
         finally:

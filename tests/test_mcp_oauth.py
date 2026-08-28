@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from mcp.shared.auth import OAuthToken
 
 from raven.mcp import oauth as mcp_oauth
 from raven.mcp.oauth import (
@@ -18,6 +20,17 @@ from raven.mcp.oauth import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def _is_seeded(provider) -> bool:
+    """Whether the seed subclass is in this provider's ancestry.
+
+    Every provider is wrapped for refresh coordination now, so ``type(...) is
+    OAuthClientProvider`` no longer separates a seeded provider from a plain one.
+    The seed is what these tests are about.
+    """
+    return any("Seeded" in cls.__name__ for cls in type(provider).__mro__)
+
 
 REDIRECT = "http://127.0.0.1:18792/oauth/callback"
 
@@ -272,6 +285,123 @@ async def test_a_relayed_background_flow_keeps_its_exemption():
     assert await asyncio.wait_for(waiter, timeout=2) == ("c", "relay-1")
 
 
+async def test_two_providers_do_not_race_a_rotating_refresh_token(monkeypatch, tmp_path):
+    """The failure this coordination exists for, end to end.
+
+    The host keeps a provider for its own connection while a bridged dispatch
+    needs another for the endpoint's upstream, and both read the same stored
+    credential. Where the authorization server rotates refresh tokens, the first
+    refresh invalidates what the second still holds in memory: the second gets
+    ``invalid_grant`` and falls into browser authorization, which for a dispatch
+    means losing the server.
+
+    Asserted on the wire rather than on the object graph: the second provider
+    must submit the token that is on disk, not the one it loaded at startup.
+    """
+    from raven.mcp.oauth import FileTokenStorage, _coordinated_provider_class
+
+    class Base:
+        def __init__(self, **kw):
+            self.context = SimpleNamespace(
+                storage=kw["storage"],
+                current_tokens=None,
+                is_token_valid=lambda: False,
+                update_token_expiry=lambda _t: None,
+            )
+            self._initialized = False
+            self.sent: list[str] = []
+
+        async def _initialize(self):
+            self.context.current_tokens = await self.context.storage.get_tokens()
+            self._initialized = True
+
+        async def async_auth_flow(self, request):
+            tokens = self.context.current_tokens
+            self.sent.append(tokens.refresh_token if tokens else "")
+            yield request
+
+    cls = _coordinated_provider_class(Base)
+    storage = FileTokenStorage("rot", REDIRECT)
+    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
+
+    host = cls(storage=storage, server_name="rot", can_park=True)
+    bridged = cls(storage=storage, server_name="rot", can_park=False)
+
+    async def run(provider):
+        async for _ in provider.async_auth_flow(object()):
+            break
+
+    # Both load the same credential, which is the state the race starts from.
+    await run(host)
+    await run(bridged)
+    assert host.sent == ["r0"]
+    assert bridged.sent == ["r0"]
+
+    # The host's refresh lands: the stored credential is now a different one, and
+    # the one both providers are holding has been retired by the server.
+    await storage.set_tokens(OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
+    await run(bridged)
+
+    # Without the re-read this is "r0" again -- the token that no longer works,
+    # which is `invalid_grant` and, for a dispatch, a server it has just lost.
+    assert bridged.sent == ["r0", "r1"]
+
+
+async def test_a_contended_refresh_gives_up_rather_than_run_unserialized(monkeypatch, tmp_path):
+    """The escape path must not become the race it exists to prevent.
+
+    A caller that cannot park waits a bounded time for the lock. Proceeding past
+    that bound was the original bug in miniature: the holder may not have stored
+    its replacement yet, so this flow re-reads the same token and consumes it in
+    parallel, and one of the two ends up with `invalid_grant` -- a credential
+    somebody has to repair. Losing one optional server for this turn is cheaper,
+    and the next turn finds the refreshed token on disk.
+    """
+    from raven.mcp.oauth import FileTokenStorage, OAuthUnavailableError, _coordinated_provider_class
+
+    monkeypatch.setattr(mcp_oauth, "_REFRESH_WAIT", 0.05)
+
+    class Base:
+        def __init__(self, **kw):
+            self.context = SimpleNamespace(
+                storage=kw["storage"],
+                current_tokens=None,
+                is_token_valid=lambda: False,
+                update_token_expiry=lambda _t: None,
+            )
+            self._initialized = False
+            self.sent: list[str] = []
+
+        async def _initialize(self):
+            self.context.current_tokens = await self.context.storage.get_tokens()
+            self._initialized = True
+
+        async def async_auth_flow(self, request):
+            tokens = self.context.current_tokens
+            self.sent.append(tokens.refresh_token if tokens else "")
+            yield request
+
+    cls = _coordinated_provider_class(Base)
+    storage = FileTokenStorage("contend", REDIRECT)
+    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
+    bridged = cls(storage=storage, server_name="contend", can_park=False)
+    await bridged._initialize()
+
+    # Somebody else is mid-refresh and has not stored a replacement yet.
+    lock = mcp_oauth._REFRESH_LOCKS.setdefault("contend", asyncio.Lock())
+    await lock.acquire()
+    try:
+        with pytest.raises(OAuthUnavailableError) as excinfo:
+            async for _ in bridged.async_auth_flow(object()):
+                break
+    finally:
+        lock.release()
+
+    assert "re-authorized by another connection" in str(excinfo.value)
+    # The point of the assertion: the shared token was never put on the wire.
+    assert bridged.sent == []
+
+
 async def test_callback_unknown_state_rejected():
     matched, html = resolve_callback({"state": "nope", "code": "x"})
     assert not matched
@@ -511,10 +641,9 @@ async def test_catalog_endpoints_keep_discovery_off_the_wire(_fixed_callback):
 
 
 async def test_a_server_without_catalog_endpoints_discovers_exactly_as_before(_fixed_callback):
-    from mcp.client.auth import OAuthClientProvider
 
     provider = await mcp_oauth.provider_for("srv", _server_cfg())
-    assert type(provider) is OAuthClientProvider
+    assert not _is_seeded(provider)
 
     seen = await _requests_before_the_browser(provider)
     assert seen[-1] == PRM_URL
@@ -544,10 +673,8 @@ async def test_endpoints_the_server_refuses_are_distrusted_next_time(_fixed_call
         await flow.asend(httpx.Response(404, request=registration))
     await flow.aclose()
 
-    from mcp.client.auth import OAuthClientProvider
-
     retry = await mcp_oauth.provider_for("srv", cfg)
-    assert type(retry) is OAuthClientProvider
+    assert not _is_seeded(retry)
     assert (await _requests_before_the_browser(retry))[-1] == PRM_URL
 
 
@@ -556,7 +683,7 @@ async def test_corrected_endpoints_are_believed_again(_fixed_callback):
     cfg = _server_cfg(**ENDPOINTS)
     storage = FileTokenStorage("srv", REDIRECT)
     storage.disarm_seed(mcp_oauth._fingerprint(cfg.oauth))
-    assert type(await mcp_oauth.provider_for("srv", cfg)).__name__ == "OAuthClientProvider"
+    assert not _is_seeded(await mcp_oauth.provider_for("srv", cfg))
 
     fixed = _server_cfg(**{**ENDPOINTS, "registration_endpoint": "https://as.example/v2/register"})
     seen = await _requests_before_the_browser(await mcp_oauth.provider_for("srv", fixed))
@@ -597,7 +724,7 @@ async def test_a_dead_refresh_token_does_not_disarm_the_seed(_fixed_callback):
 
     assert not FileTokenStorage("srv", REDIRECT).seed_disarmed(mcp_oauth._fingerprint(cfg.oauth))
     again = await mcp_oauth.provider_for("srv", cfg)
-    assert type(again).__name__ == "SeededOAuthClientProvider"
+    assert _is_seeded(again)
 
 
 async def test_a_token_endpoint_that_is_not_there_still_disarms_the_seed(_fixed_callback):
@@ -608,9 +735,7 @@ async def test_a_token_endpoint_that_is_not_there_still_disarms_the_seed(_fixed_
 
     assert FileTokenStorage("srv", REDIRECT).seed_disarmed(mcp_oauth._fingerprint(cfg.oauth))
 
-    from mcp.client.auth import OAuthClientProvider
-
-    assert type(await mcp_oauth.provider_for("srv", cfg)) is OAuthClientProvider
+    assert not _is_seeded(await mcp_oauth.provider_for("srv", cfg))
 
 
 async def _completed(code: str, state: list[str]):
@@ -681,9 +806,8 @@ async def test_a_resource_the_url_does_not_canonicalize_to_is_fetched_instead(_f
 async def test_a_partial_endpoint_block_is_not_a_document(_fixed_callback):
     """Two of the three required fields is not an RFC 8414 document, and the
     third is not guessable -- that is what discovery is for."""
-    from mcp.client.auth import OAuthClientProvider
 
     provider = await mcp_oauth.provider_for(
         "srv", _server_cfg(issuer="https://as.example", token_endpoint="https://as.example/token")
     )
-    assert type(provider) is OAuthClientProvider
+    assert not _is_seeded(provider)

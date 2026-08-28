@@ -279,12 +279,34 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                 writer.close()
                 await asyncio.gather(*pumps, return_exceptions=True)
     except (Exception, BaseExceptionGroup) as exc:
-        logger.error("mcp endpoint: upstream failed: {}: {}", type(exc).__name__, exc)
+        logger.error("mcp endpoint: upstream failed: {}", _causes(exc))
     finally:
         # Again, because cancellation can also land before the transport is
         # open: the downstream would then never be closed at all, and that is
         # the shape that made a reap sit out the full ``_CLOSE_TIMEOUT_S``.
         writer.close()
+
+
+def _causes(exc: BaseException) -> str:
+    """``exc`` named with its leaves, because a group's own message has none.
+
+    An upstream that dies inside a TaskGroup surfaces as "unhandled errors in a
+    TaskGroup (1 sub-exception)", which says only that something failed. The one
+    line an operator gets for a bridged server that never came up has to name
+    what actually went wrong.
+    """
+    leaves: list[str] = []
+
+    def walk(e: BaseException) -> None:
+        inner = getattr(e, "exceptions", None)
+        if inner:
+            for sub in inner:
+                walk(sub)
+            return
+        leaves.append(f"{type(e).__name__}: {e}")
+
+    walk(exc)
+    return "; ".join(leaves) or f"{type(exc).__name__}: {exc}"
 
 
 # Teardown bound. Cancelling the relays is what lets wait_closed return, so
