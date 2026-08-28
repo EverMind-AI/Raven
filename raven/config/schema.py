@@ -790,6 +790,9 @@ class GatewayConfig(Base):
     user_pool: int = 4
     system_pool: int = 2
     send_max_retries: int = 3
+    # Seconds an in-flight turn may finish within on shutdown; 0.0 restores
+    # cancel-immediately.
+    shutdown_grace: float = 5.0
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
     web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)

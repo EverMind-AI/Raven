@@ -111,6 +111,23 @@ def test_spawn_record_finish_records_the_output(tmp_path: Path) -> None:
     assert meta["ended_at_ms"] >= meta["started_at_ms"]
 
 
+def test_spawn_record_finish_is_idempotent(tmp_path: Path) -> None:
+    """A cancel racing a completion runs finish twice; the first outcome wins --
+    no duplicate instance-log turn, no clobbered status."""
+    d = _session_dir(tmp_path, "web:abc")
+    record = SpawnRecord.open(d, task_id="t1", task="do x", meta={"agent": "coder", "handle": "h1"})
+    record.finish(status="completed", output="done")
+    log = d / "subagents" / "instances" / "coder" / "h1.jsonl"
+    lines_after_first = len(log.read_text(encoding="utf-8").splitlines())
+
+    record.finish(status="cancelled")
+
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "completed"
+    assert len(log.read_text(encoding="utf-8").splitlines()) == lines_after_first
+
+
+
 def test_spawn_record_keeps_failures(tmp_path: Path) -> None:
     """The failure case is the one worth keeping: without it, a sub-agent that
     died leaves nothing to debug from."""

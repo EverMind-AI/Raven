@@ -35,9 +35,9 @@ def _req(text="ping", *, channel="telegram", chat_id="c1", conversation="cron:1"
 
 
 class _FakeChannel:
-    def __init__(self, name="telegram") -> None:
+    def __init__(self, name="telegram", *, file_attachments=False) -> None:
         self.name = name
-        self.capabilities = Capabilities()
+        self.capabilities = Capabilities(file_attachments=file_attachments)
         self.sent: list[tuple[str, str, list[str] | None]] = []
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
@@ -104,6 +104,20 @@ async def test_build_gateway_honors_configured_pool_and_retry_sizes():
         assert hub._send_max_retries == 5
     finally:
         await teardown()
+
+
+async def test_teardown_shuts_down_with_the_configured_grace(monkeypatch):
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(_ReplyAgent(), {}, shutdown_grace=2.5)
+    seen: list[float] = []
+    original = type(scheduler).shutdown
+
+    async def spy(self, grace: float) -> None:
+        seen.append(grace)
+        await original(self, grace)
+
+    monkeypatch.setattr(type(scheduler), "shutdown", spy)
+    await teardown()
+    assert seen == [2.5]
 
 
 async def test_proactive_reply_reaches_the_channel_via_outlet():
@@ -179,7 +193,7 @@ async def test_readback_skips_heartbeat_origin():
 
 
 async def test_proactive_media_reply_sends_local_paths():
-    ch = _FakeChannel("telegram")
+    ch = _FakeChannel("telegram", file_attachments=True)
     media = (Media(path="/tmp/chart.png", mime="image/png", kind="image"),)
     scheduler, hub, readback_texts, _sources, teardown = build_gateway(
         _ReplyAgent([MediaOut(media=media)]), {"telegram": ch}

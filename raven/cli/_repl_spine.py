@@ -182,6 +182,7 @@ def build_repl(
     send_tool_hints: bool = False,
     user_pool: int = 1,
     system_pool: int = 1,
+    shutdown_grace: float = 0.0,
 ) -> tuple[Scheduler, DeliveryHub, Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a one-shot ``-m`` turn flows through: a hub with the
     channel's CliOutlet registered, and a Scheduler whose runner bridges the agent
@@ -217,7 +218,7 @@ def build_repl(
     )
 
     async def teardown() -> None:
-        await scheduler.shutdown(grace=0.0)
+        await scheduler.shutdown(grace=shutdown_grace)
         await hub.aclose()
 
     return scheduler, hub, teardown

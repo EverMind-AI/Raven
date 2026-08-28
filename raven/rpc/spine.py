@@ -582,6 +582,7 @@ def build_rpc_spine(
     user_pool: int = 1,
     system_pool: int = 1,
     direct_pool: int = 8,
+    shutdown_grace: float = 0.0,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a client turn flows through: a hub with the channel's
     RpcOutlet, and a Scheduler whose runner streams the agent loop and whose sink
@@ -628,7 +629,7 @@ def build_rpc_spine(
     )
 
     async def teardown() -> None:
-        await scheduler.shutdown(grace=0.0)
+        await scheduler.shutdown(grace=shutdown_grace)
         await hub.aclose()
 
     return scheduler, hub, turn_ids, teardown

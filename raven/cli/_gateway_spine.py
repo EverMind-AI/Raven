@@ -142,6 +142,7 @@ def build_gateway(
     user_pool: int = 4,
     system_pool: int = 2,
     send_max_retries: int = 3,
+    shutdown_grace: float = 0.0,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], dict[str, Source], Callable[[], Awaitable[None]]]:
     """Wire the gateway's spine pieces: a hub with a ChannelOutletAdapter per
     channel (so a reply reaches its target channel), and a Scheduler whose runner
@@ -174,7 +175,7 @@ def build_gateway(
     )
 
     async def teardown() -> None:
-        await scheduler.shutdown(grace=0.0)
+        await scheduler.shutdown(grace=shutdown_grace)
         await hub.aclose()
 
     return scheduler, hub, readback_texts, sources, teardown
