@@ -4,17 +4,16 @@
     "custom": {
       "apiBase": "https://openrouter.ai/api/v1",
       "models": [
-        "openai/gpt-5.4"
+        "openai/gpt-5.6-sol"
       ],
       "protocol": "chat"
     }
   },
   "agents": {
     "defaults": {
-      "model": "openai/gpt-5.4",
+      "model": "openai/gpt-5.6-sol",
       "provider": "custom",
       "reasoningEffort": "high",
-      "temperature": 0.1,
       "contextWindowTokens": 262144,
       "maxToolIterations": 150,
       "llmCallTimeout": 1800,
@@ -80,7 +79,6 @@
       "enabled": true,
       "preferredMax": 2,
       "alternativesMax": 3,
-      "temperature": 0.0,
       "maxTokens": 8192
     }
   },

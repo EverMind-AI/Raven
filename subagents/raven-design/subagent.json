@@ -17,7 +17,7 @@
   },
   "recommendedLlm": {
     "provider": "custom",
-    "model": "openai/gpt-5.4",
+    "model": "openai/gpt-5.6-sol",
     "apiBase": "https://openrouter.ai/api/v1"
   }
 }
