@@ -446,8 +446,17 @@ def _wrapped(line, room, size, face, bold):
         # because a word too wide to start a line used to fall past both branches and
         # be dropped -- and copy measured without one of its words answers that a size
         # fits which does not.
+        #
+        # `max(1, ...)`, because a box narrower than one character makes
+        # `len(current) - 1` zero: the cut took nothing off the front, `current` came
+        # back the length it went in at, and the loop never ended -- a hang, in a
+        # generated build script, until the run's own timeout killed it. One character
+        # is the smallest line there is, so it takes a line of its own and overflows
+        # it. Overflow is measurable and gets reported off the render; dropping the
+        # character instead would answer that copy fits in a column it cannot be set
+        # in at all.
         while current and not fits(current):
-            cut = len(current) - 1
+            cut = max(1, len(current) - 1)
             while cut > 1 and not fits(current[:cut]):
                 cut -= 1
             lines.append(current[:cut])
@@ -1012,9 +1021,14 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     **And the rows spread into the box** rather than leaving its bottom third white.
     `fill=False` keeps the table at the size its content asks for.
 
-    Returns the table and the box it fills, which is as wide as its content wants and
-    as tall as `box` where there is slack to spread into. `table_size` is the same
-    arithmetic, asked before the table is drawn.
+    Returns the table and the box it fills, which is as wide as its content wants, as
+    tall as `box` where there is slack to spread into, and **taller than `box` when
+    the rows need more than it gives** -- a row is never squeezed under the line in
+    it, so the height is the rows' and not the box's. So the next thing on the page
+    goes at `written.box.y1`, which is where this table really ends, rather than at
+    the bottom of the box handed in. `table_size` is the same arithmetic, asked before
+    the table is drawn: with the same `box` and the same keywords it answers this same
+    height, taller box included.
     """
     plan = _table_geometry(
         rows,
@@ -1403,18 +1417,31 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
         # 12.6in put so much air between them that the eye loses the row. Given weights
         # are proportions and mean "fill the box".
         total = float(sum(shares))
-        return total if room is None else (room if weights else min(room, total))
+        if room is None:
+            # Proportions carry no width of their own, so with no box to fill they are
+            # apportioned over the width the content asks for -- the same width this
+            # table is given when nobody weights it. Summing them as inches instead
+            # would make `weights=[0.34, 0.16, 0.28, 0.22]` a table one inch wide.
+            return float(sum(content)) if weights else total
+        return room if weights else min(room, total)
 
     def laid():
         # What each column holds before a mark is charged to it. The marks are then
         # allowed the room left over rather than a share of the whole, which is what
         # keeps an unmarked column from paying for a neighbour's rating.
         base_shares = list(weights) if weights else content
-        base = _column_widths(base_shares, spread_of(base_shares), head_floors)
-        # With no box to fit, nothing caps what the marks may ask for.
-        floors = _mark_floors(
-            cell_marks, rows, columns, size, _mark_scale(size, ends), float("inf") if room is None else room, base
-        )
+        divided_over = spread_of(base_shares)
+        base = _column_widths(base_shares, divided_over, head_floors)
+        # The marks are charged against the width the table is going to have, which is
+        # the width `base` was just divided over. Only one table has none: unweighted
+        # and unboxed, whose width is the sum of shares that the mark floors themselves
+        # raise, so nothing caps what they may ask for. Given weights are apportioned
+        # over a width even with no box, and `inf` there funded the full floors out of
+        # a fixed width -- five columns over 4.52in put the label column at 0.22in,
+        # 0.02in of it left after the cell's margins, which is narrower than any
+        # character and is the width `_wrapped` could not break a token into.
+        reserve = room if room is not None else (divided_over if weights else float("inf"))
+        floors = _mark_floors(cell_marks, rows, columns, size, _mark_scale(size, ends), reserve, base)
         shares = list(weights) if weights else _content_weights(rows, size, skip=set(groups), minimums=floors, face=face)
         # Given weights get the same treatment as a starved heading: a column too narrow
         # for the mark in it is raised and the shortfall comes off the columns with slack.
@@ -1512,18 +1539,14 @@ def table_size(rows, theme, *, weights=None, size=LABEL_PT, style="minimal", num
     room the table spreads into -- which is what `fill` does, and the height comes
     back as the box's own where there was slack to take. `fill=False` answers for the
     table its content asks for. Without a box it is a size at the origin and the
-    table is as wide as its content wants. Given `weights` are proportions of a box,
-    so they need one.
+    table is as wide as its content wants -- and given `weights` are apportioned over
+    that width, because proportions carry no width of their own. That answer is the
+    one to build on: every column of a weighted table drawn in a box at least this
+    wide gets at least the room measured here, so no row of it wraps onto a line this
+    height did not count. A box narrower than that width is a table drawn taller than
+    the height answered, and the columns squeezed under their own content are what
+    `wide_table` reads off the built file.
     """
-    # `weights` are proportions of a box, so without one there is nothing to apportion
-    # -- but this used to refuse the call over that, and the field the caller was after
-    # is the height, which the weights cannot change: a row's height comes off `size`
-    # and the row count. A live run asked `table_size(rows, T, weights=w, size=15)` for
-    # `.h`, got a ValueError, and had nowhere to go. So the weights are set aside and
-    # the answer is the content-sized one: the height is exact either way, and the
-    # width is the width this table wants rather than the width those proportions
-    # would give it in a box nobody has named yet.
-    weights = None if box is None else weights
     plan = _table_geometry(
         rows,
         theme,
@@ -1957,7 +1980,8 @@ def _mark_floors(cell_marks, rows, columns, size, mark_height, table_width, base
     label column that measured 1.15in with 0.51in -- under the floor every other path
     holds, because `_column_widths` scales the floors in proportion once they do not
     fit and nothing below that is a floor any more. With given weights the reserve is
-    the whole box, so a mark takes nothing at all from a division the author declared
+    the whole width those weights divide -- a box's, or the content width an unboxed
+    answer is for -- so a mark takes nothing at all from a division the author declared
     and is drawn inside its own column's share.
     """
     extra = [0.0] * columns
