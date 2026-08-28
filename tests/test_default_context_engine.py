@@ -396,16 +396,16 @@ class TestNoBackendDegrade:
 
 
 class TestFailureSemantics:
-    async def test_backend_recall_exception_propagates(
+    async def test_backend_recall_exception_degrades_to_no_hits(
         self,
         builder: ContextBuilder,
     ) -> None:
-        """Memory backend outage surfaces to AgentLoop. SkillForgeRouter has
-        its own per-source isolation; the backend recall does NOT."""
+        """Memory backend outage no longer surfaces to AgentLoop: recall is
+        bounded and isolated the same way SkillForgeRouter's sources are."""
         backend = _StubBackend(recall_raises=RuntimeError("backend down"))
         eng = _engine(builder, router=SkillForgeRouter([]), backend=backend)
-        with pytest.raises(RuntimeError, match="backend down"):
-            await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        assert ac.metadata["memory_hits"] == 0
 
     async def test_single_skill_source_failure_isolated(
         self,

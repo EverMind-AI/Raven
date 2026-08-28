@@ -905,7 +905,7 @@ async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_
     stored: list = []
 
     class _FakeBackend:
-        async def store(self, key, messages) -> None:
+        async def store(self, key, messages, *, metadata=None) -> None:
             stored.append((key, messages))
 
     loop = AgentLoop(provider=_NoCallProvider(), workspace=tmp_path)
@@ -929,6 +929,7 @@ async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_
 
     session = loop.sessions.get_or_create("weixin:c")
     assert any(m.get("role") == "assistant" and m.get("content") == "FULL REPORT [1]" for m in session.messages)
+    await loop.drain_backend_stores(timeout=5.0)
     assert stored and stored[0][0] == "weixin:c"
     assert stored[0][1][0]["content"] == "FULL REPORT [1]"
 

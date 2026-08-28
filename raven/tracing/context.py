@@ -127,6 +127,23 @@ def reset(token) -> None:
 
 
 @contextlib.contextmanager
+def use(ctx: TraceCtx | None) -> Iterator[TraceCtx | None]:
+    """Re-establish a context captured earlier with :func:`current`.
+
+    For work that outlives the turn that scheduled it: a long-lived worker
+    keeps the contextvars snapshot taken when ``asyncio.create_task`` forked
+    it, so without this every span it opens would land in whichever turn
+    happened to spawn it. Passing ``None`` clears the context, which makes the
+    next span a root rather than a child of a stale parent.
+    """
+    token = _CTX.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _CTX.reset(token)
+
+
+@contextlib.contextmanager
 def child_scope(span_id: str) -> Iterator[TraceCtx]:
     """Re-parent descendants onto ``span_id`` (used by the subagent probe, P1)."""
     cur = _CTX.get() or TraceCtx(trace_id=new_trace_id())

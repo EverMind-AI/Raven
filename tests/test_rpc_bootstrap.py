@@ -69,6 +69,52 @@ async def _sink(_frame: dict) -> None:
     pass
 
 
+class _RecordingBackend:
+    """Records the teardown order the owning stack puts it through."""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        self._order.append("stop")
+
+    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+        return []
+
+    async def store(self, session_id, messages, *, metadata=None):
+        return True
+
+    async def feedback(self, signals):
+        pass
+
+
+async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend(monkeypatch) -> None:
+    """serve and ACP own turns too, and dispatch now returns before the write
+    lands. Stopping the backend without draining closes the HTTP client the
+    queued writes still need, so this path lost its last turns silently while
+    the agent, TUI and gateway hosts did not."""
+    from raven.cli import tui_commands
+
+    order: list[str] = []
+    loop = _FakeLoop(_FakeCron())
+    loop.backend = _RecordingBackend(order)
+
+    async def _drain(*_a, **_kw) -> None:
+        order.append("drain")
+
+    loop.drain_backend_stores = _drain
+    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
+    assert stack.agent_loop is loop
+    await stack.teardown()
+
+    assert order == ["drain", "stop"], order
+
+
 async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
     from raven.cli import tui_commands
 

@@ -307,6 +307,7 @@ function buildSpanTitle(name, attrs) {
   if (name === 'memory.consolidate') return 'Memory Consolidate';
   if (name === 'memory.profile_refresh') return 'Profile Refresh';
   if (name === 'memory.feedback') return 'Memory Feedback';
+  if (name === 'memory.enqueue') return 'Memory Enqueue';
   if (name === 'plugin.load') return 'Plugin Load';
   if (name === 'tracing.bootstrap') return 'Tracing Bootstrap';
   return name;

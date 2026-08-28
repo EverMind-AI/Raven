@@ -181,6 +181,116 @@ class TestMemory:
         assert seg.meta["memory_hits"] == 0
 
 
+class TestRecallHasATurnBudget:
+    """Memory is an enhancement, not a precondition for answering.
+
+    The recall was awaited with no bound at all, in front of the model call --
+    a backend that hung left the turn with nothing to show and no way out but
+    the user cancelling it.
+    """
+
+    async def test_a_hanging_backend_degrades_to_no_hits(self, monkeypatch, tmp_path) -> None:
+        import asyncio
+
+        from raven.context_engine.segments import memory as memory_segment
+
+        monkeypatch.setattr(memory_segment, "_RECALL_BUDGET_S", 0.05)
+
+        class _Hanging:
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                await asyncio.sleep(30)
+
+        builder = memory_segment.MemorySegmentBuilder(
+            ContextBuilder(workspace=tmp_path).memory,
+            backend=_Hanging(),
+        )
+        assert await builder._recall("hi") == []
+
+    async def test_a_raising_backend_degrades_to_no_hits(self, tmp_path) -> None:
+        from raven.context_engine.segments import memory as memory_segment
+
+        class _Broken:
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                raise RuntimeError("memory service down")
+
+        builder = memory_segment.MemorySegmentBuilder(
+            ContextBuilder(workspace=tmp_path).memory,
+            backend=_Broken(),
+        )
+        assert await builder._recall("hi") == []
+
+    async def test_a_timeout_and_a_programming_error_log_distinguishably(self, monkeypatch, tmp_path, caplog) -> None:
+        """A permanent bug (a mismatched ``recall`` signature, an
+        ``AttributeError`` in a plugin) must not read the same as a slow-but-
+        healthy service: only a timeout should say "budget", and only the
+        other should name the exception that actually happened.
+        """
+        import asyncio
+        import logging
+
+        from loguru import logger
+
+        from raven.context_engine.segments import memory as memory_segment
+
+        monkeypatch.setattr(memory_segment, "_RECALL_BUDGET_S", 0.05)
+
+        class _Hanging:
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                await asyncio.sleep(30)
+
+        class _WrongSignature:
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                raise TypeError("recall() got an unexpected keyword argument 'foo'")
+
+        # Bridge loguru -> stdlib caplog (loguru doesn't write to logging by default)
+        handler_id = logger.add(lambda msg: logging.getLogger("loguru.bridge").warning(msg), level="WARNING")
+        try:
+            with caplog.at_level(logging.WARNING, logger="loguru.bridge"):
+                timeout_builder = memory_segment.MemorySegmentBuilder(
+                    ContextBuilder(workspace=tmp_path).memory,
+                    backend=_Hanging(),
+                )
+                await timeout_builder._recall("hi")
+                timeout_text = caplog.records[-1].message
+                caplog.clear()
+
+                error_builder = memory_segment.MemorySegmentBuilder(
+                    ContextBuilder(workspace=tmp_path).memory,
+                    backend=_WrongSignature(),
+                )
+                await error_builder._recall("hi")
+                error_text = caplog.records[-1].message
+        finally:
+            logger.remove(handler_id)
+
+        assert timeout_text != error_text
+        assert "budget" in timeout_text
+        assert "TypeError" in error_text
+        assert "unexpected keyword argument" in error_text
+
+    async def test_a_healthy_backend_is_untouched(self, tmp_path) -> None:
+        from raven.context_engine.segments import memory as memory_segment
+
+        class _Fine:
+            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+                return ["hit"]
+
+        builder = memory_segment.MemorySegmentBuilder(
+            ContextBuilder(workspace=tmp_path).memory,
+            backend=_Fine(),
+        )
+        assert await builder._recall("hi") == ["hit"]
+
+    def test_the_plugin_budget_is_strictly_inside_the_framework_one(self) -> None:
+        """Equal budgets would let the framework's cancellation pre-empt the
+        plugin's own timeout handling, which is what demotes the service and
+        makes every later turn cost nothing."""
+        from raven.context_engine.segments import memory as memory_segment
+        from raven.plugin.memory.everos import backend as everos_backend
+
+        assert everos_backend._RECALL_TIMEOUT_S < memory_segment._RECALL_BUDGET_S
+
+
 class TestSkills:
     async def test_router_hits_render_into_skills(self, tmp_path: Path) -> None:
         hits = [RouterHit(qualified_id="local/g", name="g", content="how to git", score=0.9)]
