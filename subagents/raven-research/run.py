@@ -67,13 +67,53 @@ def env_value(name: str) -> str | None:
 # file is the only way to get them in.
 SECRET_SLOTS = {
     "RESEARCH_API_KEY": ("providers", "openrouter", "apiKey"),
-    "RESEARCH_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
-    "RESEARCH_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
+    "RESEARCH_SERPER_API_KEY": ("tools", "web", "providers", "serper", "apiKey"),
+    "RESEARCH_ANYSEARCH_API_KEY": ("tools", "web", "providers", "anysearch", "apiKey"),
+    "RESEARCH_SERPAPI_API_KEY": ("tools", "web", "providers", "serpapi", "apiKey"),
+    "RESEARCH_JINA_API_KEY": ("tools", "web", "providers", "jina", "apiKey"),
 }
-# The LLM key is the only one whose absence is fatal: Serper failing degrades a
-# run to no search, and Jina is optional by design (unauthenticated r.jina.ai
-# works at a lower rate limit, and a dead key is worse than none - it 402s).
+
+# Where the same credential sits in a config on the pre-vendor layout. The host
+# raven is a separate checkout that still holds web keys per tool, so its keys
+# arrive in the old shape indefinitely - this is not an upgrade path that can
+# eventually be deleted. Tried after the slot's own path, so a host that does
+# adopt the vendor layout is read from there first.
+HOST_LEGACY_PATHS = {
+    "RESEARCH_SERPER_API_KEY": (("tools", "web", "search", "apiKey"),),
+    "RESEARCH_JINA_API_KEY": (("tools", "web", "jinaApiKey"),),
+}
+
+# The LLM key is the only one resolved differently: it never inherits from the
+# host, which is what keeps it out of the per-slot fallback in `render_config`.
+# Jina stays optional by design (unauthenticated r.jina.ai works at a lower rate
+# limit, and a dead key is worse than none - it 402s). The search key is
+# required, but not through this tuple - see `require_search`.
 REQUIRED_SECRETS = ("RESEARCH_API_KEY",)
+
+# Which backend a rendered config can select, and where its key comes from: the
+# bare env var the tool itself falls back to, and this launcher's prefixed slot.
+# The config field is not listed because it is derived - every credential lives
+# at `tools.web.providers.<vendor>.apiKey`, since one AnySearch account serves
+# both web tools.
+#
+# A copy of `SEARCH_PROVIDERS` / `FETCH_PROVIDERS` in Raven-X's
+# `agent/tools/web.py`, because this launcher deliberately imports nothing from
+# the checkout it launches - that checkout is replaced wholesale on every
+# upstream zip. `tests/test_subagent_raven_launcher.py` reads both and fails
+# when they drift.
+SEARCH_PROVIDERS = {
+    "serper": ("SERPER_API_KEY", "RESEARCH_SERPER_API_KEY"),
+    "anysearch": ("ANYSEARCH_API_KEY", "RESEARCH_ANYSEARCH_API_KEY"),
+    "serpapi": ("SERPAPI_API_KEY", "RESEARCH_SERPAPI_API_KEY"),
+}
+
+# The third element is whether the backend can read a page without a key. Jina
+# can, at a lower rate limit, which is why `web_fetch` has always been offered
+# on a bare checkout and must keep being offered.
+FETCH_PROVIDERS = {
+    "jina": ("JINA_API_KEY", "RESEARCH_JINA_API_KEY", False),
+    "anysearch": ("ANYSEARCH_API_KEY", "RESEARCH_ANYSEARCH_API_KEY", True),
+}
 
 # Everything the runtime persists - transcripts above all - lands here rather
 # than in this folder. See `render_config` for why writing the config here is
@@ -108,6 +148,21 @@ def dig(data: dict, path: tuple) -> str:
             return ""
         data = data.get(part)
     return data if isinstance(data, str) else ""
+
+
+def dig_any(data: dict, paths: tuple) -> str:
+    """The first non-empty value among several places one setting may live."""
+    for path in paths:
+        if value := dig(data, path):
+            return value
+    return ""
+
+
+def vendor_key(web: dict, vendor: str) -> str:
+    """The credential a rendered config holds for one web vendor."""
+    providers = web.get("providers")
+    block = providers.get(vendor) if isinstance(providers, dict) else None
+    return block.get("apiKey") or "" if isinstance(block, dict) else ""
 
 
 def put(data: dict, path: tuple, value: str) -> None:
@@ -175,6 +230,74 @@ def sweep_stale_renders() -> None:
             continue
 
 
+def require_search(config: dict) -> None:
+    """Refuse to launch when the selected search backend has no key.
+
+    Search is what this agent is for. Withheld, the tool is simply absent from
+    the schema and the run answers from the model's own memory - which reads as
+    an ordinary run, in the one failure mode nobody inspects. Failing at launch
+    is the only place the absence is visible before it costs a batch.
+
+    Three things this deliberately gets right:
+
+    * The bare env var counts. The tool resolves its key at call time from the
+      config value *or* its provider's variable, so a deploy that exports
+      `SERPER_API_KEY` and configures nothing is configured. Reading the config
+      alone would refuse to start a runtime that would have worked.
+    * A corpus endpoint is a full exemption. It IS the search source on a
+      fixed-corpus benchmark and needs no key; refusing there would break every
+      BrowseComp-Plus run.
+    * AnySearch's anonymous tier does not count. It works without a key at a
+      lower rate limit, so accepting it would trade a loud launch failure for a
+      run that is silently rate-limited mid-batch - the trade this check exists
+      to refuse.
+    """
+    web = (config.get("tools") or {}).get("web") or {}
+    if web.get("corpusEndpoint"):
+        return
+    provider = ((web.get("search") or {}).get("provider")) or "serper"
+    env_var, slot = SEARCH_PROVIDERS.get(provider, SEARCH_PROVIDERS["serper"])
+    if vendor_key(web, provider) or os.environ.get(env_var):
+        return
+    raise SystemExit(
+        f"error: search provider '{provider}' has no key; put {slot} in {HERE / '.env'} "
+        f"(see .env.example), export {env_var}, or set tools.web.corpusEndpoint to run "
+        f"against a fixed corpus"
+    )
+
+
+def require_fetch(config: dict) -> None:
+    """Refuse to launch when a selected or fallback page reader has no key.
+
+    Weaker than `require_search` by design: the default reader works without a
+    key, so this fires only for a backend that cannot. Two cases, one rule -
+    the selected provider is what every fetch goes through, and a fallback entry
+    that cannot run is worse than none, because it reads as insurance while
+    being unreachable at the moment it is needed.
+
+    A corpus endpoint is a full exemption for the same reason it is one for
+    search: it serves the pages itself.
+    """
+    web = (config.get("tools") or {}).get("web") or {}
+    if web.get("corpusEndpoint"):
+        return
+    fetch = web.get("fetch") or {}
+    selected = fetch.get("provider") or "jina"
+    chain = [selected, *(fetch.get("fallback") or [])]
+    for provider in chain:
+        if provider not in FETCH_PROVIDERS:
+            continue
+        env_var, slot, needs_key = FETCH_PROVIDERS[provider]
+        if not needs_key or vendor_key(web, provider) or os.environ.get(env_var):
+            continue
+        role = "selected" if provider == selected else "fallback"
+        raise SystemExit(
+            f"error: {role} fetch provider '{provider}' has no key; put {slot} in "
+            f"{HERE / '.env'} (see .env.example), export {env_var}, or drop it from "
+            f"tools.web.fetch"
+        )
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
 
@@ -189,10 +312,14 @@ def render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = host_config()
 
-    # Each optional key falls back on its own: a missing Serper or Jina key is a
-    # degradation, not a failure, and the host's is better than nothing.
+    # Each optional key falls back on its own: a missing Jina key is a
+    # degradation, not a failure, and the host's is better than nothing. The
+    # search key inherits the same way; whether its absence is fatal is decided
+    # after the merge, by `require_search`, so the host's key still counts.
     for name, path in SECRET_SLOTS.items():
-        value = env_value(name) or ("" if name in REQUIRED_SECRETS else dig(host, path))
+        value = env_value(name)
+        if not value and name not in REQUIRED_SECRETS:
+            value = dig_any(host, (path, *HOST_LEGACY_PATHS.get(name, ())))
         if value:
             put(config, path, value)
 
@@ -210,6 +337,12 @@ def render_config(source: Path) -> Path:
             )
         log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
 
+    # After the LLM key, not before: that one is the more basic prerequisite, and
+    # a deployment missing both should be told about it first rather than being
+    # sent to fix search on a checkout that could not have answered anyway.
+    require_search(config)
+    require_fetch(config)
+
     # One workspace for the whole server, pinned under STATE_ROOT: the schema
     # default is the host raven's own `~/.raven/workspace`, and sessions are
     # kept apart below it by their protocol-minted ids.
@@ -221,8 +354,13 @@ def render_config(source: Path) -> Path:
     sweep_stale_renders()
 
     rendered = STATE_ROOT / f".config.rendered.{os.getpid()}.json"
-    # Create it unreadable to anyone else before a single secret byte is in it.
+    # Unreadable to anyone else before a single secret byte is in it. The mode
+    # argument applies only where `open` creates the file, and this name can
+    # pre-exist: `sweep_stale_renders` keeps a render whose pid is alive, which
+    # this process's own always is, so one left by an earlier process holding
+    # this pid is truncated in place and would otherwise keep its old mode.
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         json.dump(config, stream, indent=2, ensure_ascii=False)
     return rendered

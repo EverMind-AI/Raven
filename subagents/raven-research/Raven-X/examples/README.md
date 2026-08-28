@@ -20,7 +20,8 @@ so nothing about the output says anything is wrong.
 
 Placeholders to replace: `PUT_YOUR_LLM_API_KEY_HERE`, `YOUR_LLM_HOST`. Web-tool keys are read
 from the environment (`SERPER_API_KEY` for search, `JINA_API_KEY` for fetch); they can also go
-in the config under `tools.web.search.apiKey` and `tools.web.jinaApiKey`, but the environment
+in the config under `tools.web.providers.serper.apiKey` and
+`tools.web.providers.jina.apiKey`, but the environment
 is preferred so a config file can be shared without carrying a secret.
 
 The LLM key has **no environment fallback** — `providers.<name>.apiKey` must be present in the

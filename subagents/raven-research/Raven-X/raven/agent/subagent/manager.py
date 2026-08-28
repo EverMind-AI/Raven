@@ -37,6 +37,7 @@ class SubagentManager:
         workspace: Path,
         model: str | None = None,
         brave_api_key: str | None = None,
+        web_search_provider: str = "serper",
         web_proxy: str | None = None,
         web_corpus_endpoint: str | None = None,
         benchmark_containment: "BenchmarkContainment | None" = None,
@@ -45,6 +46,9 @@ class SubagentManager:
         sandbox_config: "SandboxConfig | None" = None,
         owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
+        web_fetch_provider: str = "jina",
+        web_fetch_fallback: list[str] | None = None,
+        web_provider_keys: dict[str, str] | None = None,
         max_concurrent: int = 4,
         max_spawns_per_hour: int = 30,
         parent_tool_names: "Callable[[], list[str]] | None" = None,
@@ -66,7 +70,11 @@ class SubagentManager:
         self._submit = None
         self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
+        self.web_search_provider = web_search_provider
         self.jina_api_key = jina_api_key
+        self.web_fetch_provider = web_fetch_provider
+        self.web_fetch_fallback = web_fetch_fallback or []
+        self.web_provider_keys = web_provider_keys or {}
         self.web_proxy = web_proxy
         # Must be inherited from the parent loop: a fixed-corpus benchmark run is void the
         # moment any subagent reaches the live web, and the subagent tool registry is built
@@ -193,20 +201,24 @@ class SubagentManager:
         # second source, and needs no key.
         web_search = WebSearchTool(
             api_key=self.brave_api_key,
+            provider=self.web_search_provider,
             proxy=self.web_proxy,
             corpus_endpoint=self.web_corpus_endpoint,
             containment=self.benchmark_containment,
         )
         if web_search.api_key or web_search.corpus_endpoint:
             tools.register(web_search)
-        tools.register(
-            WebFetchTool(
-                api_key=self.jina_api_key,
-                proxy=self.web_proxy,
-                corpus_endpoint=self.web_corpus_endpoint,
-                containment=self.benchmark_containment,
-            )
+        web_fetch = WebFetchTool(
+            api_key=self.jina_api_key,
+            provider=self.web_fetch_provider,
+            fallback=self.web_fetch_fallback,
+            provider_keys=self.web_provider_keys,
+            proxy=self.web_proxy,
+            corpus_endpoint=self.web_corpus_endpoint,
+            containment=self.benchmark_containment,
         )
+        if web_fetch.registrable:
+            tools.register(web_fetch)
 
         # ★★★ dr@2.3: the subagent surface must be a SUBSET of the parent's.
         #

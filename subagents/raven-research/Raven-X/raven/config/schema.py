@@ -754,19 +754,74 @@ class AcpConfig(Base):
     max_loops: int = Field(default=8, ge=1)
 
 
+class WebProviderKey(Base):
+    """One web vendor's credential."""
+
+    api_key: str = ""
+
+
+class WebProvidersConfig(Base):
+    """Credentials keyed by vendor, not by the tool that happens to use them.
+
+    AnySearch serves both ``web_search`` and ``web_fetch`` off one account, so a
+    key held per tool would have to be pasted twice and could drift into two
+    different values for the same credential. Named fields rather than a free
+    dict: ``loader._collect_unknown_keys`` walks ``model_fields`` to catch a
+    misspelled key at load time, and a free dict would make every typo silent
+    again."""
+
+    serper: WebProviderKey = Field(default_factory=WebProviderKey)
+    anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
+    serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
+    jina: WebProviderKey = Field(default_factory=WebProviderKey)
+
+
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Serper API key
+    provider: Literal["serper", "anysearch", "serpapi"] = "serper"
+    """Which backend ``web_search`` calls. Default keeps the measured wire traffic.
+
+    The key itself lives under ``tools.web.providers.<name>``, so switching does
+    not require re-pasting one and switching back restores the previous. AnySearch
+    serves no page beyond the first, which the tool declares to the saturation
+    rule up front (``paginates``) rather than issuing a request it cannot serve."""
     max_results: int = 5
+
+
+class WebFetchConfig(Base):
+    """Web fetch tool configuration."""
+
+    provider: Literal["jina", "anysearch"] = "jina"
+    """Which backend ``web_fetch`` reads pages through. Default keeps the
+    measured wire traffic (``r.jina.ai``, unauthenticated when no key is set).
+
+    Not interchangeable with the default the way search backends are: measured on
+    one Wikipedia article, AnySearch returned 49,890 characters against Jina's
+    27,786 for the same page, because it keeps the navigation chrome Jina strips,
+    and it carries no publication date. An arm reading pages through it is a
+    different arm, not the same arm on another vendor."""
+    fallback: list[Literal["jina", "anysearch"]] = Field(default_factory=list)
+    """Backends to try, in order, when the selected one fails to return a page.
+
+    Empty by default, which is the behaviour every measured run so far had. It
+    exists because a dead vendor has already cost a whole run: an out-of-credit
+    Jina key answered 402 where no key answers 200, and that run recorded
+    ``pages_ok: 0`` against ``pages_opened: 33`` with every citation ungrounded.
+    Only a transport or server failure falls through - a containment refusal, a
+    failed URL validation and "not in corpus" are rules, and retrying them on
+    another vendor would be an end-run around the gate that produced them. Every
+    attempt is recorded, so a run that leaned on the fallback cannot look like
+    one that never needed it."""
 
 
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
     proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    jina_api_key: str = ""  # Jina Reader API key
+    providers: WebProvidersConfig = Field(default_factory=WebProvidersConfig)
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
     corpus_endpoint: str | None = None
     """Route ``web_search`` / ``web_fetch`` at a fixed-corpus retrieval service
     instead of the live web (e.g. ``http://127.0.0.1:8765`` for BrowseComp-Plus).

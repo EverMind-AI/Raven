@@ -366,3 +366,48 @@ def test_web_corpus_endpoint_defaults_to_none():
     mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"))
 
     assert mgr.web_corpus_endpoint is None
+
+
+def _subagent_tool_names(**kwargs) -> set[str]:
+    """The names a subagent is actually offered, through the real builder.
+
+    Driven through ``_build_subagent_tools`` rather than by reconstructing the
+    tools: the withholding rule lives in the builder, and a test that rebuilds
+    the tools asserts the constructor instead of the gate.
+    """
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), **kwargs)
+    return set(mgr._build_subagent_tools(executor=None).names())
+
+
+def test_a_keyless_page_reader_is_withheld_from_the_subagent(monkeypatch):
+    """Same rule as the main loop, and it has to be repeated here because this
+    registry is built separately: a tool the model reaches for and that fails
+    every time relays a config path to whoever is on the other end."""
+    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+
+    assert "web_fetch" not in _subagent_tool_names(web_fetch_provider="anysearch")
+
+
+def test_the_default_page_reader_is_offered_without_a_key(monkeypatch):
+    """Unauthenticated r.jina.ai works, so every measured run so far had
+    web_fetch on a checkout with no fetch key at all."""
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+
+    assert "web_fetch" in _subagent_tool_names()
+
+
+def test_the_subagents_page_reader_follows_the_parents_selection(monkeypatch):
+    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        web_fetch_provider="anysearch",
+        web_fetch_fallback=["jina"],
+        web_provider_keys={"anysearch": "k-any"},
+    )
+    fetch = mgr._build_subagent_tools(executor=None).get("web_fetch")
+
+    assert fetch.provider == "anysearch"
+    assert fetch.fallback == ["jina"]
+    assert fetch.api_key == "k-any"

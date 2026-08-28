@@ -448,6 +448,7 @@ class AgentLoop:
         context_window_tokens: int = 65_536,
         context_window_authoritative: bool = False,
         brave_api_key: str | None = None,
+        web_search_provider: str = "serper",
         web_proxy: str | None = None,
         web_corpus_endpoint: str | None = None,
         web_benchmark_containment: bool = False,
@@ -470,6 +471,9 @@ class AgentLoop:
         runtime_config: "RuntimeConfig | None" = None,
         interactive: bool = True,
         jina_api_key: str | None = None,
+        web_fetch_provider: str = "jina",
+        web_fetch_fallback: list[str] | None = None,
+        web_provider_keys: dict[str, str] | None = None,
         max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
         media_config: Any = None,
@@ -673,7 +677,11 @@ class AgentLoop:
             f"{self._dr_flow.version}/{_flow_version()}" if self._dr_flow is not None else _flow_version()
         )
         self.brave_api_key = brave_api_key
+        self.web_search_provider = web_search_provider
         self.jina_api_key = jina_api_key
+        self.web_fetch_provider = web_fetch_provider
+        self.web_fetch_fallback = web_fetch_fallback or []
+        self.web_provider_keys = web_provider_keys or {}
         self.web_proxy = web_proxy
         self.web_corpus_endpoint = web_corpus_endpoint
         # One instance shared by web_search and web_fetch: an arm reports one
@@ -880,7 +888,11 @@ class AgentLoop:
             workspace=workspace,
             model=self.model,
             brave_api_key=brave_api_key,
+            web_search_provider=web_search_provider,
             jina_api_key=jina_api_key,
+            web_fetch_provider=web_fetch_provider,
+            web_fetch_fallback=web_fetch_fallback,
+            web_provider_keys=web_provider_keys,
             web_proxy=web_proxy,
             web_corpus_endpoint=web_corpus_endpoint,
             benchmark_containment=self.benchmark_containment,
@@ -1120,11 +1132,12 @@ class AgentLoop:
         # rather than the config, because it resolves the key at call time from
         # either source.
         # The corpus endpoint is the second source: with one configured this
-        # agent searches a fixed corpus and needs no Serper key at all, so
+        # agent searches a fixed corpus and needs no provider key at all, so
         # gating on the key alone would withdraw web_search from every
         # contained benchmark run.
         web_search = WebSearchTool(
             api_key=self.brave_api_key,
+            provider=self.web_search_provider,
             proxy=self.web_proxy,
             corpus_endpoint=self.web_corpus_endpoint,
             containment=self.benchmark_containment,
@@ -1134,17 +1147,26 @@ class AgentLoop:
             self.tools.register(web_search)
         else:
             logger.info(
-                "web_search not registered: no Serper API key and no web corpus endpoint"
+                "web_search not registered: no {} API key and no web corpus endpoint",
+                web_search.spec.label,
             )
-        self.tools.register(
-            WebFetchTool(
-                api_key=self.jina_api_key,
-                proxy=self.web_proxy,
-                corpus_endpoint=self.web_corpus_endpoint,
-                containment=self.benchmark_containment,
-                **fetch_kwargs,
-            )
+        web_fetch = WebFetchTool(
+            api_key=self.jina_api_key,
+            provider=self.web_fetch_provider,
+            fallback=self.web_fetch_fallback,
+            provider_keys=self.web_provider_keys,
+            proxy=self.web_proxy,
+            corpus_endpoint=self.web_corpus_endpoint,
+            containment=self.benchmark_containment,
+            **fetch_kwargs,
         )
+        if web_fetch.registrable:
+            self.tools.register(web_fetch)
+        else:
+            logger.info(
+                "web_fetch not registered: no {} API key and no web corpus endpoint",
+                web_fetch.spec.label,
+            )
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
         # which Config.effective_media_config() surfaces as a resolved key/model.

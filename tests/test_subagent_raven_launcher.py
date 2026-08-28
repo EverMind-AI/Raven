@@ -28,9 +28,29 @@ def mod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(launcher, "HERE", tmp_path)
     monkeypatch.setattr(launcher, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(launcher, "HOST_CONFIG", tmp_path / "host-config.json")
-    for name in ("RESEARCH_API_KEY", "RESEARCH_SERPER_API_KEY", "RESEARCH_JINA_API_KEY"):
+    for name in (
+        "RESEARCH_API_KEY",
+        "RESEARCH_SERPER_API_KEY",
+        "RESEARCH_ANYSEARCH_API_KEY",
+        "RESEARCH_SERPAPI_API_KEY",
+        "RESEARCH_JINA_API_KEY",
+        "SERPER_API_KEY",
+        "ANYSEARCH_API_KEY",
+        "SERPAPI_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     return launcher
+
+
+@pytest.fixture
+def searchable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A search key, for the tests that are about something else.
+
+    The launcher refuses to render a config whose search backend has no key, so
+    without this every unrelated case would exit on that instead of exercising
+    what it names. The gate itself is tested below, from a bare fixture.
+    """
+    monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "k-serper")
 
 
 def _source(tmp_path: Path, extra: dict | None = None) -> Path:
@@ -56,12 +76,12 @@ def test_secrets_land_in_their_slots_and_the_source_stays_clean(
 
     data = json.loads(rendered.read_text(encoding="utf-8"))
     assert data["providers"]["openrouter"]["apiKey"] == "k-llm"
-    assert data["tools"]["web"]["search"]["apiKey"] == "k-serper"
+    assert data["tools"]["web"]["providers"]["serper"]["apiKey"] == "k-serper"
     assert "k-llm" not in source.read_text(encoding="utf-8")
 
 
 def test_the_rendered_file_is_private_and_named_after_this_pid(
-    mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The pid in the name is the contract `sweep_stale_renders` reads: the
     exec hands this pid to the server, so liveness of the pid is liveness of
@@ -75,7 +95,31 @@ def test_the_rendered_file_is_private_and_named_after_this_pid(
     assert (rendered.stat().st_mode & 0o777) == 0o600
 
 
-def test_the_workspace_is_pinned_under_the_state_root(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_rendered_file_is_tightened_when_the_path_already_exists(
+    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Starts from a loose file rather than an empty directory, which is the
+    only state that can tell `os.open`'s mode from `fchmod`: the mode argument
+    applies where it creates, and this name can pre-exist because
+    `sweep_stale_renders` keeps a render whose pid is alive - this process's
+    own always is.
+    """
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    stale = mod.STATE_ROOT / f".config.rendered.{os.getpid()}.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}", encoding="utf-8")
+    stale.chmod(0o644)
+
+    rendered = mod.render_config(_source(tmp_path))
+
+    assert rendered == stale
+    assert (rendered.stat().st_mode & 0o777) == 0o600
+    assert "k-llm" in rendered.read_text(encoding="utf-8")
+
+
+def test_the_workspace_is_pinned_under_the_state_root(
+    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The schema default is the host raven's own ~/.raven/workspace, which
     this agent must not share."""
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
@@ -86,7 +130,9 @@ def test_the_workspace_is_pinned_under_the_state_root(mod, tmp_path: Path, monke
     assert data["agents"]["defaults"]["workspace"] == str(mod.STATE_ROOT / "workspace")
 
 
-def test_a_workspace_the_config_declares_is_left_alone(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_workspace_the_config_declares_is_left_alone(
+    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
     source = _source(tmp_path, extra={"workspace": "/elsewhere/ws"})
 
@@ -102,7 +148,7 @@ def test_no_key_anywhere_refuses_to_launch(mod, tmp_path: Path) -> None:
 
 
 def test_the_hosts_whole_provider_block_is_inherited_without_its_limits(
-    mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Copied wholesale, never matched by name; the agent's own operating
     limits stay its own."""
@@ -123,6 +169,190 @@ def test_the_hosts_whole_provider_block_is_inherited_without_its_limits(
     defaults = data["agents"]["defaults"]
     assert defaults["provider"] == "host" and defaults["model"] == "host-model"
     assert defaults["maxToolIterations"] == 150
+
+
+def test_a_missing_search_key_refuses_to_launch(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Search is what this agent is for. Withheld, its tool is simply absent and
+    the run answers from the model's own memory, which reads as an ordinary
+    run -- so the absence has to be loud at launch or it is never noticed."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+
+    with pytest.raises(SystemExit, match="RESEARCH_SERPER_API_KEY"):
+        mod.render_config(_source(tmp_path))
+
+
+def test_the_llm_key_is_reported_before_the_search_key(mod, tmp_path: Path) -> None:
+    """A deployment missing both should be sent to the more basic one first."""
+    with pytest.raises(SystemExit, match="RESEARCH_API_KEY"):
+        mod.render_config(_source(tmp_path))
+
+
+def test_the_bare_environment_variable_counts_as_configured(
+    mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool resolves its key at call time from the config value *or* its
+    provider's variable, so refusing here would block a runtime that works."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    monkeypatch.setenv("SERPER_API_KEY", "from-env")
+
+    assert mod.render_config(_source(tmp_path)).exists()
+
+
+def test_a_corpus_endpoint_needs_no_search_key(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It IS the search source on a fixed-corpus benchmark; refusing there
+    would break every BrowseComp-Plus run."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    source = tmp_path / "config.json"
+    source.write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiBase": "https://example.invalid/v1"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "own-model"}},
+                "tools": {"web": {"corpusEndpoint": "http://127.0.0.1:8765"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert mod.render_config(source).exists()
+
+
+def test_another_providers_key_does_not_satisfy_the_selected_one(
+    mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Serper key is not an AnySearch key. AnySearch's anonymous tier is not
+    accepted either: it would trade a loud launch failure for a run that is
+    silently rate-limited part way through a batch."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "k-serper")
+    source = tmp_path / "config.json"
+    source.write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiBase": "https://example.invalid/v1"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "own-model"}},
+                "tools": {"web": {"search": {"provider": "anysearch"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="RESEARCH_ANYSEARCH_API_KEY"):
+        mod.render_config(source)
+
+
+def _checkout_specs(kind: str) -> dict[str, dict[str, str]]:
+    """The literal fields of one provider table, read off the checkout's source.
+
+    Read rather than imported: ``web.py`` pulls in the whole Raven-X package,
+    which is a separate environment this suite does not run under.
+    """
+    web = _LAUNCHER.parent / "Raven-X" / "raven" / "agent" / "tools" / "web.py"
+    text = web.read_text(encoding="utf-8")
+    out: dict[str, dict[str, str]] = {}
+    for block in text.split(f": {kind}ProviderSpec(")[1:]:
+        body = block.split("),", 1)[0]
+        fields = {}
+        for field in ("vendor", "env_var", "extractor"):
+            if f'{field}="' in body:
+                fields[field] = body.split(f'{field}="', 1)[1].split('"', 1)[0]
+        fields["needs_key"] = "needs_key=True" in body
+        out[fields["vendor"]] = fields
+    return out
+
+
+def test_the_launchers_provider_tables_match_the_checkouts(mod) -> None:
+    """The launcher imports nothing from the checkout it launches, so it keeps
+    its own copy of both provider tables. Nothing but this stops the two drifting
+    -- and a drifted copy would refuse a configured deploy, or wave through an
+    unconfigured one, with no other symptom."""
+    search = _checkout_specs("Search")
+    assert set(mod.SEARCH_PROVIDERS) == set(search)
+    for name, (env_var, slot) in mod.SEARCH_PROVIDERS.items():
+        assert env_var == search[name]["env_var"]
+        assert slot in mod.SECRET_SLOTS
+
+    fetch = _checkout_specs("Fetch")
+    assert set(mod.FETCH_PROVIDERS) == set(fetch)
+    for name, (env_var, slot, needs_key) in mod.FETCH_PROVIDERS.items():
+        assert env_var == fetch[name]["env_var"]
+        assert needs_key == fetch[name]["needs_key"]
+        assert slot in mod.SECRET_SLOTS
+
+
+def test_every_secret_slot_writes_under_its_own_vendor(mod) -> None:
+    """The credential is keyed by vendor, so the slot's path and the provider
+    name it serves must agree. They are written in two places -- SECRET_SLOTS and
+    the provider tables -- and nothing else ties them together."""
+    for table in (mod.SEARCH_PROVIDERS, mod.FETCH_PROVIDERS):
+        for name, entry in table.items():
+            slot = entry[1]
+            assert mod.SECRET_SLOTS[slot] == ("tools", "web", "providers", name, "apiKey")
+
+
+def test_the_hosts_pre_vendor_key_is_still_inherited(mod, tmp_path: Path, monkeypatch) -> None:
+    """The host raven is a separate checkout that holds web keys per tool, so
+    its keys keep arriving in the old shape. Reading only the new path would
+    silently stop inheriting them and refuse to launch a deploy that worked."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    (tmp_path / "host-config.json").write_text(
+        json.dumps({"tools": {"web": {"search": {"apiKey": "host-serper"}, "jinaApiKey": "host-jina"}}}),
+        encoding="utf-8",
+    )
+
+    rendered = mod.render_config(_source(tmp_path))
+
+    web = json.loads(rendered.read_text(encoding="utf-8"))["tools"]["web"]
+    assert web["providers"]["serper"]["apiKey"] == "host-serper"
+    assert web["providers"]["jina"]["apiKey"] == "host-jina"
+
+
+def test_a_keyless_fetch_provider_refuses_to_launch(mod, searchable, tmp_path: Path, monkeypatch) -> None:
+    """Jina reads pages without a key; AnySearch does not. Selecting it with no
+    key would advertise a tool whose every call fails."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    source = tmp_path / "config.json"
+    source.write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiBase": "https://example.invalid/v1"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "own-model"}},
+                "tools": {"web": {"fetch": {"provider": "anysearch"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="selected fetch provider"):
+        mod.render_config(source)
+
+
+def test_a_keyless_fetch_fallback_refuses_to_launch(mod, searchable, tmp_path: Path, monkeypatch) -> None:
+    """A fallback that cannot run is worse than none: it reads as insurance
+    while being unreachable at the moment it is needed."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+    source = tmp_path / "config.json"
+    source.write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiBase": "https://example.invalid/v1"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "own-model"}},
+                "tools": {"web": {"fetch": {"provider": "jina", "fallback": ["anysearch"]}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="fallback fetch provider"):
+        mod.render_config(source)
+
+
+def test_the_default_fetch_provider_needs_no_key(mod, searchable, tmp_path: Path, monkeypatch) -> None:
+    """Unauthenticated r.jina.ai works, and a dead key is worse than none, so a
+    bare deploy must keep launching with page reading available."""
+    monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
+
+    assert mod.render_config(_source(tmp_path)).exists()
 
 
 def test_sweep_removes_only_files_whose_pid_is_gone(mod) -> None:

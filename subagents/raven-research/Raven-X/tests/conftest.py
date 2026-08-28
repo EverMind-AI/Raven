@@ -23,6 +23,15 @@ import os
 # ``setdefault``, so a caller can still run against the remote table on purpose.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
+# Same argument, different file: `load_config()` seeds the process environment
+# from a `.env` beside the config it loads, and the default config path is
+# `~/.raven/config.json`. A developer with `~/.raven/.env` would then run a
+# different suite from CI's, and every "this key is not configured" assertion
+# would depend on their home directory. Off here, on in production.
+#
+# ``setdefault`` again, so `RAVEN_DOTENV=1 uv run pytest` can exercise it.
+os.environ.setdefault("RAVEN_DOTENV", "0")
+
 import pytest
 
 # The IM-channel adapters import vendor SDKs that are not in this project's

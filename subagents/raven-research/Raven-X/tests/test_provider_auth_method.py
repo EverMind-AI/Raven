@@ -449,6 +449,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/cli/tui_commands.py",
         "raven/config/update_everos.py",
         "raven/config/update_tools.py",
+        # Relocates a WEB tool's key from the tool that used it to the vendor
+        # that issues it (_migrate_config). It moves the value and never reads it
+        # to rule on whether anything is set up.
+        "raven/config/loader.py",
         "raven/providers/transcription.py",
         # Reads a key in order to *use* it -- put it on the request, redact it
         # for display, rotate it -- rather than to rule on whether a provider is
