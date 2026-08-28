@@ -4599,17 +4599,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   font: 11px var(--sans); }
 .pane-spacer { flex: 1; }
 .desk-pane-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
-/* A delivered file says what it is before it says what it contains. Fixed at
-   the top of the pane rather than scrolling with the body: it is the identity
-   of what is open, the way the pane header is. */
-.desk-pane > .dlv-strip { flex: none; padding: 9px 12px 10px; border-bottom: 1px solid var(--line-soft);
-  background: var(--surface); }
-.dlv-strip b { display: block; font: 600 12.5px/1.4 var(--sans); }
-.dlv-strip p { margin: 2px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-.dlv-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.dlv-meta i { padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--ink);
-  color: var(--faint); font: 9.5px/1.7 var(--mono); font-style: normal; }
-.dlv-meta i.bad { color: var(--clay); }
 .desk-pane:has(.instance-conversation) .desk-pane-body { overflow: hidden; }
 .desk-pane-body > .diff { min-height: 100%; }
 .desk-pane-body > .fwrap { height: 100%; }

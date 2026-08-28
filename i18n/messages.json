@@ -4987,9 +4987,9 @@
       "en": "This view cannot read files here",
       "zh": "这里没法读取文件"
     },
-    "gui.ws.download": {
-      "en": "Download",
-      "zh": "下载"
+    "gui.ws.save_copy": {
+      "en": "Save a copy",
+      "zh": "\u4fdd\u5b58\u526f\u672c"
     },
     "gui.ws.expand_lines": {
       "en": "show {n} more",

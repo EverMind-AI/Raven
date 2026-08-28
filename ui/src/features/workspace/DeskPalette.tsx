@@ -108,7 +108,7 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
          note instead of a viewer that has nothing to show.
          Left clickable on purpose when the file is gone: the viewer says so in
          words, which is more than a dead row does. */
-      onClick={() => workspace.openDelivery(row.path, row.downloadPath)}
+      onClick={() => workspace.openDelivery(row.path)}
     >
       <span className="dlv-kind" data-kind={fileKind(row.name)}>
         {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}

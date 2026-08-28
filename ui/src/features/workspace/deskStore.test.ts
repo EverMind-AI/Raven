@@ -102,11 +102,10 @@ describe('desk store', () => {
     desk.openDeskFile('/workspace/a.ts')
     const before = desk.getState().panes[0]
 
-    desk.openDeskFile('/workspace/a.ts', '/dl/a.ts')
+    desk.openDeskFile('/workspace/a.ts')
 
     const after = desk.getState().panes[0]!
     expect(after).not.toBe(before)
-    expect(after.kind === 'file' && after.file.downloadPath).toBe('/dl/a.ts')
   })
 
   it('does not re-open a workspace that is already showing', () => {
@@ -249,11 +248,11 @@ describe('arranging the desk', () => {
 describe('what a reload finds on the desk', () => {
   it('records the file windows, by path, in the order they were opened', () => {
     desk.openDeskFile('/workspace/a.ts')
-    desk.openDeskFile('/workspace/b.ts', '/dl/b.ts')
+    desk.openDeskFile('/workspace/b.ts')
 
     expect(desk.saved('s1')!.open).toEqual([
       { k: 'file', path: '/workspace/a.ts' },
-      { k: 'file', path: '/workspace/b.ts', dl: '/dl/b.ts' },
+      { k: 'file', path: '/workspace/b.ts' },
     ])
   })
 
