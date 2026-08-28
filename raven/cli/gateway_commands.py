@@ -568,24 +568,29 @@ def register(app: typer.Typer) -> None:
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
 
-                # Web-app channel (ui-webui P1): its own streaming spine + a
-                # WebSocket JSON-RPC server the web backend connects to as a
-                # client, built alongside the gateway's spine and sharing this
-                # agent_loop. The gateway runner is non-streaming (proactive
-                # replies are one Text); the web UI wants token streaming, so it
-                # gets its own streaming runner (build_web). Built here, BEFORE
-                # the proactive wiring, so proactive producers can target it.
+                # Web-app channel: its own streaming spine + a WebSocket
+                # JSON-RPC server a client connects to, built alongside the
+                # gateway's spine and sharing this agent_loop. The gateway runner
+                # is non-streaming (proactive replies are one Text); a streaming
+                # client wants token streaming, so it gets its own streaming
+                # runner (build_web). Built here, BEFORE the proactive wiring, so
+                # proactive producers can target it.
+                #
+                # The front end this was built for (`ui-webui`) has been retired.
+                # The channel stays because of what the next comment says: it is
+                # the only way to ask a live adapter anything.
                 web_cfg = config.gateway.web
                 web_scheduler = None
                 web_hub = None
                 # Always on now, not only when the operator turned it on. This
                 # is the only place a live adapter can be asked whether a
                 # channel is actually paired, and `raven serve` has to be able
-                # to ask -- otherwise every surface but ui-webui reports the
-                # config file's `enabled` flag as if it were a connection.
+                # to ask -- otherwise every surface reports the config file's
+                # `enabled` flag as if it were a connection.
                 #
                 # Opted in (`gateway.web.enabled`) keeps the configured port and
-                # token, because ui-webui is pointed at them. Otherwise the port
+                # token, for a client that has been pointed at them. Otherwise
+                # the port
                 # is probed forward from the default and the token is minted for
                 # this boot: neither is written to config, so no stale secret
                 # outlives the process. Loopback either way.

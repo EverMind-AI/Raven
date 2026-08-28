@@ -237,17 +237,6 @@ ignore = ["E501"]
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
-# The service's own tests live beside it (they need agentscope, so the root
-# pytest run cannot collect them) and follow the same conventions.
-"ui-webui/service/tests/**" = ["E402", "S101"]
-# agentscope, adopted into the web service (Apache-2.0, see NOTICES.md and
-# ui-webui/service/agentscope/PROVENANCE.md). Linted like the rest of the repo,
-# but its own conventions are grandfathered rather than rewritten: bare asserts,
-# capitalised locals/functions, exception names without an Error suffix, and one
-# `token` variable ruff reads as a credential. Formatting is skipped separately
-# (ruff-format in .pre-commit-config.yaml) -- restyling 207 files would be ~3.5k
-# lines of cosmetic churn with no functional gain.
-"ui-webui/service/agentscope/**" = ["S101", "S105", "N802", "N806", "N812", "N818"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
