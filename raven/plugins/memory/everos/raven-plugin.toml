@@ -19,9 +19,12 @@ factory = "raven.plugins.memory.everos.backend:make_backend"
 name    = "understand_media"
 factory = "raven.plugins.memory.everos.tools:make_understand_media_tool"
 
-# No config_schema block: the registry passes the user's
-# ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)`` verbatim
-# and never validates it, so a schema declared here would be inert and its
-# defaults would not apply. The factory owns its defaults in code instead.
-# The only key it reads from that dict is ``base_url``; identity comes from
-# the host via ``ServiceLocator``.
+# The registry admits the user's ``plugins.config["everos-memory"]`` slice
+# against this declaration before ``make_backend(ctx)`` sees it: declared
+# keys are type-checked at the door, unknown keys pass through with a
+# warning. ``base_url`` deliberately declares no default — the factory keeps
+# owning its default in code, so a valid config behaves exactly as before;
+# only an invalid type now fails loudly at activation instead of misbehaving
+# later. Identity still comes from the host via ``ServiceLocator``.
+[plugin.config_schema]
+base_url = { type = "string" }
