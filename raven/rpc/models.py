@@ -2071,6 +2071,14 @@ class McpSnapshot(_Strict):
     tool_count: int
     error: str | None = None
     enabled: bool
+    auth_url: str | None = Field(
+        None,
+        description=(
+            "The authorization URL this server is parked on, when it is. Carried on the pull "
+            "because the `oauth.pending` notification that also carries it is dropped when no "
+            "client is attached, which is every connect started at assembly time."
+        ),
+    )
 
 
 class PlughubCatalogItem(_Strict):

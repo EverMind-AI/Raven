@@ -508,8 +508,27 @@ export function togglePy(row: InstalledRow): void {
 
 /* ── events from the gateway (forwarded by the live source) ──────── */
 
+/* A connect that parked before any client attached broadcast its oauth.pending
+   to nobody, so the URL only reaches us on the pull. Seeded into authWait rather
+   than read off the row at render time, so it has ONE lifetime: everything that
+   already clears a live authorization -- oauth.done, a settled mcp.status --
+   clears this too. Read from the row instead and a plugin that finished
+   authorizing kept showing "waiting" behind a dead link until a full reload. */
+function seedPulledAuth(): void {
+  for (const row of mcpRows()) {
+    const m = row.m
+    if (!m || !m.auth_url) continue
+    /* Only while the row itself still says the park is live. A URL on a row
+       whose state has settled is a stale read, and seeding from it would put
+       back a link the user has already finished with. */
+    if (m.state !== 'auth_required' && m.state !== 'connecting') continue
+    if (!authWait[m.name]) authWait[m.name] = m.auth_url
+  }
+}
+
 export function onEvent(ev: PluginsEvent): void {
   if (ev.kind === 'rows') {
+    seedPulledAuth()
     sync()
     return
   }
@@ -541,7 +560,11 @@ export function onEvent(ev: PluginsEvent): void {
         return
       }
     }
-    if (ev.state !== 'connecting') delete authWait[ev.name]
+    /* The event is authoritative for this too: it carries auth_url on every
+       snapshot, null included, so a park that settled clears the seeded pull
+       without waiting for another rows load. */
+    if (ev.state !== 'connecting' || !ev.auth_url) delete authWait[ev.name]
+    if (ev.auth_url) authWait[ev.name] = ev.auth_url
     sync()
     return
   }

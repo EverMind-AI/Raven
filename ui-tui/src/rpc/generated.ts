@@ -585,6 +585,10 @@ export interface McpSnapshot {
   tool_count: number;
   error?: string;
   enabled: boolean;
+  /**
+   * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
+   */
+  auth_url?: string;
 }
 /**
  * What the install actually landed, which is what uninstall replays.
@@ -3037,6 +3041,10 @@ export interface McpSnapshot1 {
   tool_count: number;
   error?: string;
   enabled: boolean;
+  /**
+   * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
+   */
+  auth_url?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

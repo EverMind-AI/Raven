@@ -1200,7 +1200,13 @@ class TestAgentLoopExecutorLifecycle:
         )
 
     async def test_run_turn_closes_executor_on_unexpected_error(self, tmp_path, mock_provider):
-        """run_turn() closes the executor when _connect_mcp raises a non-SandboxInitError."""
+        """run_turn() closes the executor when the turn body raises.
+
+        The trigger used to be ``_connect_mcp`` raising inside the turn. The turn
+        no longer awaits that connect -- it hands it to ``prewarm_mcp`` and moves
+        on -- so a connect failure cannot fail a turn any more, and the turn body
+        is what this invariant has to be driven through.
+        """
         from raven.agent.loop import AgentLoop
 
         stopped = []
@@ -1212,13 +1218,13 @@ class TestAgentLoopExecutorLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        loop = AgentLoop(provider=mock_provider, workspace=tmp_path, mcp_servers={"svc": object()})
+        loop = AgentLoop(provider=mock_provider, workspace=tmp_path)
         loop._executor = TrackingExecutor()
 
-        async def _failing_connect_mcp(**_kw):
+        async def _failing_process(*_a, **_kw):
             raise RuntimeError("unexpected network error")
 
-        loop._connect_mcp = _failing_connect_mcp
+        loop._process_message = _failing_process
 
         async def _emit(_ev):
             pass
@@ -1236,8 +1242,8 @@ class TestAgentLoopExecutorLifecycle:
 
         stopped = []
 
-        class StartedThenFailsMCP(SandboxExecutor):
-            """Starts fine, but triggers SandboxInitError via _connect_mcp path."""
+        class StartedThenFails(SandboxExecutor):
+            """Assigned already, so the close path has something to stop."""
 
             async def exec(self, *a, **kw) -> ExecResult:
                 raise NotImplementedError
@@ -1245,18 +1251,18 @@ class TestAgentLoopExecutorLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        loop = AgentLoop(
-            provider=mock_provider,
-            workspace=tmp_path,
-            mcp_servers={"svc": object()},  # non-empty so _connect_mcp is attempted
-        )
-        loop._executor = StartedThenFailsMCP()
+        loop = AgentLoop(provider=mock_provider, workspace=tmp_path)
+        loop._executor = StartedThenFails()
 
-        # Patch _connect_mcp to raise SandboxInitError after executor starts
-        async def _failing_connect_mcp(**_kw):
+        # Raised from the turn body. The MCP connect used to be the trigger and
+        # no longer can be -- the turn hands that off to ``prewarm_mcp`` without
+        # awaiting it. It has to be raised after ``_start_executor`` has run for
+        # real, because the close path drains ``_executor_stack``, which is what
+        # that start registers the executor into.
+        async def _failing_process(*_a, **_kw):
             raise SandboxInitError("test: MCP sandbox guard fired")
 
-        loop._connect_mcp = _failing_connect_mcp
+        loop._process_message = _failing_process
 
         async def _emit(_ev):
             pass

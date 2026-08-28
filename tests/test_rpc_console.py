@@ -1259,3 +1259,87 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
 
     assert not (tmp_path / ".raven" / "env").exists()
+
+
+@pytest.mark.asyncio
+async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pull has to answer for a connect that started before any client.
+
+    `mcp.status` and `oauth.pending` carry the state and the URL, and
+    `WsGateway.broadcast` drops both while its socket set is empty -- which is
+    every connect started at assembly time, since the page attaches after. Built
+    from the registry alone, this reported a server parked at the browser step as
+    `disconnected` with no URL, and the page draws its authorization action off
+    exactly those two fields.
+    """
+
+    def _server(url: str) -> SimpleNamespace:
+        return SimpleNamespace(enabled=True, type=None, command=None, url=url)
+
+    cfg = SimpleNamespace(
+        tools=SimpleNamespace(
+            mcp_servers={
+                "parked": _server("https://example.invalid/mcp"),
+                # No record with the manager at all: still listed from config.
+                "unknown": _server("https://example.invalid/mcp"),
+            }
+        )
+    )
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: cfg)
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+
+    from raven.mcp import oauth as oauth_module
+
+    monkeypatch.setattr(
+        oauth_module,
+        "pending_url",
+        lambda name: "https://auth.invalid/authorize?state=abc" if name == "parked" else None,
+    )
+
+    class _Catalog:
+        def gather_all_skills(self):
+            return []
+
+    class _Manager:
+        def status(self):
+            return [
+                {
+                    "name": "parked",
+                    "transport": "streamableHttp",
+                    "state": "auth_required",
+                    "connected": False,
+                    "tool_count": 0,
+                    "error": "waiting for browser authorization",
+                }
+            ]
+
+    from raven.agent.tools.registry import ToolRegistry
+
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=_Catalog()),
+        tools=ToolRegistry(),
+        _mcp_manager=_Manager(),
+    )
+
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+    by_name = {m["name"]: m for m in result["mcp"]}
+
+    assert by_name["parked"]["state"] == "auth_required"
+    assert by_name["parked"]["auth_url"] == "https://auth.invalid/authorize?state=abc"
+    assert by_name["parked"]["error"] == "waiting for browser authorization"
+    # Config still decides enabled: the manager's record predates a toggle.
+    assert by_name["parked"]["enabled"] is True
+
+    # A configured server the manager has never seen keeps the old reading.
+    assert by_name["unknown"]["state"] == "disconnected"
+    assert by_name["unknown"]["auth_url"] is None

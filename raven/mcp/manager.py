@@ -69,6 +69,13 @@ _HANDSHAKE_TIMEOUT = 90.0
 # hits this. Written as a literal it silently inverted when the flow timeout was
 # raised, and the watchdog started cancelling authorizations the page had just
 # promised the reader another eight minutes for.
+_REAP_ROUNDS = 5
+"""How many times ``reap_attempts`` re-reads the task sets before giving up.
+
+More than one because a connect can be registered while the previous batch is
+being awaited; bounded because the alternative is a shutdown a busy reload can
+hold open indefinitely."""
+
 _AUTH_PARK_GRACE = 120.0
 _AUTH_PARK_MAX = OAUTH_FLOW_TIMEOUT + _AUTH_PARK_GRACE
 
@@ -178,6 +185,12 @@ class MCPConnectionManager:
         self._lock = asyncio.Lock()
         # Names already warned about, so a config poll does not repeat itself.
         self._warned_names: set[str] = set()
+        # Every live attempt task. A cancel of whoever started a sync reaches the
+        # coroutine that was awaiting an attempt, not the attempt itself, and a
+        # deliberately detached one has no awaiter at all -- so shutdown needs a
+        # handle on them or the handshakes, transports and stdio children outlive
+        # the manager that owns them.
+        self._attempt_tasks: set[asyncio.Task] = set()
 
     # ── Introspection ──────────────────────────────────────────────
 
@@ -264,6 +277,8 @@ class MCPConnectionManager:
         return {n: ref.server for n in self._registry.names() if (ref := self._registry.origin_of(n))}
 
     def _snapshot(self, conn: MCPConnection) -> dict:
+        from raven.mcp.oauth import pending_url
+
         return {
             "name": conn.name,
             "transport": resolve_transport(conn.config) or "unknown",
@@ -272,6 +287,11 @@ class MCPConnectionManager:
             "tool_count": len(self._registry.names_from(conn.name)),
             "error": conn.error,
             "enabled": bool(getattr(conn.config, "enabled", True)),
+            # Present on every snapshot, null included. A reader that seeds this
+            # from a pull needs the later `mcp.status` to carry the key in order
+            # to clear it -- omitted, the merge leaves a settled server showing
+            # the authorization link it was parked on.
+            "auth_url": pending_url(conn.name),
         }
 
     def _set_state(self, conn: MCPConnection, state: MCPState, error: str | None = None) -> None:
@@ -402,7 +422,9 @@ class MCPConnectionManager:
                 f"{PREFIX}{SEPARATOR}{sanitary_form(name)}{SEPARATOR}<tool>",
             )
 
-    async def apply_config(self, cfg_servers: dict, *, executor_provider=None) -> ApplyReport:
+    async def apply_config(
+        self, cfg_servers: dict, *, executor_provider=None, attempts: dict | None = None
+    ) -> ApplyReport:
         """Reconcile live connections with the desired config.
 
         Reconciling, not restarting: a server whose config is unchanged and
@@ -461,6 +483,15 @@ class MCPConnectionManager:
         # measured cost was a whole turn spent waiting on a handshake that had
         # nothing to do with it. The executor is resolved once, under a lock,
         # because ``_start_executor`` was written for one caller at a time.
+        # Filled before the gather, so a caller whose apply is cancelled mid-flight
+        # still holds what it began. It belongs to the caller and not to this
+        # object: a manager-wide slot is overwritten by whichever apply started
+        # most recently, and a reaper reading that slot resets the attempt the
+        # NEWER apply owns -- which discards that attempt's transport on commit
+        # while the loop still reports MCP as connected. See `reset_for_retry`.
+        if attempts is not None:
+            attempts.update({c.name: e for c, e in pending})
+
         first_error: SandboxInitError | None = None
         shared_executor = self._shared_executor_provider(executor_provider)
         results = await asyncio.gather(
@@ -512,11 +543,23 @@ class MCPConnectionManager:
         """
         parked = conn.auth_parked
         task = asyncio.ensure_future(self._run_connect(conn, epoch, executor_provider))
+        self._attempt_tasks.add(task)
+        task.add_done_callback(self._attempt_tasks.discard)
         if parked is None:
             return await task
         park_wait = asyncio.ensure_future(parked.wait())
         try:
             done, _ = await asyncio.wait({task, park_wait}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            # ``asyncio.wait`` does not cancel what it waits on, so without this
+            # the handshake -- and the stdio child and transport inside it --
+            # survives the cancel and keeps using a sandbox executor the
+            # canceller is about to close. Taken with us and awaited, so the
+            # attempt's own abort path has run by the time this returns.
+            task.cancel()
+            with suppress(BaseException):
+                await task
+            raise
         finally:
             park_wait.cancel()
         if task in done:
@@ -524,21 +567,100 @@ class MCPConnectionManager:
         task.add_done_callback(_log_detached_connect)
         return self._snapshot(conn)
 
+    async def reap_attempts(self) -> int:
+        """Cancel and await every live attempt. Returns how many were live.
+
+        The one place attempts are reaped. Two kinds reach here and neither has
+        an awaiter that can stop it: one whose sync was cancelled (``asyncio.wait``
+        does not cancel what it waits on), and one deliberately detached at the
+        browser-authorization step -- right while the process lives, a leak once
+        it is stopping.
+
+        Both levels, because neither set covers the other. ``_attempt_tasks``
+        holds only what ``apply_config`` started: ``connect()`` -- the explicit
+        retry behind ``plug.auth`` and the installs -- awaits ``_run_connect``
+        inline, so there is no attempt task to hold and its shielded handshake is
+        the only handle anyone has on it. Going the other way, cancelling an
+        attempt does reach the handshake inside it (``_handshake_watchdog`` takes
+        its shielded task down when its own caller is cancelled), so for an
+        ``apply_config`` attempt the second pass finds nothing.
+
+        Re-read rather than snapshotted, because a connect can be started while
+        this is awaiting the last batch -- a reload or an install landing on a
+        stack that is shutting down. Bounded so a caller that never stops
+        starting them cannot hold shutdown open.
+        """
+        reaped: set[asyncio.Task] = set()
+        for _ in range(_REAP_ROUNDS):
+            attempts = [t for t in self._attempt_tasks if not t.done()]
+            # Whatever no attempt task spoke for -- see the docstring.
+            live = attempts + [t for t in self._handshakes if not t.done()]
+            if not live:
+                return len(reaped)
+            reaped.update(attempts)
+            for t in live:
+                t.cancel()
+            with suppress(BaseException):
+                await asyncio.wait(live, timeout=5)
+        # Neither set is cleared anywhere: the done callback each task carries is
+        # what removes it, and dropping a reference to one this call did not
+        # cancel is how a handshake registered mid-await survived an `aclose`
+        # that then reported itself finished.
+        logger.warning(
+            "MCP: still starting connects after {} reap rounds; shutting down with {} left",
+            _REAP_ROUNDS,
+            len([t for t in (*self._attempt_tasks, *self._handshakes) if not t.done()]),
+        )
+        return len(reaped)
+
+    async def reset_for_retry(self, attempts: dict) -> list[str]:
+        """Make one cancelled ``apply_config``'s attempts retryable.
+
+        ``apply_config`` skips any record that is not ``disconnected``, and a
+        reload deliberately does not retry an ``error`` row -- both correct for a
+        server that failed on its own, and both fatal for one whose attempt was
+        cancelled out from under it, which is then never tried again for the life
+        of the process. This is the seam that makes such a cancel recoverable, so
+        it is called by whoever did the cancelling.
+
+        ``attempts`` is the name/epoch mapping THAT apply filled, held by the
+        caller for the life of its own call. Never a scan of every record and
+        never a shared "most recent apply" slot: both reach attempts this caller
+        never began, and resetting one of those is worse than the bug this fixes.
+        Its commit checks the state being rewritten, so the transport is
+        discarded while the loop still reports MCP as connected, and the server
+        is lost with no error anywhere.
+
+        The epoch is the discriminator even within the mapping: a record whose
+        epoch has moved on was taken over after this apply began, by a
+        ``plug.auth`` or another apply, and belongs to that one now.
+        ``connected`` and ``auth_required`` are left alone regardless -- the
+        first holds a live session, the second a park whose attempt is still
+        running and commits when the user clicks.
+        """
+        async with self._lock:
+            names = []
+            for name, epoch in attempts.items():
+                conn = self._conns.get(name)
+                if conn is None or conn.epoch is not epoch:
+                    continue
+                if conn.state in ("error", "connecting"):
+                    self._set_state(conn, "disconnected", None)
+                    names.append(name)
+            return names
+
     async def aclose(self) -> None:
         """Detach everything and forget all records (loop shutdown)."""
+        # Before the detach rather than after it, and that is the whole of the
+        # difference: detaching is what wakes a parked handshake into failing, so
+        # reaping first means there is no failure to keep out of the loop's
+        # shutdown report rather than one that has to be swallowed after the
+        # fact. It also has to come first for its own reason -- a handshake still
+        # running holds a stack the detach is about to close.
+        await self.reap_attempts()
         async with self._lock:
             for name in list(self._conns):
                 await self._disconnect_locked(name, drop=True)
-        # After the detach, because detaching is what wakes a parked handshake:
-        # it fails, and reaping it here is what keeps that failure out of the
-        # loop's shutdown report. Bounded, and swallowing everything -- these are
-        # attempts this call has already decided to abandon.
-        pending = [t for t in self._handshakes if not t.done()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            with suppress(BaseException):
-                await asyncio.wait(pending, timeout=5)
 
     # ── Connect machinery ──────────────────────────────────────────
 
