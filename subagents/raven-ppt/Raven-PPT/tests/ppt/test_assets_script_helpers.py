@@ -15,6 +15,8 @@ working build directory has to come out of `script_helper_files()`.
 from __future__ import annotations
 
 import json
+import signal
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1403,6 +1405,31 @@ def test_a_box_reads_back_under_the_names_it_was_built_with(helpers) -> None:
     assert layout.Box.at(box.x, box.y, w=box.w, h=box.h) == box
 
 
+@contextmanager
+def _answers_within(seconds):
+    """Fail the call under this if it does not return, rather than wedge the run.
+
+    A regression against a loop with no end cannot assert on what the call answered --
+    there is no answer, and a plain call would hold the suite until something outside
+    it gave up. An interval timer and not a worker thread: SIGALRM is raised inside the
+    loop and ends it, where a thread left spinning would keep appending to a list for
+    the rest of the session.
+    """
+    if not hasattr(signal, "SIGALRM"):
+        pytest.skip("bounding a call that may not return needs SIGALRM")
+
+    def bark(*_):
+        raise TimeoutError(f"no answer in {seconds}s")
+
+    previous = signal.signal(signal.SIGALRM, bark)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def _slide(module):
     from pptx import Presentation
 
@@ -1793,6 +1820,69 @@ def test_a_marked_column_is_wide_enough_for_the_mark_in_it(tmp_path) -> None:
         _drop(tmp_path)
 
 
+def test_a_weighted_table_stands_no_taller_than_the_height_it_answered(tmp_path) -> None:
+    """Measured on a delivered page: a box of 1.83in drawn at 2.07in.
+
+    The author asked `table_size` for a height without giving it the box, took that
+    height for the lane, and drew the table with `weights`. Weights are proportions of
+    the box a table is given, and the unboxed answer set them aside and measured the
+    content-sized table instead -- so the 1.83in it answered was a different table
+    from the 2.07in one drawn, whose last rows landed 0.24in inside the note panel
+    below. The design's own words for that are that it is impossible, not unlikely
+    (`table_size` and `table` share `_table_geometry`), so the fix is in the sharing:
+    with no box to fill, the proportions are apportioned over the width the content
+    asks for, which is the width the unboxed answer is for.
+
+    Nothing here refuses anything. A table too tall for its box is drawn and hands
+    back the box it really filled: this height is a pre-render estimate, and raising
+    on it inside the build script would cost the author the page image and every
+    finding on the deck with it. Nothing downstream catches this one either -- the
+    0.09in the delivered page painted over its note panel is far under the share
+    `covered_shape` reads, and `box_overflow` files a table's own words as nobody's
+    overflow -- so the arithmetic is where the two have to agree.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        theme = THEMES["warm-paper"]
+        rows = [
+            ["模型", "top-1", "对标", "top-1"],
+            ["ConvNeXt-T", "82.1%", "Swin-T", "81.3%"],
+            ["ConvNeXt-B", "83.8%", "Swin-B", "83.5%"],
+            ["ConvNeXt-B 22k", "85.8%", "Swin-B 22k", "85.2%"],
+            ["ConvNeXt-XL @384²", "87.8%", "—", "—"],
+        ]
+        weights = [0.34, 0.16, 0.28, 0.22]
+        slide = _slide(module)
+
+        plain = module.table_size(rows, theme, size=module.BODY_PT)
+        asked = module.table_size(rows, theme, size=module.BODY_PT, weights=weights)
+        assert asked.h > plain.h, "the weights did not reach the unboxed answer"
+
+        # The lane the author would take from that answer, at the width the answer is
+        # for and at every width above it. Numbers are read back off the drawn table
+        # rather than written down here: the wrap count follows the face fontconfig
+        # resolves in this container.
+        for extra in (0.0, 0.5, 1.0):
+            lane = module.Box.at(6.9, 1.3, w=asked.w + extra, h=asked.h)
+            drawn = module.table(slide, lane, rows, theme, size=module.BODY_PT, weights=weights)
+            assert drawn.box.h <= lane.h + 1e-9, f"{drawn.box.h:.3f}in drawn in the {lane.h:.3f}in answered"
+            assert drawn.box.y1 <= lane.y1 + 1e-9
+
+        # A box under that height is still drawn, and says how far past it went.
+        short = module.Box.at(6.9, 1.3, w=asked.w, h=plain.h)
+        over = module.table(slide, short, rows, theme, size=module.BODY_PT, weights=weights)
+        assert over.box.h > short.h
+        assert over.box.y1 > short.y1
+
+        # And asked with the box, the answer is the drawn height, taller box included.
+        told = module.table_size(rows, theme, size=module.BODY_PT, weights=weights, box=short)
+        assert told.h == pytest.approx(over.box.h, abs=1e-9)
+    finally:
+        _drop(tmp_path)
+
+
 def test_a_mark_does_not_widen_its_column_because_the_band_is_tall(tmp_path) -> None:
     """The same five rows asked 1.72in for their rating column in a 1.6in band and
     2.52in in a 3.6in one, because every mark took its size out of the row and a row
@@ -1837,6 +1927,80 @@ def test_a_mark_takes_no_room_from_a_column_the_weights_gave_it(tmp_path) -> Non
         bare = module.table(slide, narrow, _GRID, theme)
         squeezed = module.table(slide, narrow, _GRID, theme, marks=_GRID_MARKS)
         assert squeezed.columns[0].width == bare.columns[0].width, "the label column paid for the marks"
+    finally:
+        _drop(tmp_path)
+
+
+def test_an_unboxed_weighted_table_with_marks_answers_at_all(tmp_path) -> None:
+    """Weights with no box are apportioned over the width the content asks for, and the
+    marks were charged against an infinite one -- so the full mark floors were funded
+    out of 4.52in, `_column_widths` held their proportions, and the label column came
+    out 0.22in with 0.02in of it left after the cell's own margins. That is narrower
+    than any character, and counting the lines one wraps onto never came back: in a
+    generated build script the call ended at the run's own timeout, with the staging
+    deck discarded.
+
+    The clock is the assertion because there was no answer to assert on. What the
+    answer has to be is the unmarked one: a mark charged against the width its own
+    weights divide takes nothing away from them, which is what a boxed weighted table
+    has always done.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        theme = THEMES["ink-graphite"]
+        face = theme.get("font_family")
+        weights = [1] * 5
+
+        with _answers_within(20.0):
+            marked = module.table_size(_GRID, theme, weights=weights, marks=_GRID_MARKS)
+        assert marked == module.table_size(_GRID, theme, weights=weights), "a mark took room the weights gave a column"
+
+        box = module.Box(0.72, 1.6, 0.72 + marked.w, 1.6 + marked.h)
+        with _answers_within(20.0):
+            drawn = module.table(_slide(module), box, _GRID, theme, weights=weights, marks=_GRID_MARKS, fill=False)
+        assert drawn.box.h <= marked.h + 1e-9, "the answered height did not cover the drawn one"
+        unit = module.Inches(1)
+        narrowest = min(column.width for column in drawn.columns) / unit
+        assert narrowest - 2 * module._CELL_SIDE >= module._em_width(_GRID[0][0][0], module.LABEL_PT, face)
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_box_narrower_than_one_character_still_answers_a_line_count(tmp_path) -> None:
+    """A token too wide for its box is cut one character shorter and measured again, and
+    a token one character long had nothing to cut: it came back the length it went in
+    at and the loop had no end. Every caller reached it, not only a table column -- a
+    plain weighted table in a box 0.6 of its answered width hangs here with no mark
+    anywhere on it.
+
+    So one character is the smallest line there is: it takes a line of its own and
+    overflows it. Overflow is measured off the render and reported back, where dropping
+    the character would answer that copy fits in room it cannot be set in at all --
+    which is why what comes back is asserted whole and not merely counted.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        theme = THEMES["ink-graphite"]
+        face = theme.get("font_family")
+        glyph = module._em_width("单", module.LABEL_PT, face)
+
+        for room in (glyph / 2, glyph / 100, 1e-9):
+            with _answers_within(10.0):
+                lines = module._wrapped("单点登录", room, module.LABEL_PT, face, False)
+            assert lines == ["单", "点", "登", "录"], f"{room}in lost or doubled a character"
+
+        with _answers_within(10.0):
+            latin = module._wrapped("Forward-Looking", glyph / 100, module.LABEL_PT, face, False)
+        assert "".join(latin) == "Forward-Looking", "a word too wide to start a line came back short"
+
+        answered = module.table_size(_GRID, theme, weights=(0.34, 0.16, 0.20, 0.12, 0.18))
+        narrow = module.Box(0.72, 1.6, 0.72 + answered.w * 0.6, 1.6 + answered.h * 3)
+        with _answers_within(20.0):
+            module.table(_slide(module), narrow, _GRID, theme, weights=(0.34, 0.16, 0.20, 0.12, 0.18), fill=False)
     finally:
         _drop(tmp_path)
 
@@ -2923,14 +3087,17 @@ def test_a_table_gives_the_same_size_whether_or_not_it_is_drawn(helpers) -> None
     loose = layout.table_size(rows, theme)
     assert loose.x0 == 0 and loose.y0 == 0
     assert loose.w == pytest.approx(layout.table_size(rows, theme, box=box).w)
-    # It used to refuse this: weights are proportions of a box and no box was named.
-    # But the field a caller asks for here is the height, and a row's height comes off
-    # the type size and the row count -- the weights cannot touch it. So the weights
-    # are set aside and the content-sized answer comes back, exact in the dimension
-    # that was being asked about.
+    # Given weights are proportions of a box, so with no box to fill they are
+    # apportioned over that same width. Setting them aside instead answered for the
+    # content-sized table, which is a different table: equal columns wrap the long
+    # cell that content-sized columns hold on one line, and the height follows the
+    # wrap. The answer is the height of the table drawn at the width it names.
     weighted = layout.table_size(rows, theme, weights=(1, 1, 1, 1))
-    assert weighted.h == loose.h
     assert weighted.w == loose.w
+    assert weighted.h > loose.h, "equal columns wrap and the answer did not say so"
+    lane = layout.Box.at(box.x0, box.y0, w=loose.w, h=weighted.h)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    assert layout.table(slide, lane, rows, theme, weights=(1, 1, 1, 1)).box.h == pytest.approx(weighted.h)
 
 
 def test_a_table_row_is_never_shorter_than_the_line_it_holds(helpers) -> None:
