@@ -63,6 +63,27 @@ def _compare(project: Project, findings, *, script: str = _SCRIPT, pages: int = 
     )
 
 
+def test_the_code_fingerprints_are_readable_without_a_build_outcome(tmp_path: Path) -> None:
+    """Page identity, for a caller that has no build in hand.
+
+    `seen.blocks_of` wants the script and the line spans and only the build has those,
+    so what needs to tell one version of a page from another later -- which page-version
+    a reading covered -- reads it back off this record rather than hashing a second time.
+    """
+    project = _project(tmp_path)
+    assert regress.code_by_page(project) == {}, "no record is not a deck of pages at version zero"
+
+    _pass(project, [])
+    first = regress.code_by_page(project)
+    assert sorted(first) == [1, 2, 3]
+    assert len(set(first.values())) == 3, "one fingerprint per page, off that page's own lines"
+
+    _pass(project, [], script=_EDITED)
+    after = regress.code_by_page(project)
+    assert after[1] != first[1], "page 1 is the block holding the edited line"
+    assert {page: after[page] for page in (2, 3)} == {page: first[page] for page in (2, 3)}
+
+
 def test_a_page_that_gains_a_blocking_finding_is_reported_with_what_it_had_before(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _pass(project, [_finding("overset_copy", 2, Severity.WARNING)])

@@ -100,9 +100,9 @@ def build_ppt_tools(
         destination=lambda project: project.exports_dir / deck_name,
         views_per_call=views_per_call,
     )
-    # Built first: the build tool runs it on the first finished deck, and the model
-    # can call it on its own besides. One instance, so both routes share the record
-    # that says a deck has already had its first reading.
+    # Built first: the build tool runs it while enough of the deck is unread, and the
+    # model can call it on its own besides. One instance, so both routes share the
+    # record that says which page-versions have already been read.
     review = PptReviewTool(
         workspace,
         views,
@@ -126,8 +126,8 @@ def build_ppt_tools(
         PptOutlineTool(workspace),
         PptTemplateTool(workspace, views, provision=provision_script_workspace),
         PptBuildTool(workspace, stage, views, chosen, review=review),
-        # Registered as well as wired into the build: the automatic reading happens
-        # once, on the first finished deck, and after that the author asks for one.
+        # Registered as well as wired into the build: the automatic reading covers the
+        # pages nobody has read yet, and anything else the author wants read it asks for.
         review,
     ]
     _warn_if_incomplete(chosen, tools)
