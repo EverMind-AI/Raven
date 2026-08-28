@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from raven.channels.contract import Capabilities
-from raven.gateway.intake import Intake
 
 
 class ChannelBase:
@@ -32,6 +31,11 @@ class ChannelBase:
     transcription_api_key: str = ""  # set by ChannelManager
 
     def __init__(self, config: Any):
+        # Function-level on purpose: adapters construct their intake at
+        # runtime; the gateway plumbing must not be a binding-time dependency
+        # of the adapter side, or the two packages import each other.
+        from raven.gateway.intake import Intake
+
         self.config = config
         self._running = False
         self.intake = Intake(self.name, config, allow_check=self.is_allowed)

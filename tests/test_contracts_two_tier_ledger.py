@@ -58,6 +58,8 @@ LEDGER = {
     "contract": {
         "TurnRequest", "TurnHandle", "Origin",
         # The seven shapes, moved in whole by the S2 full move:
+        "AssembledContext",
+        "TokenBudget",
         "AssembledPrefix",
         "AssemblyContext",
         "Channel",

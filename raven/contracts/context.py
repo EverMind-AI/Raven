@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.contracts.assembled import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
     # Avoid runtime import — ``curator`` imports back from this module
