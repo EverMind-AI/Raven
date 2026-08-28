@@ -110,6 +110,33 @@ def _no_real_oauth_credentials(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_tracing_state_dir(tmp_path, monkeypatch):
+    """Keep span emission off the real ``~/.raven/traces`` for the whole suite.
+
+    Tracing is on by default and ``trace.span()`` calls are embedded in library
+    code (agent loop, subagents, TUI RPC), so any test exercising those paths
+    emits spans with fabricated session keys (``session-a``, ``weixin:c``, ...)
+    into the real trace store — they then surface as phantom sessions in
+    ``raven trajectory``. Redirect only the directory, not the enabled switch,
+    so the suite keeps exercising the real emission path with zero behavior
+    change; leaks land in tmp instead.
+
+    ``raven.tracing.spans._store`` is a lazy module-level singleton pinned to
+    the directory resolved at first emit, so it must be reset around each test
+    or it keeps pointing at whichever directory was active when some earlier
+    test (or the real environment) first emitted. Tests that need their own
+    directory keep working: their ``monkeypatch.setenv`` runs after this
+    fixture and wins, and they already reset ``_store`` themselves.
+    """
+    from raven.tracing import spans as _spans
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+    _spans._store = None
+    yield
+    _spans._store = None
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 
