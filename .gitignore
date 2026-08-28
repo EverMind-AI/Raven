@@ -169,3 +169,4 @@ subagents/**/*.wmv
 
 # Playwright MCP session artifacts (console logs, page snapshots, screenshots)
 .playwright-mcp/
+demos/oncall_heat2d/.raven-demo-home/
