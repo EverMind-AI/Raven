@@ -207,6 +207,58 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
 
+**Search Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS`):
+One of the interchangeable live-web backends behind the single `web_search` tool —
+`serper` (default), `anysearch`, or `serpapi` — selected by `tools.web.search.provider`.
+Each owns an env var and a Web Vendor credential, and every response is normalised to
+the Serper shape before containment, dedup, shaping and rendering read it, so the
+ledger columns mean the same thing on every backend. A provider that serves no result offset declares
+`paginates=False` to the SearchSaturation rule at construction, exactly as the fixed
+corpus does: the page rung is then unreachable rather than reachable-and-unanswerable,
+and the ledger reports `sat_action=stopped_degraded`.
+_Avoid_: "engine" — that is SerpApi's own request parameter (`engine=google`); and
+a per-provider tool name — the model is always offered `web_search`. The corpus
+endpoint is a separate retrieval source, not a search provider.
+
+**Fetch Provider** (`agent/tools/web.py`, `FETCH_PROVIDERS`):
+One of the live-web page readers behind the single `web_fetch` tool — `jina` (default)
+or `anysearch` — selected by `tools.web.fetch.provider`, with `tools.web.fetch.fallback`
+naming further backends to try when the selected one fails to return a page. Which one
+served a page is recorded as `extractor`, in the payload and in the fetch ledger.
+Unlike Search Providers these are **not interchangeable**: measured on one Wikipedia
+article AnySearch returned 49,890 characters against Jina's 27,786 for the same page,
+because it keeps the navigation chrome Jina strips, and it carries no publication date.
+An arm reading pages through it is a different arm, not the same arm on another vendor.
+`needs_key` decides whether the tool may be registered at all — Jina reads pages
+unauthenticated, AnySearch does not.
+_Avoid_: "reader" for the concept — that is Jina's own product name (`r.jina.ai`);
+and calling the fallback chain a retry — a retry re-sends to the same backend
+(`_send_with_retry`), a fallback moves to another vendor. A containment refusal, a
+failed URL validation and "not in corpus" are rules and never fall through.
+
+**Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
+Who issues a web credential, as opposed to which tool spends it. Keys live at
+`tools.web.providers.<vendor>.apiKey` because one AnySearch account serves both
+`web_search` and `web_fetch`; a key held per tool would have to be pasted twice and
+could drift into two values for one credential. `config/loader.py::_migrate_config`
+relocates the pre-vendor fields (`tools.web.search.apiKey`, `tools.web.jinaApiKey`),
+which is also how the host raven's keys are inherited — it is a separate checkout on
+the old layout, so this is not an upgrade path that can eventually be deleted.
+
+**Env Seeding** (`config/loader.py`, `seed_env_from_dotenv`):
+Merging `KEY=VALUE` lines from a `.env` beside the config file into the process
+environment, before the config is read. Seeding only — it adds no way to resolve a
+setting, so a value still has exactly one resolution rule (`config value or environment
+variable`) however it arrived, and the precedence is config file > exported variable >
+`.env`. Anchored on the config file's own directory, the same anchor this runtime uses
+for `sessions/`, `cache/` and `ledger/`. Off when `RAVEN_DOTENV=0`, which the test suite
+sets, because it writes process-global state and the default config path is the
+developer's home.
+_Avoid_: "env substitution" — that is the `${VAR}`-inside-the-config mechanism this
+deliberately is not, and the reason the raven-research launcher renders a config at all.
+Also distinct from `subagents/raven-research/.env` in the host repo, which that launcher
+parses itself under `RESEARCH_`-prefixed names.
+
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit into a shadow git repo (separate from the user's `.git`), so an
 interrupted or failed turn can be rolled back. Covers the tree the engine's file tools

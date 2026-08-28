@@ -403,13 +403,35 @@ must live, is to move the personalizer's clarify onto this same turn-boundary se
 
 ### Environment variables
 
+A `.env` file **beside the config file** is merged into the process environment
+before the config is read, so credentials stay out of a config you can publish:
+
+```bash
+# ~/.raven/.env   (or next to whatever --config points at).  chmod 600 it.
+SERPER_API_KEY=sk-...
+JINA_API_KEY=sk-...
+ANYSEARCH_API_KEY=sk-...      # one key, both web tools
+```
+
+It only seeds the environment - it adds no second way to resolve a setting, so
+precedence stays **config file > environment > `.env`**. A real `export` always
+beats the file. The directory is the config's own, the same anchor this runtime
+already uses for `sessions/`, `cache/` and `ledger/`, so the same command reads
+the same `.env` wherever it is launched from. `RAVEN_DOTENV=0` turns it off (the
+test suite sets this). Not to be confused with `subagents/raven-research/.env`
+in the host repo, which is that launcher's own file and uses `RESEARCH_`-prefixed
+names.
+
 | Variable | Read by | Effect |
 |---|---|---|
-| `SERPER_API_KEY` | `web_search` | Required for live-web search. No config equivalent is needed; `tools.web.search.apiKey` overrides it. |
-| `JINA_API_KEY` | `web_fetch` | Required for live-web page reading. `tools.web.jinaApiKey` overrides it. |
+| `SERPER_API_KEY` | `web_search` | The key for the default search backend. `tools.web.providers.serper.apiKey` overrides it. |
+| `SERPAPI_API_KEY` | `web_search` | Used when `tools.web.search.provider` is `serpapi`; `tools.web.providers.serpapi.apiKey` overrides it. Pages by result offset, so depth works as it does on Serper. |
+| `ANYSEARCH_API_KEY` | `web_search`, `web_fetch` | One key, both tools — the credential is keyed by vendor (`tools.web.providers.anysearch.apiKey`), not by the tool that uses it. As a search backend it serves no page beyond the first, so search depth is unavailable on it: the tool tells the saturation rule up front and the ledger records `sat_action=stopped_degraded` rather than a dry search the endpoint never had a chance to serve. As a fetch backend it has no anonymous tier, so selecting it without this key withholds `web_fetch`. |
+| `JINA_API_KEY` | `web_fetch` | The default page reader. **Optional** — `r.jina.ai` answers unauthenticated at a lower rate limit, and a dead key is worse than none (402 where no key answers 200). `tools.web.providers.jina.apiKey` overrides it. |
 | `RAVEN_WEB_LEDGER` | web tools | Name a file and both tools append a per-call JSONL ledger: every search with its **ordered** result URLs and whether the result was replayed from cache, every fetch with url / chars / ok / docid. Unset means off, **except** that `finalShape.processAppendix` opens a turn-scoped one under `<data dir>/ledger/` and deletes it after rendering the trail. Naming the variable always wins and that file is never removed. Write-only — it changes no behaviour and no output byte. |
 | `RAVEN_TRACING`, `RAVEN_TRACING_DIR` | tracing | Tracing is **on by default**; `RAVEN_TRACING=0` makes it a no-op. `RAVEN_TRACING_DIR` moves the span log off `~/.raven/traces`. |
 | `RAVEN_CLI_DEBUG` | CLI | Keeps loguru's default handler. Without it the CLI installs a WARNING-only stderr sink, so an INFO-level explanation of a failure is discarded before you see it. |
+| `RAVEN_DOTENV` | config loader | `0` disables the `.env` seeding described above. Anything else (or unset) leaves it on. |
 | `RAVEN_HOME` | tracing, TUI runtime **only** | Does **not** relocate the workspace, the config, or the session logs — those come from `Path.home()` directly (`raven/config/paths.py`). Use `--workspace` to move the run's output. |
 | `http_proxy` / `https_proxy` | web tools | Inherited by default, because the fetch path constructs its client with `proxy=None` and leaves `trust_env` on. Set `tools.web.proxy` in the config to override per-arm. |
 

@@ -1,6 +1,7 @@
 """Configuration loading utilities."""
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -154,6 +155,63 @@ def warn_unknown_config_keys(data: dict[str, Any], model_cls: type[BaseModel] = 
     return unknown
 
 
+# Paths already seeded, so a process that loads its config repeatedly parses the
+# file once. Re-seeding would also undo a deliberate `del os.environ[...]` made
+# after the first load.
+_DOTENV_SEEDED: set[Path] = set()
+
+DOTENV_DISABLE_VAR = "RAVEN_DOTENV"
+
+
+def seed_env_from_dotenv(config_path: Path) -> list[str]:
+    """Merge ``KEY=VALUE`` lines from the config's own ``.env`` into the process.
+
+    Seeding only. It adds NO way to resolve a setting: the tools still read
+    ``config value or environment variable`` and nothing else, so a value still
+    has one resolution rule however it arrived. Substituting ``${VAR}`` inside
+    the config file would have been the second mechanism, operating on text that
+    ``_migrate_config`` and ``warn_unknown_config_keys`` have already walked.
+
+    An exported value always beats the file, or a stale ``.env`` would silently
+    override a key given on the command line for one run. Exported-but-EMPTY
+    does not count as a value and is filled in, the same reading of "set" that
+    ``scripts/everos_dr_smoke.py:load_env_file`` and the raven-research
+    launcher's ``env_value`` already use.
+
+    Anchored on the config file's own directory, which is where this runtime
+    already puts ``sessions/``, ``cache/`` and ``ledger/``: one anchor, one rule.
+    Reading the working directory instead would make the same command pick up a
+    different ``.env`` depending on where it was launched from.
+    """
+    env_file = config_path.parent / ".env"
+    if env_file in _DOTENV_SEEDED:
+        return []
+    _DOTENV_SEEDED.add(env_file)
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if env_file.stat().st_mode & 0o077:
+        logger.warning(
+            "config: {} is readable by other users; it holds credentials, so chmod 600 it",
+            env_file,
+        )
+    added: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and value and not os.environ.get(key):
+            os.environ[key] = value
+            added.append(key)
+    if added:
+        # Names only. The values are credentials.
+        logger.info("config: seeded {} from {}", ", ".join(added), env_file)
+    return added
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
@@ -165,6 +223,13 @@ def load_config(config_path: Path | None = None) -> Config:
         Loaded configuration object.
     """
     path = config_path or get_config_path()
+    # Before the file is read, because the keys it carries are resolved by the
+    # tools at call time from the environment when the config does not hold
+    # them. Off inside the test suite (see tests/conftest.py): this writes
+    # process-global state, and a suite whose result depends on a file in the
+    # developer's home cannot answer "is this branch green".
+    if os.environ.get(DOTENV_DISABLE_VAR) != "0":
+        seed_env_from_dotenv(path)
 
     config: Config | None = None
     if path.exists():
@@ -281,6 +346,45 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
                 _log.info(
                     "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
                 )
+
+    # Web credentials moved from the tool that used them to the vendor that
+    # issues them: ``tools.web.search.apiKey`` → ``tools.web.providers.serper``,
+    # ``tools.web.jinaApiKey`` → ``tools.web.providers.jina``, and the same for
+    # the per-tool AnySearch/SerpApi fields. One AnySearch account serves both
+    # web_search and web_fetch, so a per-tool key had to be pasted twice and
+    # could drift into two values for one credential.
+    #
+    # The host raven this agent inherits from is a separate checkout on the old
+    # layout, so its keys arrive in the legacy shape indefinitely; this is not a
+    # one-off upgrade path that can eventually be deleted.
+    web = (data.get("tools") or {}).get("web") if isinstance(data.get("tools"), dict) else None
+    if isinstance(web, dict):
+        search = web.get("search") if isinstance(web.get("search"), dict) else {}
+        legacy_web_keys = (
+            ("jinaApiKey", web, "jina"),
+            ("jina_api_key", web, "jina"),
+            ("apiKey", search, "serper"),
+            ("api_key", search, "serper"),
+            ("anysearchApiKey", search, "anysearch"),
+            ("anysearch_api_key", search, "anysearch"),
+            ("serpapiApiKey", search, "serpapi"),
+            ("serpapi_api_key", search, "serpapi"),
+        )
+        for legacy_key, holder, vendor in legacy_web_keys:
+            value = holder.pop(legacy_key, None)
+            if not value:
+                continue
+            providers = web.setdefault("providers", {})
+            if not isinstance(providers, dict):
+                continue
+            vendor_block = providers.setdefault(vendor, {})
+            # An explicit new-shape value wins: a config carrying both is being
+            # migrated by hand, and the new path is the one its author meant.
+            if isinstance(vendor_block, dict) and not (
+                vendor_block.get("apiKey") or vendor_block.get("api_key")
+            ):
+                vendor_block["apiKey"] = value
+                _log.info("Migrated: tools.web...%s -> tools.web.providers.%s.apiKey", legacy_key, vendor)
 
     # skills_dir → local_dirs migration now handled by
     # SkillForgeConfig._migrate_skills_dir model_validator (R5).

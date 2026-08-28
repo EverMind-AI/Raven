@@ -63,7 +63,11 @@ def classify_tool_result(content: Any) -> str:
     body = _unwrap(text).lstrip()
     if _ERROR_HEAD.match(body[:120]) or body[:12].startswith('{"error"'):
         return "error"
-    if "Serper API key not configured" in text:
+    # Provider-independent: the message names whichever backend
+    # ``tools.web.search.provider`` selects, and this classification decides
+    # whether a batch is invalidated - a hole here reads an unanswering
+    # retrieval surface as a legitimate result.
+    if "API key not configured" in text:
         return "error"
     if body.startswith(_EMPTY_HEAD):
         return "empty"

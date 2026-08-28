@@ -58,6 +58,13 @@ _REQUIRED = (
     "strategies",
     "context_window_authoritative",
     "jina_api_key",
+    # The provider selectors and the vendor key map belong to this set for the
+    # textbook reason: a site that omits one silently falls back to the default
+    # backend, which is a working value and therefore leaves no runtime trace.
+    "web_search_provider",
+    "web_fetch_provider",
+    "web_fetch_fallback",
+    "web_provider_keys",
     "disabled_tools",
     "context_config",
     "skill_forge_router_config",

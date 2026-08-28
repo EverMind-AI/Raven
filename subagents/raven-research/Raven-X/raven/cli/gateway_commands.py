@@ -18,6 +18,14 @@ from loguru import logger
 from rich.console import Console
 
 from raven import __logo__
+from raven.agent.tools.web import (
+    selected_fetch_fallback,
+    selected_fetch_key,
+    selected_fetch_provider,
+    selected_search_key,
+    selected_search_provider,
+    web_provider_keys,
+)
 from raven.cli._helpers import (
     load_runtime_config,
     make_provider,
@@ -238,8 +246,12 @@ def register(app: typer.Typer) -> None:
             context_window_authoritative=config.agents.defaults.context_window_authoritative,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-            brave_api_key=config.tools.web.search.api_key or None,
-            jina_api_key=config.tools.web.jina_api_key or None,
+            brave_api_key=selected_search_key(config.tools.web)[1] or None,
+            web_search_provider=selected_search_provider(config.tools.web.search),
+            jina_api_key=selected_fetch_key(config.tools.web)[1] or None,
+            web_fetch_provider=selected_fetch_provider(config.tools.web.fetch),
+            web_fetch_fallback=selected_fetch_fallback(config.tools.web.fetch),
+            web_provider_keys=web_provider_keys(config.tools.web),
             web_proxy=config.tools.web.proxy or None,
             web_corpus_endpoint=config.tools.web.corpus_endpoint or None,
             web_benchmark_containment=config.tools.web.benchmark_containment,

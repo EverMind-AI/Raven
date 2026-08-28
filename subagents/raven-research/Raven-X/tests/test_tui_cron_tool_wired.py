@@ -31,7 +31,8 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.agents.defaults.max_tool_iterations = 5
     config.agents.defaults.context_window_tokens = 65_536
     config.agents.defaults.enable_personalization = False
-    config.tools.web.search.api_key = None
+    config.tools.web.providers.serper.api_key = None
+    config.tools.web.providers.jina.api_key = None
     config.tools.web.proxy = None
     config.tools.exec = MagicMock()
     config.tools.restrict_to_workspace = True

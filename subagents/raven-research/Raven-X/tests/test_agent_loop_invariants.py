@@ -111,6 +111,17 @@ def test_error_text_inside_a_successful_looking_result_is_caught():
         ("Proxy error: boom", "error"),
         ('{"error": "Proxy error: boom", "url": "u"}', "error"),
         ("Error: Serper API key not configured. Set it in ...", "error"),
+        # Every backend names itself in that message. These two reach the
+        # verdict through the "Error:" head like the line above them; the
+        # pair below is what isolates the substring net, which is the only
+        # branch that reads the provider name.
+        ("Error: SerpApi API key not configured. Set it in ...", "error"),
+        ("Error: AnySearch API key not configured. Set it in ...", "error"),
+        # No "Error:" head, so only the substring net can classify it. A
+        # provider-specific match reads an unanswering retrieval surface as
+        # a legitimate result, and that verdict is what invalidates a batch.
+        ("web_search said: SerpApi API key not configured.", "error"),
+        ("web_search said: AnySearch API key not configured.", "error"),
         ("No results for: who founded X", "empty"),
         ("1. A page\n2. Another page", "ok"),
         # The fence is applied by the loop, so the caliber has to see through it.

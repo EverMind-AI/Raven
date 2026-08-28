@@ -35,7 +35,8 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.agents.defaults.enable_personalization = False
     config.agents.defaults.max_concurrent_subagents = 2
     config.agents.defaults.max_subagent_spawns_per_hour = 10
-    config.tools.web.search.api_key = None
+    config.tools.web.providers.serper.api_key = None
+    config.tools.web.providers.jina.api_key = None
     config.tools.web.proxy = None
     config.tools.exec = MagicMock()
     config.tools.restrict_to_workspace = True
@@ -162,7 +163,8 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     config.agents.defaults.enable_personalization = False
     config.agents.defaults.max_concurrent_subagents = 2
     config.agents.defaults.max_subagent_spawns_per_hour = 10
-    config.tools.web.search.api_key = None
+    config.tools.web.providers.serper.api_key = None
+    config.tools.web.providers.jina.api_key = None
     config.tools.web.proxy = None
     config.tools.exec = MagicMock()
     config.tools.restrict_to_workspace = True

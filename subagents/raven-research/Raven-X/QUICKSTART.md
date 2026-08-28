@@ -8,8 +8,11 @@ for `uv sync`.
 - Python **3.12+** (`requires-python = ">=3.12"`)
 - [`uv`](https://docs.astral.sh/uv/) — the only supported package manager. `pip` is not.
 - An LLM endpoint. Anything OpenAI-compatible works: OpenRouter, a vLLM/SGLang server, OpenAI.
-- For live-web research, two keys: [Serper](https://serper.dev) for search and
-  [Jina Reader](https://jina.ai/reader) for page fetching.
+- For live-web research, a search key: [Serper](https://serper.dev) by default, or
+  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) via
+  `tools.web.search.provider`. Page fetching defaults to
+  [Jina Reader](https://jina.ai/reader), which works unauthenticated at a lower rate
+  limit; `JINA_API_KEY` raises it.
 
 ## 1. Install
 
@@ -38,6 +41,18 @@ cp examples/dr_live_web.json my_config.local.json
 # edit my_config.local.json: replace PUT_YOUR_LLM_API_KEY_HERE, and set the model you want
 export SERPER_API_KEY=...
 export JINA_API_KEY=...
+```
+
+Or put them in a `.env` beside the config instead of exporting them. It is read
+before the config, never overrides a variable you exported, and `.env` is
+gitignored so it cannot be staged by accident:
+
+```bash
+cat > .env <<'EOF'
+SERPER_API_KEY=...
+JINA_API_KEY=...
+EOF
+chmod 600 .env
 ```
 
 The `.local.json` suffix is deliberate: it is gitignored, so a config carrying your API key
@@ -104,7 +119,7 @@ uv run python -c "from raven.config.raven import DRFlowConfig; print(DRFlowConfi
 | `Error: No API key configured.` (exit 1) | `providers.<name>.apiKey` missing from the config. Not read from the environment. |
 | `drFlow.version=... predates this build's flow semantics` | You used a retired label. The message names the value to use. Superseded labels are rejected on purpose — the label keys the measurement ledger, so an old label on a new build would mislabel a whole batch. The example configs omit the label for this reason; only pin one if you are publishing a number. |
 | `force-finalize: salvage unavailable` in the log, or `answer_chars: 0` / `finalShape.form: "empty"` on a run that plainly answered | `drFlow.thinkClosingTagRequired` is `true` but your model does not emit `</think>`. The answer still reaches you, but every observer reports the turn as answerless and the salvage path burns extra calls. Set it to `false` for a non-think model; `dr_live_web.json` already does. |
-| Every `web_fetch` fails with `402` | The Jina Reader account is out of credit. Search and fetch are **separate vendors with separate quotas** — search working tells you nothing about fetch. Probe both before a long run. |
+| Every `web_fetch` fails with `402` | The Jina Reader account is out of credit. A dead key is worse than none: the same URL answers `402` with it and `200` without, so delete the field rather than leaving a spent key in place. Search and fetch are **separate vendors with separate quotas** — search working tells you nothing about fetch. Probe both before a long run, or set `tools.web.fetch.fallback` so one vendor's outage does not cost the whole run. |
 | `web_search` returns nothing usable | Check `SERPER_API_KEY`. Behind a corporate proxy, set `tools.web.proxy` in the config, or rely on the standard `http_proxy` / `https_proxy` environment variables, which the fetch path inherits by default. |
 | Tests fail in the full suite but pass alone | Suite-order pollution, not a regression. |
 | `cannot execute: required file not found` after moving the directory | `uv sync --reinstall`. Bare `uv sync` leaves stale absolute-path shebangs in `.venv/bin/`. |
