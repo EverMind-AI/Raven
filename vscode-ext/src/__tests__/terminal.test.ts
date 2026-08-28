@@ -1,11 +1,16 @@
+/**
+ * Unit tests for TuiTerminalManager: terminal creation with argv-passing
+ * shellPath/shellArgs, reuse while alive, recreation after close, and
+ * disposal.
+ */
+
 import { describe, expect, it, vi } from 'vitest'
 
 import type { VscodeApi, VscodeDisposable, VscodeTerminal } from '../api.js'
 
-import { buildSendText, TuiTerminalManager } from '../terminal.js'
+import { TuiTerminalManager } from '../terminal.js'
 
 interface FakeTerminal extends VscodeTerminal {
-  sent: string[]
   shown: number
   disposed: boolean
 }
@@ -15,14 +20,10 @@ function createFakeApi() {
   const closeListeners: Array<(terminal: VscodeTerminal) => unknown> = []
 
   const makeTerminal = (): FakeTerminal => ({
-    sent: [],
     shown: 0,
     disposed: false,
     show: vi.fn().mockImplementation(function (this: FakeTerminal) {
       this.shown += 1
-    }),
-    sendText: vi.fn().mockImplementation(function (this: FakeTerminal, text: string) {
-      this.sent.push(text)
     }),
     dispose: vi.fn().mockImplementation(function (this: FakeTerminal) {
       this.disposed = true
@@ -64,56 +65,47 @@ function createFakeApi() {
   return { api, terminals, closeListeners }
 }
 
-const command = { command: '/usr/local/bin/raven', args: ['tui'], label: 'raven on PATH' }
-
-describe('buildSendText', () => {
-  it('leaves simple posix commands unquoted', () => {
-    expect(buildSendText(command, 'linux')).toBe('/usr/local/bin/raven tui')
-  })
-
-  it('single-quotes posix args containing spaces or shell metacharacters', () => {
-    expect(
-      buildSendText({ command: '/opt/my raven/raven', args: ['tui', '--title', "dev's box"], label: 'x' }, 'linux')
-    ).toBe("'/opt/my raven/raven' tui --title 'dev'\\''s box'")
-  })
-
-  it('double-quotes win32 args containing spaces', () => {
-    expect(buildSendText({ command: 'C:\\Program Files\\Raven\\raven.exe', args: ['tui'], label: 'x' }, 'win32')).toBe(
-      '"C:\\Program Files\\Raven\\raven.exe" tui'
-    )
-  })
-
-  it('quotes posix shell metacharacters and empty args', () => {
-    const text = buildSendText({ command: '/bin/echo', args: ['a&b', 'c;d|e', 'f<g>h', ''], label: 'x' }, 'linux')
-    expect(text).toBe("/bin/echo 'a&b' 'c;d|e' 'f<g>h' ''")
-  })
-
-  it('quotes win32 cmd metacharacters and empty args', () => {
-    const text = buildSendText({ command: 'C:\\raven\\raven.exe', args: ['a&b', 'c|d', ''], label: 'x' }, 'win32')
-    expect(text).toBe('C:\\raven\\raven.exe "a&b" "c|d" ""')
-  })
-})
+const command = { command: '/usr/local/bin/raven', args: ['tui', '--dev'], label: 'raven on PATH' }
 
 describe('TuiTerminalManager', () => {
-  it('creates a terminal named Raven and launches raven tui', () => {
+  it('creates a terminal that runs raven directly, without a host shell', () => {
     const { api, terminals } = createFakeApi()
     const manager = new TuiTerminalManager(api)
 
-    manager.open(command, '/workspace/raven', 'linux')
+    manager.open(command, '/workspace/raven')
 
-    expect(api.window.createTerminal).toHaveBeenCalledWith({ name: 'Raven', cwd: '/workspace/raven' })
+    expect(api.window.createTerminal).toHaveBeenCalledWith({
+      name: 'Raven',
+      cwd: '/workspace/raven',
+      shellPath: '/usr/local/bin/raven',
+      shellArgs: ['tui', '--dev']
+    })
     expect(terminals).toHaveLength(1)
     expect(terminals[0].shown).toBe(1)
-    expect(terminals[0].sent).toEqual(['/usr/local/bin/raven tui'])
     expect(manager.isOpen).toBe(true)
+  })
+
+  it('passes uv run raven argv through shellArgs', () => {
+    const { api } = createFakeApi()
+    const manager = new TuiTerminalManager(api)
+    const uvCommand = { command: '/usr/bin/uv', args: ['run', 'raven', 'tui'], label: 'uv run raven' }
+
+    manager.open(uvCommand, undefined)
+
+    expect(api.window.createTerminal).toHaveBeenCalledWith({
+      name: 'Raven',
+      cwd: undefined,
+      shellPath: '/usr/bin/uv',
+      shellArgs: ['run', 'raven', 'tui']
+    })
   })
 
   it('reuses the existing terminal on subsequent opens', () => {
     const { api, terminals } = createFakeApi()
     const manager = new TuiTerminalManager(api)
 
-    manager.open(command, undefined, 'linux')
-    manager.open(command, undefined, 'linux')
+    manager.open(command, undefined)
+    manager.open(command, undefined)
 
     expect(api.window.createTerminal).toHaveBeenCalledTimes(1)
     expect(terminals[0].shown).toBe(2)
@@ -123,13 +115,13 @@ describe('TuiTerminalManager', () => {
     const { api, terminals, closeListeners } = createFakeApi()
     const manager = new TuiTerminalManager(api)
 
-    manager.open(command, undefined, 'linux')
+    manager.open(command, undefined)
     const closed = terminals[0]
     closeListeners[0](closed)
 
     expect(manager.isOpen).toBe(false)
 
-    manager.open(command, undefined, 'linux')
+    manager.open(command, undefined)
 
     expect(api.window.createTerminal).toHaveBeenCalledTimes(2)
     expect(terminals).toHaveLength(2)
@@ -139,7 +131,7 @@ describe('TuiTerminalManager', () => {
     const { api, terminals } = createFakeApi()
     const manager = new TuiTerminalManager(api)
 
-    manager.open(command, undefined, 'linux')
+    manager.open(command, undefined)
     manager.dispose()
 
     expect(terminals[0].disposed).toBe(true)

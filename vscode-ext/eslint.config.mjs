@@ -1,3 +1,7 @@
+// ESLint flat config for the vscode-ext package. Composes the shared repo
+// base (typescript, unused-imports, perfectionist ordering) and relaxes
+// no-explicit-any for tests.
+
 import js from '@eslint/js'
 import tsPlugin from '@typescript-eslint/eslint-plugin'
 import tsParser from '@typescript-eslint/parser'

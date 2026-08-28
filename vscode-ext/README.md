@@ -6,13 +6,14 @@ integrated terminal, mirroring the OpenCode extension model.
 ## Features
 
 - Command palette entry and status bar shortcut: **Raven: Open TUI**
-- Launches `raven tui` in a dedicated integrated terminal named Raven
+- Launches `raven tui` in a dedicated integrated terminal named Raven; the
+  terminal process is raven itself, so arguments pass through argv with no
+  host-shell expansion
 - Reuses the running terminal; recreates it after it closes
 - Resolves the raven executable automatically: `raven.executablePath` or
   `RAVEN_BIN` (`~` expanded), then `which` / `where`, then a bash/zsh login
   shell probe (for GUI-launched VS Code that lacks the shell rc PATH), then
   `uv run raven`
-- Shell-safe quoting of the launch line on POSIX and Windows
 
 ## Requirements
 

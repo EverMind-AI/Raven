@@ -14,7 +14,6 @@ export interface VscodeDisposable {
 
 export interface VscodeTerminal {
   show(preserveFocus?: boolean): void
-  sendText(text: string, addNewLine?: boolean): void
   dispose(): void
 }
 
@@ -29,7 +28,7 @@ export interface VscodeStatusBarItem {
 
 export interface VscodeApi {
   window: {
-    createTerminal(options: { name: string; cwd?: string }): VscodeTerminal
+    createTerminal(options: { name: string; cwd?: string; shellPath?: string; shellArgs?: string[] }): VscodeTerminal
     onDidCloseTerminal(listener: (terminal: VscodeTerminal) => unknown): VscodeDisposable
     showErrorMessage(message: string, ...actions: string[]): Promise<string | undefined>
     createStatusBarItem(alignment: number, priority?: number): VscodeStatusBarItem
