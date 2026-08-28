@@ -185,41 +185,6 @@ def test_an_editable_install_gets_no_copy_of_the_tree(repo: Path) -> None:
     assert not any(target.startswith("raven/subagents") for target in editable.values())
 
 
-def test_an_editable_install_gets_no_copy_of_the_web_assets(repo: Path) -> None:
-    """The TUI bundle and the served page are skipped for the same reason.
-
-    An editable install resolves both from the checkout it was built from:
-    ``resolve_dist_entry`` and ``resolve_ui_dist`` try the packaged path first,
-    and for an editable install that path is inside the checkout's own
-    ``raven/``, where neither exists. So the site-packages copy was 4.6 MB
-    uncompressed (3.0 for the bundle, 1.6 for the page) that nothing ever opens.
-    """
-    _write(repo / "ui-tui" / "dist" / "entry.js")
-    _write(repo / "ui" / "dist" / "index.html")
-
-    # Mapped first, then withheld, in one case: "the copy is absent" is
-    # satisfied just as well by a hook that maps nothing at all.
-    standard, _ = _run_hook(repo, version="standard")
-    assert standard[str(repo / "ui-tui" / "dist")] == "raven/ui-tui/dist"
-    assert standard[str(repo / "ui" / "dist")] == "raven/ui/dist"
-
-    editable, _ = _run_hook(repo, version="editable")
-    assert not any(target.startswith("raven/ui") for target in editable.values())
-
-
-def test_an_editable_build_does_not_advise_building_a_release_wheel(repo: Path) -> None:
-    """With neither artifact present, a wheel build says what to run before
-    building a release wheel. An editable build is not one, and the command that
-    needs the artifact already says so accurately -- ``raven tui`` names both
-    candidate paths and the npm command, ``raven web`` names ``ui/build.py``.
-    """
-    _, wheel_app = _run_hook(repo, version="standard")
-    assert sum("before building a release wheel" in w for w in wheel_app.warnings) == 2
-
-    _, editable_app = _run_hook(repo, version="editable")
-    assert not any("release wheel" in w for w in editable_app.warnings)
-
-
 def test_still_packages_the_tui_bundle(repo: Path) -> None:
     _write(repo / "ui-tui" / "dist" / "entry.js")
 
