@@ -141,6 +141,33 @@ class MCPConfigError(ValueError):
     """A server config that cannot be connected (missing/unknown transport)."""
 
 
+async def _report_redirect(response: httpx.Response) -> None:
+    """Say plainly why a redirecting MCP endpoint does not connect.
+
+    The HTTP clients built below do not follow redirects, and that is the
+    security property: ``cfg.headers`` is where the plugin market renders the
+    user's secret for a server, and httpx applies client-level headers to
+    every hop of a redirect chain -- it scrubs ``Authorization`` when the
+    origin changes but carries custom headers across, so a server answering
+    302 could have read a secret meant only for itself. Refusing the hop
+    removes the possibility rather than trusting the scrubbing.
+
+    Following redirects by hand with a per-hop check (the shape in
+    rpc/methods/skillhub.py) would also work, but an MCP endpoint is a
+    configured address: the right answer to a redirect is to configure the
+    address it points at, which this message asks for.
+    """
+    if 300 <= response.status_code < 400:
+        logger.warning(
+            "MCP endpoint {} answered {} redirecting to {!r}; not followed "
+            "(configured headers must not reach another origin). Configure the "
+            "final URL for this server instead.",
+            response.request.url,
+            response.status_code,
+            response.headers.get("location", ""),
+        )
+
+
 @asynccontextmanager
 async def _mcp_server_connection(
     cfg,
@@ -178,7 +205,8 @@ async def _mcp_server_connection(
                 merged_headers = {**(cfg.headers or {}), **(headers or {})}
                 return httpx.AsyncClient(
                     headers=merged_headers or None,
-                    follow_redirects=True,
+                    follow_redirects=False,
+                    event_hooks={"response": [_report_redirect]},
                     timeout=timeout,
                     auth=http_auth or auth,
                 )
@@ -190,7 +218,8 @@ async def _mcp_server_connection(
             http_client = await stack.enter_async_context(
                 httpx.AsyncClient(
                     headers=cfg.headers or None,
-                    follow_redirects=True,
+                    follow_redirects=False,
+                    event_hooks={"response": [_report_redirect]},
                     timeout=None,
                     auth=http_auth,
                 )

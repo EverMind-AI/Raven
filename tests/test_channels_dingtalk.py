@@ -11,6 +11,19 @@ import pytest
 
 pytest.importorskip("dingtalk_stream")
 
+
+@pytest.fixture
+def resolves_public(monkeypatch):
+    """Every hostname resolves to one ordinary public address.
+
+    Opt-in, not autouse: the media fetch path validates its target before each
+    hop, so a test about the transport would otherwise depend on live DNS (and
+    on names like ``dt.example``, which is reserved and never resolves) -- but
+    a test about the guard REFUSING something must keep the real answer.
+    """
+    monkeypatch.setattr("socket.getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 0))])
+
+
 from dingtalk_stream import AckMessage
 
 from raven.channels.adapters.dingtalk import parsing as p
@@ -44,7 +57,7 @@ def _api_with_token(ch, token="t1"):
     return ch._api
 
 
-async def test_api_download_happy_returns_bytes(tmp_path, monkeypatch):
+async def test_api_download_happy_returns_bytes(resolves_public, tmp_path, monkeypatch):
     """post URL → get bytes → returns the file content."""
     ch = _make_channel(tmp_path, monkeypatch)
     api = _api_with_token(ch)
@@ -59,6 +72,7 @@ async def test_api_download_happy_returns_bytes(tmp_path, monkeypatch):
         return_value=SimpleNamespace(
             status_code=200,
             content=b"\x89PNG" + b"\x00" * 100,
+            headers={},
         )
     )
 
@@ -78,8 +92,11 @@ async def test_api_download_token_missing(tmp_path, monkeypatch):
     api._http.get.assert_not_called()
 
 
-async def test_api_download_oversize_aborts(tmp_path, monkeypatch):
-    """Body > 20MB → return None."""
+async def test_api_download_oversize_aborts(resolves_public, tmp_path, monkeypatch):
+    """Body > 20MB → return None, and only after the GET actually happened:
+    without the DNS fixture, ``dt.example`` never resolves and the guard
+    refuses the fetch before the mocked GET, so the size cap would pass
+    untested."""
     ch = _make_channel(tmp_path, monkeypatch)
     api = _api_with_token(ch)
     api._http.post = AsyncMock(
@@ -93,10 +110,12 @@ async def test_api_download_oversize_aborts(tmp_path, monkeypatch):
         return_value=SimpleNamespace(
             status_code=200,
             content=b"X" * (21 * 1024 * 1024),
+            headers={},
         )
     )
 
     assert await api.download_file("dc123") is None
+    api._http.get.assert_awaited_once()
 
 
 async def test_api_download_url_missing(tmp_path, monkeypatch):

@@ -86,51 +86,43 @@ class DingTalkAPI:
             if not (url := meta.json().get("downloadUrl")):
                 logger.error("dingtalk download URL missing in response")
                 return None
-            blob = await self._http.get(url, follow_redirects=True)
-            if blob.status_code != 200:
-                logger.error("dingtalk file fetch failed: status={}", blob.status_code)
-                return None
-            if len(blob.content) > MAX_MEDIA_BYTES:
-                logger.warning("dingtalk media too large: {} bytes (cap 20MB)", len(blob.content))
-                return None
-            return blob.content
+            # Through the guarded fetch, not a bare GET: this URL arrives in an
+            # API response, and the sibling below already knows how to follow a
+            # chain one checked hop at a time with a size cap. Two policies for
+            # the same kind of URL in one class is how the wrong one gets
+            # copied next.
+            content, _ = await self.fetch_remote(url)
+            return content
         except Exception as e:
             logger.error("dingtalk file download error: {}", e)
             return None
 
     async def fetch_remote(self, url: str) -> tuple[bytes | None, str | None]:
-        """GET a remote URL, revalidating against SSRF on every redirect hop."""
-        from raven.security.network import validate_resolved_url, validate_url_target
+        """GET a remote URL, revalidating against SSRF on every redirect hop.
+
+        The hop loop is shared (raven.security.network.guarded_fetch): this
+        adapter had the only correct copy of it, and a second adapter needing
+        the same thing is what made it worth one home.
+        """
+        from raven.security.network import guarded_fetch
 
         if not self._http:
             return None, None
-        current = url
-        for hop in range(MAX_REDIRECTS + 1):
-            ok, err = (validate_url_target if hop == 0 else validate_resolved_url)(current)
-            if not ok:
-                logger.warning("dingtalk ssrf blocked: {} ({})", current, err)
-                return None, None
-            try:
-                resp = await self._http.get(current, follow_redirects=False)
-            except Exception as e:
-                logger.error("dingtalk media fetch error ref={} err={}", current, e)
-                return None, None
-            if resp.status_code in (301, 302, 303, 307, 308):
-                if not (nxt := resp.headers.get("location") or ""):
-                    logger.warning("dingtalk redirect without location header: {}", current)
-                    return None, None
-                current = nxt
-                continue
-            if resp.status_code >= 400:
-                logger.warning("dingtalk media download failed status={} ref={}", resp.status_code, current)
-                return None, None
-            if len(resp.content) > MAX_MEDIA_BYTES:
-                logger.warning("dingtalk remote media too large: {} bytes (cap {})", len(resp.content), MAX_MEDIA_BYTES)
-                return None, None
-            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip() or None
-            return resp.content, content_type
-        logger.warning("dingtalk too many redirects for {}", url)
-        return None, None
+        try:
+            resp = await guarded_fetch(self._http, url, what="dingtalk media", max_redirects=MAX_REDIRECTS)
+        except Exception as e:
+            logger.error("dingtalk media fetch error ref={} err={}", url, e)
+            return None, None
+        if resp is None:
+            return None, None
+        if resp.status_code >= 400:
+            logger.warning("dingtalk media download failed status={} ref={}", resp.status_code, resp.request.url)
+            return None, None
+        if len(resp.content) > MAX_MEDIA_BYTES:
+            logger.warning("dingtalk remote media too large: {} bytes (cap {})", len(resp.content), MAX_MEDIA_BYTES)
+            return None, None
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip() or None
+        return resp.content, content_type
 
     # ── outbound ──────────────────────────────────────────────────────
 
