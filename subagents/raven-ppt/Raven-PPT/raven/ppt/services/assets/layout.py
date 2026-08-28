@@ -65,6 +65,11 @@ tried against a render:
     grid = table_size(rows, T, box=down.rest())
     tbl = table(slide, down.take(grid.h), rows, T)
     write(slide, Box(tbl.box.x0, tbl.box.y1 + GUTTER, tbl.box.x1, ...), "来源：Table 2", ...)
+
+The other end of that arithmetic: a run measured this way is as tall as its content,
+which is rarely as tall as the body. Ask the page to hold it --
+`page().holding(grid.h, GUTTER, group.h)` -- and the leftover becomes air above and
+below the page's content instead of a band of white along its foot.
 """
 
 import math
@@ -307,7 +312,81 @@ class Box(namedtuple("Box", "x0 y0 x1 y1")):
         return parts
 
 
-Frame = namedtuple("Frame", "kicker title body footer")
+class Frame(namedtuple("Frame", "kicker title body footer")):
+    """The regions of a page: the kicker and title rows, the body, the footer strip.
+
+    `page()` builds the ordinary one, and a frame you build yourself is what a left
+    rail or a full-bleed opener is made of -- every helper that takes a frame takes
+    yours without knowing the difference.
+
+    `body` is the room the page may use, which is more than most pages use. `holding`
+    is what to do with the difference.
+    """
+
+    __slots__ = ()
+
+    def holding(self, *heights):
+        """This frame with its body cut to the run these heights add up to.
+
+        A run measured at 4.1in taken off the top of a 5.5in body leaves the last 1.4in
+        of the page empty, and the page then reads as one that stopped early. It is the
+        commonest thing wrong with a delivered deck: eleven of eighteen pages of one run
+        ended their content between 60% and 70% down, and the render measured 1.5in of
+        trailing white on the worst of them. Nothing on those pages had asked for that
+        height -- it was the room that was left.
+
+        The leftover goes outside the run rather than between its bands. Between them is
+        `stack(...).spread(...)`, which is what a lane of cards wants and what a page of
+        groups does not: a whole page's leftover put into one gap is reported as a blank
+        field in the middle instead of one at the foot.
+
+        And not half above, half below, because a reader sees white and not regions. The
+        white over the body is the `GUTTER` the page leaves under the heading, the white
+        under it is `MARGIN`, so an even split still leaves 0.44in more at the foot than
+        at the head -- and on the page this was written for, that difference decided
+        whether the render reported a trailing field. The two are made equal instead,
+        measured from the heading's edge and to the page's. A run with less slack than
+        that difference sits on the safe margin rather than being pushed through it.
+
+        Because it moves the region and not a cursor, it answers for the page rather
+        than for one lane: `columns`, `split_left` and a stack down each lane all come
+        out of the same corrected band, so two lanes still end level. Where the lanes
+        differ, the run to pass is the taller one.
+
+        Not for a run something else is already spreading into the body: a
+        `card_group(down=True)` handed the whole body puts the leftover between its own
+        cards, so cutting the body to the sum of their heights first leaves them
+        touching. Ask this where the page takes measured bands off a cursor, which is
+        where the leftover has nowhere to go.
+
+        Bands and gaps are the same thing here, as they are for `short_by` and `spread`:
+        pass them in the order they occur, and a single list works too.
+
+            frame = page().holding(grid.h, GUTTER, group.h)
+            heading(slide, frame, T, title, kicker=section)
+            down = stack(frame.body)
+
+        A run with no slack is left as it is, and so is one that overruns: growing the
+        body past the safe margin would put type where a projector crops, and an overrun
+        is `take`'s to refuse, naming both numbers. Only the body moves -- the kicker,
+        the title and the footer stay where the page put them, so this can be asked
+        before or after `heading`.
+        """
+        if len(heights) == 1 and not isinstance(heights[0], (int, float)):
+            heights = tuple(heights[0])
+        if not heights:
+            raise ValueError(
+                "holding() takes the heights of the run the body has to hold, and was given none. "
+                "Measure them first -- text_size(...).h, table_size(...).h, card_size(...).h, "
+                "picture_size(...).h -- and pass the gaps between them as well"
+            )
+        slack = self.body.h - sum(float(height) for height in heights)
+        if slack <= 0:
+            return self
+        above = min(slack, (slack + MARGIN - GUTTER) / 2)
+        return self._replace(
+            body=Box(self.body.x0, self.body.y0 + above, self.body.x1, self.body.y1 - (slack - above))
+        )
 
 
 # Why the box travels with the shape: over one run of 105 steps, thirteen moved a
@@ -335,6 +414,22 @@ class Drawn(namedtuple("Drawn", "shape box")):
             return getattr(self.shape, name)
         except AttributeError:
             return getattr(self.box, name)
+
+
+class Cards(list):
+    """The cards one `card_group` drew, with `box` for the region they cover together.
+
+    A list and not a `Drawn`, for `Marks`'s reason below: a group is several cards and
+    `first, second, third = card_group(...)` is how they are read. The box is measured
+    off what was placed, so it is the run's own extent -- where the page carries on --
+    and not the region the group was handed, which a group deliberately does not fill.
+    """
+
+    __slots__ = ("box",)
+
+    def __init__(self, cards, box):
+        super().__init__(cards)
+        self.box = box
 
 
 class Marks(list):
@@ -677,6 +772,11 @@ def page(kicker=True, footer=False):
     The footer is off by default: reserving it spends `_FOOTER_H + GUTTER` on a strip
     at the bottom, which is 0.58in of a 7.5in page and 12% of the body. Ask for it on
     the pages that cite.
+
+    The body runs from under the heading to the safe margin, which is the room the page
+    may use and not the room it uses. A page holding less than that says so:
+    `page().holding(*heights)` cuts the body to the measured run and splits the leftover
+    above and below it, instead of leaving all of it at the foot of the page.
     """
     top = _HEAD_TOP
     kicker_box = Box(MARGIN, top, CANVAS_W - MARGIN, top + _KICKER_H)
@@ -926,7 +1026,7 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
           style="minimal", emphasize_rows=(), emphasize_columns=(), group_rows=None,
           indent_rows=(), total_rows=(), marks=None, header_size=None, align=None,
           rule_pt=None, grid_pt=None, row_height=None, header_height=None,
-          padding=None, fill=True, column_rules=False, banding=False, fills=None):
+          padding=None, fill=True, column_rules=True, banding=False, fills=None):
     """A shortcut for the ordinary table. Every part of it is yours to overrule.
 
     python-pptx hands you the Office default, and the default is why tables come out
@@ -934,31 +1034,39 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     that fights whatever palette the deck is in. On a dark page the grid is the loudest
     thing on the slide.
 
-    So the defaults here draw the other kind: no vertical rules, no banding and no
-    filled columns. Nothing tells one column from the next but alignment and weight,
-    which is what a reader actually follows across a row.
+    So the defaults here draw the other kind: quiet lines at one weight, no banding
+    and no filled column. The rule between the columns was off here too, on the
+    reading that alignment already told one column from the next -- and that reading
+    expired when every non-numeric column started being centred, because a centred
+    cell has no visible edge to be centred against. `column_rules=False` takes it back
+    off for a table read across one row at a time.
 
-    **What every style does draw is a frame and a rule at every row boundary** -- the
-    table's four outer edges, and the line between one body row and the next, both in
-    the theme's `grid` tone at `grid_pt`. They are not the cell outlines above: those
-    box every one of 25 cells, and these are one rectangle saying where the table stops
-    and one horizontal per row saying where that row ends. Without the frame there are
-    three lines that each end in mid-air -- a rule under the header, a hairline under
-    the last row, and no side of any kind -- which reads as unfinished rather than
-    restrained. Without the row rules a four-column comparison whose cells wrap onto
-    two lines says nothing about where one row ends and the next begins, and the reader
-    counts baselines to work out which cell belongs to which label. Both are at
-    `grid_pt` rather than `rule_pt`, so the accent rule under the header stays the
-    heavier line and the table is still read from it. A default is what ships, so the
-    default has to be presentable with no keyword turned.
+    **What every style does draw is a frame, a rule at every row boundary and a rule
+    between the columns** -- the four outer edges in the theme's `muted` tone and the
+    interior lines in the quieter `grid` one, all of them at `grid_pt`. That is a grid
+    and it is not the Office grid: one weight and two quiet tones, with no banding
+    under it and no blue header over it, where `add_table` gives every one of 25 cells
+    a white hairline on a banded, gallery-styled table whatever palette the deck is in.
+    Without the frame there are three lines that each end in mid-air -- a rule under
+    the header, a hairline under the last row, and no side of any kind -- which reads
+    as unfinished rather than restrained. Without the row rules a four-column
+    comparison whose cells wrap onto two lines says nothing about where one row ends
+    and the next begins, and the reader counts baselines to work out which cell belongs
+    to which label. Without the column rules, on the rows a delivered deck shipped with
+    every interior vertical written as noFill, a five-column table of figures read
+    "2012" and "8" as one cell and a three-column table of phrases read as one run-on
+    line. All of them are at `grid_pt` rather than `rule_pt`, so the
+    accent rule under the header stays the heaviest line and the table is still read
+    from it. A default is what ships, so the default has to be presentable with no
+    keyword turned.
 
-    **Those are defaults and not a house rule.** `column_rules` puts a line between
-    every column, `fills` paints any cell, row or column in a colour you name,
+    **Those are defaults and not a house rule.** `column_rules=False` takes the line
+    between the columns off, `fills` paints any cell, row or column in a colour you name,
     `banding` tints alternate rows, `align` sets each column's alignment by name,
     `header_size` sets the header's type independently of the body's, `rule_pt` and
     `grid_pt` set the two line weights in points, and `row_height`, `header_height`
-    and `padding` set the rows' own measurements. A page whose table needs a rule
-    down the middle of it, or its third column painted, should have it. And when
+    and `padding` set the rows' own measurements. A page whose table wants its columns
+    left open, or its third column painted, should have it. And when
     what a page needs is not a variation on this table at all -- merged cells, a
     grouped header spanning three columns, an icon inside a cell, a sparkline down a
     column -- draw it out of `Box`, `columns`, `stack`, `lines_needed`, `write` and
@@ -1083,8 +1191,8 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
 
     # Merged before a word is written: merging carries the spanned cells' text into
     # the origin, so a band assembled afterwards would hold every placeholder in the
-    # row. There are no vertical rules to hide behind either -- an unmerged band looks
-    # right here and wraps its name inside column one the moment the name is long.
+    # row. An unmerged band would also wrap its name inside column one the moment
+    # the name is long.
     if columns > 1:
         for index in groups:
             tbl.cell(index, 0).merge(tbl.cell(index, columns - 1))
@@ -2276,7 +2384,7 @@ class Stack:
     well pays both. Pass `gutter=` to have one added after every band.
     """
 
-    __slots__ = ("box", "gutter", "spent_by_rest", "spread_to_fit", "taken", "y")
+    __slots__ = ("box", "gutter", "spent_by_rest", "spread_short", "spread_to_fit", "taken", "y")
 
     def __init__(self, box, gutter=0.0):
         self.box = box
@@ -2284,6 +2392,7 @@ class Stack:
         self.y = box.y0
         self.spent_by_rest = False
         self.spread_to_fit = False
+        self.spread_short = False
         self.taken = 0
 
     def __getattr__(self, name):
@@ -2393,13 +2502,21 @@ class Stack:
         left the rest empty, and four more were two columns that stopped at different
         heights. Both are this call not being made.
 
-        A run with no slack is left as it is, gutter included: the share is what the
-        region can actually pay for, and raising it to the deck's usual gap would
-        spend height the region does not have and push the last band off the bottom.
+        A run with no slack still gets `GUTTER`, which is the floor and not the
+        share. This used to be the other way -- no slack meant the gap the cursor
+        already carried, on the reasoning that the region cannot pay for more -- and
+        a delivered page shows what that buys: three tinted panels down a column at
+        1.24-3.16, 3.16-4.78 and 4.78-6.70in, 0.000in apart twice, reading as one
+        block somebody forgot to finish rather than as three cards. The program that
+        drew it was `stack(right).spread(*need)` with `need` already shortened to fit
+        the region exactly, so the share was zero. Welding components is not a
+        cheaper page than a shorter one, so the bands are what gives: with no room
+        for the floor the run overruns and `take` says by how much. `card_group` has
+        had this floor from the start, by passing `gutter=GUTTER` into the same call.
+
         One band has no between, so it centres instead. So it needs no guard around
         it -- `stack(box).spread(*heights)` is right whether or not there is slack,
-        and a caller that adds its own `skip` when there is none overruns by exactly
-        what it skipped.
+        and a caller that adds its own `skip` overruns by exactly what it skipped.
 
             down = stack(box).spread(*heights)
             for card, tall in zip(cards, heights):
@@ -2410,9 +2527,12 @@ class Stack:
         if len(heights) < 2:
             return self.centre(*heights)
         share = self.slack(*heights) / (len(heights) - 1)
-        if share > self.gutter:
+        if share > max(self.gutter, GUTTER):
             self.gutter = share
             self.spread_to_fit = True
+        elif self.gutter < GUTTER:
+            self.gutter = GUTTER
+            self.spread_short = True
         return self
 
     def take(self, height):
@@ -2447,6 +2567,15 @@ class Stack:
                     f"exactly on the bottom edge -- so a skip() or a gutter of your own on top of it "
                     f"overruns by exactly what you added. Take the bands and add nothing between them. "
                     if self.spread_to_fit
+                    # The floor, not the share: spread had nothing to share and still keeps the
+                    # deck's gap, so the bands are the only thing left to shorten. Said here
+                    # because the run that met it measured every band correctly and the height it
+                    # had not counted was the air between them.
+                    else f"spread() had no slack to share, so this region keeps the deck's own "
+                    f"{self.gutter:.2f}in between components -- any closer and n cards read as one "
+                    f"unfinished shape. The bands are what has to give: count the n-1 gaps into "
+                    f"short_by(*heights, *gaps) and shorten the run by what it reports. "
+                    if self.spread_short
                     else f"This cursor leaves a {self.gutter:.2f}in gap after every band, so a run of n "
                     f"bands spends n gaps as well as their heights; slack() and short_by() answer "
                     f"about the heights alone. "
@@ -2490,6 +2619,13 @@ def stack(box, gutter=0.0):
 
     Bands come out adjacent; `skip(h)` puts a gap between them. Pass `gutter=` to have
     every `take` leave one.
+
+    Adjacent is the default because most runs down a region are copy, a figure and its
+    caption, or a table and the key under it -- type carries its own air in the line box
+    and a gap added on the caller's behalf is height it cannot see. A run of *painted*
+    bands is the other case and has its own call: `spread(*heights)` for a column of
+    cards or panels, which never leaves less than `GUTTER` between them, and
+    `card_group(..., down=True)` when the bands are cards.
     """
     return Stack(box, gutter)
 
@@ -2831,6 +2967,11 @@ def card(
 ):
     """A titled card: the surface, an icon, the title beside it, the copy under it.
 
+    One card. `card_group` draws a row of them across a region or a column down it,
+    passing each item straight into this call, so a group needs no helper of its own --
+    and a helper of your own that reads the items itself is how a delivered deck drew
+    seven groups with the icon missing from every card.
+
     The copy is body copy, so it is set at the body size (`BODY_PT`) and its title one
     step above it at `LEAD_PT`. Copy at `LABEL_PT` is copy sitting exactly on
     `BODY_FLOOR_PT`, with no room to step down and nothing between it and the smallest
@@ -2956,6 +3097,9 @@ def card_size(width, *, icon=None, title="", body=(), size=BODY_PT, title_size=L
     A box at the origin, like `text_size`: `.h` is what to ask a `stack` for, and the
     tallest of a row's cards is what the row needs -- `max(card_size(w, **c).h for c in
     cards)`, so they come out level and none of them is padded out to the page.
+    `card_group` is that composition already written and is what a plain row or column
+    of cards wants; this is for the groups that are not one -- a staggered column, a
+    grid cell, a panel placed over a figure -- and for asking before drawing anything.
     """
     if width <= 2 * PAD:
         raise ValueError(f"{width:.2f}in is no width for a card; its padding alone is {2 * PAD:.2f}in")
@@ -2965,6 +3109,72 @@ def card_size(width, *, icon=None, title="", body=(), size=BODY_PT, title_size=L
     if body:
         needed += text_size(body, width - 2 * PAD, size=size, font=font).h
     return Box.at(0.0, 0.0, w=width, h=needed)
+
+
+def _card_height(width, item):
+    """`card_size` asked about an item, whose keys are `card`'s and not only its own.
+
+    `tint` and `cjk_font` change nothing about how tall a card is, so `card_size` does
+    not take them. Which keys it does take is read off the function rather than listed
+    here, because a list of a card's fields kept beside the card is exactly what the
+    helper this replaces got wrong.
+    """
+    asked = {name: value for name, value in item.items() if name in card_size.__kwdefaults__}
+    return card_size(width, **asked).h
+
+
+def card_group(slide, box, theme, items, *, down=False, gutter=GUTTER):
+    """A row of cards across `box`, or a column of them down it: `card` once per item.
+
+    The composition between the two halves that were already here. `card` draws one and
+    `card_size` says how tall one has to be; dividing the region, levelling the cards and
+    drawing n of them was left to the page, and a delivered deck wrote its own helper for
+    it -- `(region.h - gutter * (n - 1)) / n`, which is `Box.rows`, over a plane with a
+    title and a body under it, which is `card`. That helper read `title`, `body` and
+    `tint` out of each item and nothing else, so the `icon` all seven of its groups
+    carried was dropped seven times, with nothing raised and nothing to see.
+
+    So an item is `card`'s own keyword arguments and `card(**item)` is what reads them:
+    every argument `card` takes travels, and a key it does not take is refused here
+    before the first card is drawn rather than quietly doing nothing.
+
+        card_group(slide, frame.body, T, [
+            {"icon": "link", "title": "One claim", "body": "what it rests on"},
+            {"icon": "stack_2", "title": "Another", "body": "and its evidence"},
+        ])
+
+    Across is the default, a row across a region being the commoner shape; `down=True` is
+    the column. Both spend the region rather than fill it: a row is levelled to the
+    tallest height `card_size` asks for and centred in the region, a column keeps each
+    card's own height and the leftover becomes the air between them, so the group ends on
+    the region's own edge and none of its cards is padded out to the page. A group that
+    does not fit is refused by `take`, which names both numbers.
+
+    Hands back each card's `Drawn` in order, carrying `.box` for the run as a whole, so
+    `group.box.y1 + GUTTER` is where the page carries on and `overlaps(group)` reads
+    straight through.
+    """
+    items = [dict(item) for item in items]
+    if not items:
+        raise ValueError("a card group draws at least one card, and was given no items")
+    unknown = sorted({key for item in items for key in item} - set(card.__kwdefaults__))
+    if unknown:
+        raise ValueError(
+            f"a card group's items are card()'s own arguments: {unknown} is not among "
+            f"{sorted(card.__kwdefaults__)}. A key this call does not pass on is a field the cards "
+            f"come out without, which is what reading the items by hand cost seven groups of one deck"
+        )
+    if down:
+        heights = [_card_height(box.w, item) for item in items]
+        cursor = stack(box, gutter=gutter).spread(*heights)
+        boxes = [cursor.take(height) for height in heights]
+    else:
+        columns = box.columns(len(items), gutter)
+        tall = max(_card_height(column.w, item) for column, item in zip(columns, items))
+        band = stack(box).spread(tall).take(tall)
+        boxes = [Box(column.x0, band.y0, column.x1, band.y1) for column in columns]
+    drawn = [card(slide, one, theme, **item) for one, item in zip(boxes, items)]
+    return Cards(drawn, _ink_box([one.shape for one in drawn]))
 
 
 # Character widths in ems, by class. Not a font metric: a formula is one line and

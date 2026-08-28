@@ -616,8 +616,13 @@ def excessive_whitespace(
                         trailing,
                         (
                             f"the page's last substantive body content ends {trailing / 72:.2f}in above the body "
-                            "boundary, leaving the lower field unfinished. Increase the main content's scale or "
-                            "use the space for the page's conclusion"
+                            "boundary, leaving the lower field unfinished. Increase the main content's scale, or "
+                            "use the space for the page's conclusion; and where the run was measured and taken off "
+                            "a cursor, that field is room the body was given and nothing asked for -- pass the "
+                            "run's heights and the gaps between them to page().holding(*heights), which cuts the "
+                            "body to the run and splits the leftover above and below it. Not for a run something "
+                            "else already spreads into the whole body, such as card_group(down=True), whose cards "
+                            "would then touch"
                         ),
                         bands[-1][1],
                         body_bottom,

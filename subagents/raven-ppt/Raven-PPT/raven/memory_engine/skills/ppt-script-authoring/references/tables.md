@@ -91,8 +91,8 @@ page is committed to one.
 ## Drawing one: the whole recipe
 
 This runs. It measures its own rows, fills its box, right-aligns what should be
-right-aligned, and does three things `table()`'s defaults refuse: a vertical rule,
-zebra bands and a tinted column at once.
+right-aligned, and does two things `table()`'s defaults refuse: zebra bands and a
+tinted column at once.
 
 ```python
 from ppt_layout import Box, plane, write, text_size
@@ -266,30 +266,32 @@ Preserve units, scales, qualifiers, series meaning and source labels exactly.
 
 ## The dials, and when to turn them
 
-The defaults are an argument, not a rule: no vertical rules, no banding, nothing
-filled, a frame around the table in the `muted` tone, a hairline at every row boundary
-in the quieter `grid` tone, one accent rule under the
-header, and header and body at one size. Every one of them is a keyword away from
+The defaults are an argument, not a rule: no banding, nothing filled, a frame around
+the table in the `muted` tone, a hairline at every row boundary and between every
+column in the quieter `grid` tone, one accent rule under the header, and header and
+body at one size. Every one of them is a keyword away from
 being something else, and a page that needs the other thing should have it. **The
 reason a default is what it is is written beside it, so that overruling it is a
 decision rather than a guess.**
 
-The frame and the row hairlines are the two defaults that are not restraints. Without
+The frame and the interior hairlines are the defaults that are not restraints. Without
 the frame the table drew a rule
 under the header, a hairline under the last row and no side of any kind — three lines
 each ending in mid-air, which reads as unfinished rather than as held back. Without the
 row hairlines a four-column comparison whose cells wrap onto two lines said nothing
 about where one row ended and the next began, and the reader was left counting
-baselines to find which cell went with which label. So the outer
-edge is closed and the rows are told apart for you, and a bare
+baselines to find which cell went with which label. Without the column rules a
+five-column table of figures read "2012" and "8" as one cell and a three-column table
+of centred phrases read as one run-on line, both on a delivered deck. So the outer
+edge is closed and the rows and the columns are told apart for you, and a bare
 `table(slide, box, rows, T)` is something a deck can
 ship. It is not the Office look coming back: that is a hairline around every one of 25
-cells with banding under them, and this is one rectangle and one horizontal per row, all
-at the same weight. Two tones and not one: the frame separates the table from the page
-and the hairlines separate rows from each other, so the frame takes the `muted` tone and
+cells with banding under them and a blue header over them, and this is one weight with
+nothing under it. Two tones and not one: the frame separates the table from the page
+and the hairlines separate one cell from the next, so the frame takes the `muted` tone and
 the interior lines the `grid` one -- which is picked to sit under the copy and, drawn
-around the outside, reads on a projector as no edge at all. Nothing inside the table
-is outlined down its columns unless `column_rules` asks for it.
+around the outside, reads on a projector as no edge at all. `column_rules=False` takes
+the vertical half of that interior off.
 
 | | | |
 | --- | --- | --- |
@@ -301,7 +303,7 @@ is outlined down its columns unless `column_rules` asks for it.
 | `padding` | 0.03in | the air above and below a row's copy. The single number that decides dense against open |
 | `row_height` / `header_height` | measured | a floor you set, in inches. A row still grows past it for copy that needs the room — a declared height cannot shrink a line |
 | `fill` | `True` | `False` to keep the table at the size its content asks for |
-| `column_rules` | `False` | off because alignment already separates columns and a full grid is the Office look — the frame closes the outside and the hairlines part the rows, this is the only line that parts the columns. **On** where the columns are unrelated scales rather than one comparison, or where a matrix has so many that the eye loses which one it is in |
+| `column_rules` | `True` | on because a centred cell has no visible edge to be centred against and two right-aligned figure columns run their figures together across a boundary nobody drew. It was off while alignment was held to separate the columns on its own; centring every non-numeric column ended that. **Off** where the table is read across one row at a time rather than down a column |
 | `fills` | none | `{(row, column): colour}`, either coordinate `None` for all of them: `{(None, 3): "accent_soft"}` fills column 3, `{(2, None): "surface"}` fills row 2, `{(2, 3): "#FFEECC"}` one cell. Any role the theme carries, including one the deck named for itself, or a literal |
 | `banding` | `False` | off because row spacing and alignment already tell the rows apart, and a tint on every other row fights whatever the template's own palette is doing. **On** for a long lookup table nobody reads straight through — twenty rows of figures somebody scans down for one line |
 | `style` | `"minimal"` | the four below |
@@ -347,11 +349,12 @@ table(slide, down.take(laid.h), rows, T, size=BODY_PT, numeric_from=1,
       padding=0.08)                # the one dial that decides dense against open
 ```
 
-**`column_rules` on every one of these.** The default draws the frame and a rule at each
-row boundary and nothing vertical, which is right for a table read across one row at a
-time. These are read *down*, and a centred cell with no visible column edge does not read
-as centred at all -- measured: the label column below is centre-aligned and looks
-arbitrary until the rule is there for it to be centred against.
+**`column_rules` on every one of these**, and it is the default for the reason these
+needed it: a table read *down* a column wants its boundaries drawn, and a centred cell
+with no visible column edge does not read as centred at all -- measured: the label column
+below is centre-aligned and looks arbitrary until the rule is there for it to be centred
+against. The calls below still say it, because what a page is spending is worth reading
+off the call; `column_rules=False` is the one that is now a decision.
 
 **The table with sections.** `group_rows` is `{row: "name"}` and that row becomes one
 band carrying the name -- its own cells stay empty. Reach for it when the *figures* fall
