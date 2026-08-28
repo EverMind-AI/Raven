@@ -136,6 +136,9 @@ def _sample_calls(helpers, slide, picture) -> dict[str, object]:
         "points": lambda: layout.points(slide, box, theme, ["one", "two"]),
         "heading": lambda: layout.heading(slide, regions, theme, "A title", "Kicker"),
         "card": lambda: layout.card(slide, box, theme, icon="check", title="Card", body=["body"]),
+        "card_group": lambda: layout.card_group(
+            slide, plot, theme, [{"icon": "check", "title": "One"}, {"title": "Two", "body": ["a line"]}]
+        ),
         "formula": lambda: layout.formula(slide, box, "e = mc^2", theme),
         "table": lambda: layout.table(slide, wide, [["Head", "Value"], ["Row", "1"]], theme),
         "picture_fit": lambda: layout.picture_fit(slide, picture, box, theme, caption="A caption"),
@@ -1063,6 +1066,110 @@ def test_a_card_can_be_asked_how_tall_it_has_to_be(helpers) -> None:
     assert icon_only.y0 > box.y0 + layout.PAD, "an icon clears the copy with no title beside it"
 
 
+def _height_of(layout, width, item):
+    return layout.card_size(width, **{key: value for key, value in item.items() if key != "tint"}).h
+
+
+GROUP = (
+    {"icon": "link", "title": "接口对齐", "body": "字段一次映射，下游无需再改"},
+    {"icon": "layers_intersect", "title": "版式复用", "body": "母版随主题走"},
+    {"icon": "stack_2", "title": "证据分层", "body": ["结论在上，度量在下", "每条都回得到来源"], "tint": "accent_soft"},
+)
+
+
+def test_a_group_of_cards_keeps_the_icon_every_item_gave_it(helpers) -> None:
+    """The helper a delivered deck wrote instead of this one, and what it dropped.
+
+    Its own `stacked_cards` divided the region with `(region.h - gutter * (n - 1)) / n`
+    -- `Box.rows` -- and drew a plane, a title and a body under it -- `card` -- then read
+    `tint`, `title` and `body` out of each item. Every item also carried an `icon` and
+    nothing read it, so seven groups came out with no icon on any card and the deck had
+    icon geometry on one page of eighteen. Nothing was raised; there was nothing to see.
+
+    Asserted on the shapes that landed rather than on the call, because "the icon was
+    passed" is what that helper's items also said.
+    """
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    layout, theme = helpers.ppt_layout, helpers.theme
+    region = layout.page().body
+
+    for down in (False, True):
+        _, slide = _deck()
+        group = layout.card_group(slide, region, theme, GROUP, down=down)
+        assert len(group) == len(GROUP), "one card per item"
+        glyphs = [shape for shape in slide.shapes if shape.shape_type == MSO_SHAPE_TYPE.FREEFORM]
+        assert glyphs, f"no icon geometry reached the slide at all (down={down})"
+        for drawn in group:
+            covered = [
+                shape
+                for shape in glyphs
+                if drawn.box.x0 - 0.01 <= shape.left / 914400
+                and (shape.left + shape.width) / 914400 <= drawn.box.x1 + 0.01
+                and drawn.box.y0 - 0.01 <= shape.top / 914400
+                and (shape.top + shape.height) / 914400 <= drawn.box.y1 + 0.01
+            ]
+            assert covered, f"a card came out with no icon in it (down={down}): {drawn.box}"
+
+
+def test_a_group_takes_its_heights_from_card_size_and_spends_the_region(helpers) -> None:
+    """Not `region.h / n`, which is what the hand-rolled one divided and what
+    `card_size` exists to replace: a column keeps each card's own measured height and the
+    leftover becomes the air between them, a row is levelled to the tallest and centred.
+    """
+    layout, theme = helpers.ppt_layout, helpers.theme
+    region = layout.page().body
+
+    _, slide = _deck()
+    lane = region.split_left(0.42)[1]
+    column = layout.card_group(slide, lane, theme, GROUP, down=True)
+    for drawn, item in zip(column, GROUP):
+        assert drawn.box.h == pytest.approx(_height_of(layout, lane.w, item), abs=1e-9)
+    assert len({round(drawn.box.h, 6) for drawn in column}) > 1, "cards that differ are not levelled"
+    assert column[0].box.y0 == pytest.approx(lane.y0, abs=1e-9)
+    assert column[-1].box.y1 == pytest.approx(lane.y1, abs=1e-9), "the group ends on the region's own edge"
+    assert not layout.overlaps([drawn.box for drawn in column]), "and no card sits on the next"
+    assert column.box.y0 == pytest.approx(lane.y0, abs=0.01), "the run reports its own extent"
+    assert column.box.y1 == pytest.approx(lane.y1, abs=0.01)
+
+    _, slide = _deck()
+    row = layout.card_group(slide, region, theme, GROUP)
+    tall = max(_height_of(layout, drawn.box.w, item) for drawn, item in zip(row, GROUP))
+    assert {round(drawn.box.h, 6) for drawn in row} == {round(tall, 6)}, "a row is level at the tallest card"
+    assert len({round(drawn.box.w, 6) for drawn in row}) == 1, "and the columns are equal"
+    assert row[0].box.h < region.h / 2, "the row is not padded out to the region"
+    above = row[0].box.y0 - region.y0
+    assert above == pytest.approx(region.y1 - row[0].box.y1, abs=0.01), "the leftover is split above and below"
+    assert row[1].box.x0 - row[0].box.x1 == pytest.approx(layout.GUTTER, abs=1e-9)
+    assert row.box.h == pytest.approx(tall, abs=0.01) and row.box.w == pytest.approx(region.w, abs=0.01)
+
+
+def test_a_group_refuses_a_field_no_card_would_read(helpers) -> None:
+    """The silence that cost the icons, turned into a refusal before anything is drawn.
+
+    An item is `card`'s own keyword arguments, so a key `card` does not take is a field
+    the cards would come out without -- and half a group on a slide is worse than none,
+    so it is refused before the first card rather than at the one that carried it.
+    """
+    layout, theme = helpers.ppt_layout, helpers.theme
+    region = layout.page().body
+    _, slide = _deck()
+
+    with pytest.raises(ValueError) as refused:
+        layout.card_group(slide, region, theme, [{"title": "接口对齐", "ikon": "link"}])
+    said = str(refused.value)
+    assert "ikon" in said and "'icon'" in said, said
+    assert not len(slide.shapes), "a refused group drew part of itself"
+
+    with pytest.raises(ValueError):
+        layout.card_group(slide, region, theme, [])
+
+    # A group taller than its region is refused by the cursor every other run of bands
+    # goes through, which names what the region has and what was asked of it.
+    with pytest.raises(ValueError, match="is left in this region"):
+        layout.card_group(slide, layout.Box(0.72, 1.53, 4.0, 2.0), theme, GROUP, down=True)
+
+
 def test_the_body_keeps_the_footer_strip_until_a_page_asks_to_cite(tmp_path) -> None:
     """Reserved by default, used by nobody: 29 live pages wrote `page()` and 0 drew a footer.
 
@@ -1079,6 +1186,40 @@ def test_the_body_keeps_the_footer_strip_until_a_page_asks_to_cite(tmp_path) -> 
         assert plain.body.y1 == pytest.approx(module.CANVAS_H - module.MARGIN), "to the safe area"
         assert citing.footer.y0 >= citing.body.y1, "and when it is asked for, it is clear of the body"
         assert plain.title == citing.title, "asking changes the body and nothing above it"
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_page_holding_a_short_run_balances_the_white_around_it(tmp_path) -> None:
+    """Measured on a delivered deck: 11 of 18 pages ended their content 60-70% down.
+
+    The run was taken off the top of the body and whatever the body had left stayed at
+    the foot -- 1.4in of it on the worst page, which the render reports as a trailing
+    field. Half above and half below is not enough: the body's own top edge is a GUTTER
+    under the heading and its bottom is a MARGIN over the page, so an even split still
+    leaves 0.44in more white at the foot. What is asserted is the reading, which is that
+    the white over the run and the white under it come out equal.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        frame = module.page()
+        run = [1.90, module.GUTTER, 1.90]
+        held = frame.holding(*run)
+
+        assert held.body.h == pytest.approx(sum(run)), "the body is cut to the run"
+        over = held.body.y0 - (frame.body.y0 - module.GUTTER)
+        under = module.CANVAS_H - held.body.y1
+        assert over == pytest.approx(under), "from the heading's edge and to the page's"
+        assert held.body.y1 <= frame.body.y1 + 1e-9, "and never through the safe margin"
+        assert (held.kicker, held.title, held.footer) == (frame.kicker, frame.title, frame.footer)
+        assert held.holding(run) == held, "asking twice is asking once"
+
+        # A run the body cannot pay for is left where it is: an overrun is `take`'s to
+        # refuse with both numbers, and a body grown to hold it is type past the margin.
+        assert frame.holding(frame.body.h) is frame
+        assert frame.holding(frame.body.h + 1.0) is frame
+        with pytest.raises(ValueError, match="was given none"):
+            frame.holding()
     finally:
         _drop(tmp_path)
 
@@ -1386,7 +1527,6 @@ def test_a_cjk_header_sets_no_floor_of_its_own(tmp_path) -> None:
 # as a length. These run the generated module and read the shapes back off a real
 # slide for the reason at the top of this file: a test that compared the source string
 # would pass for a module with a NameError in it.
-
 
 
 def test_a_box_reads_back_under_the_names_it_was_built_with(helpers) -> None:
@@ -1770,7 +1910,7 @@ def test_a_detail_row_is_stepped_in_and_a_total_row_sits_under_a_rule(tmp_path) 
         quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
         assert _border(module, table.cell(3, 0), "lnB") == firm, "nothing rules off the row above the total"
         assert _border(module, table.cell(4, 0), "lnT") == firm, "the two sides of that boundary disagree"
-        assert _border(module, table.cell(3, 0), "lnR") is None, "a vertical rule nobody asked for"
+        assert _border(module, table.cell(3, 0), "lnR") == quiet, "a column boundary in the total's own tone"
         # And it is darker than the boundary a row that is not a total gets, which is
         # the whole of what makes it readable as a rule rather than as another row.
         assert _border(module, table.cell(2, 0), "lnB") == quiet, "an ordinary boundary lost its hairline"
@@ -3710,9 +3850,13 @@ def test_a_bare_table_is_closed_by_a_frame_in_every_style(helpers) -> None:
         for row in range(len(_WRAPPING)):
             assert _border(module, drawn.cell(row, 0), "lnL") == firm, f"{style} row {row} has no left edge"
             assert _border(module, drawn.cell(row, columns - 1), "lnR") == firm, f"{style} row {row} has no right"
-        # And the frame is the only vertical the default draws: an interior edge is
-        # still bare, which is the difference from the grid `column_rules` asks for.
-        assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
+        # The frame is not the only vertical any more, so what it has to stay is the
+        # one tone apart: an interior boundary is the quiet line, the outer edge the
+        # firm one, or the frame reads as one more column rule.
+        assert _border(module, drawn.cell(1, 0), "lnR") == quiet, f"{style} left its columns unparted"
+        bare = module.table(_slide(module), box, _WRAPPING, theme, style=style, column_rules=False)
+        assert _border(module, bare.cell(1, 0), "lnR") is None, f"{style} kept a vertical rule nobody asked for"
+        assert _border(module, bare.cell(1, columns - 1), "lnR") == firm, f"{style} took the frame off with them"
         # The header's rule still outweighs the frame, so it stays the line the reader
         # is meant to see; the frame is what the eye reads last.
         assert _border(module, drawn.cell(0, 0), "lnB") == (
@@ -3727,12 +3871,15 @@ def test_a_bare_table_is_closed_by_a_frame_in_every_style(helpers) -> None:
     assert _border(module, heavier.cell(0, 0), "lnT") == (str(module._rgb(theme["muted"])), pytest.approx(2.0))
 
     # A border is drawn on the boundary and takes no room from the row it edges, so
-    # the frame cannot make `table_size` answer for a table that is not the drawn one.
+    # neither the frame nor the column rules can make `table_size` answer for a table
+    # that is not the drawn one -- which is why `table_size` does not take them and
+    # why turning them off has to leave both answers where they were.
     for style in ("minimal", "compact"):
-        drawn = module.table(_slide(module), box, _WRAPPING, theme, style=style)
         asked = module.table_size(_WRAPPING, theme, style=style, box=box)
-        assert drawn.box.h == pytest.approx(asked.h, abs=1e-9)
-        assert drawn.box.w == pytest.approx(asked.w, abs=1e-9)
+        for ruled in (True, False):
+            drawn = module.table(_slide(module), box, _WRAPPING, theme, style=style, column_rules=ruled)
+            assert drawn.box.h == pytest.approx(asked.h, abs=1e-9), f"{style} column_rules={ruled}"
+            assert drawn.box.w == pytest.approx(asked.w, abs=1e-9), f"{style} column_rules={ruled}"
 
 
 def test_every_row_boundary_carries_a_hairline_in_every_style(helpers) -> None:
@@ -3779,7 +3926,7 @@ def test_every_row_boundary_carries_a_hairline_in_every_style(helpers) -> None:
             str(module._rgb(theme["muted"])),
             pytest.approx(module.GRID_RULE_PT, abs=0.01),
         ), f"{style} has no bottom edge"
-        assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
+        assert _border(module, drawn.cell(1, 0), "lnR") == quiet, f"{style} left its columns unparted"
 
     # A border is drawn on the boundary rather than beside it, so the hairlines take no
     # room: the height is still the rows' own and still what `table_size` answered
@@ -3804,6 +3951,50 @@ def test_every_row_boundary_carries_a_hairline_in_every_style(helpers) -> None:
     for row in range(len(rows)):
         for edge in ("lnT", "lnB", "lnL", "lnR"):
             assert _border(module, named.cell(row, 0), edge) == _border(module, plain.cell(row, 0), edge)
+
+
+def test_every_column_boundary_carries_a_rule_by_default(helpers) -> None:
+    """The third default from the same reading as the frame and the row hairlines.
+
+    The column rule was off on the argument that alignment already told one column from
+    the next. That argument was written for a table whose non-numeric columns were
+    left-aligned; `_cell_aligns` centres them now, so a centred cell has no visible edge
+    to be centred against and two right-aligned figure columns set their figures either
+    side of a boundary nobody drew. A delivered deck shipped two tables with every
+    interior vertical written as noFill; re-rendered at 110dpi, its five-column table of
+    figures read "2012" and "8" as one cell and its three-column table of centred
+    phrases read as one run-on line. It shipped that way because a default nobody turns
+    is the table that gets sent.
+
+    In the `grid` tone at `grid_pt`, which is the interior's own line: the frame stays a
+    tone apart so the outer edge is not read as one more column boundary, and the
+    header's accent rule stays the heaviest line on the table.
+    """
+    module, theme = helpers.ppt_layout, helpers.theme
+    box = module.Box.corners(0.72, 1.93, 12.60, 5.63)
+    quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    firm = (str(module._rgb(theme["muted"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    rows = [
+        ["模型", "年份", "层数", "参数量", "top-5"],
+        ["AlexNet", "2012", "8", "6,000 万", "15.3%"],
+        ["VGG16", "2014", "16", "1.38 亿", "7.3%"],
+        ["ResNet-152", "2015", "152", "6,000 万", "3.57%"],
+    ]
+    columns = len(rows[0])
+
+    drawn = module.table(_slide(module), box, rows, theme)
+    for row in range(len(rows)):
+        for column in range(1, columns):
+            assert _border(module, drawn.cell(row, column), "lnL") == quiet, f"row {row} boundary {column}"
+            assert _border(module, drawn.cell(row, column - 1), "lnR") == quiet, f"row {row} boundary {column} split"
+        assert _border(module, drawn.cell(row, columns - 1), "lnR") == firm, "the frame reads as a column rule"
+    assert quiet[0] != firm[0], "the interior line and the frame are the same tone"
+    assert module.GRID_RULE_PT < module.HEADER_RULE_PT, "a column rule at the header rule's weight"
+
+    # A group row is one merged cell carrying a name, so there is no interior boundary
+    # inside it to draw and a rule there would come down through the name.
+    banded = module.table(_slide(module), box, rows, theme, group_rows={1: "2012-2014"})
+    assert _border(module, banded.cell(1, 0), "lnR") == firm, "a rule came down through the band"
 
 
 def test_a_table_spreads_into_the_box_rather_than_sitting_in_the_top_of_it(helpers) -> None:
@@ -3865,8 +4056,8 @@ def test_a_table_takes_the_look_it_is_told_to_take(helpers) -> None:
     # and the frame keeps its own tone, so the outer edge is not read as one more
     # column boundary.
     assert _border(module, drawn.cell(1, 2), "lnR") == (str(module._rgb(theme["muted"])), pytest.approx(1.5))
-    unruled = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=1.5)
-    assert _border(module, unruled.cell(1, 0), "lnR") is None, "a vertical rule nobody asked for"
+    unruled = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=1.5, column_rules=False)
+    assert _border(module, unruled.cell(1, 0), "lnR") is None, "column_rules=False still parted the columns"
     assert _border(module, unruled.cell(1, 2), "lnR") == (str(module._rgb(theme["muted"])), pytest.approx(1.5))
 
     sizes = {run.font.size.pt for run in drawn.cell(0, 0).text_frame.paragraphs[0].runs}
@@ -3948,12 +4139,33 @@ def test_a_run_shorter_than_its_region_can_spend_the_slack_between_its_bands(tmp
         beside = module.stack(region).spread(2.4, 0.9)
         assert [beside.take(h) for h in (2.4, 0.9)][-1].y1 == pytest.approx(region.y1, abs=1e-9)
 
-        # A run with no slack keeps what it had: raising the gap to the deck's usual
-        # one would spend height the region cannot pay and push the last band off.
+        # A run with no slack still gets the deck's gap, because the alternative is
+        # what a delivered page shipped: three tinted panels down a column, adjacent
+        # to three decimal places, reading as one block rather than as three cards.
+        # The program was this call with its heights already cut to fit exactly.
         tight = module.Box(7.0, 1.4, 12.6, 1.4 + sum(cards))
         packed = module.stack(tight).spread(*cards)
-        assert packed.gutter == 0.0
-        assert [packed.take(h) for h in cards][-1].y1 == pytest.approx(tight.y1, abs=1e-9)
+        assert packed.gutter == pytest.approx(module.GUTTER)
+        with pytest.raises(ValueError) as welded:
+            for height in cards:
+                packed.take(height)
+        # The bands are the only thing left to shorten, and the refusal says so --
+        # the older sentence pointed at short_by over the heights alone, which is
+        # the sum that already balanced.
+        assert "no slack to share" in str(welded.value), welded.value
+        assert "short_by(*heights, *gaps)" in str(welded.value), welded.value
+
+        # Shortened by the gaps it had not counted, the same run fits with the gap in
+        # it, and every band is the deck's own distance from the next.
+        room = [height - 2 * module.GUTTER / len(cards) for height in cards]
+        paid = module.stack(tight).spread(*room)
+        bands = [paid.take(height) for height in room]
+        assert [b.y0 - a.y1 for a, b in zip(bands, bands[1:])] == pytest.approx([module.GUTTER] * 2)
+        assert bands[-1].y1 == pytest.approx(tight.y1, abs=1e-9)
+
+        # A gap the region can more than pay for is still the share, so the run goes
+        # on ending on the bottom edge -- the floor is a floor and not a cap.
+        assert module.stack(region).spread(*cards).gutter > module.GUTTER
 
         # One band has no between, so it falls back to the answer that does apply.
         alone = module.stack(region).spread(1.4)

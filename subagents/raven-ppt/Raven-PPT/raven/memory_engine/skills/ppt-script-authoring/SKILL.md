@@ -547,6 +547,7 @@ without reading its reference gets the bare default.
 | --- | --- |
 | `page(kicker=True, footer=False)` | → `Frame(kicker, title, body, footer)`, four boxes inside the safe area; ask for the footer on a page that cites and the body gives up the strip for it |
 | `Frame(kicker, title, body, footer)` | the same four boxes as a value you can build. `page()` is the ordinary page and not the only one: a frame you make yourself is what a left rail, a full-bleed opener or a title over two thirds of the canvas is made of, and every helper that takes a frame takes yours without knowing the difference |
+| `frame.holding(*heights)` | the same frame with its body cut to the run these heights add up to, and the leftover split as air above and below that run instead of a band of white along the page's foot. The bands and the gaps between them, in the order they occur; a list works too. For the path where the page measures its bands and takes them off a cursor -- **not** for a run something else already spreads into the whole body (`card_group(..., down=True)`), whose cards would then touch. Only the body moves, so it can be asked before or after `heading`, and a run with no slack comes back unchanged |
 | `Box.corners(x0, y0, x1, y1)` | a box from its **two corners** |
 | `Box.at(x, y, w=, h=)` | a box from a corner and a **size**; the size is keyword-only. It reads back under the same four names (`box.x`, `box.y`, `box.w`, `box.h`) as well as `box.x0..y1` |
 | `box.rows(n, gutter=GUTTER, weights=None)`, `box.columns(...)` | n boxes filling this one |
@@ -559,10 +560,11 @@ without reading its reference gets the bare default.
 | `write(slide, box, text, *, size=BODY_PT, colour="#000000", font=None, cjk_font=None, bold=False, align="left", anchor="top", spacing=1.15)` | `text` may be a list of paragraphs |
 | `points(slide, box, theme, items, *, size=BODY_PT, numbered=False, mark="•", colour=None, font=None, cjk_font=None, mark_colour=None, spacing=1.25)` | §6.5 — it takes the theme, so the faces are optional here |
 | `card(slide, box, theme, *, icon=None, title="", body=(), tint="surface", size=BODY_PT, title_size=LEAD_PT, font=None, cjk_font=None)` | §7 |
+| `card_group(slide, box, theme, items, *, down=False, gutter=GUTTER)` | a row of cards across the region, or a column down it with `down=True`. Each item is a dict of `card`'s own arguments, so every field it carries reaches the card; a row is levelled with `card_size` and centred, a column keeps each card's own height and `spread`s the leftover. §7 |
 | `formula(slide, box, text, theme, *, size=BODY_PT, align="left", anchor="top", font=None, cjk_font=None)` | §9 |
 | `plane(slide, box, theme, tint="surface", radius=False)` | a painted region |
 | `rule(slide, box, theme, thickness=0.03, colour=None)` | a hairline **0.06in below** the box and **at most 1.05in long** — a short mark under a heading or beside a number, not a divider across a region. For a full-width line draw a thin `plane`, or take the box a chart hands back |
-| `table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=None, style="minimal", emphasize_rows=(), emphasize_columns=(), group_rows=None, indent_rows=(), total_rows=(), marks=None, header_size=None, align=None, rule_pt=None, grid_pt=None, row_height=None, header_height=None, padding=None, fill=True, column_rules=False, banding=False, fills=None)` | §6 |
+| `table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=None, style="minimal", emphasize_rows=(), emphasize_columns=(), group_rows=None, indent_rows=(), total_rows=(), marks=None, header_size=None, align=None, rule_pt=None, grid_pt=None, row_height=None, header_height=None, padding=None, fill=True, column_rules=True, banding=False, fills=None)` | §6 |
 | `mark(slide, box, theme, kind, value=None, *, colour=None)` | [deck/build/references/tables.md](deck/build/references/tables.md) |
 | `overlaps(boxes, tolerance=0.01)` | → the `(i, j)` pairs that overlap |
 
@@ -575,7 +577,9 @@ Every helper that *draws* hands back a `Drawn` — the five that compute instead
 back what they computed: `page()` a `Frame`, `stack()` a `Stack`, `overlaps()` a list
 of `(i, j)` pairs, a `Box` divider a `Box` or a list of them, and `mark()` a `Marks`,
 which is a list of the shapes it made carrying `.box` for the ink they actually cover
-— the one measurement that says whether a marked column is wide enough to read.
+— the one measurement that says whether a marked column is wide enough to read. A
+`card_group` reads the same way: the cards' own `Drawn`s in order, carrying `.box` for
+the run as a whole.
 
 For the drawing ones: `.shape` is the python-pptx object it made and `.box` is **what it
 actually covered**, not the box you passed in -- a rule sits below the box it underlines, a
@@ -599,12 +603,12 @@ round into an `if`:
 | `formula_type_size(text, width, *, size=BODY_PT, font=None)` | the size `formula` will really set it at; one that comes back at `BODY_FLOOR_PT` wants a wider column, not another build |
 | `the_largest_step_this_copy_takes(text, box, *, font=None, bold=False, spacing=1.15, wrap=False, largest=TITLE_PT)` | the biggest step of the ramp the copy still fits that box at — the only call that answers upwards. `wrap=False` keeps it on the lines you gave it; `wrap=True` is for copy meant to reflow. `largest` is the step to stop at and you name it: `TITLE_PT` for a label in a shape, `LEAD_PT` for a line that leads a band, `BODY_PT` for copy, `NUMBER_PT` when the copy is the figure. It is not inferred — a character count cannot tell a long word from a sentence |
 | `card_body_box(box, *, icon=None, title="", title_size=LEAD_PT)` | where a card's copy starts, once the icon and the title have taken their line |
-| `card_size(width, *, icon=None, title="", body=(), size=BODY_PT, title_size=LEAD_PT, font=None)` | how tall a card has to be for what goes in it — `max(card_size(w, **c).h for c in cards)` levels a row without padding it out to the page |
+| `card_size(width, *, icon=None, title="", body=(), size=BODY_PT, title_size=LEAD_PT, font=None)` | how tall a card has to be for what goes in it — `max(card_size(w, **c).h for c in cards)` levels a row without padding it out to the page, which is what `card_group` does for you; reach for this on its own for a group that is not a plain row or column |
 | `stack(box).room` | what is still unspoken for, as a box, **without taking it** — `fits(picture_size(fig, down.room), down.room)` is the whole question |
 | `stack(box).short_by(*heights)` | how many inches the whole plan runs over, or 0.0 — measure every band, ask this, **then** draw. `rest()` spends the region it answers with; `room` is the same box and does not |
 | `stack(box).slack(*heights)` | the same arithmetic the other way: how many inches the region has left once these bands are in it |
 | `stack(box).centre(*heights)` | half that leftover above the run, half below, and hands the cursor back to chain. For a single run that sits against something beside it |
-| `stack(box).spread(*heights)` | the leftover becomes the gaps *between* the bands, so the run ends on the region's bottom edge. **A lane of cards, and two columns that have to come out level.** No slack leaves the cursor as it was, so it needs no guard around it — and no `skip` after it, which overruns by exactly what was skipped |
+| `stack(box).spread(*heights)` | the leftover becomes the gaps *between* the bands, so the run ends on the region's bottom edge. **A lane of cards, and two columns that have to come out level.** Never less than `GUTTER` between them, so a run with no leftover overruns instead of welding — count the n-1 gaps into `short_by` and shorten the bands. No `skip` after it, which overruns by exactly what was skipped |
 
 **A short label in a big box: ask, do not name a step.** Every call above except the last
 measures downwards. What that leaves out is the label its box is far too big for: naming
@@ -879,12 +883,25 @@ tall = max(card_size(lanes[0].w, icon=i, title=h, body=b, font=FACE).h for i, h,
 cell = stack(lanes[0]).take(tall)
 if not all(fits(b, card_body_box(cell, icon=i, title=h)) for i, h, b in said):
     tall = max(card_size(lanes[0].w, icon=i, title=h, body=b).h for i, h, b in said)
-ground = stack(frame.body).take(tall + 2 * PAD)
+frame = frame.holding(tall + 2 * PAD)     # the band is measured, so the body is cut to it
+ground = frame.body
 plane(slide, ground, T, tint="surface")
 for box, (icon, head, body) in zip(ground.inset(PAD).columns(3), said):
     card(slide, box, T, tint="background", icon=icon, title=head, body=body,
          font=FACE, cjk_font=HAN)
 ```
+
+**The body is the room a page may use, not the run it uses.** `page()` hands back all of
+it, this page uses one measured band, and everything left over stays at the foot unless
+the page says so: `frame.holding(tall + 2 * PAD)` cuts the body to the run and splits the
+leftover as air above and below it. Ask it once the bands are measured and before a cursor
+runs down them -- the kicker, the title and the footer do not move, so it reads the same
+before or after `heading`, and a body the run already fills comes back unchanged. Pass the
+bands and the gaps between them in the order they occur, and pass the taller run where two
+lanes differ. **Not** for a run something else already spreads into the whole body:
+`card_group(..., down=True)` given the body puts the leftover between its own cards, and a
+body cut to the sum of their heights first leaves them touching. More on where the page's
+slack goes below.
 
 **`heading()` is one ready-made top edge** — a quiet ground behind the title row with the
 kicker and the title set on it, stopping short of the body, and `bleed=False` to keep that
@@ -933,13 +950,34 @@ has. A coordinate you were *given* is different and you should paste it: `house_
 (`card_size`, `text_size`, `picture_size`, `table_size`); the room the page has left over
 goes *between* components, never inside one. A cursor runs from the top of its region, so
 left alone it does the opposite -- every unused inch piles up underneath and the page has
-a band of white along its bottom edge. Two calls spend it, both before the first `take`:
+a band of white along its bottom edge. Three calls spend it, all of them before the first
+`take`:
 
 - `stack(box).spread(*heights)` -- the leftover becomes the gaps, and the run ends on the
   region's own bottom edge. A lane of cards, a table over a chart, and **two columns given
-  the same region, which is what makes them end level.**
+  the same region, which is what makes them end level.** The gap it leaves is never under
+  `GUTTER`: components any closer read as one unfinished shape, so bands with no leftover to
+  share have to be shortened by the gaps between them rather than run flush against each
+  other. `card_group(..., down=True)` is this call with the cards' heights measured for you.
 - `stack(box).centre(*heights)` -- half above and half below, for a run that nearly fills
   its region and sits against something taller beside it.
+- `page().holding(*heights)` -- the page's own leftover, taken out of the body before a
+  cursor runs down it at all: the body is cut to the run these heights add up to, and what
+  is left becomes air above and below that run instead of a band along the foot. Not half
+  and half -- the white over the body is the `GUTTER` under the heading and the white under
+  it is the `MARGIN`, so an even split still leaves 0.44in more at the foot; the two are
+  measured from the heading's edge and to the page's and come out reading equal. **This is
+  the call when the page's bands were measured and taken off a cursor** -- a table over a
+  card row, a figure over its conclusion -- because that is where the leftover has nowhere
+  else to go: spread into the one gap between two groups instead, a whole page's slack is
+  reported as a blank field in the middle rather than one at the foot. It moves the region
+  and not a cursor, so `columns`, `split_left` and a stack down each lane all come out of
+  the same corrected band and two lanes still end level; where the lanes differ, pass the
+  taller run. **Not** for a run something else already spreads into the whole body:
+  `card_group(..., down=True)` given the body spends the leftover between its own cards, and
+  a body cut to the sum of their heights first leaves them touching. A body the run already
+  fills comes back unchanged, and so does one the run overruns -- growing it would put type
+  through the safe margin, and an overrun is `take`'s to refuse with both numbers.
 
 Measured on one delivered deck: eleven of the eighteen pages an independent reader could
 read ended their content between 60% and 70% down, and four more were two columns that
@@ -1025,8 +1063,8 @@ card(slide, box, T, icon="target", title="语义查询是必要的",
 add_icon(slide, "clock", Inches(0.7), Inches(2.1), Inches(0.42), ACCENT)
 ```
 
-**`card(icon=)` takes one, and so does a block drawn without a card.** Not every block
-needs one. Pick the icon for what the block argues, not for a noun in its title. An icon
+**`card(icon=)` takes one, `card_group` carries it into a whole row or column of them, and
+so does a block drawn without a card.** Not every block needs one. Pick the icon for what the block argues, not for a noun in its title. An icon
 takes the card's first line whether or not a title shares it, so what room the copy has
 left is `card_body_box`'s answer (§6.5).
 
@@ -1320,10 +1358,13 @@ leave a finding you have looked at and disagree with alone. Judge it once: the s
 warning on the next build is the same warning, and rebuilding a deck nothing refuses to
 chase it changes nothing.
 
-**Somebody else looks, and you do not have to ask: `ppt_review`.** The first build that
-delivers a deck with nothing refusing it runs this by itself, and the list comes back in
-that same reply under `first_reading`, with the pages it found the most on rendered beside
-their entries. Call it yourself for a second reading once you have answered the first, or
+**Somebody else looks, and you do not have to ask: `ppt_review`.** A build with nothing
+refusing it runs this by itself once five of its pages have not been read -- a draft
+counts, so the first reading arrives while the deck is still being written -- and the list
+comes back in that same reply under `first_reading`, with the pages it found the most on
+rendered beside their entries. It reads the pages nobody has read yet, and a page you
+rewrite after it was read is read again, so the build that delivers the deck reads
+whatever is outstanding. Call it yourself for a second reading once you have answered the first, or
 `ppt_review(pages=[7, 8])` to read back the pages you have just changed. It renders every
 page and reads each one on an empty context -- one page, its planned claim, and the
 requirements -- and hands back a problem list: where a region carries nothing, where copy crowds a rim, what does not line up,

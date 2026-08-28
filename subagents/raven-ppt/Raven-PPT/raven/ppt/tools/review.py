@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
 from raven.ppt.backends.script import deck_path
 from raven.ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
+from raven.ppt.services import regress
 from raven.ppt.stages.build import BATCH_VIEWS
 from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_ints
@@ -214,17 +216,12 @@ class PptReviewTool(Tool):
             payload["could_not_be_read"] = unread
         if len(renders) > len(shown):
             payload["pages_not_reviewed"] = sorted(set(renders) - set(shown))
-        # What the record is for: the automatic reading runs while a page of the deck
-        # has not been read, so the pages it covered have to be in it. A deck longer
-        # than MAX_PAGES is read across builds rather than truncated silently, and a
-        # round that read nothing leaves no record at all -- writing one would mark the
-        # deck read and the hook would never fire again.
-        # The union with what earlier rounds covered, not this round's own list. A
-        # 40-page deck reads 1-30, then puts 31-40 first and fills the rest of the cap
-        # with pages it has already read -- so a record holding only the second round
-        # is {31-40, 1-20}, the third round goes back for 21-30, and the deck is never
-        # covered. Reported on the merge request.
-        payload["pages_read"] = sorted(set(read) | _already_read(deck))
+        # What the record is for: the automatic reading runs while a page-version of the
+        # deck has not been read, so the pages it covered have to be in it. A deck
+        # longer than MAX_PAGES is read across builds rather than truncated silently,
+        # and a round that read nothing leaves no record at all -- writing one would
+        # mark the deck read and the hook would never fire again.
+        payload["pages_read"] = _marked(deck, read)
         if read:
             _record(deck, payload)
 
@@ -292,17 +289,94 @@ class PptReviewTool(Tool):
         )
 
 
-def _already_read(deck: Project) -> set[int]:
-    """The pages a previous reading covered, out of the record it left.
+def _marked(deck: Project, read: Iterable[int]) -> dict[str, str | None]:
+    """The record's `pages_read` after this round: each page, at the version it was read.
 
-    Empty when there is no record, when it cannot be read, or when it predates the
-    field -- all three mean "read it again", which is the safe way to be wrong.
+    The union with what earlier rounds covered, not this round's own list. A 40-page
+    deck reads 1-30, then puts 31-40 first and fills the rest of the cap with pages it
+    has already read -- so a record holding only the second round is {31-40, 1-20}, the
+    third round goes back for 21-30, and the deck is never covered.
+
+    The version is the build record's own fingerprint of the code that drew the page,
+    so nothing here decides for a second time what "the same page" means. Empty for a
+    page this round read while the build had no fingerprint for it.
+
+    A mark this round did not touch is written back as it was read, `None` included, so
+    the old list field's pages stay the old field's pages. Collapsing them to `""` on
+    the way out re-labelled every untouched legacy page as a reading taken at an unknown
+    version: after a round that covered page 1 of an old `[1, 2, 3]`, pages 2 and 3 had
+    known fingerprints and an empty mark, so the next build launched the reader on two
+    pages nobody had changed.
+    """
+    now = regress.code_by_page(deck)
+    marks = {**_marks(deck), **{page: now.get(page, "") for page in read}}
+    return {str(page): marks[page] for page in sorted(marks)}
+
+
+def _marks(deck: Project) -> dict[int, str | None]:
+    """Page -> the version of it a previous reading covered, out of the record it left.
+
+    The one reader of the record's shape, and the shape is what separates two marks a
+    single empty string used to carry. A record written before it kept versions is a
+    plain list of page numbers, whose pages come back `None`: the old field made no
+    claim about any version. A mapping's `""` is a different statement -- a reading was
+    taken while the build had no fingerprint for that page -- and `_already_read` has
+    to answer them differently, so they cannot share a value.
+
+    Empty when there is no record or it cannot be read -- both mean "read it again",
+    which is the safe way to be wrong.
     """
     try:
         said = json.loads((deck.review_dir / RECORD_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
-    return {int(number) for number in said.get("pages_read", ()) if str(number).lstrip("-").isdigit()}
+        return {}
+    read = said.get("pages_read") if isinstance(said, dict) else None
+    if isinstance(read, dict):
+        return {int(page): (None if code is None else str(code)) for page, code in read.items() if _numbered(page)}
+    if isinstance(read, list):
+        return {int(page): None for page in read if _numbered(page)}
+    return {}
+
+
+def _numbered(page: Any) -> bool:
+    return str(page).lstrip("-").isdigit()
+
+
+def _already_read(deck: Project) -> set[int]:
+    """The pages whose current version a previous reading covered.
+
+    Per page-version rather than per page number, and that is what lets a reading be
+    taken before the deck is finished: a page redrawn after it was read is unread
+    again, so an early reading cannot leave the rewritten version of a page shipping
+    with nobody having looked at it.
+
+    Three marks, three answers, because a mark can say three different things.
+
+    `None` is the old list field, which made no claim about versions; its pages count
+    as read or a resumed job pays to read a deck that has already been read.
+
+    `""` is a reading taken while the build had no fingerprint for the page -- a draft
+    is exempt from `page_mapping`, so an early reading can cover a page whose version
+    nobody knows yet. It counts as read only while that is still true. Once the mapping
+    is fixed and a real, possibly rewritten, fingerprint appears, the page is unread:
+    treating the empty mark as current there let the delivered build skip the reading it
+    promised, for exactly the draft-to-finished transition an early reading introduces.
+
+    A version that is known and unchanged counts as read, and so does one whose current
+    version has become unknown -- nothing there says the page changed, and re-reading a
+    whole deck on that silence costs a reading per build and finds nothing new.
+    """
+    now = regress.code_by_page(deck)
+    covered = set()
+    for page, code in _marks(deck).items():
+        if code is None:
+            covered.add(page)
+        elif not code:
+            if not now.get(page):
+                covered.add(page)
+        elif now.get(page, code) == code:
+            covered.add(page)
+    return covered
 
 
 def _record(deck: Project, payload: dict[str, Any]) -> None:

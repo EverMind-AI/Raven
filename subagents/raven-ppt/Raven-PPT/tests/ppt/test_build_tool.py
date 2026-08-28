@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from raven.agent.tools.base import ToolResult
-from raven.agent.tools.base import ToolResult
+from raven.ppt.backends.script import script_path
 from raven.ppt.contracts import (
     BuildOutcome,
     DeckBrief,
@@ -39,6 +39,7 @@ from raven.ppt.contracts import (
 from raven.ppt.profiles import registry
 from raven.ppt.stages.build import BATCH_VIEWS, _showing
 from raven.ppt.tools.build import PptBuildTool
+from raven.ppt.tools.review import RECORD_FILE, _already_read, _marked
 
 
 class FakeViews:
@@ -95,12 +96,15 @@ class FakeStage:
         return replace(self.result, data={**self.result.data, "showing": showing})
 
 
-def _ok(project: Project, findings=(), pages: int = 2, **data) -> StageResult:
+def _ok(project: Project, findings=(), pages: int = 2, sources=None, **data) -> StageResult:
     deck = project.build_dir / "deck.pptx"
     deck.parent.mkdir(parents=True, exist_ok=True)
     deck.write_bytes(b"PK")
     outcome = BuildOutcome(
-        ok=True, pptx_path=deck, pages=pages, sources=(PageSource(page=1, first_line=0, last_line=5),)
+        ok=True,
+        pptx_path=deck,
+        pages=pages,
+        sources=sources if sources is not None else (PageSource(page=1, first_line=0, last_line=5),),
     )
     blocking = [f for f in findings if f.severity is Severity.BLOCKING]
     return StageResult(
@@ -582,9 +586,12 @@ class _Reader:
 
     name = "ppt_review"
 
-    def __init__(self, reply=None, record: Path | None = None, covers=(1, 2)) -> None:
+    def __init__(self, reply=None, deck: Project | None = None, covers=None) -> None:
         self.calls: list[str] = []
-        self.record = record
+        self.asked: list[list[int] | None] = []
+        self.deck = deck
+        # None means "whatever it was asked for", which is what the real tool covers.
+        # A fixed set stands in for the cap: one call reads MAX_PAGES of a longer deck.
         self.covers = covers
         self._reply = reply if reply is not None else (
             '{"ok": true, "project": "ws", "pages_reviewed": 3, "pages_with_something_to_fix": 1,'
@@ -592,31 +599,42 @@ class _Reader:
             ' "what": "empty", "fix": "say more"}]}, "next_step": "take them one page at a time"}'
         )
 
-    async def execute(self, project: str, **_kwargs):
+    async def execute(self, project: str, pages=None, **_kwargs):
         self.calls.append(project)
-        if self.record is not None:
-            self.record.parent.mkdir(parents=True, exist_ok=True)
-            # `pages_read` and not an empty object: the hook runs while a page of the
-            # deck is uncovered, so a record that names no page is a deck still unread.
-            # The union, as the tool itself writes it: a fake that replaced the
-            # record would hide exactly the defect this file now pins.
-            prior = []
-            if self.record.is_file():
-                try:
-                    prior = json.loads(self.record.read_text()).get("pages_read", [])
-                except ValueError:
-                    prior = []
-            self.record.write_text(
-                json.dumps({"pages_read": sorted(set(prior) | set(self.covers))}), encoding="utf-8"
-            )
+        self.asked.append(list(pages) if pages is not None else None)
+        if self.deck is not None:
+            record = self.deck.review_dir / RECORD_FILE
+            record.parent.mkdir(parents=True, exist_ok=True)
+            # `pages_read` and not an empty object: the hook runs while a page-version of
+            # the deck is uncovered, so the pages this round covered have to be in it.
+            # Written through the tool's own `_marked` -- the union, at the version each
+            # page is at -- because a fake that wrote a record of its own would hide
+            # exactly the defects this file pins.
+            covered = list(pages or ()) if self.covers is None else list(self.covers)
+            record.write_text(json.dumps({"pages_read": _marked(self.deck, covered)}), encoding="utf-8")
         return ToolResult(model_text=self._reply, blocks=[{"type": "text", "text": "Page 2, and what"}])
 
 
-async def test_the_first_finished_deck_is_read_without_being_asked(project: Project) -> None:
+def _versioned(project: Project, pages: int, *, rewritten: int | None = None) -> tuple[PageSource, ...]:
+    """A build program of one line per page, so a page's fingerprint is its own line.
+
+    That is what makes a rewrite expressible here: `rewritten=4` leaves every other
+    page's code byte-identical, which is the case the per-page-version record exists
+    for.
+    """
+    lines = [f"page({number})\n" for number in range(1, pages + 1)]
+    if rewritten is not None:
+        lines[rewritten - 1] = f"page({rewritten}, again)\n"
+    path = script_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(lines), encoding="utf-8")
+    return tuple(PageSource(page=number, first_line=number - 1, last_line=number) for number in range(1, pages + 1))
+
+
+async def test_a_delivered_deck_is_read_without_being_asked(project: Project) -> None:
     """Asking the author to call it left it to the author. One run made twenty builds
     and reached `ppt_review` at iteration 61 on its own; a run that never leaves draft
-    never meets the sentence naming it at all. The first delivered build is the moment
-    the reading is worth having, so this is where it happens.
+    never meets the sentence naming it at all.
     """
     reader = _Reader()
     tool = _tool(project, _ok(project))
@@ -626,22 +644,60 @@ async def test_the_first_finished_deck_is_read_without_being_asked(project: Proj
     said = reply if isinstance(reply, str) else reply.model_text
 
     assert reader.calls == [project.slug]
+    assert reader.asked == [[1, 2]], "the pages nobody has read, which here is the deck"
     assert "first_reading" in said
     assert "underfilled_page" in said
     assert "take them one page at a time" in said
 
 
-async def test_a_draft_is_not_read_and_neither_is_a_deck_that_was_refused(project: Project) -> None:
-    """A draft is a part-written deck and a refused build is not a deck: a reading of
-    either is a list about pages that are about to change, paid for per page."""
+async def test_a_draft_is_read_once_five_of_its_pages_are_unread(project: Project) -> None:
+    """The draft veto is what put the reading at the finish line.
+
+    A measured 18-page run spent its first eleven builds in draft, so a reading held
+    back for the delivered build read all 18 pages at once, reported 45 problems, and
+    was answered by one edit and a publish 38 seconds later -- there is no acting on 45
+    findings when acting means redoing every page. Five unread pages is where the same
+    findings still change the pages that come after them.
+    """
+    quiet = _Reader()
+    early = _tool(project, _ok(project, pages=4))
+    early.review = quiet
+
+    await early.execute(project=project.slug, draft=True)
+    assert quiet.calls == [], "four unread pages does not fire it"
+
     reader = _Reader()
-    tool = _tool(project, _ok(project))
+    tool = _tool(project, _ok(project, pages=5))
+    tool.review = reader
+
+    reply = await tool.execute(project=project.slug, draft=True)
+    said = reply if isinstance(reply, str) else reply.model_text
+
+    assert reader.calls == [project.slug], "and the fifth does, on a draft"
+    assert reader.asked == [[1, 2, 3, 4, 5]]
+    assert "first_reading" in said
+
+
+async def test_nothing_is_read_while_something_refuses_the_build(project: Project) -> None:
+    """A page failing a gate is about to change, and a refused build is not a deck.
+
+    The refusal by kind rather than by severity is the case worth driving: it leaves
+    the stage's own result `ok`, so only the tool's blocking set stands between the
+    reading and a page that is on its way to being rewritten anyway.
+    """
+    reader = _Reader()
+    gated = _ok(
+        project,
+        findings=(Finding(kind="house_style", severity=Severity.WARNING, message="not the template's", page=1),),
+        pages=6,
+    )
+    tool = _tool(project, gated)
     tool.review = reader
 
     await tool.execute(project=project.slug, draft=True)
-    assert reader.calls == [], "a draft is not the finished deck"
+    assert reader.calls == [], "a page a gate refuses is about to change"
 
-    refused = replace(_ok(project), ok=False, note="the built deck is empty")
+    refused = replace(_ok(project, pages=6), ok=False, note="the built deck is empty")
     refused = replace(refused, data={k: v for k, v in refused.data.items() if k != "pptx_path"})
     undelivered = _tool(project, refused)
     undelivered.review = reader
@@ -649,12 +705,56 @@ async def test_a_draft_is_not_read_and_neither_is_a_deck_that_was_refused(projec
     assert reader.calls == [], "nothing was published, so there is nothing to read"
 
 
+async def test_a_page_rewritten_after_its_reading_is_read_again(project: Project) -> None:
+    """The load-bearing half of reading a deck early: the mark is per page-version.
+
+    Marked per page number, an early reading of a page the author later rewrites would
+    ship the rewritten version with nobody having looked at it -- which is worse than
+    the finish-line reading it replaces. The version is the build record's fingerprint
+    of the code that drew the page, so the pages left alone stay read.
+    """
+    reader = _Reader(deck=project)
+    tool = _tool(project, _ok(project, pages=6, sources=_versioned(project, 6)))
+    tool.review = reader
+
+    await tool.execute(project=project.slug, draft=True)
+    assert reader.asked == [[1, 2, 3, 4, 5, 6]], "the whole deck was unread"
+
+    await tool.execute(project=project.slug, draft=True)
+    assert reader.calls == [project.slug], "nothing was rewritten, so there is nothing to read again"
+
+    _versioned(project, 6, rewritten=4)
+    await tool.execute(project=project.slug)
+
+    assert reader.asked[-1] == [4], "the page whose code changed, and only that page"
+
+
+async def test_a_delivered_build_leaves_no_page_version_unread(project: Project) -> None:
+    """The invariant the early reading is not allowed to cost.
+
+    A delivered build reads whatever is outstanding rather than waiting for five of
+    them, so the deck that ships has had every one of its page-versions read by
+    somebody who did not write it.
+    """
+    reader = _Reader(deck=project)
+    drafting = _tool(project, _ok(project, pages=5, sources=_versioned(project, 5)))
+    drafting.review = reader
+
+    await drafting.execute(project=project.slug, draft=True)
+    assert reader.asked == [[1, 2, 3, 4, 5]]
+
+    whole = _tool(project, _ok(project, pages=8, sources=_versioned(project, 8)))
+    whole.review = reader
+    await whole.execute(project=project.slug)
+
+    assert reader.asked[-1] == [6, 7, 8], "three unread pages is under five, and a delivered build reads them"
+    assert set(range(1, 9)) - _already_read(project) == set(), "so nothing ships unread"
+
+
 async def test_the_deck_is_read_once_and_not_on_every_build(project: Project) -> None:
     """Every build after the first would pay for a whole deck of model calls to say
     what the author has already been told. The record on disk is what remembers."""
-    from raven.ppt.tools.review import RECORD_FILE
-
-    reader = _Reader(record=project.review_dir / RECORD_FILE)
+    reader = _Reader(deck=project)
     tool = _tool(project, _ok(project))
     tool.review = reader
 
@@ -672,9 +772,7 @@ async def test_a_deck_longer_than_one_reading_is_read_across_builds(project: Pro
     after 30 and pages 31-40 never got the reading the tool description promises.
     Coverage is the test now, so the next delivered build reads the remainder.
     """
-    from raven.ppt.tools.review import RECORD_FILE
-
-    reader = _Reader(record=project.review_dir / RECORD_FILE, covers=range(1, 31))
+    reader = _Reader(deck=project, covers=range(1, 31))
     tool = _tool(project, _ok(project, pages=40))
     tool.review = reader
 
@@ -690,7 +788,7 @@ async def test_a_deck_longer_than_one_reading_is_read_across_builds(project: Pro
 
     assert reader.calls == [project.slug] * 2, "the deck was covered and read a third time"
     read = json.loads((project.review_dir / RECORD_FILE).read_text())["pages_read"]
-    assert read == list(range(1, 41)), read
+    assert sorted(int(page) for page in read) == list(range(1, 41)), read
 
 
 async def test_a_reading_that_read_nothing_leaves_no_record(project: Project) -> None:
@@ -700,10 +798,7 @@ async def test_a_reading_that_read_nothing_leaves_no_record(project: Project) ->
     `review.json`, and every later build skipped the hook because that file was there.
     Reported on the merge request and reproduced with `_asks({}, [], [1, 2])`.
     """
-    from raven.ppt.tools.review import RECORD_FILE
-
-    record = project.review_dir / RECORD_FILE
-    reader = _Reader(record=record, covers=())
+    reader = _Reader(deck=project, covers=())
     tool = _tool(project, _ok(project))
     tool.review = reader
 

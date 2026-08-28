@@ -13,6 +13,7 @@ import asyncio
 import json
 import pathlib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -130,13 +131,159 @@ async def test_a_deck_longer_than_the_cap_is_covered_by_its_second_round(tmp_pat
 
     await tool.execute(project="ws")
     first = _json.loads((deck.review_dir / RECORD_FILE).read_text())["pages_read"]
-    assert first == list(range(1, MAX_PAGES + 1)), first
+    assert sorted(int(page) for page in first) == list(range(1, MAX_PAGES + 1)), first
 
     await tool.execute(project="ws")
     second = _json.loads((deck.review_dir / RECORD_FILE).read_text())["pages_read"]
 
     # Every page, once: the union of the two rounds and not the second one alone.
-    assert second == list(range(1, pages + 1)), second
+    assert sorted(int(page) for page in second) == list(range(1, pages + 1)), second
+
+
+@pytest.mark.asyncio
+async def test_a_record_written_before_it_kept_versions_still_reads(tmp_path) -> None:
+    """A resumed job's `review.json` can be a plain list of page numbers.
+
+    Those pages count as read at a version nobody wrote down, which is the whole of
+    what the old field said about them: a resumed job neither fails on the record nor
+    pays to read a deck that has already been read.
+    """
+    from raven.ppt.tools.review import RECORD_FILE, _already_read
+
+    deck = _deck(tmp_path, pages=3)
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    (deck.review_dir / RECORD_FILE).write_text(
+        json.dumps({"schema": "raven.ppt.review.v1", "pages_read": [1, 3]}), encoding="utf-8"
+    )
+
+    assert _already_read(deck) == {1, 3}
+
+    tool = PptReviewTool(tmp_path, Views(3), composer=Composer(_ONE))
+    await tool.execute(project="ws")
+    written = json.loads((deck.review_dir / RECORD_FILE).read_text(encoding="utf-8"))["pages_read"]
+
+    assert written == {"1": "", "2": "", "3": ""}, "kept, and marked at a version nobody wrote down"
+
+
+@pytest.mark.asyncio
+async def test_a_page_read_before_it_had_a_version_is_unread_once_it_has_one(tmp_path) -> None:
+    """An early reading of an unmapped draft page does not cover the mapped page.
+
+    A draft is exempt from `page_mapping`, so a reading can be taken while the build
+    has no fingerprint for a page; the record marks it "". The mark held while that was
+    still true, but it also held once the mapping was fixed and a real -- possibly
+    rewritten -- fingerprint appeared, so the delivered build skipped the reading it had
+    promised for the version that was going to ship.
+    """
+    from raven.ppt.tools.review import RECORD_FILE, _already_read, regress
+
+    deck = _deck(tmp_path, pages=2)
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    (deck.review_dir / RECORD_FILE).write_text(
+        json.dumps({"schema": "raven.ppt.review.v1", "pages_read": {"1": "", "2": "drawn-by"}}),
+        encoding="utf-8",
+    )
+
+    with mock.patch.object(regress, "code_by_page", return_value={}):
+        assert _already_read(deck) == {1, 2}, "no version to disagree with, so nothing says either changed"
+
+    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "drawn-by"}):
+        # Page 2 was read at the version it still carries; page 1 was read at no version
+        # and now has one, which is the transition that used to ship unread.
+        assert _already_read(deck) == {2}
+
+    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "rewritten"}):
+        assert _already_read(deck) == set()
+
+
+@pytest.mark.asyncio
+async def test_the_old_list_field_is_not_the_same_mark_as_a_version_nobody_wrote(tmp_path) -> None:
+    """A resumed job's plain list keeps counting as read once versions appear.
+
+    The two marks used to share the empty string, so separating them had to leave this
+    one alone: the old field made no claim about any version, and a fingerprint turning
+    up later is not news about a page it never described.
+    """
+    from raven.ppt.tools.review import RECORD_FILE, _already_read, regress
+
+    deck = _deck(tmp_path, pages=2)
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    (deck.review_dir / RECORD_FILE).write_text(
+        json.dumps({"schema": "raven.ppt.review.v1", "pages_read": [1, 2]}), encoding="utf-8"
+    )
+
+    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "also-known"}):
+        assert _already_read(deck) == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_a_partly_reviewed_legacy_record_keeps_the_pages_it_did_not_cover(tmp_path) -> None:
+    """A round that covers one page of an old list does not re-label the other two.
+
+    `_marks` reads the old field as `None`, but the record it writes back has to keep
+    that mark for pages the round never touched. Writing them as `""` says a reading was
+    taken at an unknown version, and those pages have known fingerprints -- so the next
+    build launched the reader on pages nobody had changed, which is the cost the
+    old-record compatibility exists to avoid.
+    """
+    from raven.ppt.tools.review import RECORD_FILE, _already_read, _marked, regress
+
+    deck = _deck(tmp_path, pages=3)
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    (deck.review_dir / RECORD_FILE).write_text(
+        json.dumps({"schema": "raven.ppt.review.v1", "pages_read": [1, 2, 3]}), encoding="utf-8"
+    )
+
+    with mock.patch.object(regress, "code_by_page", return_value={1: "one", 2: "two", 3: "three"}):
+        written = _marked(deck, [1])
+        assert written == {"1": "one", "2": None, "3": None}, "untouched legacy marks survive the write"
+
+        (deck.review_dir / RECORD_FILE).write_text(
+            json.dumps({"schema": "raven.ppt.review.v1", "pages_read": written}), encoding="utf-8"
+        )
+        assert _already_read(deck) == {1, 2, 3}
+
+
+@pytest.mark.asyncio
+async def test_writing_the_record_never_changes_a_page_the_round_did_not_read(tmp_path) -> None:
+    """The property both holes in this logic broke, over every record shape it accepts.
+
+    A round writes back marks for pages it never looked at, so serialization must carry
+    each of them unchanged. Twice it did not: one revision dropped unfingerprinted pages
+    and re-read whole decks on every build, the next collapsed the old list field's mark
+    into the new empty one and re-read pages nobody had touched. Both are the same
+    mistake -- a write that quietly restates a mark -- and a case list only catches the
+    instance somebody thought of.
+    """
+    from raven.ppt.tools.review import RECORD_FILE, _already_read, _marked, regress
+
+    records: list[object] = [
+        [1, 2, 3],
+        {"1": None, "2": None, "3": None},
+        {"1": "", "2": "", "3": ""},
+        {"1": "a", "2": "b", "3": "c"},
+        {"1": None, "2": "", "3": "c"},
+    ]
+    fingerprints = [{}, {1: "a", 2: "b", 3: "c"}, {1: "a", 3: "c"}]
+
+    deck = _deck(tmp_path, pages=3)
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    record = deck.review_dir / RECORD_FILE
+
+    for held in records:
+        for now in fingerprints:
+            for read in ([], [1], [2], [1, 2], [1, 2, 3]):
+                record.write_text(json.dumps({"pages_read": held}), encoding="utf-8")
+                with mock.patch.object(regress, "code_by_page", return_value=now):
+                    before = _already_read(deck)
+                    written = _marked(deck, read)
+                    record.write_text(json.dumps({"pages_read": written}), encoding="utf-8")
+                    after = _already_read(deck)
+
+                untouched = {1, 2, 3} - set(read)
+                assert {page for page in untouched if page in before} == {
+                    page for page in untouched if page in after
+                }, f"held={held} now={now} read={read} wrote={written}"
 
 
 @pytest.mark.asyncio

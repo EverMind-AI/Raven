@@ -44,6 +44,12 @@ from raven.ppt.tools._args import ArgumentError, as_ints
 from raven.ppt.tools.review import _already_read as _pages_read
 from raven.utils.helpers import image_block, text_block
 
+# How many unread pages fire the second reading on a draft. What it trades is findings
+# that can still be acted on against a draft build that sometimes costs minutes instead
+# of seconds: a reading of a finished deck arrives when acting on it means redoing every
+# page, and one taken five pages in changes the pattern the rest of the deck repeats.
+UNREAD_PAGES_BEFORE_READING = 5
+
 
 @dataclass(frozen=True)
 class Reading:
@@ -83,11 +89,11 @@ class PptBuildTool(Tool):
         self.stage = stage
         self.views = views
         self.profile = profile
-        # The second reading, run once by this tool rather than waited for. Asking the
+        # The second reading, run by this tool rather than waited for. Asking the
         # author to call it left it to the author: one run made twenty builds and
         # reached it at iteration 61 on its own, and a run that never leaves draft
-        # never meets the sentence that names it at all. The first finished deck is
-        # the moment it is worth having, and that moment is here.
+        # never meets the sentence that names it at all. When it is worth having is
+        # `_first_reading`.
         self.review = review
 
     @property
@@ -338,28 +344,40 @@ class PptBuildTool(Tool):
     async def _first_reading(
         self, deck: Project, project: str, draft: bool, blocking: Sequence[Finding], payload: dict[str, Any]
     ) -> Reading | None:
-        """The second reader, on the first deck that is finished enough to have one.
+        """The second reader, whenever enough of the deck is unread to be worth one.
 
-        Once, and only here: a delivered build with nothing refusing it. A draft is a
-        part-written deck and a refused one is not a deck, so a reading of either is a
-        list about pages that are about to change. After this the author calls
-        `ppt_review` itself, which is what the reply tells it to do.
+        Drafts included, and that is the change the measurement asked for. Held back
+        for the delivered build, the reading arrived at the finish line: one 18-page run
+        spent its first eleven builds in draft, so the reader first ran inside the build
+        that delivered, read all 18 pages, reported 45 problems on 18 of them -- and the
+        deck was published 38 seconds later after one edit, because answering 45
+        findings on a finished deck means redoing every page. The same findings five
+        pages in change the pattern the rest of the deck is about to repeat.
 
-        The record on disk is what says it has run, so a resumed job does not pay for
-        it twice.
+        What keeps that from shipping unread pages is that a page counts as read only
+        while the code that drew it is the code that was read, so a page rewritten after
+        its reading is read again -- and the delivered build reads whatever is left
+        rather than waiting for five of them.
+
+        A refused build is still not a deck: nothing was published, so there is nothing
+        to look at and nothing to accept.
+
+        The record on disk is what says which page-versions have been read, so a resumed
+        job does not pay for them twice.
         """
-        if self.review is None or draft or blocking or "pptx_path" not in payload:
+        if self.review is None or blocking or "not_delivered" in payload:
             return None
-        # Not "a record exists" but "every page is in it". `ppt_outline` takes up to 40
-        # pages and one reading covers 30, so the existence test marked a 40-page deck
-        # read after 30 and pages 31-40 never got the reading the tool description
-        # promises. The reader puts the uncovered pages first, so the remainder is read
-        # on the next delivered build.
+        # `ppt_outline` takes up to 40 pages and one reading covers 30, so a deck longer
+        # than the cap is read across builds: only the unread pages are asked for, and
+        # the reader caps its own call, so the remainder comes back on the next build.
         built_pages = payload.get("slides")
-        if isinstance(built_pages, int) and built_pages > 0 and len(_pages_read(deck)) >= built_pages:
+        if not isinstance(built_pages, int) or built_pages <= 0:
+            return None
+        unread = sorted(set(range(1, built_pages + 1)) - _pages_read(deck))
+        if len(unread) < (UNREAD_PAGES_BEFORE_READING if draft else 1):
             return None
         try:
-            reply = await self.review.execute(project=project)
+            reply = await self.review.execute(project=project, pages=unread)
         except Exception:  # noqa: BLE001 -- a reading that failed must not cost the delivery
             return None
         said = reply if isinstance(reply, str) else reply.model_text
