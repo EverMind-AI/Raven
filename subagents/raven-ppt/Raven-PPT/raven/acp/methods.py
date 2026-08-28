@@ -44,8 +44,6 @@ from raven.spine import ChatType, Origin, Source, TurnRequest
 # that reads the handshake never sends these at all.
 UNIMPLEMENTED_METHODS = frozenset(
     {
-        "session/load",
-        "session/resume",
         "session/list",
         "session/delete",
         "session/set_mode",
@@ -53,6 +51,12 @@ UNIMPLEMENTED_METHODS = frozenset(
         "logout",
     }
 )
+
+# Which stored roles a replay puts back on the wire, and as what. Only the two a
+# person reads: a tool call has update kinds of its own that carry ids this
+# connection never issued, and replaying one would name a call the client cannot
+# match to anything.
+_REPLAY_KINDS = {"user": "user_message_chunk", "assistant": "agent_message_chunk"}
 
 # Notifications that are safe to receive and correct to ignore. ``$/cancel_request``
 # is protocol-level and explicitly optional: the spec says a receiver MAY act on
@@ -193,6 +197,10 @@ class AcpMethods:
             )
         if method == "session/new":
             return await self._session_new(params)
+        if method == "session/load":
+            return await self._session_load(params)
+        if method == "session/resume":
+            return await self._session_resume(params)
         if method == "session/prompt":
             return await self._session_prompt(params)
         if method == "session/cancel":
@@ -219,16 +227,126 @@ class AcpMethods:
         return initialize_result(params)
 
     async def _session_new(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Mint a session, give it a job directory, and build its engine."""
+        """Mint a session, give it a job directory, and build its engine.
+
+        A ``sessionId`` the client hands back is honoured when its job directory
+        is still on disk. Minting unconditionally is what made every call to the
+        same instance a fresh conversation: the id is the raven session key, the
+        key is the transcript's filename, and a new key reads an empty history
+        beside the previous one rather than continuing it. A client that sends
+        nothing, or names a session this machine no longer holds, still gets a
+        new one -- resuming is an offer, not a precondition.
+
+        A returning id that is still *open* on this connection is answered with
+        that session, the way ``session/load`` answers one. Constructing a
+        replacement would overwrite the table entry, and the table is the only
+        handle on an engine.
+        """
         self._refuse_per_session_mcp(params)
         cwd = self._validated_cwd(params.get("cwd"))
-        chat_id = _new_chat_id()
-        session = AcpSession(
-            session_id=f"{self._channel}:{chat_id}",
-            cwd=cwd,
-            root=self._jobs_root / chat_id,
-        )
+        returning = params.get("sessionId")
+        if (open_now := self._reuse_open(returning, cwd)) is not None:
+            return {"sessionId": open_now.session_id}
+        session = await self._open_session(self._resumable_chat_id(returning) or _new_chat_id(), cwd)
+        logger.info("acp: session {} created; job {} delivering to {}", session.session_id, session.root, cwd)
+        # The ACP sessionId IS the raven session key: spine addresses a turn's
+        # events by conversation id and every session/update frame is addressed by
+        # sessionId, so a second id space would need a map that buys nothing.
+        return {"sessionId": session.session_id}
+
+    async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Reopen a session this machine still holds, and replay its transcript.
+
+        Two halves, and only the first one the model cares about: rebuilding the
+        session under its old id and root is what puts the history back in front
+        of the model, because the loop reads it from disk by that key. The replay
+        is for the person -- the spec has a loaded session emit its past turns as
+        ``session/update`` notifications, so a client that reopens a conversation
+        renders it instead of showing an empty pane above a live prompt.
+
+        A session already open on this connection is answered without rebuilding
+        it: a client that loads twice has one engine, not two on one job.
+        """
+        session = await self._reopen(params, "loaded")
+        self._replay(session)
+        return {}
+
+    async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Reopen a held session without replaying it.
+
+        The distinction is the spec's and it is the whole of the method:
+        ``session/load`` returns the transcript as ``session/update`` frames so a
+        client that lost its history can repaint it, while ``session/resume``
+        continues a session the client still has on screen -- so the transcript
+        stays where it is and the session becomes promptable again. The state
+        both establish is identical, which is why both go through ``_reopen``,
+        and both refuse an unknown id the same way: a client silently handed a
+        new id would prompt an empty conversation for one that had history.
+
+        Declared as a capability rather than served quietly: the consuming raven
+        reads ``sessionCapabilities.resume`` for statefulness and will not even
+        look up a stored id without it, so the key and this method are one change.
+        """
+        await self._reopen(params, "resumed")
+        return {}
+
+    async def _reopen(self, params: dict[str, Any], verb: str) -> AcpSession:
+        """The state a reopened session needs, for whichever method asked.
+
+        Returns the session rather than a result, because what differs between
+        ``load`` and ``resume`` is only what is sent afterwards.
+        """
+        self._refuse_per_session_mcp(params)
+        cwd = self._validated_cwd(params.get("cwd"))
+        session_id = params.get("sessionId")
+        if (open_now := self._reuse_open(session_id, cwd)) is not None:
+            return open_now
+
+        chat_id = self._resumable_chat_id(session_id)
+        if chat_id is None:
+            # Named rather than silently minted: a client asked for a specific
+            # conversation, and handing it a different empty one under the same
+            # promise is the failure the spec's own error table exists for.
+            raise AcpMethodError(
+                protocol.RESOURCE_NOT_FOUND,
+                "no session by that id is held on this machine",
+                {"sessionId": session_id},
+            )
+
+        session = await self._open_session(chat_id, cwd)
+        logger.info("acp: session {} {}; job {} delivering to {}", session.session_id, verb, session.root, cwd)
+        return session
+
+    def _reuse_open(self, session_id: Any, cwd: str) -> AcpSession | None:
+        """The session this connection already holds under ``session_id``, if any.
+
+        Every entry point that accepts a returning id answers through here, and
+        for one reason rather than two: ``SessionTable.add`` overwrites, and the
+        table is the only handle on an engine. A replacement entry would leave the
+        former engine running on the same job directory with no route to a
+        teardown -- not ``session/close``, which looks the id up, and not the
+        connection teardown, which walks the table.
+
+        The working directory is still taken, because it is the client's and this
+        call is where it says so.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        session.cwd = cwd
+        return session
+
+    async def _open_session(self, chat_id: str, cwd: str) -> AcpSession:
+        """A session on ``chat_id``'s job directory, engine built and registered.
+
+        One path for every method that opens a session, so a reopened session
+        cannot reach a different state than a new one on the same job would: the
+        job root outlives the process that staged into it, and a follow-up prompt
+        reads the staging bookkeeping that ``materials.rehydrate`` recovers here.
+        """
+        session = AcpSession(session_id=f"{self._channel}:{chat_id}", cwd=cwd, root=self._jobs_root / chat_id)
         session.ensure_dirs()
+        session.staged, session.taken = materials.rehydrate(session.materials)
         # Registered before the engine is built, because the engine's outlet
         # resolves every frame through this table: an event emitted during the
         # build -- an MCP status line, a plugin notice -- would otherwise be
@@ -247,11 +365,55 @@ class AcpMethods:
                 "the agent could not be started for this session",
                 {"reason": str(exc)[:400]},
             ) from exc
-        logger.info("acp: session {} created; job {} delivering to {}", session.session_id, session.root, cwd)
-        # The ACP sessionId IS the raven session key: spine addresses a turn's
-        # events by conversation id and every session/update frame is addressed by
-        # sessionId, so a second id space would need a map that buys nothing.
-        return {"sessionId": session.session_id}
+        return session
+
+    def _replay(self, session: AcpSession) -> None:
+        """Put the stored turns of ``session`` on the wire, oldest first.
+
+        Read through ``SessionManager`` rather than off the file, so the one
+        reader that knows the on-disk shape stays the only one. Best-effort by
+        construction: a transcript that cannot be read costs the person their
+        scrollback, and failing the load over it would cost them the session.
+        """
+        try:
+            from raven.session.manager import SessionManager
+
+            stored = SessionManager(session.root).get_or_create(session.session_id)
+            messages = list(stored.messages)
+        except Exception:
+            logger.exception("acp: replaying {} failed", session.session_id)
+            return
+        for message in messages:
+            kind = _REPLAY_KINDS.get(message.get("role"))
+            text = message.get("content")
+            # Only the two roles a person reads. A tool call replayed as prose
+            # would put a wall of JSON in the pane, and its own update kinds carry
+            # ids this connection never issued.
+            if kind is None or not isinstance(text, str) or not text.strip():
+                continue
+            self._emit(
+                protocol.session_update(
+                    session.session_id, {"sessionUpdate": kind, "content": {"type": "text", "text": text}}
+                )
+            )
+
+    def _resumable_chat_id(self, session_id: Any) -> str | None:
+        """The chat id inside ``session_id`` when this machine holds its job.
+
+        ``None`` for anything that is not a session this agent could have minted:
+        a non-string, another channel's key, or a chat id that is not one path
+        segment -- ``..`` and a separator both reach outside the jobs root, and
+        the id arrives from the far side of a socket.
+        """
+        if not isinstance(session_id, str):
+            return None
+        channel, sep, chat_id = session_id.partition(":")
+        if not sep or channel != self._channel or not chat_id:
+            return None
+        if chat_id != Path(chat_id).name or chat_id in {os.curdir, os.pardir}:
+            return None
+        root = self._jobs_root / chat_id
+        return chat_id if root.is_dir() else None
 
     async def _session_close(self, params: dict[str, Any]) -> dict[str, Any]:
         """Drop one session: cancel its work, release its engine.
@@ -381,16 +543,13 @@ class AcpMethods:
     def _stage_for(self, session: AcpSession, text: str) -> list[tuple[str, Path]]:
         """Copy anything this prompt names that the session does not already hold.
 
-        Returns only the newly staged pairs; ``session.staged`` accumulates. A
-        source already staged is skipped rather than copied again under a
-        collision-suffixed name, which would have the prompt list one document
-        twice and the deck ground twice in it.
+        Returns only the newly staged pairs; ``session.staged`` accumulates. What
+        counts as already held is ``materials.unstaged``, which is where the cost
+        of skipping the check is written down.
         """
         declared = materials.inputs_from_prompt(text)
         wanted = materials.unique_sources(declared + materials.materials_from_prompt(text))
-        held = {os.path.realpath(source) for source, _ in session.staged}
-        fresh = [source for source in wanted if os.path.realpath(source) not in held]
-        staged = materials.stage(session.materials, fresh, session.taken)
+        staged = materials.stage(session.materials, materials.unstaged(wanted, session.staged), session.taken)
         session.staged.extend(staged)
         return staged
 

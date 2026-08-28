@@ -85,7 +85,10 @@ class AcpSession:
     turn: _Turn | None = None
     # Sources staged for this session so far, as (source, staged copy). Kept per
     # session rather than per turn: a second turn adds material without losing
-    # what the first one grounded the deck in, and the prompt lists all of it.
+    # what the first one grounded the deck in, and the prompt lists all of it. A
+    # session opened on a job that already holds copies recovers these from the
+    # copies themselves, where each pair's source is its own copy -- see
+    # ``materials.rehydrate``.
     staged: list[tuple[str, Path]] = field(default_factory=list)
     # Basenames already used under ``materials/``, so a second turn's source
     # cannot overwrite a first turn's copy of the same name.
