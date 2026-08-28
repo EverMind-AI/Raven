@@ -13,6 +13,7 @@ import mimetypes
 from pathlib import Path
 
 from raven.agent.tools.filesystem import _resolve_path
+from raven.agent.workdir import default_channel_root
 from raven.config import load_config
 
 # A viewer is not a download manager: past this size no renderer in the page
@@ -101,13 +102,17 @@ def in_state_dir(resolved: Path, workspace: str | Path) -> bool:
     panel all have to answer alike for a given file: two of them refusing while
     the one that renders bytes allowed it is how ``serve.json`` reached the page.
 
-    The workspace subtree is exempt, because the default workspace lives *at*
-    ``~/.raven/workspace`` -- without the carve-out the fence denies every file
-    the agent itself wrote. The state directory's secrets (``config.json``,
-    ``oauth/``, ``serve.json``) are all siblings of the workspace, never inside
-    it. Only the workspace-nested-in-home layout earns the exemption: a home
-    that itself sits inside the workspace, or IS the workspace, would otherwise
-    ride it and expose ``serve.json`` through it.
+    Two subtrees are exempt, and both for one reason: they are where the agent
+    itself writes. The workspace lives *at* ``~/.raven/workspace`` by default,
+    and a turn's working directory at ``~/.raven/tmp/<channel>`` -- a sibling of
+    the workspace since agent home and the working directory were split apart.
+    Exempting only the first left the second denied, which is every artifact a
+    chat has produced since that split: the page drew the delivery and then
+    refused to open it. The state directory's secrets (``config.json``,
+    ``oauth/``, ``serve.json``) are siblings of both, never inside either. Only
+    the nested-in-home layout earns an exemption: a home that itself sits inside
+    one of these, or IS one of them, would otherwise ride it and expose
+    ``serve.json`` through it.
 
     Two roots rather than one, because two are in use and they do not always
     agree: ``RAVEN_HOME`` moves ``serve.json`` and the runtime dir, while the
@@ -116,11 +121,11 @@ def in_state_dir(resolved: Path, workspace: str | Path) -> bool:
     tokens as ordinary paths.
     """
     ws = Path(workspace).resolve()
+    written = (ws, default_channel_root(ws).resolve())
     for home in _raven_state_roots():
         if resolved != home and home not in resolved.parents:
             continue
-        inside_workspace = home in ws.parents and (resolved == ws or ws in resolved.parents)
-        if not inside_workspace:
+        if not any(home in own.parents and (resolved == own or own in resolved.parents) for own in written):
             return True
     return False
 

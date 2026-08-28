@@ -408,6 +408,57 @@ def test_the_default_workspace_is_exempt_from_the_state_dir_fence(
         resolve_readable(str(home / "serve.json"))
 
 
+def test_the_turn_working_directory_is_exempt_from_the_state_dir_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn does not write in the workspace: agent home and the working
+    directory were split apart, and a turn now runs in ``~/.raven/tmp/<channel>``
+    -- a sibling of the workspace, inside the same state root. A carve-out for
+    the workspace alone therefore denied every artifact a chat produced, which
+    is the bug the workspace carve-out exists to prevent, one directory over.
+    The secrets stay refused: they are siblings of this directory too."""
+    from raven.rpc import files as files_module
+
+    home = tmp_path / "raven-home"
+    ws = home / "workspace"
+    ws.mkdir(parents=True)
+    workdir = home / "tmp" / "tui"
+    workdir.mkdir(parents=True)
+    (workdir / "report.md").write_text("# delivered by the agent")
+    (home / "serve.json").write_text(json.dumps({"token": "s3cret"}))
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(ws, restrict=False))
+
+    assert resolve_readable(str(workdir / "report.md")) == (workdir / "report.md").resolve()
+    with pytest.raises(PermissionError):
+        resolve_readable(str(home / "serve.json"))
+
+
+def test_a_working_directory_root_that_contains_the_state_root_earns_no_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exemption is for a subtree the state root contains, and the direction
+    matters. A working-directory root that sits ABOVE raven's home -- reachable
+    from any workspace whose parent holds it -- contains ``serve.json`` as well
+    as the agent's own files, so reading it as a carve-out would serve the token
+    that mints session nonces to any cookie holder. The same trap the workspace
+    carve-out already guards against, one directory over."""
+    from raven.rpc import files as files_module
+
+    # `default_channel_root` of this workspace is `<tmp_path>/tmp`, and raven's
+    # home is inside it -- the one layout where the containment runs backwards.
+    home = tmp_path / "tmp" / "raven-home"
+    home.mkdir(parents=True)
+    (home / "serve.json").write_text(json.dumps({"token": "s3cret"}))
+    ws = tmp_path / "project"
+    ws.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(ws, restrict=False))
+
+    with pytest.raises(PermissionError):
+        resolve_readable(str(home / "serve.json"))
+
+
 async def test_the_sign_in_cookie_outlives_the_browser_session(gateway_client) -> None:
     """Without a max-age this is a session cookie: closing the browser signs the
     user out of a gateway that never went anywhere, and the page then reports a
