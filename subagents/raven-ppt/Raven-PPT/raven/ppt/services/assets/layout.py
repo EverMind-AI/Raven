@@ -243,6 +243,19 @@ class Box(namedtuple("Box", "x0 y0 x1 y1")):
     def h(self):
         return self.y1 - self.y0
 
+    # `Box.at` is spelled (x, y, w=, h=) and `w`/`h` read back under those names, so
+    # a program that passes one box's geometry into another reaches for `.x` and `.y`
+    # too. Two of the four names read back and two raised AttributeError, which is
+    # the worst arrangement: a build that got three quarters of the line right still
+    # crashed. Measured on a live run.
+    @property
+    def x(self):
+        return self.x0
+
+    @property
+    def y(self):
+        return self.y0
+
     def pptx(self):
         """(left, top, width, height) as python-pptx lengths."""
         return Inches(self.x0), Inches(self.y0), Inches(self.w), Inches(self.h)
@@ -1025,12 +1038,13 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     head_pt = size if header_size is None else header_size
     ends = _CELL_ENDS if padding is None else float(padding)
     grid_w = GRID_RULE_PT if grid_pt is None else float(grid_pt)
+    frame_ink = theme.get("muted", theme["foreground"])
     emphasize_rows = {_body_row(index, len(rows), "emphasize_rows") for index in emphasize_rows}
     columns = len(rows[0])
     emphasize_columns = {_column_index(index, columns) for index in emphasize_columns}
     indented = {_body_row(index, len(rows), "indent_rows") for index in indent_rows}
     totals = {_body_row(index, len(rows), "total_rows") for index in total_rows}
-    aligns = _cell_aligns(align, columns, numeric_from, rows)
+    aligns = _cell_aligns(align, columns, numeric_from, rows, cell_marks)
     painted = _cell_fills(fills, len(rows), columns, theme)
     banded = set(range(2, len(rows), 2)) if banding else set()
     edges = _rule_edges(
@@ -1084,15 +1098,22 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
             # The two upright sides of the frame. `_rule_edges` holds the two flat
             # ones, which are a row's business; a side belongs to the first and last
             # column and there is nothing else in this loop's shape to hang it on.
-            if c == 0:
-                lines["lnL"] = (theme["grid"], grid_w)
-            if c == columns - 1:
-                lines["lnR"] = (theme["grid"], grid_w)
-            if column_rules and columns > 1:
+            # The interior rules first and the frame over them, because a cell on
+            # either end owns one of each and the frame is the one that has to win.
+            # A group row is skipped: it is a single merged cell with no interior
+            # boundary to draw, and a rule inside it would cross its name.
+            if column_rules and columns > 1 and r not in groups:
                 if c:
                     lines["lnL"] = (theme["grid"], grid_w)
                 if c < columns - 1:
                     lines["lnR"] = (theme["grid"], grid_w)
+            if c == 0:
+                lines["lnL"] = (frame_ink, grid_w)
+            # A group row's right side belongs to the cell that owns the span: a
+            # border written on a spanned cell is not drawn, so the band would break
+            # the frame open on that side.
+            if c == columns - 1 or (r in groups and c == 0):
+                lines["lnR"] = (frame_ink, grid_w)
             _strip_borders(cell, lines)
             cell.margin_left = cell.margin_right = Inches(_CELL_SIDE)
             # One step in, and the step is the page's own padding rather than a number
@@ -1130,7 +1151,9 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
         text = "" if (r in groups and c) else str(rows[r][c])
         cell = _cell_box(box, widths, heights, r, c)
         reading = text if value is None and kind in _NUMERIC_MARKS else value
-        room = _mark_room(cell, text, size, aligns[c] == PP_ALIGN.RIGHT, theme.get("font_family"))
+        room = _mark_room(
+            cell, text, size, aligns[c] == PP_ALIGN.RIGHT, theme.get("font_family"), _mark_scale(size, ends)
+        )
         mark(slide, room, theme, kind, reading, colour=paint)
     return Drawn(tbl, Box.at(box.x0, box.y0, w=width, h=plan.height))
 
@@ -1141,11 +1164,13 @@ _CELL_ENDS = 0.03
 
 # The two weights a table draws at, in points, which is the unit a line weight is
 # asked for in: the accent rule under the header, and everything quiet -- the frame,
-# the row hairlines, a total's rule, a column rule. They were inches -- 0.022 and
-# 0.012, so 1.6pt and 0.9pt -- and at 0.9pt the quiet line is under what a 110dpi
-# render resolves: the reader saw no line at all.
-HEADER_RULE_PT = 2.25
-GRID_RULE_PT = 1.0
+# the row hairlines, a total's rule, a column rule. The quiet weight is what has to
+# clear the render: at 1pt it is 1.5px at 110dpi, and in the `grid` tone that came
+# back as no line at all, so a four-column table's rows ran together. 2.5pt holds a
+# line at every dpi a render is taken at. The header rule stays the heavier of the
+# two -- `_rule_edges` reads the table from it -- so it moves with the quiet one.
+HEADER_RULE_PT = 3.5
+GRID_RULE_PT = 2.5
 
 # How much air a row may take to fill a box it does not fill on its own. One line's
 # worth: past that, three rows in a half-page band stop reading as rows and start
@@ -1196,19 +1221,40 @@ def _column_is_numeric(rows, index):
     return seen
 
 
-def _cell_aligns(align, columns, numeric_from, rows=None):
+def _cell_aligns(align, columns, numeric_from, rows=None, cell_marks=None):
     """One alignment per column: the names the caller gave, or the cells' own shape.
 
     `numeric_from` says "figures from here rightwards", which is the whole answer for
-    a table of labels and figures and no answer at all for one whose single centred
-    column sits between two left-aligned ones. `align=("left", "center", "right")` is
+    a table of labels and figures and no answer at all for one whose single left-aligned
+    column sits between two others. `align=("left", "center", "right")` is
     how to say that, and a name that is not an alignment comes back as a sentence
     rather than as a page that looks nearly right.
     """
+    # Figures right, everything else centred. A column of numbers that is not right
+    # aligned cannot be compared down its length, which is the one alignment with a
+    # reason behind it rather than a look. The rest used to go left and came out ragged
+    # down every column on a deck whose tables were mostly short labels and phrases --
+    # and a cell long enough for centring to hurt is a cell that wanted a card, which is
+    # a different fix than an alignment.
+    # A cell holding a mark beside its string is two things sharing a cell, and the mark
+    # takes whichever side the string does not. Centred, the string sits in the middle
+    # and there is no side left -- the marks landed on top of the words on the first
+    # table drawn after centring became the default.
+    marked = {column for _, column in (cell_marks or ())}
     if align is None and numeric_from is None:
-        return [PP_ALIGN.RIGHT if _column_is_numeric(rows, index) else PP_ALIGN.LEFT for index in range(columns)]
+        return [
+            PP_ALIGN.RIGHT
+            if _column_is_numeric(rows, index)
+            else PP_ALIGN.LEFT
+            if index in marked
+            else PP_ALIGN.CENTER
+            for index in range(columns)
+        ]
     if align is None:
-        return [PP_ALIGN.RIGHT if index >= numeric_from else PP_ALIGN.LEFT for index in range(columns)]
+        return [
+            PP_ALIGN.RIGHT if index >= numeric_from else PP_ALIGN.LEFT if index in marked else PP_ALIGN.CENTER
+            for index in range(columns)
+        ]
     named = list(align)
     if len(named) != columns:
         raise ValueError(f"align names {len(named)} columns, this table has {columns}")
@@ -1284,9 +1330,11 @@ def _rule_edges(count, totals, theme, rule_pt, grid_pt):
     # The frame's flat sides. A table with a rule under its header, nothing between
     # its rows and one hairline under the last of them has three lines that all stop
     # in mid-air, and what a reader takes from that is a page that was not finished.
-    # The frame closes it, in the quietest tone the theme carries, so the default is
-    # something a deck can ship without a single keyword being turned.
-    line(0, "lnT", quiet, grid_pt)
+    # The frame closes it, in the firm tone rather than the quiet one: the frame is
+    # the table's outer edge against the page, and the grid tone -- picked to be
+    # nearly invisible so that interior lines do not compete with the copy -- leaves
+    # that edge indistinguishable from no edge at all on a projector.
+    line(0, "lnT", firm, grid_pt)
     boundary(0, accent, rule_pt)
     # And the row boundaries, for the same reason and in the same tone. A four-column
     # comparison whose cells wrap onto two lines has nothing left saying where one row
@@ -1297,7 +1345,7 @@ def _rule_edges(count, totals, theme, rule_pt, grid_pt):
     # line on it would be the same line twice.
     for row in range(1, count - 1):
         boundary(row, quiet, grid_pt)
-    line(count - 1, "lnB", quiet, grid_pt)
+    line(count - 1, "lnB", firm, grid_pt)
     # A subtotal sits under a line. Bold alone reads as emphasis; the line is what
     # says the numbers above it were added up rather than merely listed. In the firmer
     # tone, because the quiet one is now on every boundary: a grid-toned hairline over
@@ -1346,23 +1394,31 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
     face = theme.get("font_family") if theme else None
     indented = {_body_row(index, len(rows), "indent_rows") for index in indent_rows}
 
-    def laid(mark_height):
-        # With no box to fit, nothing caps what the marks may ask for.
-        floors = _mark_floors(
-            cell_marks, rows, columns, size, mark_height, float("inf") if room is None else room, face
-        )
-        shares = list(weights) if weights else _content_weights(rows, size, skip=set(groups), minimums=floors, face=face)
-        total = float(sum(shares))
+    content = _content_weights(rows, size, skip=set(groups), face=face)
+    head_floors = _header_floors(rows[0], head_pt, face)
+
+    def spread_of(shares):
         # Sized weights are inches, so a table whose content is narrower than its box
         # stays narrow rather than being stretched across it: five columns spread over
         # 12.6in put so much air between them that the eye loses the row. Given weights
         # are proportions and mean "fill the box".
-        spread = total if room is None else (room if weights else min(room, total))
+        total = float(sum(shares))
+        return total if room is None else (room if weights else min(room, total))
+
+    def laid():
+        # What each column holds before a mark is charged to it. The marks are then
+        # allowed the room left over rather than a share of the whole, which is what
+        # keeps an unmarked column from paying for a neighbour's rating.
+        base_shares = list(weights) if weights else content
+        base = _column_widths(base_shares, spread_of(base_shares), head_floors)
+        # With no box to fit, nothing caps what the marks may ask for.
+        floors = _mark_floors(
+            cell_marks, rows, columns, size, _mark_scale(size, ends), float("inf") if room is None else room, base
+        )
+        shares = list(weights) if weights else _content_weights(rows, size, skip=set(groups), minimums=floors, face=face)
         # Given weights get the same treatment as a starved heading: a column too narrow
         # for the mark in it is raised and the shortfall comes off the columns with slack.
-        sized = _column_widths(
-            shares, spread, [max(pair) for pair in zip(_header_floors(rows[0], head_pt, face), floors)]
-        )
+        sized = _column_widths(shares, spread_of(shares), [max(pair) for pair in zip(head_floors, floors)])
         tall = _row_heights(rows, sized, groups, indented, size, head_pt, head_h, body_h, ends, face)
         if header_height is not None:
             tall[0] = max(tall[0], float(header_height))
@@ -1370,16 +1426,9 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
             tall[1:] = [max(value, float(row_height)) for value in tall[1:]]
         if fill and room_h:
             tall = _filled_heights(tall, room_h, size)
-        return sized, spread, tall
+        return sized, spread_of(shares), tall
 
-    widths, width, heights = laid(body_h)
-    if cell_marks and len(heights) > 1:
-        # A mark is drawn to the row it lands in, and how tall that row is cannot be
-        # known until the rows have been measured against their columns and spread
-        # into the box. A column sized for a row the table no longer has is the same
-        # collapse `_mark_floors` exists to prevent, arrived at one pass late -- so
-        # the pass is run again on the height the marks will really be drawn at.
-        widths, width, heights = laid(min(heights[1:]))
+    widths, width, heights = laid()
     return _Plan(tuple(widths), tuple(heights), width, sum(heights), groups, cell_marks)
 
 
@@ -1852,7 +1901,7 @@ def _cell_box(box, widths, heights, row, column):
     return Box(x0, y0, x0 + widths[column], y0 + heights[row])
 
 
-def _mark_room(cell, text, size, right_aligned, face=None):
+def _mark_room(cell, text, size, right_aligned, face=None, height=None):
     """The part of a cell its own string does not need.
 
     A mark beside a string is the common case -- a bar beside its percentage, a dot
@@ -1860,8 +1909,16 @@ def _mark_room(cell, text, size, right_aligned, face=None):
     keeps the side its alignment puts it on and the mark takes what is left, measured
     with `_em_width` rather than split down the middle and hoped over. A string is
     never given more than three fifths, so a mark always has room to be a mark.
+
+    `height` caps how tall the mark may be drawn and centres it in the row, which is
+    the same number the column was sized from -- every mark takes its dimensions out
+    of the box handed to it, so a cap that applied only to the sizing would leave the
+    drawn mark and the width bought for it describing different marks.
     """
     inner = Box(cell.x0 + _CELL_SIDE, cell.y0, cell.x1 - _CELL_SIDE, cell.y1)
+    if height is not None and 0.0 < height < inner.h:
+        middle = (inner.y0 + inner.y1) / 2
+        inner = Box(inner.x0, middle - height / 2, inner.x1, middle + height / 2)
     if not text.strip():
         return inner
     needed = min(inner.w * 0.6, _em_width(text, size, face) + _CELL_SIDE)
@@ -1870,8 +1927,22 @@ def _mark_room(cell, text, size, right_aligned, face=None):
     return Box(inner.x0 + needed, inner.y0, inner.x1, inner.y1)
 
 
-def _mark_floors(cell_marks, rows, columns, size, row_height, table_width, face=None):
-    """What each column needs so the marks in it are still marks, and no more.
+def _mark_scale(size, ends):
+    """The height a mark is drawn at, which is the line box of the type beside it.
+
+    Not the row's own height. A row grows to fill a band it is spread into
+    (`_ROW_FILL_MAX`) and grows again when a neighbouring cell wraps, and a mark
+    sized off that is a mark whose column is wider in a tall band than in a short
+    one -- the same five rows asked 1.72in for their rating column in a 1.6in band
+    and 2.52in in a 3.6in one, and the dots came out half an inch across beside
+    14pt copy. What a mark has to be read against is the type it sits with, and
+    that is one line however much air the row has.
+    """
+    return _line_h(size) + 2 * ends
+
+
+def _mark_floors(cell_marks, rows, columns, size, mark_height, table_width, base):
+    """What each marked column needs, on top of what it already holds.
 
     Content-driven columns measure strings, and a marked cell usually holds none --
     so the column carrying the marks is exactly the one that collapses: a five-step
@@ -1879,27 +1950,28 @@ def _mark_floors(cell_marks, rows, columns, size, row_height, table_width, face=
     reading. What a mark needs is a measurement of its own, and it goes in beside the
     strings'.
 
-    And a ceiling, because a floor with none takes its room out of the labels: a
-    ten-step scale in a 1.68in table asked for 2.49in and left its label column
-    0.18in, well under the `_NARROWEST_IN` every other path holds -- `_column_widths`
-    falls back to scaling the floors in proportion once they do not fit, and nothing
-    below that is a floor any more. So the marks may take what is left once every
-    unmarked column has that width, and what they ask for over it is scaled down
-    together. When the table cannot hold even that, the floors stand and everything
-    is squeezed in proportion, which is the answer a table too narrow for its own
-    columns already gets.
+    `base` is what every column holds with no mark charged to it, so the mark is only
+    ever allowed the room over that. The predecessor reserved `_NARROWEST_IN` per
+    unmarked column instead and let the marks divide the rest, which took the room out
+    of the labels: two rating columns in a 6.0in table came to 2.17in each and left a
+    label column that measured 1.15in with 0.51in -- under the floor every other path
+    holds, because `_column_widths` scales the floors in proportion once they do not
+    fit and nothing below that is a floor any more. With given weights the reserve is
+    the whole box, so a mark takes nothing at all from a division the author declared
+    and is drawn inside its own column's share.
     """
-    floors = [0.0] * columns
+    extra = [0.0] * columns
     for (row, column), (kind, value, _) in cell_marks.items():
-        text = str(rows[row][column])
-        reading = text if value is None and kind in _NUMERIC_MARKS else value
-        needed = _mark_width(kind, reading, row_height) + _em_width(text, size, face) + 0.20
-        floors[column] = max(floors[column], needed)
-    asked = sum(floors)
-    room = table_width - _NARROWEST_IN * sum(1 for floor in floors if floor <= 0)
-    if not asked or room <= 0 or asked <= room:
-        return floors
-    return [floor * room / asked for floor in floors]
+        reading = str(rows[row][column]) if value is None and kind in _NUMERIC_MARKS else value
+        extra[column] = max(extra[column], _mark_width(kind, reading, mark_height))
+    asked = sum(extra)
+    if not asked:
+        return extra
+    slack = table_width - sum(base)
+    if slack < asked:
+        share = max(0.0, slack) / asked
+        extra = [value * share for value in extra]
+    return [holds + more if more else 0.0 for holds, more in zip(base, extra)]
 
 
 def _mark_width(kind, value, row_height):
@@ -2180,13 +2252,15 @@ class Stack:
     well pays both. Pass `gutter=` to have one added after every band.
     """
 
-    __slots__ = ("box", "gutter", "spent_by_rest", "y")
+    __slots__ = ("box", "gutter", "spent_by_rest", "spread_to_fit", "taken", "y")
 
     def __init__(self, box, gutter=0.0):
         self.box = box
         self.gutter = gutter
         self.y = box.y0
         self.spent_by_rest = False
+        self.spread_to_fit = False
+        self.taken = 0
 
     def __getattr__(self, name):
         """The region's own geometry, because a question about the region is not a typo.
@@ -2242,17 +2316,117 @@ class Stack:
             heights = tuple(heights[0])
         return max(0.0, sum(float(height) for height in heights) - self.left)
 
+    def slack(self, *heights):
+        """How many inches this region has left over once these bands are in it.
+
+        `short_by` the other way round, off the same arithmetic, because both
+        questions come up before the first band is drawn and only one of them had an
+        answer. This is the one that says whether the run should be hung from the top
+        of the region or centred in it.
+        """
+        if len(heights) == 1 and not isinstance(heights[0], (int, float)):
+            heights = tuple(heights[0])
+        return max(0.0, self.left - sum(float(height) for height in heights))
+
+    def centre(self, *heights):
+        """Put half the leftover above the run, and hand back this same cursor.
+
+        A cursor runs from the top of its region, so a column of copy shorter than
+        the region it was given hangs from the top with every inch of slack under it.
+        Beside a figure that fills its own column, that reads as the page slipping
+        upward -- measured on a delivered page whose five points ended 62% down while
+        the figure beside them ran to 88%.
+
+        Centring it is `skip((region - run) / 2)` before the first `take`, which is
+        four lines of arithmetic the author has to get right and the same arithmetic
+        `short_by` already does. Pass the heights you measured for `short_by`; a run
+        that does not fit is left where it is, because there is nothing to centre and
+        `take` will say so at the band that overruns.
+
+        Chains, so the measure-first shape stays one statement:
+
+            down = stack(box).centre(*heights)
+        """
+        self.skip(self.slack(*heights) / 2)
+        return self
+
+    def spread(self, *heights):
+        """Spend the leftover as the air between these bands, and hand back this cursor.
+
+        `centre` puts the slack above and below the run; this puts it between the
+        bands, which is what a lane of cards or a table over a chart wants -- the run
+        then ends on the region's own bottom edge, so two columns given the same
+        region end level and the page has no band of white under it.
+
+        For components and not for running copy. The gap between two cards is air;
+        the gap between two paragraphs is a break in a thought, and copy spread down
+        a region reads worse than copy left at the top of it. A copy column far
+        shorter than its region is a page bigger than what it holds, which no cursor
+        can fix.
+
+        The commonest defect on a delivered deck is the other thing: eleven of
+        eighteen pages in one run ended their content between 60% and 70% down and
+        left the rest empty, and four more were two columns that stopped at different
+        heights. Both are this call not being made.
+
+        A run with no slack is left as it is, gutter included: the share is what the
+        region can actually pay for, and raising it to the deck's usual gap would
+        spend height the region does not have and push the last band off the bottom.
+        One band has no between, so it centres instead. So it needs no guard around
+        it -- `stack(box).spread(*heights)` is right whether or not there is slack,
+        and a caller that adds its own `skip` when there is none overruns by exactly
+        what it skipped.
+
+            down = stack(box).spread(*heights)
+            for card, tall in zip(cards, heights):
+                card_at(slide, down.take(tall), *card)
+        """
+        if len(heights) == 1 and not isinstance(heights[0], (int, float)):
+            heights = tuple(heights[0])
+        if len(heights) < 2:
+            return self.centre(*heights)
+        share = self.slack(*heights) / (len(heights) - 1)
+        if share > self.gutter:
+            self.gutter = share
+            self.spread_to_fit = True
+        return self
+
     def take(self, height):
         """The next `height` inches, full width."""
         if height <= 0:
             raise ValueError("a band takes some height")
         if height > self.left + 1e-9:
             raise ValueError(
-                f"{height:.2f}in was asked for and {self.left:.2f}in is left in this region. "
+                f"{height:.2f}in was asked for and {self.left:.2f}in is left in this region"
+                # The band that refuses is never the band that overspent, so the refusal
+                # says what the region has already paid out. A run reading only the last
+                # number went back and shortened the last card twice, on a page whose
+                # first three were the ones that did not fit.
+                + (
+                    f", after {self.taken} band(s) spent {self.y - self.box.y0:.2f}in of its "
+                    f"{self.box.h:.2f}in. "
+                    if self.taken
+                    else ". "
+                )
                 + (
                     "rest() already spent it: it hands back the remainder and takes it. `room` is that "
                     "same box without taking it, and `left` is its height. "
                     if self.spent_by_rest
+                    else ""
+                )
+                # The gap is invisible in the caller's arithmetic -- the heights add up and the
+                # region still runs out -- so a cursor that is spending one says so here. `spread`
+                # sizes its gap to leave the run ending exactly on the bottom edge, which means any
+                # skip added on top of it overruns by exactly what was skipped.
+                + (
+                    f"spread() already sized this region's gap at {self.gutter:.2f}in so the run ends "
+                    f"exactly on the bottom edge -- so a skip() or a gutter of your own on top of it "
+                    f"overruns by exactly what you added. Take the bands and add nothing between them. "
+                    if self.spread_to_fit
+                    else f"This cursor leaves a {self.gutter:.2f}in gap after every band, so a run of n "
+                    f"bands spends n gaps as well as their heights; slack() and short_by() answer "
+                    f"about the heights alone. "
+                    if self.gutter
                     else ""
                 )
                 + "Measure every band first and ask short_by(*heights) before drawing any of them -- "
@@ -2260,6 +2434,7 @@ class Stack:
             )
         band = Box(self.box.x0, self.y, self.box.x1, self.y + height)
         self.y = band.y1 + self.gutter
+        self.taken += 1
         return band
 
     def rest(self):

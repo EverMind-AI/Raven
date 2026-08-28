@@ -38,89 +38,6 @@ def outline_path(project: Project) -> Path:
 
 
 @dataclass(frozen=True)
-class PlannedTable:
-    """A page's table plan read as the grid it describes, rather than as a dict.
-
-    The stored form stays a dict, because a model writes it and JSON persists it --
-    and it comes back off disk with its tuples turned into lists. Every reader goes
-    through here so that all of them see one shape: rows of cells, one cell a column,
-    however the plan reached the file.
-
-    `rows` used to hold two shapes at once. The field began as row *labels*, one
-    string a row, and grew into complete cell rows without the string form being
-    taken back out, so a single plan could carry `["cost", "4.2"]` beside `"cost"`.
-    A bare string is not a row of a grid: it has a cell under the first column and a
-    hole under every other one, and nothing downstream could tell a plan that meant
-    one label from a plan that lost its cells. So a string read here becomes a
-    one-cell row and the schema asks for cells -- the shape is single, and a row that
-    is short of the header still shows as short when the plan is read back.
-    """
-
-    columns: tuple[str, ...] = ()
-    rows: tuple[tuple[str, ...], ...] = ()
-    reading: str = ""
-
-    @classmethod
-    def of(cls, table_plan: object) -> PlannedTable:
-        """One of these out of whatever a plan holds, and empty out of anything else."""
-        if not isinstance(table_plan, dict):
-            return cls()
-        columns = tuple(str(item).strip() for item in table_plan.get("columns") or () if str(item).strip())
-        rows: list[tuple[str, ...]] = []
-        for item in table_plan.get("rows") or ():
-            if isinstance(item, (list, tuple)):
-                cells = tuple(str(cell).strip() for cell in item)
-                if any(cells):
-                    rows.append(cells)
-            elif str(item).strip():
-                rows.append((str(item).strip(),))
-        return cls(columns=columns, rows=tuple(rows), reading=str(table_plan.get("reading") or "").strip())
-
-    @property
-    def width(self) -> int:
-        """How many columns the grid has: the header's, or the longest row's without one."""
-        return max(len(self.columns), max((len(row) for row in self.rows), default=0))
-
-    def as_dict(self) -> dict[str, object]:
-        """The stored form, with the keys the plan does not fill left out."""
-        result: dict[str, object] = {}
-        if self.columns:
-            result["columns"] = self.columns
-        if self.rows:
-            result["rows"] = self.rows
-        if self.reading:
-            result["reading"] = self.reading
-        return result
-
-    def lines(self) -> list[str]:
-        """The plan as the author should read it: a header, its rows, the cue.
-
-        It used to be handed over as `{'columns': ('指标', '自研'), 'rows': ((...),)}`
-        -- a Python dict repr, tuples and quotes and all -- two lines above the
-        planned points, which were rendered as a list. A table is the one thing in a
-        plan that has a shape, and the repr is the one form that hides it.
-
-        Indented to sit under its own heading, the way the planned points are, and
-        deliberately terse: this goes into a prompt, not onto a page. Short rows are
-        padded out so a row missing a cell reads as a gap in the grid rather than as
-        a shorter row.
-        """
-        width = self.width
-        out = []
-        if self.columns:
-            out.append("  " + " | ".join(self.columns))
-            if self.rows:
-                out.append("  " + " | ".join("---" for _ in range(width)))
-        for row in self.rows:
-            # Right-stripped only: the empty cells are what show the gap, and the pipe
-            # after the last of them survives the strip while its trailing space does not.
-            out.append(("  " + " | ".join((*row, *("" for _ in range(width - len(row)))))).rstrip())
-        if self.reading:
-            out.append(f"  Read it for: {self.reading}")
-        return out
-
-
-@dataclass(frozen=True)
 class PagePlan:
     """One page, as an argument rather than as a layout."""
 
@@ -130,16 +47,11 @@ class PagePlan:
     matches four task-specific ones" is a claim, and it is also the title."""
     carries: str = ""
     """What carries it: a figure id, a table, a chart, a number, a diagram."""
-    table_plan: dict[str, object] | None = None
-    """Optional table information shape: columns, complete cell rows, a reading cue.
-
-    Stored as the dict the tool schema takes and read through `PlannedTable`, which
-    is where the one shape those rows come in is decided."""
     layout: str = ""
     """Which page structure and modifier layers this page is composed of, by id.
 
-    `"P14 + M4 + M11"`, from `references/layouts.md`. Structured for the same reason
-    `table_plan` is: a page's shape was decided while its geometry was being typed, and
+    `"P14 + M4 + M11"`, from `references/layouts.md`. Structured because a page's shape
+    was decided while its geometry was being typed, and
     what came of that is measurable -- one delivered deck drew its own layout on eleven
     pages, four of which are the same eight lines (a table, one rounded plane, three
     points). Declared here, the choice is reviewable before anything is drawn, and the
@@ -185,7 +97,6 @@ class PagePlan:
             "page": self.page,
             "claim": self.claim,
             "carries": self.carries,
-            "table_plan": self.table_plan,
             "layout": self.layout,
             "figures": list(self.figures),
             "says": list(self.says),
@@ -249,7 +160,6 @@ def load_outline(path: Path) -> Outline | None:
                     page=int(entry.get("page", 0)),
                     claim=str(entry.get("claim", "")),
                     carries=str(entry.get("carries") or ""),
-                    table_plan=PlannedTable.of(entry.get("table_plan")).as_dict() or None,
                     layout=str(entry.get("layout") or ""),
                     figures=tuple(str(f) for f in entry.get("figures") or ()),
                     says=tuple(str(s) for s in entry.get("says") or ()),

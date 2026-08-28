@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from raven.agent.tools.base import ToolResult
+from raven.agent.tools.base import ToolResult
 from raven.ppt.contracts import (
     BuildOutcome,
     DeckBrief,
@@ -36,7 +37,8 @@ from raven.ppt.contracts import (
     write_plan,
 )
 from raven.ppt.profiles import registry
-from raven.ppt.tools.build import BATCH_VIEWS, PptBuildTool
+from raven.ppt.stages.build import BATCH_VIEWS, _showing
+from raven.ppt.tools.build import PptBuildTool
 
 
 class FakeViews:
@@ -60,14 +62,19 @@ class FakeViews:
 
 
 class FakeStage:
-    def __init__(self, result: StageResult) -> None:
+    def __init__(self, result: StageResult, views_per_call: int = BATCH_VIEWS) -> None:
         self.result = result
         self.calls: list[str | None] = []
         self.drafts: list[bool] = []
+        self.slides: list[list[int] | None] = []
         self.backend = None
         self.measure = None
         self.profile = registry.get("script_author")
         self.destination = lambda p: p.exports_dir / "deck.pptx"
+        # The number the tool reads its `slides` cap off, and the one the real stage
+        # selects `showing` with. A fake holding its own copy of that rule is the drift
+        # this fixture exists to catch, so it delegates to `_showing`.
+        self.views_per_call = views_per_call
 
     async def run(
         self,
@@ -80,14 +87,11 @@ class FakeStage:
     ) -> StageResult:
         self.calls.append(script)
         self.drafts.append(draft)
+        self.slides.append(list(slides) if slides is not None else None)
         # The stage decides which pages the reply shows, because that is where the
         # deck is published and an unseen page has to refuse before delivery.
         pages = getattr(self.result.data.get("outcome"), "pages", 0)
-        showing = (
-            sorted(set(slides))[:BATCH_VIEWS]
-            if slides
-            else list(range(page_from, min(pages, page_from + BATCH_VIEWS - 1) + 1))
-        )
+        showing = _showing(pages, slides, page_from, self.views_per_call)
         return replace(self.result, data={**self.result.data, "showing": showing})
 
 
@@ -106,10 +110,15 @@ def _ok(project: Project, findings=(), pages: int = 2, **data) -> StageResult:
     )
 
 
-def _tool(project: Project, result: StageResult, views: FakeViews | None = None) -> PptBuildTool:
+def _tool(
+    project: Project,
+    result: StageResult,
+    views: FakeViews | None = None,
+    views_per_call: int = BATCH_VIEWS,
+) -> PptBuildTool:
     return PptBuildTool(
         workspace=project.workspace,
-        stage=FakeStage(result),  # type: ignore[arg-type]
+        stage=FakeStage(result, views_per_call),  # type: ignore[arg-type]
         views=views or FakeViews(),
         profile=registry.get("script_author"),
     )
@@ -170,42 +179,15 @@ async def test_each_render_is_preceded_by_the_line_that_names_its_page(project: 
     reply = await _tool(project, _ok(project)).execute(project="tarvis", slides=[1, 2])
 
     assert isinstance(reply, ToolResult)
-    kinds = [block["type"] for block in reply.blocks or []]
-    assert kinds == ["text", "image_url"]
-    assert "Page 1 of 2" in (reply.blocks or [])[0]["text"]
-    assert "Planned claim: It works" in (reply.blocks or [])[0]["text"]
+    blocks = reply.blocks or []
+    # One label per render and strictly alternating, which is what keeps a label with
+    # its picture on a transport that moves the images to a following message.
+    assert [block["type"] for block in blocks] == ["text", "image_url", "text", "image_url"]
+    assert "Page 1 of 2" in blocks[0]["text"]
+    assert "Planned claim: It works" in blocks[0]["text"]
+    assert "Page 2 of 2" in blocks[2]["text"]
 
 
-@pytest.mark.asyncio
-async def test_a_planned_table_is_shown_as_a_table_and_not_as_a_dict(project: Project) -> None:
-    """The author was handed `{'columns': ('指标', '自研'), 'rows': ((...),)}` -- tuples,
-    quotes and all -- two lines above the planned points, which are rendered as a list."""
-    write_outline(
-        Outline(
-            takeaway="it works",
-            pages=(
-                PagePlan(
-                    page=1,
-                    claim="It works",
-                    carries="drawn table",
-                    table_plan={
-                        "columns": ("指标", "自研"),
-                        "rows": (("成本", "4.2"), ("延迟", "38ms")),
-                        "reading": "compare cost",
-                    },
-                ),
-            ),
-        ),
-        outline_path(project),
-    )
-
-    reply = await _tool(project, _ok(project, pages=1)).execute(project="tarvis", slides=[1])
-
-    assert isinstance(reply, ToolResult)
-    assert (
-        "Planned table information shape:\n  指标 | 自研\n  --- | ---\n  成本 | 4.2\n  延迟 | 38ms\n  Read it for: compare cost"
-        in (reply.blocks or [])[0]["text"]
-    )
 
 
 @pytest.mark.asyncio
@@ -284,7 +266,8 @@ async def test_a_layout_warning_is_the_author_s_to_answer(project: Project) -> N
     # rebuilt the same finished deck eight times, each reply identical.
     assert body["next_step"].startswith("this deck is delivered at ")
     assert "nothing refuses it" in body["next_step"]
-    assert "page(s) below" in body["next_step"]
+    assert "look at every page below" in body["next_step"]
+    assert "pages_not_shown" not in body, "a two-page deck fits in one batch"
 
 
 @pytest.mark.asyncio
@@ -318,17 +301,34 @@ async def test_the_note_about_an_empty_submission_reaches_the_author(project: Pr
 
 @pytest.mark.asyncio
 async def test_only_the_requested_pages_come_back(project: Project) -> None:
+    """Every page named, in order, and nothing else -- the surplus used to be dropped.
+
+    `slides=[3, 1, 2]` is three pages inside the cap, and one render came back: the
+    tool's own cap said one page and the caller was told nothing about the other two,
+    which is how a model concludes it has looked at a page nobody rendered.
+    """
     views = FakeViews(pages=18)
     tool = _tool(project, _ok(project, pages=18), views)
     await tool.execute(project="tarvis", slides=[3, 1, 2])
-    assert views.asked == [[1]]
+    assert views.asked == [[1, 2, 3]]
 
 
 @pytest.mark.asyncio
-async def test_one_page_comes_back_unasked(project: Project) -> None:
+async def test_the_first_batch_comes_back_unasked(project: Project) -> None:
+    """Omitting `slides` walks the deck a batch at a time, not a page at a time.
+
+    `execute` used to pass `slides=[page_from]`, which made the stage's walk branch
+    unreachable: an eighteen-page deck took eighteen builds to look at once.
+    """
     views = FakeViews(pages=18)
+    stage_views = FakeViews(pages=18)
     await _tool(project, _ok(project, pages=18), views).execute(project="tarvis")
-    assert views.asked == [[1]]
+    assert views.asked == [[1, 2, 3]]
+
+    tool = _tool(project, _ok(project, pages=18), stage_views)
+    await tool.execute(project="tarvis", page_from=7)
+    assert stage_views.asked == [[7, 8, 9]]
+    assert tool.stage.slides == [None], "the walk branch only runs when slides is unset"
 
 
 @pytest.mark.asyncio
@@ -379,6 +379,22 @@ async def test_draft_is_passed_through(project: Project) -> None:
     assert tool.stage.drafts == [True]  # type: ignore[attr-defined]
 
 
+async def test_a_draft_is_told_where_the_second_reading_is(project: Project) -> None:
+    """A run stayed in draft for fourteen builds and forty iterations. The pointer at
+    `ppt_review` was in the delivered-and-clean branch alone, so a deck that never
+    leaves draft is a deck whose author is never told a second reading exists -- and
+    the draft branch is exactly where an author sits while it still believes the pages
+    need work.
+    """
+    tool = _tool(project, _ok(project))
+
+    reply = await tool.execute(project=project.slug, draft=True)
+    said = reply if isinstance(reply, str) else reply.model_text
+
+    assert "without `draft`" in said, "the draft still has to be told how to deliver"
+    assert "ppt_review" in said
+
+
 async def test_a_deck_the_publish_step_refused_is_not_reported_as_delivered(project: Project) -> None:
     """Two notes reach the reply and only one used to be read.
 
@@ -403,18 +419,329 @@ async def test_a_deck_the_publish_step_refused_is_not_reported_as_delivered(proj
     assert body["next_step"].startswith("nothing was published: the built deck is empty")
 
 
-def test_the_slides_cap_cannot_exceed_the_batch_the_stage_renders() -> None:
-    """Naming more pages than the stage shows drops the surplus without saying so.
+@pytest.mark.parametrize("budget", [1, 2, 3, 5, 12])
+@pytest.mark.asyncio
+async def test_the_slides_cap_is_exactly_the_number_of_renders_the_reply_carries(project: Project, budget: int) -> None:
+    """The invariant the stage's comment claims: one number, not two that agree.
 
-    Two constants carry this name -- one here bounding what `slides` may hold, one in
-    the stage deciding how many renders a reply carries -- and the stage truncates
-    with `[:BATCH_VIEWS]`. Tighter here is a deliberate choice; looser is a request
-    the reply silently answers in part, which is how a model concludes it has looked
-    at a page nobody rendered.
+    Two constants carried this and drifted to 1 and 3. Tighter on the tool side is not
+    the safe direction it looks like: the cap is what tells a caller how many pages it
+    may name, so a cap under the batch forbids pages the reply would have carried, and
+    a cap over it lets a call name pages the reply drops without saying so. Either way
+    a model concludes it has looked at a page nobody rendered.
     """
-    from raven.ppt.stages.build import BATCH_VIEWS as RENDERED
+    views = FakeViews(pages=40)
+    tool = _tool(project, _ok(project, pages=40), views, views_per_call=budget)
+    cap = tool.parameters["properties"]["slides"]["maxItems"]
 
-    tool = PptBuildTool(workspace=Path("/tmp"), stage=None, views=None, profile=registry.get("script_author"))
+    assert cap == budget
+    assert cap == tool.stage.views_per_call, "the tool must read the number, not restate it"
 
-    assert BATCH_VIEWS <= RENDERED
-    assert tool.parameters["properties"]["slides"]["maxItems"] == BATCH_VIEWS
+    asked = list(range(3, 3 + cap))
+    reply = await tool.execute(project="tarvis", slides=asked)
+
+    assert views.asked == [asked], "every page the cap allows comes back"
+    labels = [b["text"] for b in (reply.blocks or []) if b["type"] == "text"]
+    assert [f"Page {n} of 40" in label for n, label in zip(asked, labels, strict=True)] == [True] * cap
+
+
+@pytest.mark.parametrize("budget", [1, 3, 5])
+@pytest.mark.asyncio
+async def test_the_walk_advances_by_the_same_number_it_shows(project: Project, budget: int) -> None:
+    """Omitting `slides` walks the deck in batches of the budget, and the reply's own
+    `page_from` hint lands on the page after the last one it showed -- so following it
+    covers the deck exactly once, with no page skipped and none shown twice."""
+    seen_pages: list[int] = []
+    page_from, calls = 1, 0
+    while page_from <= 19:
+        views = FakeViews(pages=19)
+        body = _body(
+            await _tool(project, _ok(project, pages=19), views, views_per_call=budget).execute(
+                project="tarvis", page_from=page_from
+            )
+        )
+        shown = views.asked[0]
+        assert len(shown) <= budget
+        seen_pages += shown
+        calls += 1
+        page_from = shown[-1] + 1
+        if page_from <= 19:
+            assert body["pages_not_shown"] == 19 - shown[-1]
+            assert f"page_from={page_from}" in body["next_step"]
+
+    assert seen_pages == list(range(1, 20)), "the deck is covered once, in order"
+    assert calls == -(-19 // budget), "no more calls than the budget makes necessary"
+
+
+@pytest.mark.asyncio
+async def test_a_batch_of_renders_survives_a_transport_that_cannot_carry_them(project: Project) -> None:
+    """The fallback that moves the pictures to a following user message.
+
+    `labelled_images` returns a single picture bare -- its one label is already in the
+    result text -- so at a budget of one nothing here was exercised. With a batch the
+    labels have to interleave, or pairing the third label with the third picture is
+    positional guesswork across a message boundary.
+    """
+    from raven.providers.capabilities import image_placeholder_text
+    from raven.utils.helpers import labelled_images
+
+    views = FakeViews(pages=19)
+    reply = await _tool(project, _ok(project, pages=19), views).execute(project="tarvis")
+    blocks = reply.blocks or []
+
+    attached = labelled_images(blocks)
+    assert [b["type"] for b in attached] == ["text", "image_url"] * 3
+    for number, label in zip((1, 2, 3), attached[::2], strict=True):
+        assert f"Page {number} of 19" in label["text"]
+
+    # And the text that stays behind in the tool result still counts the pictures and
+    # still names the pages the reply did not show.
+    placeholder = image_placeholder_text(blocks)
+    assert "[3 images attached to the following message" in placeholder
+    body = json.loads(reply.model_text)
+    assert body["pages_shown"] == "1, 2, 3"
+    assert body["pages_not_shown"] == 16
+    assert "16 of this deck's 19 are not here" in body["next_step"]
+
+
+def _real_stage(pages: int, views_per_call: int) -> Any:
+    """A real `BuildStage`, so the unseen record is the one publication reads."""
+    from raven.ppt.backends.script import script_path
+    from raven.ppt.stages.build import BuildStage
+
+    async def backend(project: Project, _script: str | None) -> BuildOutcome:
+        deck = project.build_dir / "deck.pptx"
+        deck.parent.mkdir(parents=True, exist_ok=True)
+        deck.write_bytes(b"PK")
+        script_path(project).parent.mkdir(parents=True, exist_ok=True)
+        script_path(project).write_text(
+            "".join(f"# SLIDE {n}\ndraw_{n}()\n" for n in range(1, pages + 1)), encoding="utf-8"
+        )
+        return BuildOutcome(
+            ok=True,
+            pptx_path=deck,
+            pages=pages,
+            sources=tuple(PageSource(page=n, first_line=2 * (n - 1), last_line=2 * n) for n in range(1, pages + 1)),
+            source_digest="x",
+        )
+
+    async def measure(_project: Project, _pptx: Path, _outcome: Any = None) -> list[Finding]:
+        return []
+
+    return BuildStage(
+        backend=backend,
+        measure=measure,
+        profile=registry.get("script_author"),
+        views_per_call=views_per_call,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_unseen_gate_records_exactly_the_pages_the_reply_rendered(project: Project) -> None:
+    """What blocks publication is computed from the same list the pictures come from.
+
+    This is the invariant the stage's comment asserts and the code did not hold. The
+    gate is written from the pages the stage selected and the reply renders that same
+    selection, so the two must be one list -- a gate reading a wider number would mark
+    a page seen that was never shown, which is the one refusal a model cannot answer by
+    editing the deck.
+
+    Both halves are asserted, because only one of them is about the drift: that the two
+    agree, and that they agree on the whole batch the budget allows rather than on the
+    single page the tool's own cap used to force.
+    """
+    from raven.ppt.services import seen
+
+    views = FakeViews(pages=10)
+    stage = _real_stage(pages=10, views_per_call=3)
+    tool = PptBuildTool(workspace=project.workspace, stage=stage, views=views, profile=registry.get("script_author"))
+
+    body = _body(await tool.execute(project="tarvis"))
+    recorded = set(json.loads(seen.seen_path(project).read_text())["pages"])
+
+    assert views.asked == [[1, 2, 3]], "the batch the budget allows"
+    assert recorded == {"1", "2", "3"}, "the gate records what was shown, and all of it"
+    assert body["ok"] is False and "unseen_page" in body["error"]
+    unseen = [f for f in body["measured"]["for_you"] if f["kind"] == "unseen_page"]
+    assert unseen[0]["detail"]["pages"] == [4, 5, 6, 7, 8, 9, 10], "the seven it did not show"
+
+    # And the walk keeps them equal: the second batch adds exactly its own pages.
+    await tool.execute(project="tarvis", page_from=4)
+    assert views.asked[-1] == [4, 5, 6]
+    assert set(json.loads(seen.seen_path(project).read_text())["pages"]) == {str(n) for n in range(1, 7)}
+
+
+def _body(reply) -> dict:
+    """The reply's JSON, whether or not it came back with pictures attached."""
+    said = reply if isinstance(reply, str) else reply.model_text
+    return json.loads(said[said.index("{") : said.rindex("}") + 1])
+
+
+class _Reader:
+    """A stand-in for ppt_review that records when the build reached for it."""
+
+    name = "ppt_review"
+
+    def __init__(self, reply=None, record: Path | None = None, covers=(1, 2)) -> None:
+        self.calls: list[str] = []
+        self.record = record
+        self.covers = covers
+        self._reply = reply if reply is not None else (
+            '{"ok": true, "project": "ws", "pages_reviewed": 3, "pages_with_something_to_fix": 1,'
+            ' "problems": {"2": [{"kind": "underfilled_page", "where": "the lower third",'
+            ' "what": "empty", "fix": "say more"}]}, "next_step": "take them one page at a time"}'
+        )
+
+    async def execute(self, project: str, **_kwargs):
+        self.calls.append(project)
+        if self.record is not None:
+            self.record.parent.mkdir(parents=True, exist_ok=True)
+            # `pages_read` and not an empty object: the hook runs while a page of the
+            # deck is uncovered, so a record that names no page is a deck still unread.
+            # The union, as the tool itself writes it: a fake that replaced the
+            # record would hide exactly the defect this file now pins.
+            prior = []
+            if self.record.is_file():
+                try:
+                    prior = json.loads(self.record.read_text()).get("pages_read", [])
+                except ValueError:
+                    prior = []
+            self.record.write_text(
+                json.dumps({"pages_read": sorted(set(prior) | set(self.covers))}), encoding="utf-8"
+            )
+        return ToolResult(model_text=self._reply, blocks=[{"type": "text", "text": "Page 2, and what"}])
+
+
+async def test_the_first_finished_deck_is_read_without_being_asked(project: Project) -> None:
+    """Asking the author to call it left it to the author. One run made twenty builds
+    and reached `ppt_review` at iteration 61 on its own; a run that never leaves draft
+    never meets the sentence naming it at all. The first delivered build is the moment
+    the reading is worth having, so this is where it happens.
+    """
+    reader = _Reader()
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    reply = await tool.execute(project=project.slug)
+    said = reply if isinstance(reply, str) else reply.model_text
+
+    assert reader.calls == [project.slug]
+    assert "first_reading" in said
+    assert "underfilled_page" in said
+    assert "take them one page at a time" in said
+
+
+async def test_a_draft_is_not_read_and_neither_is_a_deck_that_was_refused(project: Project) -> None:
+    """A draft is a part-written deck and a refused build is not a deck: a reading of
+    either is a list about pages that are about to change, paid for per page."""
+    reader = _Reader()
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    await tool.execute(project=project.slug, draft=True)
+    assert reader.calls == [], "a draft is not the finished deck"
+
+    refused = replace(_ok(project), ok=False, note="the built deck is empty")
+    refused = replace(refused, data={k: v for k, v in refused.data.items() if k != "pptx_path"})
+    undelivered = _tool(project, refused)
+    undelivered.review = reader
+    await undelivered.execute(project=project.slug)
+    assert reader.calls == [], "nothing was published, so there is nothing to read"
+
+
+async def test_the_deck_is_read_once_and_not_on_every_build(project: Project) -> None:
+    """Every build after the first would pay for a whole deck of model calls to say
+    what the author has already been told. The record on disk is what remembers."""
+    from raven.ppt.tools.review import RECORD_FILE
+
+    reader = _Reader(record=project.review_dir / RECORD_FILE)
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    await tool.execute(project=project.slug)
+    await tool.execute(project=project.slug)
+    await tool.execute(project=project.slug)
+
+    assert reader.calls == [project.slug], "read once, on the first finished deck"
+
+
+async def test_a_deck_longer_than_one_reading_is_read_across_builds(project: Project) -> None:
+    """`ppt_outline` takes up to 40 pages and one reading covers 30.
+
+    The hook used to skip on "a record exists", so a 40-page deck was marked read
+    after 30 and pages 31-40 never got the reading the tool description promises.
+    Coverage is the test now, so the next delivered build reads the remainder.
+    """
+    from raven.ppt.tools.review import RECORD_FILE
+
+    reader = _Reader(record=project.review_dir / RECORD_FILE, covers=range(1, 31))
+    tool = _tool(project, _ok(project, pages=40))
+    tool.review = reader
+
+    await tool.execute(project=project.slug)
+    assert reader.calls == [project.slug], "thirty of forty pages is not a deck that was read"
+
+    # The second round covers the rest. Its record has to hold the union: a record of
+    # only the round that just ran is {31-40} plus whatever filled the cap, and the
+    # deck alternates between two sets forever without ever being covered.
+    reader.covers = range(31, 41)
+    await tool.execute(project=project.slug)
+    await tool.execute(project=project.slug)
+
+    assert reader.calls == [project.slug] * 2, "the deck was covered and read a third time"
+    read = json.loads((project.review_dir / RECORD_FILE).read_text())["pages_read"]
+    assert read == list(range(1, 41)), read
+
+
+async def test_a_reading_that_read_nothing_leaves_no_record(project: Project) -> None:
+    """A transient total failure used to disable the reading for the deck's whole life.
+
+    Every reply empty or unparsable meant no page was read, the reply still wrote
+    `review.json`, and every later build skipped the hook because that file was there.
+    Reported on the merge request and reproduced with `_asks({}, [], [1, 2])`.
+    """
+    from raven.ppt.tools.review import RECORD_FILE
+
+    record = project.review_dir / RECORD_FILE
+    reader = _Reader(record=record, covers=())
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    await tool.execute(project=project.slug)
+    await tool.execute(project=project.slug)
+
+    assert reader.calls == [project.slug] * 2, "a reading that covered no page is not a reading"
+
+
+async def test_a_reading_that_fails_does_not_cost_the_delivery(project: Project) -> None:
+    """The deck is built, gated and published before this runs. A reviewer that threw,
+    answered nothing, or answered something unparseable must leave all of that standing.
+    """
+
+    class Broken(_Reader):
+        async def execute(self, project: str, **_kwargs):
+            self.calls.append(project)
+            raise RuntimeError("the gateway said 503")
+
+    reader = Broken()
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    reply = await tool.execute(project=project.slug)
+    body = _body(reply)
+
+    assert reader.calls == [project.slug]
+    assert "first_reading" not in body, "a reading that failed contributes nothing"
+    assert body["pptx_path"], "and the deck is still delivered"
+
+
+async def test_without_a_reviewer_the_build_is_what_it_always_was(project: Project) -> None:
+    """A build with no provider registers no reviewer, and that route must be the
+    plain one rather than a broken one."""
+    tool = _tool(project, _ok(project))
+    tool.review = None
+
+    body = _body(await tool.execute(project=project.slug))
+
+    assert "first_reading" not in body
+    assert body["pptx_path"]

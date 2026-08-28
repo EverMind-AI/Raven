@@ -1,0 +1,447 @@
+"""`ppt_review`: a second reader looks at the built pages and lists what is wrong.
+
+Every other check on this route is measured -- a number off the file or the render,
+reported by a gate. This one is a reading, and it exists because the measured half
+cannot reach the largest class of defect a delivered deck still carries. Three runs
+delivered pages with a colour bar over the lower half, cards holding three lines in
+a region twice their content, a figure at a third of the width its band offered, and
+not one card carrying a mark; the gates reported some of it as warnings and the
+author, having written those pages itself, accepted every one.
+
+That is the reason this is a separate call and not more text in the build reply. The
+author is reviewing its own work with the whole history of writing it in context: a
+region it deliberately filled reads to it as a decision already made, and a warning
+against a decision is a warning it has already answered. The reviewer here starts
+empty -- one page, its plan, and the requirements -- so a void is a void.
+
+It refuses nothing and blocks nothing. What comes back is a list, and which of it to
+act on is the author's, the same standing the measured warnings have.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Any
+
+from raven.agent.tools.base import Tool, ToolResult
+from raven.ppt.backends.script import deck_path
+from raven.ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
+from raven.ppt.stages.build import BATCH_VIEWS
+from raven.ppt.tools import _return
+from raven.ppt.tools._args import ArgumentError, as_ints
+from raven.utils.helpers import image_block, text_block
+
+# How many pages one call reviews. A whole deck at once is the working case,
+# because the author calls this when the deck is built.
+MAX_PAGES = 30
+
+# Where the list is left behind. The reply reaches the author's context and nothing
+# else: a 19-page review that took seven and a half minutes was unrecoverable an hour
+# later, because the transcript truncates a tool result and the tool wrote nothing.
+# `blocking.json` beside it exists for the same reason -- what a round concluded has to
+# outlive the round, or the next one cannot tell what it fixed.
+RECORD_FILE = "review.json"
+
+# How many of those requests are in flight at once. A backstop against a whole-deck
+# review opening as many concurrent streaming requests as the deck has pages -- each
+# carrying an image, against one endpoint -- and not a tuned figure: nothing here has
+# ever been observed to be rate limited, and the bound has a measured cost. Nineteen
+# pages came to 455s at four at a time where eighteen unbounded came to 209s, so a
+# number low enough to be the dominant cost buys protection from something nobody has
+# seen. Eight leaves a deck of the usual length two or three batches deep. If a run is
+# ever actually limited, that is the measurement this should be set from.
+READERS = 8
+
+# What one page's reply may cost. A reviewer that finds four problems writes four
+# short objects; reasoning models spend from the same budget, which is why this is
+# not tight.
+REPLY_TOKENS = 2500
+
+# The document both sides read. The author writes against it and this call judges the
+# render by it, and that is the point of it being a file rather than a string here: a
+# requirement the reviewer holds a page to and the author never saw is a requirement
+# nobody agreed to. It reaches the author as `deck/build/references/design-requirements.md`
+# through the same mechanism as every other reference document.
+REQUIREMENTS_NAME = "design-requirements.md"
+
+BRIEF = """One page of a finished deck, in {language}. You did not build it. Say what is
+wrong with how it looks, so the author can fix it.
+
+Judge it yourself — you can see the page. Below is only what is easy to get backwards.
+
+{requirements}
+
+`reads`: one sentence on how the page comes across. Handsome, plain, busy, thin,
+unfinished, a wall of text, one strong figure carrying a weak column. Your own eye, not a
+summary of the list. Every page gets one.
+
+`problems`: one entry each. Only what you can see — not whether a number is true. Where and
+what, not how far. Nothing for what the page does well. No repeats.
+
+JSON and nothing else:
+
+{{"reads": "one sentence",
+ "problems": [{{"kind": "oversized_shape|underfilled_page|too_full|alignment|marks|figure|table|listed|type|claim",
+ "where": "...", "what": "...", "fix": "..."}}]}}
+"""
+
+
+def requirements() -> str:
+    """The design-requirements document, or "" when this checkout ships no skill.
+
+    Read at call time rather than at import: the document is the skill's, and a run
+    whose skill was edited between two reviews should be judged by the edited one.
+    """
+    from raven.ppt.services.assets.script_helpers import REFERENCE_DIRNAME, reference_files
+
+    return reference_files().get(f"{REFERENCE_DIRNAME}/{REQUIREMENTS_NAME}", "")
+
+
+# The two kinds of blank region are two kinds here rather than one with a note, because
+# the answers differ and only one of them is cheap: a round of repair answered every void
+# by shrinking the shape over it, which fixes `oversized_shape` and, on the pages that
+# were really `underfilled_page`, removes the cover and leaves the room. Counted apart,
+# that shows up as the second number not moving.
+_ROOM_KINDS = ("oversized_shape", "underfilled_page")
+# `listed` is section 3.5: parallel claims set as a list, or as a table whose rows are
+# each a thing rather than a column to compare down. The measured gate `listed_claims`
+# reads the file for the first half and reported it on four pages of a delivered deck
+# that shipped anyway; nothing was reading the render for either half.
+_KINDS = (*_ROOM_KINDS, "too_full", "alignment", "marks", "figure", "table", "listed", "type", "claim")
+
+
+class PptReviewTool(Tool):
+    name = "ppt_review"
+    description = (
+        "Have a second reader look at the pages you built and list what is wrong with them. It renders each "
+        "page and reviews it on an empty context -- no memory of writing it -- against the design requirements "
+        "in deck/build/references/design-requirements.md, the same document you write against: blank "
+        "room, crowding, alignment, missing icons, figure sizing, table geometry, type and whether the page "
+        "still carries its planned claim. It returns one list of problems per page, and nothing else: it "
+        "refuses nothing, publishes nothing and changes no file. "
+        "Call it once the deck builds without anything blocking, before you decide the deck is done -- the "
+        "pages you wrote read differently to someone who did not write them. Then answer the entries you "
+        "agree with by editing build.py and building again."
+    )
+    timeout_seconds = 900.0
+
+    def __init__(self, workspace: Path, views: Any, composer: Any | None = None) -> None:
+        self.workspace = workspace
+        self.views = views
+        self.composer = composer
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
+                "pages": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "description": (
+                        "the pages to review; omit to review the whole deck, which is the usual call. "
+                        "Name pages when you have just changed those and want them read again"
+                    ),
+                },
+            },
+            "required": ["project"],
+        }
+
+    async def execute(self, project: str, pages: list[int] | None = None, **kwargs: Any) -> str | ToolResult:
+        try:
+            deck = Project(workspace=self.workspace, slug=project)
+        except ValueError as exc:
+            return _return.failed(str(exc))
+        if self.composer is None:
+            return _return.failed(
+                "this build has no model configured for a second reading, so ppt_review cannot run",
+                hint="look at the renders ppt_build returns and judge them yourself",
+            )
+        try:
+            wanted = as_ints(pages, "pages")
+        except ArgumentError as exc:
+            return _return.failed(str(exc), hint="pages: [3, 4, 5]")
+
+        built = deck_path(deck)
+        if not built.is_file():
+            return _return.failed(
+                "nothing has been built for this deck yet, so there are no pages to review",
+                hint="write deck/build/build.py and call ppt_build first",
+            )
+
+        if not requirements():
+            return _return.failed(
+                f"this checkout ships no {REQUIREMENTS_NAME}, so there is nothing to hold a page to",
+                hint="the requirements are the skill's; a build without the skill has no design review",
+            )
+
+        renders = await self.views.pages(built, deck.review_dir / "review", wanted or None)
+        if not renders:
+            return _return.failed(
+                "the pages could not be rendered on this machine, so nothing could be looked at",
+                hint="the renders ppt_build returns are the only reading available here",
+            )
+        # A deck longer than the cap is read across builds rather than truncated: the
+        # pages an earlier reading already covered go to the back of the queue, so a
+        # 40-page deck is read 30 then 10 instead of 30 then the same 30. An explicit
+        # `pages=` is the caller's own choice and is left in the order it asked for.
+        shown = sorted(renders, key=lambda number: (number in _already_read(deck), number))[:MAX_PAGES]
+        read, reads = await self._read(deck, renders, shown)
+
+        found = {number: problems for number, problems in read.items() if problems}
+        clean = [number for number in shown if number in read and not read[number]]
+        unread = [number for number in shown if number not in read]
+        payload: dict[str, Any] = {
+            "project": project,
+            "pages_reviewed": len(read),
+            "pages_with_something_to_fix": len(found),
+            "problems": {str(number): found[number] for number in sorted(found)},
+            # How each page reads as a whole, which the list cannot say: a page can carry
+            # three small entries and still be the best in the deck, and a page with an
+            # empty list can be plain. Kept for every page read, including the clean ones,
+            # because "nothing to fix" and "nothing to it" are different answers.
+            "reads": {str(number): reads[number] for number in sorted(reads)},
+        }
+        if clean:
+            payload["nothing_found_on"] = clean
+        if unread:
+            # Named rather than dropped: a page the reviewer could not read is not a
+            # page that came back clean, and the two are one list once they are merged.
+            payload["could_not_be_read"] = unread
+        if len(renders) > len(shown):
+            payload["pages_not_reviewed"] = sorted(set(renders) - set(shown))
+        # What the record is for: the automatic reading runs while a page of the deck
+        # has not been read, so the pages it covered have to be in it. A deck longer
+        # than MAX_PAGES is read across builds rather than truncated silently, and a
+        # round that read nothing leaves no record at all -- writing one would mark the
+        # deck read and the hook would never fire again.
+        # The union with what earlier rounds covered, not this round's own list. A
+        # 40-page deck reads 1-30, then puts 31-40 first and fills the rest of the cap
+        # with pages it has already read -- so a record holding only the second round
+        # is {31-40, 1-20}, the third round goes back for 21-30, and the deck is never
+        # covered. Reported on the merge request.
+        payload["pages_read"] = sorted(set(read) | _already_read(deck))
+        if read:
+            _record(deck, payload)
+
+        # With the pictures, and this is the whole difference between a list that gets
+        # read and one that gets dismissed. The reply used to be text: 27 entries about
+        # 18 pages, arriving in a context where compaction keeps one image-bearing
+        # message, so the author was asked to "look at the page each one names" with
+        # nothing to look at. It answered "most of these are whitespace on the table
+        # pages and template decoration, keeping them", made two edits and published.
+        worst = sorted(found, key=lambda number: (-len(found[number]), number))[:BATCH_VIEWS]
+        blocks: list[Any] = []
+        for number in sorted(worst):
+            said = [f"Page {number}, and what the second reader said about it:"]
+            if number in reads:
+                said.append(f"  reads as: {reads[number]}")
+            said += [f"  - [{entry['kind']}] {entry['where']}: {entry['what']}" for entry in found[number]]
+            blocks.append(text_block("\n".join(said)))
+            blocks.append(image_block(self.views.data_uri(renders[number])))
+        if not blocks:
+            return _return.done(asks=_asks(found, clean, unread), **payload)
+        rest = [number for number in sorted(found) if number not in worst]
+        if rest:
+            payload["carrying_more_than_shown"] = rest
+        body = _return.done(asks=_asks(found, clean, unread, rest), **payload)
+        return _return.with_images(body, blocks)
+
+    async def _read(
+        self, deck: Project, renders: dict[int, Path], shown: list[int]
+    ) -> tuple[dict[int, list[dict[str, str]]], dict[int, str]]:
+        """One page, one empty context, one list. Concurrently, and per page.
+
+        Per page rather than the whole deck in one call because the void is a fact
+        about one page and a reviewer holding twenty of them reports the three
+        loudest. Failures are dropped from the mapping instead of coming back empty,
+        so `could_not_be_read` can say so.
+        """
+        brief = load_brief(brief_path(deck))
+        language = brief.language if brief is not None else "the deck's own language"
+        outline = load_outline(outline_path(deck))
+        planned = {page.page: page for page in outline.pages} if outline is not None else {}
+        asked = BRIEF.format(language=language, requirements=requirements())
+
+        reading = asyncio.Semaphore(READERS)
+
+        async def one(number: int) -> tuple[int, list[dict[str, str]]] | None:
+            async with reading:
+                reply = await self.composer.ask(
+                    asked,
+                    [
+                        text_block(_said(number, planned.get(number))),
+                        image_block(self.views.data_uri(renders[number])),
+                    ],
+                    max_tokens=REPLY_TOKENS,
+                )
+            try:
+                payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
+            except (ValueError, AttributeError):
+                return None
+            return number, _vetted(payload.get("problems")), str(payload.get("reads") or "").strip()
+
+        read = [entry for entry in await asyncio.gather(*(one(number) for number in shown)) if entry]
+        return (
+            {number: problems for number, problems, _ in read},
+            {number: reads for number, _, reads in read if reads},
+        )
+
+
+def _already_read(deck: Project) -> set[int]:
+    """The pages a previous reading covered, out of the record it left.
+
+    Empty when there is no record, when it cannot be read, or when it predates the
+    field -- all three mean "read it again", which is the safe way to be wrong.
+    """
+    try:
+        said = json.loads((deck.review_dir / RECORD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {int(number) for number in said.get("pages_read", ()) if str(number).lstrip("-").isdigit()}
+
+
+def _record(deck: Project, payload: dict[str, Any]) -> None:
+    """Leave the list on disk, and never fail the call over it.
+
+    A review that ran is worth its reply whether or not the record could be written,
+    so an unwritable review directory costs the note and not the reading.
+    """
+    try:
+        deck.review_dir.mkdir(parents=True, exist_ok=True)
+        (deck.review_dir / RECORD_FILE).write_text(
+            json.dumps({"schema": "raven.ppt.review.v1", **payload}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _said(number: int, plan: Any) -> str:
+    """What the reviewer is told about the page besides the picture.
+
+    Only what the picture cannot show. It is a model that sees, and handing it what is
+    already in front of it dilutes the one thing it is being asked to do -- a version of
+    this pasted the table's header and first row in, which are legible in the render.
+    Whether the page was cloned and what it was planned to argue are not in the render at
+    any resolution, which is the whole test for what belongs here.
+
+    The plan and nothing else of the author's. Handing over the code that drew it
+    would give the reviewer the author's own reasons for the layout, which is
+    exactly the context this call exists to withhold.
+
+    Except which of the two kinds of page it is, and that one is load-bearing: on a
+    page cloned from the template the author fills text into the template's shapes
+    and cannot add an icon or restyle a badge. Without it, every cloned page in an
+    18-page deck came back asking for icons the page had no way to carry -- 7
+    findings, every one of them on a cloned page. The plan already carries it, in
+    the prototype the author named.
+    """
+    said = [f"Page {number}."]
+    if plan is None:
+        said.append("No plan was recorded for this page; review the picture alone.")
+        return "\n".join(said)
+    said.append(
+        "This page was cloned from the template's own structure: its badges, marks and their "
+        "styling are the template's."
+        if getattr(plan, "prototype", None)
+        else "This page was composed from scratch: every mark and every measurement on it is the "
+        "author's own."
+    )
+    said.append(f"Its planned claim: {plan.claim}")
+    if plan.carries:
+        said.append(f"What it was planned to carry: {plan.carries}")
+    return "\n".join(said)
+
+
+def _vetted(problems: Any) -> list[dict[str, str]]:
+    """The entries that have the three fields a reader can act on.
+
+    An entry missing `where` is a sentence about the deck rather than a problem on a
+    page, and the point of the list is that each line can be found and fixed.
+    """
+    kept: list[dict[str, str]] = []
+    for entry in problems if isinstance(problems, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        where, what = str(entry.get("where") or "").strip(), str(entry.get("what") or "").strip()
+        if not where or not what:
+            continue
+        kind = str(entry.get("kind") or "").strip()
+        kept.append(
+            {
+                "kind": kind if kind in _KINDS else "other",
+                "where": where,
+                "what": what,
+                "fix": str(entry.get("fix") or "").strip(),
+            }
+        )
+    return kept
+
+
+def _asks(
+    found: dict[int, list[dict[str, str]]], clean: list[int], unread: list[int], rest: list[int] | None = None
+) -> list[str]:
+    """What to do with the list, said in the reply rather than only in the payload."""
+    if not found and not clean and unread:
+        # Every reply came back empty or unparsable. `kinds[0]` below indexed an empty
+        # list here, and the raise was swallowed by the caller *after* the record had
+        # been written -- which is the automatic reading disabled for the rest of the
+        # deck's life by one transient failure. Nothing is recorded on this path now.
+        return [
+            f"the second reader returned nothing readable for any of page(s) {unread}, so this deck has "
+            "not been read yet. Nothing is recorded, so the next delivered build reads it again; "
+            "ppt_review(pages=...) also runs it now"
+        ]
+    if not found and not unread:
+        return [
+            f"a second reader looked at {len(clean)} page(s) and found nothing to fix. "
+            "Nothing here asks you to change anything"
+        ]
+    counted = sum(len(entries) for entries in found.values())
+    kinds = sorted({entry["kind"] for entries in found.values() for entry in entries})
+    asks = [
+        f"{counted} problem(s) on {len(found)} page(s), by kind: {', '.join(kinds)}. These are one reader's "
+        "reading of the pictures, not measurements: look at the page each one names before you act on it, "
+        "and leave alone what you look at and disagree with. Answer the rest by editing build.py and "
+        "building again",
+        # The kinds are printed above because they say what the round is about. They are
+        # also how the list gets dismissed: one sentence about a kind answers every page
+        # carrying it without opening any of them. A live run replied "most of these are
+        # whitespace on the table pages and template decoration, keeping them", made two
+        # edits and published -- against eighteen pages of entries.
+        f"take them one page at a time. Each entry names a page, and a verdict on a kind -- "
+        f"'most of these are {kinds[0]}, keeping them' -- answers every page carrying it without opening "
+        "one. If you leave an entry, open its page first and say what you saw there, by page number",
+    ]
+    if rest:
+        asks.append(
+            f"the pages carrying the most are rendered below with their entries beside them. Page(s) "
+            f"{rest} carry entries too and are not pictured here: ppt_review(pages={rest[:3]}) reads "
+            "those again with their renders, and ppt_build(slides=...) shows them without re-reading"
+        )
+    kinds_found = {entry["kind"] for entries in found.values() for entry in entries}
+    if "oversized_shape" in kinds_found:
+        asks.append(
+            "an oversized_shape is answered by measuring: card_size for a card and the row drawn at max() of "
+            "them, text_size for a band of copy, picture_size for a figure, table_size for a table -- take "
+            "that much of the region and leave the rest to the next band. Copy added into a box sized for the "
+            "old copy comes back as type under the floor, which is the same page failing the other way, so "
+            "measure again after adding"
+        )
+    if "underfilled_page" in kinds_found:
+        asks.append(
+            "an underfilled_page is not answered by shrinking anything -- the shapes already fit, and taking "
+            "a cover off room leaves the room. Either the page gets more that it needs said (the units, the "
+            "year, the figure behind the number, an icon on each card, fewer and wider cards, a point moved "
+            "here from a page carrying one too many), or this page and its neighbour become one page. A page "
+            "with nothing more to say about its claim should not be a page of its own, and one page fewer is "
+            "a real answer rather than a last resort"
+        )
+    if unread:
+        asks.append(f"page(s) {unread} could not be read, so nothing here says whether they are right")
+    return asks

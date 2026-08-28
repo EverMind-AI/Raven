@@ -209,35 +209,8 @@ def test_two_points_are_a_plan_however_short_they_are() -> None:
     assert _thin_pages(outline, _Bare()) == []
 
 
-def test_a_table_led_page_without_cell_structure_is_reported() -> None:
-    outline = Outline(
-        takeaway="t",
-        pages=(_planned(1, ("one", "two"), carries="pricing table"),),
-    )
-
-    findings = _thin_pages(outline, _Bare())
-    assert [finding.kind for finding in findings] == ["thin_page"]
-    assert findings[0].detail == {"table_plan": False, "carries": "pricing table"}
 
 
-def test_a_drawn_table_with_complete_cell_rows_is_planned() -> None:
-    outline = Outline(
-        takeaway="t",
-        pages=(
-            _planned(
-                1,
-                ("Compare the plans.",),
-                carries="drawn table",
-                table_plan={
-                    "columns": ("Plan", "Price"),
-                    "rows": (("Hobby", "Free"), ("Pro", "$249")),
-                    "reading": "compare price",
-                },
-            ),
-        ),
-    )
-
-    assert _thin_pages(outline, _Bare()) == []
 
 
 def test_a_page_carrying_a_figure_plans_its_copy_in_the_figure() -> None:
@@ -256,11 +229,6 @@ def test_a_page_with_an_errand_is_going_to_get_something_to_show() -> None:
 # back, and whether a page has the room for the grid it describes.
 
 
-def _plan(**fields) -> dict[str, object]:
-    """A table plan as it arrives from the tool, normalised the way the tool does."""
-    from raven.ppt.tools.outline import _table_plan
-
-    return _table_plan(fields)
 
 
 _BENCHMARKS = {
@@ -309,273 +277,38 @@ _TWELVE_PHRASES = {
 }
 
 
-def test_a_two_column_plan_reads_as_a_table_and_not_as_a_dict() -> None:
-    """The author used to be handed `{'columns': ('指标', '自研'), 'rows': ...}`."""
-    from raven.ppt.contracts import PlannedTable
 
-    plan = _plan(columns=["指标", "自研"], rows=[["成本", "4.2"], ["延迟", "38ms"]], reading="compare cost")
 
-    assert PlannedTable.of(plan).lines() == [
-        "  指标 | 自研",
-        "  --- | ---",
-        "  成本 | 4.2",
-        "  延迟 | 38ms",
-        "  Read it for: compare cost",
-    ]
 
 
-def test_a_six_column_plan_keeps_its_header_over_its_rows() -> None:
-    from raven.ppt.contracts import PlannedTable
 
-    assert PlannedTable.of(_plan(**_BENCHMARKS)).lines() == [
-        "  Benchmark | Ours | Baseline A | Baseline B | Baseline C | Delta",
-        "  --- | --- | --- | --- | --- | ---",
-        "  DAVIS J&F | 82.4 | 79.1 | 78.6 | 77.2 | +3.3",
-        "  YouTube-VOS | 85.1 | 82.0 | 81.4 | 80.9 | +3.1",
-        "  MOSE | 71.9 | 68.2 | 67.5 | 66.4 | +3.7",
-        "  Read it for: one model against three task-specific ones",
-    ]
 
 
-def test_a_plan_with_no_header_and_no_cue_is_still_read_as_its_rows() -> None:
-    from raven.ppt.contracts import PlannedTable
 
-    assert PlannedTable.of(_plan(rows=[["a", "b"], ["c", "d"]])).lines() == ["  a | b", "  c | d"]
 
 
-def test_a_row_that_arrives_as_a_bare_string_becomes_a_one_cell_row() -> None:
-    """The vestige of the row-labels era, given the one shape everything else has.
 
-    `rows` began as row labels -- one string a row -- and grew into complete cell
-    rows with the string form left in beside it, so one plan could carry both. The
-    schema refuses a bare string now; a replan reply is not schema-checked at all, so
-    one arriving there is a row with one cell rather than a row of another type.
-    """
-    plan = _plan(columns=["Plan", "Price", "Seats"], rows=[["Hobby", "Free", "3"], "Enterprise"])
 
-    assert plan["rows"] == (("Hobby", "Free", "3"), ("Enterprise",))
 
 
-def test_a_row_short_of_the_header_reads_as_a_gap_in_the_grid() -> None:
-    """Which is the only way a plan can still be missing a cell, so it has to show."""
-    from raven.ppt.contracts import PlannedTable
 
-    plan = _plan(columns=["Plan", "Price", "Seats"], rows=[["Hobby", "Free", "3"], "Enterprise"])
 
-    assert PlannedTable.of(plan).lines() == [
-        "  Plan | Price | Seats",
-        "  --- | --- | ---",
-        "  Hobby | Free | 3",
-        "  Enterprise |  |",
-    ]
 
 
-def test_the_rows_schema_asks_for_one_shape() -> None:
-    """It was `oneOf: [array of strings, string]`, so one plan could mix the two."""
-    from raven.ppt.tools.outline import PptOutlineTool
 
-    pages = PptOutlineTool(workspace=Path("/tmp")).parameters["properties"]["pages"]
-    rows = pages["items"]["properties"]["table_plan"]["properties"]["rows"]
 
-    assert rows["items"]["type"] == "array"
-    assert rows["items"]["items"] == {"type": "string"}
-    assert "oneOf" not in str(rows)
 
 
-def test_a_table_plan_no_page_can_hold_is_reported() -> None:
-    from raven.ppt.tools.outline import _table_room
 
-    outline = Outline(
-        takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=_plan(**_TWELVE_PHRASES)),)
-    )
-    findings = _table_room(outline)
 
-    assert [f.kind for f in findings] == ["table_plan"]
-    assert findings[0].severity.value == "warning"
-    assert findings[0].page == 1
-    assert findings[0].detail["columns"] == 12
-    assert findings[0].detail["width_in"] > findings[0].detail["width_room_in"]
-    assert "drop the columns the claim does not rest on" in findings[0].message
 
 
-def test_a_six_column_benchmark_table_is_a_table_a_page_holds() -> None:
-    """The plan that must not be reported: 6.5in of text in 11.9in of page."""
-    from raven.ppt.tools.outline import _table_room
 
-    outline = Outline(takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=_plan(**_BENCHMARKS)),))
 
-    assert _table_room(outline) == []
 
 
-def test_twelve_short_columns_are_not_reported_because_the_cap_was_deleted() -> None:
-    """`MAX_TABLE_COLUMNS` was 8 and was deleted for counting the wrong thing.
 
-    Twelve columns of figures fit this canvas -- 6.8in of the 19.0in it carries --
-    and twelve columns of phrases do not. Nothing here counts columns.
-    """
-    from raven.ppt.tools.outline import _table_room
 
-    plan = _plan(
-        columns=[f"M{index}" for index in range(1, 13)],
-        rows=[[f"{row}.{column}" for column in range(12)] for row in range(3)],
-    )
-    outline = Outline(takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=plan),))
-
-    assert _table_room(outline) == []
-
-
-def test_thirty_rows_are_reported_however_narrow_the_columns_are() -> None:
-    """The plan the stage used to pass untouched, caught on the axis that is wrong."""
-    from raven.ppt.tools.outline import _table_room
-
-    plan = _plan(
-        columns=["Region", "Q1", "Q2", "Q3"],
-        rows=[[f"Region {index}", f"{index}.1", f"{index}.2", f"{index}.3"] for index in range(1, 31)],
-    )
-    outline = Outline(takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=plan),))
-    findings = _table_room(outline)
-
-    assert [f.kind for f in findings] == ["table_plan"]
-    assert findings[0].detail["rows"] == 30
-    assert findings[0].detail["height_in"] > findings[0].detail["height_room_in"]
-    assert findings[0].detail["width_in"] < findings[0].detail["width_room_in"]
-    # A plan too tall is not answered by dropping columns, so it is not asked for.
-    assert "carry the rest onto a second page" in findings[0].message
-    assert "drop the columns" not in findings[0].message
-
-
-def test_fifteen_rows_of_four_columns_are_a_table_a_page_holds() -> None:
-    from raven.ppt.tools.outline import _table_room
-
-    plan = _plan(
-        columns=["Region", "Q1", "Q2", "Q3"],
-        rows=[[f"Region {index}", f"{index}.1", f"{index}.2", f"{index}.3"] for index in range(1, 16)],
-    )
-    outline = Outline(takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=plan),))
-
-    assert _table_room(outline) == []
-
-
-def test_a_page_with_no_table_plan_is_measured_for_nothing() -> None:
-    from raven.ppt.tools.outline import _table_room
-
-    assert _table_room(Outline(takeaway="t", pages=(_planned(1, ("a line",)),))) == []
-
-
-def test_the_tolerance_is_the_one_the_built_deck_is_measured_with() -> None:
-    from raven.ppt.services.measure import COLUMN_SQUEEZE
-    from raven.ppt.tools.outline import SAFE_WIDTH_IN, _table_room
-
-    outline = Outline(
-        takeaway="t", pages=(_planned(1, (), carries="drawn table", table_plan=_plan(**_TWELVE_PHRASES)),)
-    )
-    finding = _table_room(outline)[0]
-
-    assert finding.detail["width_room_in"] == round(SAFE_WIDTH_IN * COLUMN_SQUEEZE, 2)
-
-
-def test_the_room_a_table_plan_is_measured_against_is_the_grids_own() -> None:
-    """Four numbers taken off `ppt_layout`, held against it so the pair cannot drift."""
-    from raven.ppt.services.assets.layout import layout_module_source
-    from raven.ppt.services.measure import BODY_FLOOR_PT
-    from raven.ppt.tools.outline import _BODY_LEADING_PT, _HEADER_LEADING_PT, SAFE_HEIGHT_IN, SAFE_WIDTH_IN
-
-    source = layout_module_source()
-
-    assert "CANVAS_W, CANVAS_H = 13.333, 7.5" in source
-    assert "\nMARGIN = 0.72\n" in source
-    assert SAFE_WIDTH_IN == 13.333 - 2 * 0.72
-    assert SAFE_HEIGHT_IN == 7.5 - 2 * 0.72
-    # The row heights `_table_geometry` gives a drawn table, and the size it draws at.
-    assert f"(size + {_HEADER_LEADING_PT}) / 72" in source
-    assert f"size + {_BODY_LEADING_PT}) / 72" in source
-    assert "LABEL_PT = 14" in source
-    assert BODY_FLOOR_PT == 14.0
-
-
-def _drawn(plan: dict[str, object], path: Path) -> Path:
-    """The plan drawn the way `ppt_layout.table` sizes one: columns in proportion.
-
-    Which is what makes the outline-time comparison the same test as `wide_table`
-    rather than a second one: the helper apportions the width it is given between the
-    columns by what they hold, so `sum(needs) > width * COLUMN_SQUEEZE` is exactly the
-    condition under which every one of those columns comes out squeezed.
-    """
-    from pptx import Presentation
-    from pptx.util import Emu, Inches, Pt
-
-    from raven.ppt.contracts import PlannedTable
-    from raven.ppt.services.measure import BODY_FLOOR_PT, DEFAULT_MEASURER
-    from raven.ppt.tools.outline import SAFE_WIDTH_IN
-
-    planned = PlannedTable.of(plan)
-    grid = [planned.columns, *planned.rows]
-    floor = int(BODY_FLOOR_PT)
-    needs = [
-        max(DEFAULT_MEASURER.width(line[index], floor) / 72.0 for line in grid if index < len(line)) + 0.2
-        for index in range(planned.width)
-    ]
-    presentation = Presentation()
-    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    frame = slide.shapes.add_table(
-        len(grid), planned.width, Inches(0.72), Inches(0.72), Inches(SAFE_WIDTH_IN), Inches(3)
-    )
-    for index, need in enumerate(needs):
-        frame.table.columns[index].width = Emu(int(round(SAFE_WIDTH_IN * need / sum(needs) * 914400)))
-    for row, line in enumerate(grid):
-        for column in range(planned.width):
-            cell = frame.table.cell(row, column)
-            cell.text = line[column] if column < len(line) else ""
-            for paragraph in cell.text_frame.paragraphs:
-                for run in paragraph.runs:
-                    run.font.size = Pt(floor)
-    presentation.save(str(path))
-    return path
-
-
-def test_the_plan_this_reports_is_the_table_the_built_deck_reports(tmp_path) -> None:
-    """The derivation, run rather than argued: the same two plans, drawn and measured."""
-    from raven.ppt.services.measure import wide_tables
-
-    reported = wide_tables(_drawn(_plan(**_TWELVE_PHRASES), tmp_path / "phrases.pptx"))
-
-    assert [f.kind for f in reported] == ["wide_table"]
-    # Every column, which is what proportional allocation makes of one table too wide.
-    assert len(reported[0].detail["squeezed"]) == 12
-    assert wide_tables(_drawn(_plan(**_BENCHMARKS), tmp_path / "benchmarks.pptx")) == []
-
-
-def test_an_outline_read_back_off_disk_holds_one_row_shape(tmp_path) -> None:
-    """Including one edited by hand, which is the only way a bare row still arrives."""
-    import json
-
-    from raven.ppt.contracts import load_outline
-
-    path = tmp_path / "outline.json"
-    path.write_text(
-        json.dumps(
-            {
-                "takeaway": "t",
-                "pages": [
-                    {
-                        "page": 1,
-                        "claim": "c",
-                        "table_plan": {"columns": ["Plan", "Price"], "rows": [["Hobby", "Free"], "Enterprise"]},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    outline = load_outline(path)
-
-    assert outline is not None
-    assert outline.pages[0].table_plan == {
-        "columns": ("Plan", "Price"),
-        "rows": (("Hobby", "Free"), ("Enterprise",)),
-    }
 
 
 def test_the_page_structure_a_plan_declares_survives_the_round_trip(tmp_path) -> None:
@@ -595,36 +328,6 @@ def test_the_page_structure_a_plan_declares_survives_the_round_trip(tmp_path) ->
     assert outline.pages[0].layout == "P14 + M4 + M11"
 
 
-async def test_a_table_plan_no_page_can_hold_comes_back_from_the_tool(tmp_path) -> None:
-    """A warning and not a refusal: which way to answer it is the author's (D2)."""
-    import json
-
-    from raven.ppt.contracts import DeckBrief, PageBudget, Project, brief_path, write_brief
-    from raven.ppt.tools.outline import PptOutlineTool
-
-    deck = Project(workspace=tmp_path, slug="deck")
-    write_brief(DeckBrief(language="English", audience="a review", pages=PageBudget(1, 4)), brief_path(deck))
-
-    body = json.loads(
-        await PptOutlineTool(tmp_path).execute(
-            project="deck",
-            takeaway="one model matches four",
-            pages=[
-                {
-                    "page": 1,
-                    "claim": "One model matches four task-specific ones",
-                    "carries": "drawn table",
-                    "says": ["Compare: the one against the four.", "Explain: why it holds."],
-                    "table_plan": _TWELVE_PHRASES,
-                }
-            ],
-        )
-    )
-
-    assert body["ok"] is True
-    assert body["recorded"] is True
-    assert [entry["kind"] for entry in body["measured"]["for_you"]] == ["table_plan"]
-    assert body["measured"]["for_you"][0]["severity"] == "warning"
 
 
 # --- the sources' own citations -------------------------------------------

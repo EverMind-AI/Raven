@@ -242,6 +242,59 @@ def test_a_word_running_past_its_card_is_reported() -> None:
     assert "do not shrink the type" in findings[0].message
 
 
+def test_a_label_the_author_placed_outside_the_card_is_not_escaped_copy() -> None:
+    """The badge welded to a card's corner. Every cloned card page of two measured
+    runs reported two of these, and one of those runs read the report, looked at the
+    page and wrote the finding off as "the template's number badge, a false
+    positive" -- correctly, and on a page that did have a real defect nothing here
+    measures."""
+    # Straddling the card's top edge, the way the template draws it: the box hangs
+    # 24pt above the card and the glyphs 18pt, so half of the word is inside and the
+    # check attributes it to the card before deciding anything.
+    badge = Rect(72, 48, 108, 84)
+    body = Rect(80, 100, 350, 200)  # the card's own copy, well inside it
+    word = _word("01", 76, 54, 100, 90)
+
+    escaped = card_overflows({1: [_CARD]}, [word])
+    assert [f.detail["words"] for f in escaped] == [["01"]], "without the boxes, the old reading"
+
+    quiet = card_overflows({1: [_CARD]}, [word], copy_by_page={1: [badge, body]})
+    assert quiet == []
+
+    # And the tight case, which is the one the comparison has to get right: a badge
+    # drawn snug around its own glyphs overhangs by exactly what they do. Requiring
+    # the box to overhang by *more* than the word would report every one of these.
+    snug = Rect(76, 54, 100, 90)
+    assert card_overflows({1: [_CARD]}, [word], copy_by_page={1: [snug, body]}) == []
+
+
+def test_copy_the_render_pushed_out_of_a_box_inside_the_card_still_fires() -> None:
+    """The other half, and the one that matters: the discriminator must not silence
+    the defect the check is named for. Here the author's box is inside the card and
+    the renderer set a line below both."""
+    body = Rect(80, 100, 350, 200)  # inside _CARD (72,72)-(360,216)
+
+    findings = card_overflows(
+        {1: [_CARD]},
+        [_word("pushed", 100, 210, 180, 226)],
+        copy_by_page={1: [body]},
+    )
+
+    assert [f.detail["words"] for f in findings] == [["pushed"]]
+
+
+def test_a_word_in_no_declared_box_keeps_the_older_reading() -> None:
+    """A word the .pptx has no text frame for cannot be attributed either way, so it
+    is reported rather than dropped -- silence would be the worse failure."""
+    findings = card_overflows(
+        {1: [_CARD]},
+        [_word("orphaned", 100, 210, 180, 226)],
+        copy_by_page={1: [Rect(500, 500, 600, 560)]},
+    )
+
+    assert [f.detail["words"] for f in findings] == [["orphaned"]]
+
+
 def test_the_slop_is_three_points_of_border_and_antialiasing() -> None:
     assert CARD_SLOP_PT == 3.0
     reported = []
@@ -697,6 +750,88 @@ def test_a_genuine_orphan_in_a_box_that_also_carries_a_written_break_still_fires
 
     assert [f.kind for f in findings] == ["orphan_line"]
     assert findings[0].detail["orphan"] == "一"
+
+
+def _cell_deck(tmp_path: Path, name: str, held: str, column_in: float = 1.6) -> Path:
+    """One two-column table, the copy under test in its first cell."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(column_in * 2), Inches(1.4))
+    frame.table.cell(0, 0).text = held
+    frame.table.cell(0, 1).text = "other"
+    deck = tmp_path / name
+    presentation.save(str(deck))
+    return deck
+
+
+def test_an_orphan_in_a_table_cell_is_reported(tmp_path: Path) -> None:
+    """The gap this closes. A table cell is not a shape -- python-pptx puts the whole
+    table in one GraphicFrame -- so a check walking `iter_shapes` and asking each for
+    its rectangle never saw a cell, and a delivered deck carried a column head broken
+    as "全量上下文窗 / 口" with nothing reporting it.
+
+    `wide_table` is not the same reading: it fires at `COLUMN_SQUEEZE`, most of a
+    second line's worth of missing room, and this is a hair.
+    """
+    from raven.ppt.services.measure.rendered import orphan_lines
+
+    deck = _cell_deck(tmp_path, "cell-orphan.pptx", "全量上下文窗口")
+    # The cell's own rectangle: column one of a 3.2in table drawn at (1in, 1in).
+    words = [
+        _word("全量上下文窗", 80, 80, 190, 98),
+        _word("口", 80, 104, 98, 122),
+    ]
+
+    findings = orphan_lines(deck, words)
+
+    assert [f.kind for f in findings] == ["orphan_line"]
+    assert findings[0].detail["orphan"] == "口"
+    # And it says what has the width, because "widen the box" is not something anyone
+    # can act on for a cell.
+    assert findings[0].detail["in"] == "its column"
+    assert "its column" in findings[0].message
+
+
+def test_a_table_cell_the_render_did_not_break_is_not_one(tmp_path: Path) -> None:
+    from raven.ppt.services.measure.rendered import orphan_lines
+
+    deck = _cell_deck(tmp_path, "cell-whole.pptx", "全量上下文窗口", column_in=3.0)
+
+    assert orphan_lines(deck, [_word("全量上下文窗口", 80, 80, 290, 98)]) == []
+
+
+def test_a_cell_orphan_is_read_from_the_cell_and_not_the_whole_table(tmp_path: Path) -> None:
+    """Two cells in one row, each carrying its own copy. Reading the table's rectangle
+    instead of the cell's would put both cells' words in one block, and the two-line
+    test would then be about the table rather than about either label."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven.ppt.services.measure.rendered import orphan_lines
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_table(1, 2, Inches(1), Inches(1), Inches(4), Inches(0.8))
+    frame.table.cell(0, 0).text = "全量上下文窗口"
+    frame.table.cell(0, 1).text = "其他记忆基础设施"
+    deck = tmp_path / "two-cells.pptx"
+    presentation.save(str(deck))
+
+    words = [
+        _word("全量上下文窗", 80, 80, 190, 98),
+        _word("口", 80, 104, 98, 122),
+        _word("其他记忆基础设", 224, 80, 350, 98),
+        _word("施", 224, 104, 242, 122),
+    ]
+
+    findings = orphan_lines(deck, words)
+
+    assert [f.detail["orphan"] for f in findings] == ["口", "施"]
 
 
 def _stacked_deck(tmp_path: Path, second_top_in: float) -> Path:

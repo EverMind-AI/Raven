@@ -380,6 +380,92 @@ def test_two_conversions_at_once_do_not_lock_each_other_out(tmp_path: Path) -> N
         assert pdf.is_file() and pdf.stat().st_size > 0
 
 
+# --- a render that came back, checked before it is measured ------------------
+
+# The deck canvas in points, and the fractional page that catches a rounding
+# convention: 13.333x7.5in is not a whole number of points on the long edge.
+DECK_PAGE = PageSize(width_pt=959.976, height_pt=540.0)
+ODD_PAGE = PageSize(width_pt=300.5, height_pt=200.25)
+
+
+def _rendered_png(path: Path, size: tuple[int, int], *, flat: bool = False) -> Path:
+    image = pytest.importorskip("PIL.Image", reason="Pillow reads the page images back")
+    draw = pytest.importorskip("PIL.ImageDraw", reason="Pillow draws something onto the page")
+    page = image.new("RGB", size, (255, 255, 255))
+    if not flat:
+        draw.Draw(page).rectangle([1, 1, max(2, size[0] // 2), max(2, size[1] // 2)], fill=(0, 0, 0))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    page.save(path, "PNG")
+    return path
+
+
+def test_a_page_comes_out_the_size_its_recorded_page_size_predicts() -> None:
+    """Both backends ceil each axis independently, which was measured, not assumed.
+
+    PDFium and `pdftoppm` were compared on these two pages at 72, 100, 144, 150 and
+    201dpi and agreed on every one, so one formula answers for both.
+    """
+    assert render_pdf.page_pixels(DECK_PAGE, 144) == (1920, 1080)
+    assert render_pdf.page_pixels(DECK_PAGE, 72) == (960, 540)
+    assert render_pdf.page_pixels(ODD_PAGE, 72) == (301, 201)
+    assert render_pdf.page_pixels(ODD_PAGE, 144) == (601, 401)
+
+
+def test_the_same_page_at_two_resolutions_is_that_page_at_both() -> None:
+    """The dpi a PNG was written at is not in the file, so the record to check
+    against is the page's size in points and the question is whether any
+    resolution maps it onto exactly these pixels."""
+    assert render_pdf.is_page_render(DECK_PAGE, (960, 540))
+    assert render_pdf.is_page_render(DECK_PAGE, (1920, 1080))
+    assert render_pdf.is_page_render(DECK_PAGE, (480, 270)), "36dpi is a resolution like any other"
+    assert not render_pdf.is_page_render(DECK_PAGE, (800, 600)), "another shape entirely"
+    assert not render_pdf.is_page_render(DECK_PAGE, (1, 1)), "a placeholder, not a page"
+    assert not render_pdf.is_page_render(DECK_PAGE, (1920, 1081)), "off by one pixel is off"
+
+
+def test_a_page_image_that_did_not_come_out_is_reported_rather_than_measured(tmp_path: Path) -> None:
+    """The state this pass exists for: a blank or mis-sized page image has none of
+    what the pixel measurements look for, so every one of them passes."""
+    sizes = {number: DECK_PAGE for number in (1, 2, 3, 4, 5)}
+    _rendered_png(tmp_path / "page-001.png", (960, 540))
+    _rendered_png(tmp_path / "page-002.png", (960, 540), flat=True)
+    _rendered_png(tmp_path / "page-003.png", (800, 600))
+    (tmp_path / "page-004.png").write_bytes(b"")
+    (tmp_path / "page-005.png").write_bytes(b"not an image")
+
+    verdicts = render_pdf.unusable_pages(sizes, sorted(tmp_path.glob("page-*.png")))
+
+    assert list(verdicts) == [2, 3, 4, 5], "page 1 came out and the rest did not"
+    assert verdicts[2] == "it came out a single flat colour"
+    assert "800x600px" in verdicts[3]
+    assert verdicts[4] == "the file written for it is empty"
+    assert "cannot be read as an image" in verdicts[5]
+
+
+def test_a_page_image_the_renderer_never_wrote_is_reported(tmp_path: Path) -> None:
+    assert render_pdf.unusable_pages({1: DECK_PAGE}, [tmp_path / "page-001.png"]) == {1: "no file was written for it"}
+
+
+def test_an_image_left_behind_by_a_longer_build_is_not_this_decks_page(tmp_path: Path) -> None:
+    """A review directory outlives the deck in it, and page 3 of the last build is
+    not a page of a deck that now has two."""
+    _rendered_png(tmp_path / "page-003.png", (800, 600))
+    _rendered_png(tmp_path / "cover.png", (800, 600))
+
+    assert render_pdf.unusable_pages({1: DECK_PAGE, 2: DECK_PAGE}, sorted(tmp_path.glob("*.png"))) == {}
+
+
+@needs_soffice
+@needs_reader
+def test_a_real_render_passes_the_sanity_pass(rendered: Path, tmp_path: Path) -> None:
+    """The other direction: what LibreOffice and the rasteriser actually produce
+    has to read as usable, or the pass is a source of false reports."""
+    pngs = render_pdf.to_pngs(rendered, tmp_path / "pages")
+
+    assert len(pngs) == 2
+    assert render_pdf.unusable_pages(render_pdf.page_sizes(rendered), pngs) == {}
+
+
 # --- the parsers, without any of the tools ----------------------------------
 
 _BBOX_XML = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "x.dtd">

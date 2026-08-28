@@ -22,7 +22,6 @@ from raven.ppt.services.measure.content import (
     SAFE_MARGIN_IN,
     evidence_coverage,
     native_tables,
-    planned_tables,
     wide_tables,
 )
 from raven.ppt.services.measure.geometry import (
@@ -50,6 +49,7 @@ from raven.ppt.services.measure.rendered import (
     COLLISION_SHARE,
     WORD_IN_CARD_SHARE,
     card_overflows,
+    copy_boxes,
     cards,
     excessive_whitespace,
     hairline_rules,
@@ -91,6 +91,7 @@ __all__ = [
     "WordBox",
     "by_page",
     "card_overflows",
+    "copy_boxes",
     "cards",
     "census",
     "deck_text",
@@ -106,7 +107,6 @@ __all__ = [
     "page_paragraphs",
     "pages",
     "parse_bbox_xml",
-    "planned_tables",
     "rule_strikes",
     "scale_findings",
     "text_boxes_emu",

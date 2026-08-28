@@ -25,7 +25,6 @@ from raven.ppt.services.measure.content import (
     flat_formulas,
     listed_claims,
     native_tables,
-    planned_tables,
     wide_tables,
 )
 from tests.ppt.conftest import DeckBuilder
@@ -196,137 +195,22 @@ _NARROW_PLAN = {
 }
 
 
-def _outline(plans: dict[int, dict]):
-    """An outline of numbered pages, each carrying the table plan given for it."""
-    from raven.ppt.contracts.outline import Outline, PagePlan
-
-    return Outline(
-        takeaway="one model, four tasks",
-        pages=tuple(
-            PagePlan(page=number, claim="a comparison", table_plan=plan) for number, plan in sorted(plans.items())
-        ),
-    )
 
 
-def test_a_page_that_planned_a_table_and_drew_none_is_refused(deck: DeckBuilder) -> None:
-    """The twin of `unplaced_figure`: a promise in the plan, read back off the file.
-
-    Blocking, because it is a disagreement between the plan and the deck rather than
-    a reading of a rendered page -- nothing about it is answered by making the page
-    smaller, and both ways out are one edit.
-    """
-    page = deck.page()
-    deck.text(page, "the comparison, described in prose instead", height=2.0)
-
-    findings = planned_tables(deck.save(), _outline({1: _NARROW_PLAN}))
-
-    assert [finding.kind for finding in findings] == ["unplaced_table"]
-    assert findings[0].severity is Severity.BLOCKING
-    assert findings[0].page == 1
-    assert findings[0].detail == {"columns": 3, "rows": 2}
-    # The plan named, so the author knows which table, and both answers offered.
-    assert "Task | TarViS | Specialist" in findings[0].message
-    assert "ppt_layout.table(" in findings[0].message
-    assert "ppt_outline again" in findings[0].message
 
 
-def test_a_page_that_drew_the_table_it_planned_is_reported_for_nothing(deck: DeckBuilder) -> None:
-    page = deck.page()
-    deck.table(page, 3, 3, top=1.0, width=9.0, cell="48.3")
-
-    assert planned_tables(deck.save(), _outline({1: _NARROW_PLAN})) == []
 
 
-def test_a_page_the_plan_gave_no_table_is_measured_for_nothing(deck: DeckBuilder) -> None:
-    """A table nobody planned is `wide_table`'s business; this reading has no plan."""
-    page = deck.page()
-    deck.table(page, 3, 4, top=1.0, width=2.4, cell="Professional services transformation")
-
-    assert planned_tables(deck.save(), _outline({1: {}})) == []
-    assert planned_tables(deck.save(), None) == []
 
 
-def test_a_built_table_smaller_than_its_plan_names_what_is_missing(deck: DeckBuilder) -> None:
-    """Columns both ways and rows only downwards, with the dropped heading named.
-
-    Reported rather than refused: the plan-time width warning tells an author to drop
-    the columns the claim does not rest on, so a refusal here would refuse the fix
-    that warning asks for.
-    """
-    page = deck.page()
-    frame = deck.table(page, 2, 2, top=1.0, width=9.0, cell="")
-    frame.table.cell(0, 0).text = "Task"
-    frame.table.cell(0, 1).text = "TarViS"
-
-    findings = planned_tables(deck.save(), _outline({1: _NARROW_PLAN}))
-
-    assert [finding.kind for finding in findings] == ["table_grid"]
-    assert findings[0].severity is Severity.WARNING
-    assert findings[0].detail == {
-        "planned_columns": 3,
-        "planned_rows": 3,
-        "drawn_columns": 2,
-        "drawn_rows": 2,
-        "tables": 1,
-    }
-    assert "'Specialist'" in findings[0].message
-    assert "1 planned row(s) are on no page" in findings[0].message
 
 
-def test_a_table_with_more_rows_than_its_plan_is_ordinary(deck: DeckBuilder) -> None:
-    """`group_rows` turns a row into a band and a total row is drawn under a rule --
-    both are rows `ppt_layout.table` adds that no plan names."""
-    page = deck.page()
-    frame = deck.table(page, 5, 3, top=1.0, width=9.0, cell="")
-    for index, head in enumerate(_NARROW_PLAN["columns"]):
-        frame.table.cell(0, index).text = head
-
-    assert planned_tables(deck.save(), _outline({1: _NARROW_PLAN})) == []
 
 
-def test_the_plan_time_width_warning_is_checked_against_the_table_that_was_drawn(deck: DeckBuilder) -> None:
-    """The forecast, and the file that settles it, in one finding.
-
-    `ppt_outline` said this page's plan wanted more width than any page carries; the
-    answer it got was an opinion about the renderer. Here the drawn table is beside
-    it, and the opinion has nothing left to stand on.
-    """
-    page = deck.page()
-    deck.table(page, 3, 5, top=1.0, width=2.4, cell="Professional services transformation")
-
-    findings = planned_tables(deck.save(), _outline({1: _WIDE_PLAN}))
-
-    assert [finding.kind for finding in findings] == ["table_room"]
-    assert findings[0].severity is Severity.WARNING
-    assert findings[0].detail["width_in"] > findings[0].detail["width_room_in"]
-    assert findings[0].detail["page_room_in"] == round(13.333 - 2 * SAFE_MARGIN_IN, 2)
-    assert "columns are narrower than what they hold" in findings[0].message
-    # Measured at the floor, so the one answer the plan-time reading already refused
-    # is refused again rather than being left open.
-    assert "wrapping the cells is not one of the answers" in findings[0].message
 
 
-def test_a_forecast_the_built_table_does_not_bear_out_is_not_reported(deck: DeckBuilder) -> None:
-    """Half the finding is the file. A plan measured too wide whose page then drew a
-    table that fits -- shorter cells, fewer of them, a second page -- has been
-    answered, and repeating the forecast over a page that solved it is the noise this
-    reading exists to replace."""
-    page = deck.page()
-    deck.table(page, 3, 5, top=1.0, width=11.0, cell="4.9")
-
-    assert planned_tables(deck.save(), _outline({1: _WIDE_PLAN})) == []
 
 
-def test_a_table_running_past_the_margin_bears_the_forecast_out_too(deck: DeckBuilder) -> None:
-    """The other way a page carries the forecast into the file: columns wide enough
-    for their own cells, on a table that simply does not fit between the margins."""
-    page = deck.page()
-    deck.table(page, 3, 5, top=1.0, left=1.0, width=12.0, cell="4.9")
-
-    findings = planned_tables(deck.save(), _outline({1: _WIDE_PLAN}))
-
-    assert [finding.kind for finding in findings] == ["table_room"]
-    assert "past the page's right margin" in findings[0].message
 
 
 def test_the_page_a_plan_is_held_against_is_the_grids_own_margin() -> None:

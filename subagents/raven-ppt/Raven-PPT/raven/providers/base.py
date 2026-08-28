@@ -751,6 +751,20 @@ class LLMProvider(ABC):
         if status == 400 or "badrequesterror" in names or has("invalid request", "invalid_request"):
             return ErrorClassification("invalid_request")
 
+        # A gateway saying only that the host behind it failed, and nothing above
+        # recognising the failure. Last rather than in the server bucket, because
+        # this is the *outer* wrapper OpenRouter puts on anything an upstream host
+        # returns: the same phrase heads a permanent 400 whose real cause is buried
+        # in `metadata.raw` (see the tool-image branch above, which reads that inner
+        # text), so every branch that can name a cause has to be given the message
+        # first. What is left here is a gateway failure with no cause stated, and
+        # `unknown` made that fatal: one measured run died on it at iteration 72
+        # after 82 minutes and 15.5M input tokens, while three earlier upstream
+        # failures in the same run were retried and recovered on the first attempt
+        # because they had arrived worded as "service unavailable".
+        if has("provider returned error"):
+            return ErrorClassification("server", retryable=True, should_fallback=True)
+
         return ErrorClassification("unknown")
 
     @classmethod

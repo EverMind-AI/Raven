@@ -18,11 +18,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import (
     EMU_PER_POINT,
     Rect,
+    cell_boxes,
     has_text,
     is_panel,
     iter_shapes,
@@ -191,11 +193,28 @@ def card_overflows(
     cards_by_page: Mapping[int, Sequence[Rect]],
     words: Sequence[WordBox],
     per_page: int = OVERFLOWS_PER_PAGE,
+    copy_by_page: Mapping[int, Sequence[Rect]] | None = None,
 ) -> list[Finding]:
     """Rendered words that escape the card they belong to.
 
     `word_collisions` only sees text landing on text; copy that runs off the
     bottom of its card onto blank page, or onto the card's border, escapes it.
+
+    **A label the author placed outside the card is not escaped copy**, and telling
+    the two apart is what `copy_by_page` is for. The question is which side put the
+    word where it is: escaped copy sits in a box that is inside the card and the
+    renderer pushed the line out of it, while a number badge welded to a card's
+    corner sits in a box the author drew hanging over the edge. Without this the
+    check reported the badge on every cloned card page -- two findings a page, in
+    two separate measured runs -- and one of those runs read the report, looked at
+    the page, and wrote off the whole finding as "the template's number badge, a
+    false positive". It was right, and the same page had copy running under the
+    template's centre artwork that nothing here measures. A gate that cries wolf
+    is what teaches an author to stop reading it.
+
+    Without `copy_by_page` the older behaviour stands, badge and all: a caller with
+    no .pptx to hand cannot answer the question, and guessing it from the word's
+    own geometry is what produced the false positive.
 
     One card, one finding, and the finding carries the number to act on. Reporting
     each escaped word separately put nine findings on one deck for three cards, and
@@ -209,6 +228,7 @@ def card_overflows(
     painted = by_page(words)
     findings: list[Finding] = []
     for page, panels in sorted(cards_by_page.items()):
+        declared = list((copy_by_page or {}).get(page, ()))
         escaped: dict[int, list[tuple[WordBox, Rect]]] = {}
         for word in painted.get(page, ()):
             box = rect(word)
@@ -227,6 +247,8 @@ def card_overflows(
             home = panels[home_at]
             escape = max(home.x0 - box.x0, home.y0 - box.y0, box.x1 - home.x1, box.y1 - home.y1)
             if escape <= CARD_SLOP_PT:
+                continue
+            if _was_placed_outside(home, box, declared):
                 continue
             escaped.setdefault(home_at, []).append((word, box))
         shown = sorted(escaped.items())[:per_page]
@@ -249,6 +271,33 @@ def card_overflows(
                 )
             )
     return findings
+
+
+def _was_placed_outside(home: Rect, word: Rect, declared: Sequence[Rect]) -> bool:
+    """Did the author put this word's box outside the card, rather than the render?
+
+    The word's own text box is the one that holds most of it. If that box already
+    reaches past the card by about as much as the word does, the overhang is where
+    it was drawn and there is nothing for the author to fix; if the box is inside
+    the card and the word is not, the renderer pushed the line out, which is the
+    defect this check is named for.
+
+    False when there are no declared boxes to consult, so a caller that cannot
+    answer the question keeps the older reading rather than silently losing findings.
+    """
+    if not declared:
+        return False
+    holder = None
+    for box in declared:
+        if box.overlap(word) / max(word.area, 1e-6) < WORD_IN_CARD_SHARE:
+            continue
+        if holder is None or box.area < holder.area:
+            holder = box
+    if holder is None:
+        return False
+    word_out = max(home.x0 - word.x0, home.y0 - word.y0, word.x1 - home.x1, word.y1 - home.y1)
+    box_out = max(home.x0 - holder.x0, home.y0 - holder.y0, holder.x1 - home.x1, holder.y1 - home.y1)
+    return box_out >= word_out - CARD_SLOP_PT
 
 
 def _card_overflow(page: int, home: Rect, items: Sequence[tuple[WordBox, Rect]]) -> Finding:
@@ -674,22 +723,27 @@ def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVER
     fact in the file rather than a judgement, so the block the author wrote is what the
     render is compared against here, one block at a time. Per break and not per shape:
     a shape that carries a written break somewhere else is still checked here.
+
+    Table cells are read alongside the shapes, and that is where a results deck puts
+    the copy this is about: a column head or a figure is exactly the two-to-four-word
+    label that breaks badly, and `wide_table` does not report it -- that one fires at
+    `COLUMN_SQUEEZE`, most of a second line's worth of missing room, and an orphan is a
+    hair. A cell is not a shape, so nothing walking `iter_shapes` could see one.
     """
     painted = by_page(words)
     findings: list[Finding] = []
     for number, slide in pages(pptx_path):
         reported = 0
         on_page = painted.get(number, [])
-        for shape in iter_shapes(slide.shapes):
-            if reported >= per_page or not has_text(shape) or not shape.width:
-                continue
-            box = shape_rect_pt(shape)
+        for carrier, box, room in _orphan_carriers(slide):
+            if reported >= per_page:
+                break
             if box.area <= 0:
                 continue
             inside = [word for word in on_page if box.overlap(rect(word)) / max(rect(word).area, 1e-6) >= 0.5]
             if not inside:
                 continue
-            for block in _authored_blocks(shape, _lines(inside)):
+            for block in _authored_blocks(carrier, _lines(inside)):
                 if reported >= per_page or len(block) != ORPHAN_LINES:
                     continue
                 last = "".join(word.text for word in block[-1]).strip()
@@ -702,15 +756,31 @@ def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVER
                         severity=Severity.WARNING,
                         page=number,
                         message=(
-                            f"'{head[:30]}' breaks with {last!r} alone on the second line -- the box is "
+                            f"'{head[:30]}' breaks with {last!r} alone on the second line -- {room} is "
                             f"{box.width / 72:.2f}in and the label needs a hair more. Widen it, or say it in fewer "
                             f"characters"
                         ),
-                        detail={"label": head[:40], "orphan": last, "box_in": round(box.width / 72, 2)},
+                        detail={"label": head[:40], "orphan": last, "box_in": round(box.width / 72, 2), "in": room},
                     )
                 )
                 reported += 1
     return findings
+
+
+def _orphan_carriers(slide) -> list[tuple[Any, Rect, str]]:
+    """What holds copy on this page: every shape that does, then every table cell.
+
+    The third element is what the finding calls the box, because "widen the box" is
+    not an instruction anyone can act on for a table cell -- the column is what has
+    the width.
+    """
+    carriers: list[tuple[Any, Rect, str]] = [
+        (shape, shape_rect_pt(shape), "the box")
+        for shape in iter_shapes(slide.shapes)
+        if has_text(shape) and shape.width
+    ]
+    carriers += [(cell, box, "its column") for cell, box in cell_boxes(slide)]
+    return carriers
 
 
 def _authored_blocks(shape, lines: Sequence[Sequence[WordBox]]) -> list[list[list[WordBox]]]:
@@ -999,6 +1069,21 @@ def cards(pptx_path: Path) -> dict[int, list[Rect]]:
             if box.width >= CARD_MIN_WIDTH_PT and box.height >= CARD_MIN_HEIGHT_PT:
                 panels.append(box)
         found[number] = panels
+    return found
+
+
+def copy_boxes(pptx_path: Path) -> dict[int, list[Rect]]:
+    """Where each page's copy is declared to sit, in points, keyed by page.
+
+    The companion `cards` needs to tell an escaped line from a label the author
+    placed outside a card on purpose -- see `card_overflows`.
+    """
+    found: dict[int, list[Rect]] = {}
+    for number, slide in pages(pptx_path):
+        found[number] = [
+            box for box in (shape_rect_pt(shape) for shape in iter_shapes(slide.shapes) if has_text(shape))
+            if box.area > 0
+        ]
     return found
 
 

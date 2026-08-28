@@ -49,14 +49,28 @@ class ProviderComposer:
         """
         self.failure = ""
         text, reason = await self._once(system, parts, max_tokens)
-        if text.strip():
+        # `reason != "length"` and not just `text.strip()`: a reply the provider cut
+        # off is a non-empty string, so testing only for emptiness returned the
+        # truncated half and left the doubled-budget retry below unreachable in the
+        # one case it was written for. Measured on a live run whose intake failed
+        # three times in a row -- "unterminated string at character 310 of 311",
+        # then 1244 of 1295, then 1588 of 1588 -- each time handing back a partial
+        # object the caller could only report as unparseable, and each time costing
+        # the author a fresh call at about eighty seconds. Reasoning models are why
+        # the cut lands in different places: their thinking is spent from the same
+        # budget as the answer, so what is left for the JSON varies per call.
+        if text.strip() and reason != "length":
             return text
         # One retry. Doubled budget when the reply was cut off mid-sentence,
         # because the same budget produces the same truncation; the same budget
         # otherwise, because the failure was transport rather than length.
         budget = max_tokens * 2 if reason == "length" else max_tokens
-        text, _ = await self._once(system, parts, budget)
-        return text
+        retried, _ = await self._once(system, parts, budget)
+        # The partial stands if the retry brought back nothing at all: it is no
+        # worse than the empty string, and the caller's two error paths -- "the
+        # transport failed" and "the reply did not parse" -- read the same either
+        # way.
+        return retried or text
 
     async def _once(self, system: str, parts: list[dict[str, Any]], max_tokens: int) -> tuple[str, str | None]:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": parts}]

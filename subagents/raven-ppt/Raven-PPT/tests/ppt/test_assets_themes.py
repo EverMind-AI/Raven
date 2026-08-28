@@ -254,10 +254,16 @@ def test_derived_theme_is_deterministic() -> None:
 
 
 def test_derived_theme_takes_a_face_that_resolves_on_both_sides() -> None:
-    """A seed carries no typographic intent, so it gets the neutral grotesque."""
+    """A seed carries no typographic intent, so it gets the deck's own face.
+
+    Not the measurement font: DejaVu Sans is what fitting measures with, and it is
+    absent from the viewer's machine, where the name would resolve to an unknown
+    substitute. A deck built on the user's own template never reaches here -- it
+    reads its face off the file.
+    """
     theme = derive_theme("light", "#B85042")
     assert theme.font_family in MEASURED_SAFE_FONTS
-    assert theme.font_family == "Arial"
+    assert theme.font_family == THEMES[DEFAULT_THEME_ID].font_family
 
 
 def test_custom_theme_can_select_non_color_design_dimensions() -> None:

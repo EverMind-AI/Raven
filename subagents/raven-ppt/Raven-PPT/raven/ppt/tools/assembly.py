@@ -27,7 +27,7 @@ from raven.ppt.services.ingest import ingest_materials
 from raven.ppt.services.template import bound
 from raven.ppt.stages._measure import DeckMeasurer
 from raven.ppt.stages._views import DeckViews
-from raven.ppt.stages.build import BuildStage
+from raven.ppt.stages.build import BATCH_VIEWS, BuildStage
 from raven.ppt.stages.prepare import PrepareStage
 from raven.ppt.tools._composer import ProviderComposer
 from raven.ppt.tools.brief import PptBriefTool
@@ -38,6 +38,7 @@ from raven.ppt.tools.ingest import PptIngestTool
 from raven.ppt.tools.inspect import PptFigureInspectTool
 from raven.ppt.tools.outline import PptOutlineTool
 from raven.ppt.tools.prepare import PptPrepareTool
+from raven.ppt.tools.review import PptReviewTool
 from raven.ppt.tools.template import PptTemplateTool
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def build_ppt_tools(
     composer_model: str | None = None,
     render_dpi: int = 144,
     render_concurrency: int = 2,
+    views_per_call: int = BATCH_VIEWS,
     deck_name: str = "deck.pptx",
     web_proxy: str | None = None,
     image_config: Any | None = None,
@@ -96,6 +98,17 @@ def build_ppt_tools(
         measure=measure,
         profile=chosen,
         destination=lambda project: project.exports_dir / deck_name,
+        views_per_call=views_per_call,
+    )
+    # Built first: the build tool runs it on the first finished deck, and the model
+    # can call it on its own besides. One instance, so both routes share the record
+    # that says a deck has already had its first reading.
+    review = PptReviewTool(
+        workspace,
+        views,
+        composer=ProviderComposer(provider=provider, model=composer_model or None)
+        if provider is not None
+        else None,
     )
     tools: list[Tool] = [
         PptPrepareTool(workspace, _prepare(provider), provision=provision_script_workspace),
@@ -112,7 +125,10 @@ def build_ppt_tools(
         ),
         PptOutlineTool(workspace),
         PptTemplateTool(workspace, views, provision=provision_script_workspace),
-        PptBuildTool(workspace, stage, views, chosen),
+        PptBuildTool(workspace, stage, views, chosen, review=review),
+        # Registered as well as wired into the build: the automatic reading happens
+        # once, on the first finished deck, and after that the author asks for one.
+        review,
     ]
     _warn_if_incomplete(chosen, tools)
     return tools

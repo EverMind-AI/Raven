@@ -197,8 +197,17 @@ class ExecTool(Tool):
                 return self._terminal_error(guard_error, command)
             decision = self._policy.evaluate(command)
             if decision is CommandDecision.HARD_DENY:
+                # "denied by policy" and not "evaluation failed": HARD_DENY is a
+                # decision, and the old wording described the one cause that is a
+                # fault as though it were all three. A refusal nobody can read the
+                # reason off is answered by abandoning the task -- one measured run
+                # replied "no alternative method will be attempted" and ended with
+                # the deck unbuilt.
                 return self._terminal_error(
-                    "Error: Command blocked by safety guard (policy evaluation failed)", command
+                    "Error: this command is denied by the exec policy (a deny pattern, "
+                    "or a system-power command). Nothing about it can be retried; "
+                    "reach the same end another way",
+                    command,
                 )
             if decision is CommandDecision.REQUIRE_APPROVAL:
                 approval_error = await self._request_approval(command)

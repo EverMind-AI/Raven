@@ -436,6 +436,45 @@ def test_a_machine_without_libcairo_keeps_the_svg_instead_of_failing(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_a_host_never_reached_names_the_setting_that_would_reach_it(fetch, monkeypatch, tmp_path: Path) -> None:
+    """The refusal a run actually got was `the download failed: ` and nothing else.
+
+    `httpx.ConnectTimeout("")` renders empty, so the class was the only thing there
+    was to say and it was not said. And the cause is knowable: every client in this
+    tool is built `trust_env=False`, so a machine that reaches the internet through
+    a proxy goes direct here however its environment is set -- measured at 50s per
+    timeout while curl through that same proxy answered in 0.86s.
+    """
+    from raven.ppt.tools.fetch import PptFetchTool
+
+    tool = PptFetchTool(tmp_path)
+
+    async def _timeout(url):
+        raise httpx.ConnectTimeout("")
+
+    monkeypatch.setattr(tool, "_download", _timeout)
+    monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: (True, ""))
+    said = await _run(tool, url="https://example.com/a.png")
+
+    assert said["ok"] is False
+    assert "ConnectTimeout" in said["error"], said["error"]
+    assert "tools.web.proxy" in said["hint"]
+    assert "HTTPS_PROXY" in said["hint"]
+
+    # A configured proxy means the network is already being routed, so the hint
+    # would be wrong; and a status is the server talking, which needs no hint.
+    routed = PptFetchTool(tmp_path, proxy="http://127.0.0.1:7890")
+    monkeypatch.setattr(routed, "_download", _timeout)
+    assert "hint" not in await _run(routed, url="https://example.com/a.png")
+
+    async def _refused(url):
+        raise httpx.HTTPStatusError("403", request=None, response=None)
+
+    monkeypatch.setattr(tool, "_download", _refused)
+    assert "hint" not in await _run(tool, url="https://example.com/a.png")
+
+
+@pytest.mark.asyncio
 async def test_an_address_the_network_guard_refuses_is_not_downloaded(fetch, monkeypatch, tmp_path: Path) -> None:
     """`validate_url_target` answers, it does not throw.
 
@@ -452,3 +491,55 @@ async def test_an_address_the_network_guard_refuses_is_not_downloaded(fetch, mon
     assert "cannot be fetched" in json.dumps(out), out
     landed = list((tmp_path / "tarvis").rglob("*")) if (tmp_path / "tarvis").exists() else []
     assert not [p for p in landed if p.is_file()], "nothing may be written for a refused address"
+
+
+@pytest.mark.asyncio
+async def test_a_fetched_image_hands_back_the_id_the_catalogue_keys_it_under(fetch, tmp_path: Path) -> None:
+    """Nothing else in the reply can be turned into one.
+
+    `ppt_figure_inspect` takes catalogue ids and nothing else, and the catalogue keys a
+    picture as `<stem>-<digest>`. A measured run fetched ten images, called inspect with
+    the filenames it had just passed to this tool, was told none of them was in the
+    catalogue, then guessed at the digests and got their length wrong -- two iterations
+    spent recovering a string the fetch already had on disk.
+    """
+    from raven.ppt.services.ingest import ingest_materials, load_catalogue
+
+    tool = fetch(_png(320, 180))
+    tool.ingest = ingest_materials
+
+    body = await _run(tool, url="https://example.com/figure.png", filename="diagram.png")
+
+    deck = Project(workspace=tmp_path, slug="tarvis")
+    catalogue = load_catalogue(deck.ingest_dir / "figures.json", figures_dir=deck.ingest_dir / "figures")
+    assert body["figure_id"] in catalogue, "the id has to be one inspect will accept"
+    assert body["figure_id"].startswith("diagram-")
+
+
+@pytest.mark.asyncio
+async def test_the_id_a_fetch_hands_back_is_one_figure_inspect_accepts(fetch, tmp_path: Path) -> None:
+    """End to end across the two tools, because the ids agreeing is the whole claim and
+    each tool builds its own view of the catalogue."""
+    from raven.ppt.services.ingest import ingest_materials
+    from raven.ppt.tools.inspect import PptFigureInspectTool
+
+    tool = fetch(_png(320, 180))
+    tool.ingest = ingest_materials
+    body = await _run(tool, url="https://example.com/figure.png", filename="diagram.png")
+
+    inspect = PptFigureInspectTool(tmp_path, _Views())
+    seen = await inspect.execute(project="tarvis", figures=[body["figure_id"]])
+    reply = json.loads(seen.model_text if hasattr(seen, "model_text") else seen)
+
+    assert reply["ok"] is True, reply
+    assert [f["figure_id"] for f in reply["figures"]] == [body["figure_id"]]
+
+
+class _Views:
+    """Just the surface `ppt_figure_inspect` asks of the render service."""
+
+    async def pages(self, *_args, **_kwargs):
+        return {}
+
+    def data_uri(self, png, budget=None):
+        return f"data:image/png;base64,{Path(png).stem}"

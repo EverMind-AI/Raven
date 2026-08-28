@@ -253,7 +253,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#4A3B30",
             grid="#DFD5C9",
             chart_series=("#4B311E", "#916444", "#CAB5A5", "#565048", "#9A948C", "#D8D5D2"),
-            font_family="Cambria",
+            font_family="Century Schoolbook",
             title_geometry="editorial",
             decor_language="corner",
             structural_tone="soft",
@@ -273,7 +273,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#1A1D21",
             grid="#E3E5E8",
             chart_series=("#063760", "#0B5FA5", "#8AB2D4", "#40454B", "#93989D", "#D1D3D6"),
-            font_family="Arial",
+            font_family="Century Schoolbook",
             title_geometry="plain",
             decor_language="grid",
             structural_tone="light",
@@ -313,7 +313,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#22352B",
             grid="#DDE6DE",
             chart_series=("#193A2D", "#477C66", "#A1BCB1", "#464F48", "#8C9690", "#D2D7D4"),
-            font_family="Helvetica",
+            font_family="Century Schoolbook",
             title_geometry="rail",
             decor_language="corner",
             structural_tone="light",
@@ -333,7 +333,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#33253A",
             grid="#E6DEE7",
             chart_series=("#43223A", "#824A74", "#C3A8BC", "#534B56", "#958E99", "#D6D3D8"),
-            font_family="Bookman Old Style",
+            font_family="Century Schoolbook",
             title_geometry="editorial",
             decor_language="grid",
             structural_tone="soft",
@@ -353,7 +353,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#1B3247",
             grid="#DFE6ED",
             chart_series=("#17334C", "#2A5D8C", "#9FB6CB", "#48525C", "#86909A", "#CFD4D8"),
-            font_family="Arial",
+            font_family="Century Schoolbook",
             title_geometry="plain",
             decor_language="geometric",
             structural_tone="light",
@@ -373,7 +373,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#4A2A1F",
             grid="#E8DBD2",
             chart_series=("#5B2B20", "#A8503A", "#D8B0A6", "#60554E", "#9E938D", "#DAD5D2"),
-            font_family="Cambria",
+            font_family="Century Schoolbook",
             title_geometry="plain",
             decor_language="editorial",
             structural_tone="soft",
@@ -393,7 +393,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#252A5E",
             grid="#E1E2EC",
             chart_series=("#20234E", "#3A3F8F", "#A6A9CC", "#4D4F5E", "#8C8E9C", "#D2D3D9"),
-            font_family="Times New Roman",
+            font_family="Century Schoolbook",
             title_geometry="rail",
             decor_language="grid",
             structural_tone="light",
@@ -413,7 +413,7 @@ THEMES: dict[str, Theme] = {
             accent_soft_dark="#33421C",
             grid="#E0E6D8",
             chart_series=("#2B3A17", "#647C43", "#B0BC9F", "#494F43", "#919789", "#D4D7D1"),
-            font_family="Helvetica",
+            font_family="Century Schoolbook",
             title_geometry="rail",
             decor_language="geometric",
             structural_tone="soft",
@@ -587,12 +587,11 @@ def derive_theme(
         accent_soft_dark=mix(WHITE, background_dark, 0.90),
         grid=_NEUTRAL_GRID[neutral],
         chart_series=_derive_chart_series(accent_text, _CHART_POOL_LIGHT),
-        # A derived theme carries a palette the model seeded but no typographic
-        # intent, so it takes the neutral grotesque rather than the measurement
-        # font: DejaVu Sans is what fitting measures with, but it is absent from
-        # the viewer's machine, where the name would resolve to an unknown
-        # substitute. Arial resolves to a metric-compatible face on both sides.
-        font_family="Arial",
+        # A derived theme carries a palette the seed named and no typographic
+        # intent, so it takes the same face the bundled themes take. A deck built
+        # on the user's own template does not come through here at all -- that one
+        # reads its face off the file, which is the face its designer chose.
+        font_family="Century Schoolbook",
         title_geometry=selected_geometry,
         decor_language=selected_decor,
         structural_tone=selected_tone,

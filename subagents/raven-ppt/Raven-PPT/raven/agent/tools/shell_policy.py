@@ -70,7 +70,50 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     This conservative lexical split catches deletion in common sequence,
     conditional, and pipeline forms without pretending to evaluate expansions
     or reproduce the full shell grammar.
+
+    Text `shlex` cannot read as shell words falls back to `_bare_segments`
+    rather than raising. `shlex` raises "No closing quotation" for any command
+    whose quotes do not balance -- which an English contraction inside a heredoc
+    or a comment does -- and the caller answers an exception with HARD_DENY, so
+    `echo it's fine` was refused outright. Three measured runs died there: two
+    with eighteen of twenty pages unwritten, and one that spent 43 minutes and
+    7.15M tokens before a `python3 - <<EOF` whose comment read "labels don't
+    collide" was blocked, at which point it answered "no alternative method will
+    be attempted" and stopped.
     """
+
+    try:
+        yield from _lexed_segments(command)
+    except ValueError:
+        yield from _bare_segments(command)
+
+
+def _bare_segments(command: str) -> Iterator[list[str]]:
+    """The same split for text `shlex` cannot read, and never less revealing.
+
+    Quote and escape characters are removed before splitting rather than
+    interpreted. Removing them can only join what the shell would have joined
+    -- `"r""m"` becomes `rm`, which is the concatenation a naive whitespace
+    split would have missed -- and never separates a token, so every leading
+    token `shlex` would have produced appears here too. Boundaries are read off
+    the raw characters, so a quote that never closes cannot swallow the rest of
+    the command into one segment.
+
+    It errs the other way instead: `echo "; rm -rf /"` yields a second segment
+    led by `rm`, and the command is sent for approval although it only prints
+    that text. Over-classification costs an approval; under-classification
+    costs the gate, so this is the side to be wrong on.
+    """
+
+    bare = command.replace('"', "").replace("'", "").replace("\\", "")
+    for piece in re.split(r"[;&|\n()]+", bare):
+        tokens = piece.split()
+        if tokens:
+            yield tokens
+
+
+def _lexed_segments(command: str) -> Iterator[list[str]]:
+    """`_command_segments` proper: shell-aware, and raises on unbalanced quotes."""
 
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}`\n")
     lexer.commenters = ""

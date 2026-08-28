@@ -161,9 +161,10 @@ def test_the_schema_never_offers_a_physical_quantity(tmp_path: Path) -> None:
 def test_the_scan_reaches_the_fields_the_flat_one_could_not_see(tmp_path: Path) -> None:
     """The guard on the guard: a recursive check that recursed into nothing would pass.
 
-    `ppt_outline` nests a page's table plan two levels under `pages`, so its
-    `table_plan.columns` is the shape the old check was blind to and the cheapest
-    proof the new one is not.
+    `ppt_outline` nests every page's fields under an array's `items`, so
+    `pages.claim` is only reachable by recursing through that array -- the shape the
+    old flat check was blind to, and the cheapest proof the new one is not. The
+    planted schema below carries the same nesting with a banned word at the bottom.
     """
     tools = {tool.name: tool for tool in build_ppt_tools(tmp_path)}
     outline = tools.get("ppt_outline")
@@ -172,7 +173,7 @@ def test_the_scan_reaches_the_fields_the_flat_one_could_not_see(tmp_path: Path) 
     fields = _named_fields(outline.parameters)
     assert "pages" in fields
     assert "pages.claim" in fields, fields
-    assert "pages.table_plan.columns" in fields, fields
+    assert "swept.url" in fields, fields
     # And a field with a banned word in it has to be caught wherever it is nested.
     planted = {
         "type": "object",
@@ -201,3 +202,50 @@ def test_the_project_field_names_the_tool_that_actually_makes_a_project(tmp_path
         if named - {entry}:
             offences.append(f"{tool.name}.project points at {sorted(named - {entry})} rather than {entry}")
     assert not offences, "\n  ".join(["a project field names the wrong tool:", *offences])
+
+
+def test_the_view_budget_reaches_both_sides_of_the_call_from_one_setting(tmp_path: Path) -> None:
+    """`tools.ppt.viewsPerCall` has to arrive as one number, not as two that agree.
+
+    It was two hardcoded constants, 1 in the tool and 3 in the stage, and the tool's
+    won: a nineteen-page deck took nineteen builds to look at once. Assembly is where a
+    setting becomes a stage, so this is where a knob that is declared and never read
+    would show -- the failure this module's docstring is about.
+    """
+    from raven.ppt.stages.build import BATCH_VIEWS
+
+    for wanted in (1, 3, 7):
+        build = next(t for t in build_ppt_tools(tmp_path, views_per_call=wanted) if t.name == "ppt_build")
+        assert build.stage.views_per_call == wanted
+        assert build.parameters["properties"]["slides"]["maxItems"] == wanted
+
+    unset = next(t for t in build_ppt_tools(tmp_path) if t.name == "ppt_build")
+    assert unset.stage.views_per_call == BATCH_VIEWS
+
+
+def test_the_configured_default_is_the_one_the_stage_ships_with() -> None:
+    """Two spellings of the same default, so they get a test rather than a comment.
+
+    `renderDpi` spells 144 in the schema, in assembly and in `DeckViews`, and nothing
+    checks that those stay the same number. This one is load-bearing in a way that one
+    is not: it is the batch size the unseen gate is written from, so a schema whose
+    default drifted from the stage's would change what a deck must show to publish.
+    """
+    from raven.config.schema import PptToolConfig
+    from raven.ppt.stages.build import BATCH_VIEWS
+
+    assert PptToolConfig().views_per_call == BATCH_VIEWS
+
+
+def test_a_view_budget_outside_the_range_is_a_startup_error_not_a_silent_clamp() -> None:
+    """Zero renders would publish a deck nobody looked at; the gate reads the same
+    number, so it would also record nothing and refuse forever. Above twelve the reply
+    approaches the content-block ceiling an endpoint has already refused."""
+    import pydantic
+
+    from raven.config.schema import PptToolConfig
+
+    assert PptToolConfig.model_validate({"viewsPerCall": 12}).views_per_call == 12
+    for bad in (0, -1, 13):
+        with pytest.raises(pydantic.ValidationError):
+            PptToolConfig.model_validate({"viewsPerCall": bad})

@@ -153,6 +153,54 @@ def iter_text_frames(slide: Any) -> Iterator[Any]:
                     yield cell.text_frame
 
 
+def cell_boxes(slide: Any) -> Iterator[tuple[Any, Rect]]:
+    """Every table cell holding copy, with where it sits on the page in points.
+
+    A table cell is not a shape: python-pptx puts the whole table in one
+    GraphicFrame, so every check that walks `iter_shapes` and asks for a
+    rectangle is blind to the copy inside a table -- which on a results deck is
+    most of the numbers.
+
+    The boundaries come out as fractions of the frame's own rectangle rather
+    than as a running sum of the declared widths, so a table inside a scaled
+    group lands where the group puts it, the way `page_box` handles a shape.
+    The two agree to the EMU on a table `ppt_layout.table` drew, because it
+    sizes the frame from the columns and rows it then declares.
+
+    Only what the file can be trusted on: a spanned cell yields once, from its
+    origin, over the span it really covers.
+    """
+    for shape in iter_shapes(slide.shapes):
+        if not getattr(shape, "has_table", False):
+            continue
+        table = shape.table
+        frame = shape_rect_pt(shape)
+        widths = [int(column.width or 0) for column in table.columns]
+        heights = [int(row.height or 0) for row in table.rows]
+        if frame.area <= 0 or sum(widths) <= 0 or sum(heights) <= 0:
+            continue
+        xs = _fractions(frame.x0, frame.width, widths)
+        ys = _fractions(frame.y0, frame.height, heights)
+        for down, row in enumerate(table.rows):
+            for across in range(len(widths)):
+                cell = table.cell(down, across)
+                if getattr(cell, "is_spanned", False) or not cell.text_frame.text.strip():
+                    continue
+                last_across = min(across + int(getattr(cell, "span_width", 1) or 1), len(widths))
+                last_down = min(down + int(getattr(cell, "span_height", 1) or 1), len(heights))
+                yield cell, Rect(xs[across], ys[down], xs[last_across], ys[last_down])
+
+
+def _fractions(start: float, span: float, sizes: list[int]) -> list[float]:
+    """Cumulative boundaries across `span`, one per size plus the closing edge."""
+    total = float(sum(sizes))
+    edges, run = [start], 0
+    for size in sizes:
+        run += size
+        edges.append(start + span * run / total)
+    return edges
+
+
 def page_paragraphs(slide: Any) -> list[str]:
     """Every piece of copy on a page, one string per paragraph or table cell.
 

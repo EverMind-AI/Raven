@@ -122,6 +122,10 @@ def test_the_real_assets_land_as_modules_the_author_can_import(project: Project,
     }
     assert {p.name for p in (build / "references").iterdir()} == {
         "charts.md",
+        # What a finished page owes, which `ppt_review` judges the render by. It lands
+        # here rather than only reaching the reviewer because a requirement the author
+        # never saw is a requirement nobody agreed to.
+        "design-requirements.md",
         "formulas.md",
         "icons.md",
         "layouts.md",

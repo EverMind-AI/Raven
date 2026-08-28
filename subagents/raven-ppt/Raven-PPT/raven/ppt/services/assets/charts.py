@@ -195,6 +195,14 @@ TICK_GAP = 0.08
 # How much of a category's slot the bar takes. The rest is the gap that makes six
 # columns read as six rather than as a block.
 BAR_SHARE = 0.62
+# And how wide that share is allowed to get. A slot is the plot's width over the
+# number of categories, so two categories in a half-page box ask for a bar 1.43in
+# across -- measured on a delivered page, where the pair read as two slabs rather
+# than as two readings and left the rest of the page empty, because the chart had
+# spent its room on paint instead of on length. `horizontal_bar` and `stacked_bar`
+# already cap a bar's thickness for the same reason; this is that cap stood upright.
+# Five categories or more are already under it and do not move.
+BAR_MAX = 0.62
 # Wider when several series share the slot: the gap goes between groups, never
 # inside one.
 GROUP_SHARE = 0.80
@@ -312,6 +320,18 @@ class Drawn(Box):
         drawn.readings_not_written = tuple(str(reading) for reading in readings)
         drawn.marks_not_to_scale = tuple(str(name) for name in floored)
         return drawn
+
+    @property
+    def box(self):
+        """This, spelled the other way.
+
+        A chart's `Drawn` *is* its plot box and `ppt_layout`'s is a shape carrying
+        one, so the two answer the same question under two names -- and an author
+        who has written `picture_fit(...).box` writes `line(...).box` next. It
+        cost a build: `print("p11 chart", drawn.box, ...)` on the line after the
+        chart was drawn, and `AttributeError` before the deck existed.
+        """
+        return Box(self.x0, self.y0, self.x1, self.y1)
 
     @property
     def nothing_was_dropped(self):
@@ -1292,7 +1312,7 @@ def column(slide, box, theme, data, *, accent=None, unit="", axis_max=None):
     at = linear(low, high, plot.y1, plot.y0)
     base = at(0.0)
     fills, inks = emphasis(theme, labels, accent)
-    width = slot * BAR_SHARE
+    width = min(slot * BAR_SHARE, BAR_MAX)
     if value_size is None:
         scale_top(slide, plot, theme, high, unit)
     for index, (label, value) in enumerate(pairs):
@@ -1617,6 +1637,10 @@ def stacked_bar(slide, box, theme, categories, series, *, accent=None, unit="", 
         _room(plot, "a stacked bar chart's plot", 1.0, 0.4)
         key(slide, Box(box.x0, box.y0, box.x1, box.y0 + key_h), theme, names, fills)
         at = linear(0.0, high, plot.y1, plot.y0)
+        # Uncapped, unlike the charts whose slot holds one bar: a stack's slot holds
+        # the whole composition, and a single-category stack is the one column on the
+        # plot -- held to a bar's width it reads as a ribbon rather than as the thing
+        # the page is about.
         width = slot * BAR_SHARE
         pitch, bar_h = slot, 0.0
     else:
@@ -2324,7 +2348,7 @@ def combo(slide, box, theme, data, curve, *, sides=(), accent=None, unit="", cur
     up = linear(curve_low, curve_high, plot.y1, plot.y0)
     fills, _ = emphasis(theme, labels, accent)
     curve_paint = _second_paint(theme, fills)
-    width = slot * BAR_SHARE
+    width = min(slot * BAR_SHARE, BAR_MAX)
     base = at(0.0)
     taken, lost = [], []
     for index, (label, value) in enumerate(pairs):
@@ -2466,7 +2490,7 @@ def waterfall(slide, box, theme, data, *, accent=None, unit="", totals=()):
     # and the fall was what the page was about. Quiet depths when something is
     # accented, so the accented step is the only colour on the plot.
     levels, rises, falls = shades(theme, 3, quiet=bool(chosen))
-    width = slot * BAR_SHARE
+    width = min(slot * BAR_SHARE, BAR_MAX)
     if value_size is None:
         scale_top(slide, plot, theme, high, unit)
     previous = None
@@ -2543,7 +2567,7 @@ def pareto(slide, box, theme, data, *, accent=None, unit="", threshold=0.8):
     at = linear(low, high, plot.y1, plot.y0)
     up = linear(0.0, 1.0, plot.y1, plot.y0)
     fills, _ = emphasis(theme, labels, accent)
-    width = slot * BAR_SHARE
+    width = min(slot * BAR_SHARE, BAR_MAX)
     if threshold is not None:
         level = up(float(threshold))
         hline(slide, plot.x0, plot.x1, level, _grid(theme))

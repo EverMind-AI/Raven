@@ -52,5 +52,8 @@ __pycache__/
 # Pillow - whose console scripts carry this machine's absolute paths baked into
 # their shebangs. `uv sync --extra ppt` in the checkout rebuilds it correctly;
 # a copied one fails outright.
-Raven-PPT/.venv/
+# No trailing slash: a developer who symlinks the venv from another checkout has
+# a *file* here as far as git is concerned, and `Raven-PPT/.venv/` matches only a
+# directory -- so `git add -A` swept the link into the index.
+Raven-PPT/.venv
 Raven-PPT/**/__pycache__/

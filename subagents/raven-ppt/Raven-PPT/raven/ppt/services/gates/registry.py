@@ -48,7 +48,6 @@ from raven.ppt.services.measure.content import (
     listed_claims,
     literal_escapes,
     native_tables,
-    planned_tables,
     wide_tables,
 )
 from raven.ppt.services.measure.contrast import contrast_findings
@@ -61,6 +60,7 @@ from raven.ppt.services.measure.rendered import (
     box_overflows,
     card_overflows,
     cards,
+    copy_boxes,
     clipped_copy,
     crowded_panels,
     excessive_whitespace,
@@ -144,18 +144,15 @@ DISPATCH: Mapping[str, Severity] = {
     # page after it is written against and because both answers are one edit: draw the
     # table, or call ppt_outline again for a plan that does not promise one. The twin
     # of `unplaced_figure`, which every route already refuses.
-    "unplaced_table": Severity.BLOCKING,
     # And the same page drawing a grid of another size. Reported, not refused: the
     # plan-time width warning tells an author to drop the columns the claim does not
     # rest on, so a refusal here would refuse the fix that warning asks for. What is
     # worth saying is that the plan and the deck now describe different tables.
-    "table_grid": Severity.WARNING,
     # The plan-time estimate, checked against the file that settled it: a plan wanting
     # more column width than the page carries, on a page whose drawn table is squeezed
     # or reaches past the margin. A warning with `wide_table`, which reports the same
     # shape -- two rows over one table, one refusing and one reporting, is the
     # contradiction `band` was downgraded for.
-    "table_room": Severity.WARNING,
     # A page printing "48.3\\nOVIS" is not taste and not layout: the escape was escaped on
     # its way in, and the fix is one character in the author's program. Refused, with the
     # other rows about what a page says.
@@ -409,9 +406,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         # One reading, filtered three ways, the way the adherence rows already are: the
         # three findings come off one pass over the plan and the file, and each answers
         # differently, so each needs its own row in the table above.
-        "unplaced_table": lambda deck: _planned(deck, "unplaced_table"),
-        "table_grid": lambda deck: _planned(deck, "table_grid"),
-        "table_room": lambda deck: _planned(deck, "table_room"),
         "flat_formula": lambda deck: flat_formulas(deck.pptx_path),
         "listed_claims": lambda deck: listed_claims(deck.pptx_path),
         "literal_escape": lambda deck: literal_escapes(deck.pptx_path),
@@ -445,7 +439,10 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         # template's own: those are meant to be alike, and counting them is how a
         # correct deck gets reported for the four pages it was supposed to clone.
         "layout_variety": lambda deck: layout_variety(deck.pptx_path, _layout_structural(deck.outline)),
-        "wrapped_label": lambda deck: wrapped_labels(deck.pptx_path, deck.measurer),
+        # Not through `_rendered`: that answers [] with no render, and this check's
+        # own case -- a box guessed at 0.25in -- is one the file alone catches. The
+        # render is handed in as a veto where there is one.
+        "wrapped_label": lambda deck: wrapped_labels(deck.pptx_path, deck.measurer, deck.rendered_words),
         "overset_copy": lambda deck: overset_copy(deck.pptx_path, deck.measurer),
         # Not findings about the deck, but about which of the checks above were
         # able to run at all.
@@ -456,7 +453,12 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "covered_shape": lambda deck: overlap_findings(deck.pptx_path),
         "clipped_copy": lambda deck: _rendered(deck, lambda words: clipped_copy(deck.pptx_path, words)),
         "rule_strike": lambda deck: _rendered(deck, lambda words: rule_strikes(hairline_rules(deck.pptx_path), words)),
-        "card_overflow": lambda deck: _rendered(deck, lambda words: card_overflows(cards(deck.pptx_path), words)),
+        "card_overflow": lambda deck: _rendered(
+            deck,
+            lambda words: card_overflows(
+                cards(deck.pptx_path), words, copy_by_page=copy_boxes(deck.pptx_path)
+            ),
+        ),
         "box_overflow": lambda deck: _rendered(deck, lambda words: box_overflows(deck.pptx_path, words)),
         "crowded_panel": lambda deck: _rendered(deck, lambda words: crowded_panels(cards(deck.pptx_path), words)),
         "orphan_line": lambda deck: _rendered(deck, lambda words: orphan_lines(deck.pptx_path, words)),
@@ -466,13 +468,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
             lambda words: excessive_whitespace(deck.pptx_path, words, _layout_structural(deck.outline)),
         ),
     }
-
-
-def _planned(deck: DeckUnderReview, kind: str) -> list[Finding]:
-    """One kind out of the plan-against-file table reading, or nothing without a plan."""
-    if deck.outline is None:
-        return []
-    return [finding for finding in planned_tables(deck.pptx_path, deck.outline) if finding.kind == kind]
 
 
 def _structural(outline: Any | None) -> list[int]:
@@ -522,6 +517,10 @@ def check_deck(
     shapes it does not model. Isolated per check, not per group -- the
     predecessor wrapped three checks in one `try`, so a crash in the first meant
     the other two reported a clean page.
+
+    One cause is reported once. See `_one_per_cause` -- a check that fires on
+    nineteen pages for one shared reason arrived as nineteen findings, and the
+    model read them as nineteen problems.
     """
     wanted = set(only) if only is not None else None
     found: list[Finding] = []
@@ -533,7 +532,68 @@ def check_deck(
         except Exception as exc:  # noqa: BLE001 -- see the docstring
             if on_error is not None:
                 on_error(name, exc)
-    return found
+    return _one_per_cause(found)
+
+
+def _one_per_cause(findings: list[Finding]) -> list[Finding]:
+    """Findings that repeat one cause across pages, collapsed to one that names them.
+
+    A live 19-page run came back with the same title-row warning on every page: one
+    shared cause, in the setup every page is drawn from, and nineteen findings saying
+    so. The model spent a round on each, because nineteen concrete per-page problems
+    read as nineteen decisions. This is the same fold `build`'s root-cause note makes
+    for a page wrong at the root, applied across pages rather than down one.
+
+    What counts as one cause is read off the findings rather than declared here: same
+    kind, same severity, and the same message word for word. A message
+    that names what is wrong with the page it is on -- a number that page states, a
+    placeholder it left in -- differs per page and stays per page, which is why there
+    is no list of kinds to keep in step with the registry. More than one page is what
+    makes a cause repeated; there is no count to tune.
+
+    The collapsed finding is deck-wide, because that is what it is: the pages it names
+    are in `on_pages` and in the message, and its severity is the one it had, so an
+    aggregated blocking finding still blocks. That also takes it out of `by_page`,
+    which is the intended half of the trade -- a cause shared by nineteen pages is not
+    answered by a pass that sees one page at a time.
+    """
+    grouped: dict[tuple[str, Severity, str], list[Finding]] = {}
+    # A finding, or the cause standing in for the group that starts here, so the run
+    # comes back in registry order with each group where its first member was.
+    kept: list[Finding | tuple[str, Severity, str]] = []
+    for finding in findings:
+        if finding.page is None:
+            kept.append(finding)
+            continue
+        cause = (finding.kind, finding.severity, finding.message)
+        if cause not in grouped:
+            grouped[cause] = []
+            kept.append(cause)
+        grouped[cause].append(finding)
+    if all(len({f.page for f in same}) < 2 for same in grouped.values()):
+        return findings
+    out: list[Finding] = []
+    for entry in kept:
+        if isinstance(entry, Finding):
+            out.append(entry)
+            continue
+        same = grouped[entry]
+        pages = sorted({f.page for f in same if f.page is not None})
+        if len(pages) < 2:
+            out.extend(same)
+            continue
+        first = same[0]
+        named = ", ".join(str(page) for page in pages)
+        out.append(
+            Finding(
+                kind=first.kind,
+                severity=first.severity,
+                page=None,
+                message=f"pages {named} all report this, so it is one cause and not {len(pages)}: {first.message}",
+                detail={**dict(first.detail), "on_pages": pages},
+            )
+        )
+    return out
 
 
 def by_page(findings: Iterable[Finding]) -> dict[int, list[Finding]]:

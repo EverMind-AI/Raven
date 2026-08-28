@@ -568,3 +568,105 @@ def test_the_refusal_verdict_survives_a_provider_that_swallows_the_exception():
     assert LLMProvider.classify_error(None, "Error calling LLM: 400 context_length_exceeded").refuses_prompt_cache is (
         False
     )
+
+
+# --- Where the breakpoints go ---
+
+
+def _head_marked(block: dict) -> bool:
+    return "cache_control" in block
+
+
+def _content_marked(msg: dict) -> bool:
+    content = msg.get("content")
+    return isinstance(content, list) and bool(content) and "cache_control" in content[-1]
+
+
+def _provider():
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    return LiteLLMProvider(api_key="", default_model="x", provider_name="openrouter")
+
+
+def test_the_growing_history_carries_breakpoints_and_not_only_the_stable_head():
+    """What the cached share of a long run depends on.
+
+    Tools and the system prompt are a fixed size; the conversation is not. Marked
+    only on that head, every call re-reads the whole history fresh, so the cached
+    share falls as the run gets longer -- measured against a real gateway on a
+    conversation that grew by ~30k tokens a turn, it went 48% on the second call
+    to 23% by the fifth, and a 147-iteration deck build came in at 17%. The two
+    tail marks are what make the appended part cacheable: history is append-only,
+    so next call's prefix still matches up to this call's tail.
+    """
+    messages = [
+        {"role": "system", "content": "the stable head"},
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+        {"role": "assistant", "content": "four"},
+    ]
+    tools = [{"type": "function", "function": {"name": "ppt_build"}}]
+
+    out_messages, out_tools = _provider()._apply_cache_control(messages, tools)
+
+    assert _head_marked(out_tools[-1])
+    assert _content_marked(out_messages[0])
+    assert _content_marked(out_messages[-1])
+    assert _content_marked(out_messages[-2])
+    # Nothing older: the tail marks already define a prefix that covers them.
+    assert not _content_marked(out_messages[1])
+    assert not _content_marked(out_messages[2])
+
+
+def test_no_request_carries_more_breakpoints_than_the_vendor_accepts():
+    """Past four, Anthropic rejects the request rather than ignoring the extras,
+    so an over-spend is a failed call and not a missed optimisation."""
+    from raven.providers.prompt_cache import MAX_BREAKPOINTS
+
+    messages = [{"role": "system", "content": "head"}] + [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"} for i in range(40)
+    ]
+    tools = [{"type": "function", "function": {"name": "a"}}, {"type": "function", "function": {"name": "b"}}]
+
+    out_messages, out_tools = _provider()._apply_cache_control(messages, tools)
+
+    placed = sum(_content_marked(m) for m in out_messages) + sum(_head_marked(t) for t in out_tools)
+    assert placed == MAX_BREAKPOINTS
+
+
+def test_a_tool_call_only_turn_does_not_spend_a_breakpoint_it_cannot_carry():
+    """The vendor reads the field off a content block, and an assistant turn that
+    is only tool calls has none. Spending a mark there would place it where
+    nothing reads it and leave the newest readable message uncached."""
+    messages = [
+        {"role": "system", "content": "head"},
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "t"}}]},
+    ]
+
+    out_messages, _ = _provider()._apply_cache_control(messages, [{"type": "function", "function": {"name": "t"}}])
+
+    assert not _content_marked(out_messages[3])
+    assert _content_marked(out_messages[2])
+    assert _content_marked(out_messages[1])
+
+
+def test_the_caller_s_own_messages_come_back_unmarked():
+    """The loop keeps its history across calls, so a mark written into it would
+    accumulate one breakpoint per iteration and the request would be refused a
+    few turns in."""
+    messages = [
+        {"role": "system", "content": "head"},
+        {"role": "user", "content": [{"type": "text", "text": "one"}]},
+        {"role": "assistant", "content": "two"},
+    ]
+    tools = [{"type": "function", "function": {"name": "t"}}]
+
+    _provider()._apply_cache_control(messages, tools)
+
+    assert messages[0]["content"] == "head"
+    assert messages[1]["content"] == [{"type": "text", "text": "one"}]
+    assert messages[2]["content"] == "two"
+    assert "cache_control" not in tools[-1]

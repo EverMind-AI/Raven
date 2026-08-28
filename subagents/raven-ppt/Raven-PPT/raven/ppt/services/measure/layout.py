@@ -17,8 +17,11 @@ pages a render shows to be clean".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
+from raven.ppt.contracts import WordBox
 from raven.ppt.contracts.findings import Finding, Severity
 from raven.ppt.services.measure.geometry import (
     EMU_PER_INCH,
@@ -26,8 +29,11 @@ from raven.ppt.services.measure.geometry import (
     iter_shapes,
     open_deck,
     shape_rect_emu,
+    shape_rect_pt,
 )
 from raven.ppt.services.measure.width import WidthMeasurer
+from raven.ppt.services.measure.words import by_page as _by_page
+from raven.ppt.services.measure.words import rect as _rect
 
 # Half a point, in EMU: a rule drawn exactly on the margin rounds either way.
 EDGE_SLACK_EMU = 6350
@@ -191,7 +197,9 @@ def off_page_shapes(pptx_path: Path) -> list[Finding]:
     return findings
 
 
-def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> list[Finding]:
+def wrapped_labels(
+    pptx_path: Path, measurer: WidthMeasurer | None = None, words: Sequence[WordBox] | None = None
+) -> list[Finding]:
     """Short labels set in boxes too narrow to hold them on one line.
 
     A numbered step drawn as '01' in a box guessed at 0.25in wraps into a stacked
@@ -199,13 +207,25 @@ def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> li
     just broken. Only short label-like text is held to this -- prose is meant to
     wrap -- and the width carries slack for the renderer resolving to a different
     font than the measurer used.
+
+    `words` is the render, and where there is one it has the last word. `_em_width`
+    is a class average per character, not a font metric, and on figures it reads
+    high: it over-measured eight digit-and-percent labels on one chart page by
+    about 13%, where `LABEL_SLACK` allows 5, and every one of them was on a single
+    line in the render. Raising the slack would only trade that for a number
+    guessed the other way, so the prediction is kept as what finds candidates and
+    the render decides which of them actually broke. Without a render the
+    prediction stands alone, which is still better than the check not running --
+    that is the case this was written for, a box guessed at 0.25in.
     """
     if measurer is None:
         from raven.ppt.services.assets.text_metrics import measurer as font_measurer
 
         measurer = font_measurer()
     findings: list[Finding] = []
+    painted = _by_page(words) if words is not None else None
     for number, slide in enumerate(open_deck(pptx_path).slides, start=1):
+        on_page = painted.get(number, ()) if painted is not None else None
         for shape in iter_shapes(slide.shapes):
             if not getattr(shape, "has_text_frame", False):
                 continue
@@ -214,6 +234,7 @@ def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> li
                 continue
             if int(shape.width or 0) <= 0:
                 continue  # no declared width to hold anything to
+            drawn = _drawn_lines(shape, on_page) if on_page is not None else None
             # A box narrower than its own margins is not skipped: it is the worst
             # offender, since no label fits in it at all.
             box_w = shape_rect_emu(shape).width / EMU_PER_POINT - BOX_SIDE_MARGINS_PT
@@ -238,6 +259,8 @@ def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> li
                 # reviewer had just called clean.
                 if _holds_two_lines(shape, frame, size):
                     continue
+                if drawn is not None and _set_on_one_line(text, drawn):
+                    continue
                 findings.append(
                     Finding(
                         kind="wrapped_label",
@@ -256,3 +279,49 @@ def wrapped_labels(pptx_path: Path, measurer: WidthMeasurer | None = None) -> li
                     )
                 )
     return findings
+
+
+# A word's top within this many points of the line's is on that line. The renderer's
+# own figure, shared with the render-side checks rather than guessed again here.
+_SAME_LINE_PT = 4.0
+
+# How much of a word has to sit inside a box for the box to own it. Half: a word
+# straddling two boxes belongs to whichever holds more of it, and at exactly half
+# either answer is as good.
+_WORD_IN_BOX_SHARE = 0.5
+
+
+def _drawn_lines(shape: Any, on_page: Sequence[WordBox]) -> list[str]:
+    """What the renderer actually set inside this shape, one string per line.
+
+    Whitespace is dropped rather than normalised: the comparison this feeds is
+    "did these characters end up on one line", and `pdftotext` splits a run into
+    words wherever it likes -- a label the file holds as one string comes back as
+    two or three word boxes on the same line.
+    """
+    box = shape_rect_pt(shape)
+    if box.area <= 0:
+        return []
+    inside = [
+        word
+        for word in on_page
+        if box.overlap(_rect(word)) / max(_rect(word).area, 1e-6) >= _WORD_IN_BOX_SHARE
+    ]
+    lines: list[list[WordBox]] = []
+    for word in sorted(inside, key=lambda word: (word.y0, word.x0)):
+        if lines and abs(word.y0 - lines[-1][0].y0) <= _SAME_LINE_PT:
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    return ["".join("".join(word.text.split()) for word in line) for line in lines]
+
+
+def _set_on_one_line(text: str, drawn: Sequence[str]) -> bool:
+    """Whether the render put this label on a single line after all.
+
+    True only on positive evidence. A shape whose words the render did not report --
+    an empty list, a label the extractor transcribed differently, a glyph it dropped
+    -- is not evidence of anything, and the file's prediction stands.
+    """
+    wanted = "".join(text.split())
+    return bool(wanted) and any(wanted in line for line in drawn)

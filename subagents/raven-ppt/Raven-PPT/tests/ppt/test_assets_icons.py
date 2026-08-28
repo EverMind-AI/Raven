@@ -296,7 +296,12 @@ def test_a_miss_is_a_lookup_error_not_a_key_error() -> None:
     with pytest.raises(LookupError) as caught:
         resolve_icon_name("definitely-not-an-icon")
     assert not isinstance(caught.value, KeyError)
-    assert str(caught.value).startswith("unknown icon 'definitely-not-an-icon'")
+    said = str(caught.value)
+    assert said.startswith("unknown icon 'definitely-not-an-icon'")
+    # And it names the search, at the moment the author needs it. `find_icons` is in
+    # the skill four times and a live run guessed icon names through two build rounds
+    # without once calling it -- the miss is where it is asked for.
+    assert "find_icons" in said
 
 
 def test_the_keyword_catalog_is_the_same_words_as_flat_text() -> None:
@@ -461,7 +466,7 @@ def test_the_ink_is_asked_for_the_way_every_other_lookup_is() -> None:
     """
     assert icon_ink("map-pin") == icon_ink("map_pin")
     assert icon_ink("TREND UP") == icon_ink("trend_up")
-    with pytest.raises(UnknownIconError, match="closest"):
+    with pytest.raises(UnknownIconError, match="nearest"):
         icon_ink("stakeholder")
 
 
@@ -475,3 +480,54 @@ def test_an_icon_with_nothing_to_stroke_is_refused_rather_than_measured(monkeypa
     monkeypatch.setattr(icons, "icon_paths", lambda name: ((("M", (4.0, 6.0)),),))
     with pytest.raises(icons.IconDataError, match="no strokes to measure"):
         icon_ink("all_moves_and_no_strokes")
+
+
+def test_a_spelling_match_is_not_offered_as_the_answer() -> None:
+    """`trophy` came back as `closest: typography`, which shares six letters and no
+    meaning. The search's last resort is string similarity, so a candidate list has
+    to say what it is or an author acts on it -- the icon set does hold `award`, which
+    a search on the meaning finds and a search on the spelling never will.
+    """
+    with pytest.raises(LookupError) as caught:
+        resolve_icon_name("trophy")
+    said = str(caught.value)
+
+    assert "typography" in said, "the search's own answer is still reported"
+    assert "spelling match and not an answer" in said
+    assert "find_icons" in said
+
+
+def test_both_sides_of_the_fence_report_a_miss_the_same_way(tmp_path) -> None:
+    """The author's script raises this from its own copy in the build directory and
+    the service raises it here. That copy can import nothing from the service -- it
+    runs alone in a build directory -- so the sentence is written out twice, and this
+    is what keeps the two from coming apart.
+    """
+    import sys
+
+    from raven.ppt.services.assets.script_helpers import script_helper_files
+
+    out = tmp_path / "mod"
+    out.mkdir()
+    for name, body in script_helper_files().items():
+        target = out / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body if isinstance(body, bytes) else body.encode("utf-8"))
+
+    sys.path.insert(0, str(out))
+    try:
+        for stale in ("ppt_icons",):
+            sys.modules.pop(stale, None)
+        import ppt_icons as author
+
+        for miss in ("trophy", "definitely-not-an-icon", "zzzzqqq"):
+            said = {}
+            for who, call in (("author", author._resolve), ("service", resolve_icon_name)):
+                try:
+                    call(miss)
+                except LookupError as caught:
+                    said[who] = str(caught)
+            assert said["author"] == said["service"], f"the two messages for {miss!r} have drifted"
+    finally:
+        sys.path.remove(str(out))
+        sys.modules.pop("ppt_icons", None)

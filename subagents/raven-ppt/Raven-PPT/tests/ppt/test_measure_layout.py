@@ -1,4 +1,5 @@
-"""The two things the declared geometry alone can decide."""
+"""The two things the declared geometry alone can decide -- and, for the label
+check, what the render is allowed to overrule it about."""
 
 from __future__ import annotations
 
@@ -216,3 +217,71 @@ def test_a_label_centred_in_its_own_anchor_box_is_not(deck) -> None:
     deck.text(page, ("VIS", 12.0), left=6.0, top=3.0, width=0.12, height=0.2, wrap=False)
 
     assert spilled_copy(deck.save()) == []
+
+
+def _word(page: int, text: str, x0: float, y0: float, *, w: float = 20.0, h: float = 12.0):
+    """One word as the render reported it, in points with the origin top left."""
+    from raven.ppt.contracts import WordBox
+
+    return WordBox(page=page, text=text, x0=x0, y0=y0, x1=x0 + w, y1=y0 + h)
+
+
+def test_the_render_overrules_a_label_it_shows_on_one_line(deck: DeckBuilder) -> None:
+    """`_em_width` is a class average per character, not a font metric, and on chart
+    labels it reads high: eight digit-and-percent labels on one delivered page were
+    over-measured by about 13% where `LABEL_SLACK` allows 5, and every one of them was
+    on a single line in the render. Raising the slack trades that for a number guessed
+    the other way, so the prediction finds candidates and the render decides.
+    """
+    page = deck.page()
+    deck.text(page, ("15.3%", 18.0), left=1.0, top=1.0, width=0.6, height=0.4, wrap=True)
+    path = deck.save()
+
+    assert [f.detail["label"] for f in wrapped_labels(path)] == ["15.3%"]
+
+    # The render put it on one line: one word box inside the shape's own rectangle.
+    on_one_line = [_word(1, "15.3%", 74.0, 74.0)]
+    assert wrapped_labels(path, None, on_one_line) == []
+
+
+def test_the_render_does_not_overrule_a_label_it_shows_broken(deck: DeckBuilder) -> None:
+    """The case the check exists for has to survive the veto. Measured on a real
+    render: '01' in a 0.25in box came back as '0' at y=76.9 and '1' at y=110.5.
+    """
+    page = deck.page()
+    deck.text(page, ("01", 28.0), left=1.0, top=1.0, width=0.25, height=1.0, wrap=True)
+    path = deck.save()
+
+    broken = [_word(1, "0", 79.0, 76.9, w=9.0), _word(1, "1", 79.0, 110.5, w=9.0)]
+    assert [f.detail["label"] for f in wrapped_labels(path, None, broken)] == ["01"]
+
+
+def test_a_label_the_render_says_nothing_about_keeps_the_file_s_answer(deck: DeckBuilder) -> None:
+    """No render, a render that dropped the glyph, a transcription that does not match:
+    all the same case, and none of them is evidence the label was fine. The veto acts
+    only on positive evidence, or a host without pdftotext silently loses the check.
+    """
+    page = deck.page()
+    deck.text(page, ("01", 28.0), left=1.0, top=1.0, width=0.25, height=1.0, wrap=True)
+    path = deck.save()
+
+    assert [f.detail["label"] for f in wrapped_labels(path, None, None)] == ["01"]
+    assert [f.detail["label"] for f in wrapped_labels(path, None, [])] == ["01"]
+    # A word box nowhere near the shape says nothing about it either.
+    elsewhere = [_word(1, "01", 700.0, 400.0)]
+    assert [f.detail["label"] for f in wrapped_labels(path, None, elsewhere)] == ["01"]
+
+
+def test_the_veto_reads_only_the_page_the_label_is_on(deck: DeckBuilder) -> None:
+    """Word boxes carry their page, and a label set on one line on page 2 says nothing
+    about the same label broken on page 1."""
+    first = deck.page()
+    deck.text(first, ("01", 28.0), left=1.0, top=1.0, width=0.25, height=1.0, wrap=True)
+    second = deck.page()
+    deck.text(second, ("01", 28.0), left=1.0, top=1.0, width=0.25, height=1.0, wrap=True)
+    path = deck.save()
+
+    only_page_two_is_fine = [_word(2, "01", 79.0, 76.9)]
+    kept = wrapped_labels(path, None, only_page_two_is_fine)
+
+    assert [f.page for f in kept] == [1]
