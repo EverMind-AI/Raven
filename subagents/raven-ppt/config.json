@@ -8,7 +8,19 @@
       "llmCallTimeout": 600,
       "maxToolIterations": 600,
       "maxConcurrentSubagents": 2,
-      "reasoningEffort": "medium"
+      "reasoningEffort": "medium",
+      "modelOverrides": {
+        "grok": {
+          "extra_body": {
+            "provider": {
+              "only": [
+                "xAI"
+              ],
+              "allow_fallbacks": false
+            }
+          }
+        }
+      }
     }
   },
   "providers": {

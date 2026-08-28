@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -437,3 +438,76 @@ async def test_a_draft_hands_back_its_house_too(project: Project) -> None:
 
     assert result.data["draft"] is True
     assert "this deck's own house" in result.data["outcome"].note
+
+
+def _ten_pages(project: Project) -> BuildOutcome:
+    deck = project.build_dir / "deck.pptx"
+    deck.write_bytes(b"PK")
+    return BuildOutcome(
+        ok=True,
+        pptx_path=deck,
+        pages=10,
+        sources=tuple(PageSource(page=n, first_line=n, last_line=n + 1) for n in range(1, 11)),
+        source_digest="x",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_draft_render_counts_as_a_page_seen(project: Project) -> None:
+    """The record is about pages put in front of the author, and a draft render is that.
+
+    Recording only on publication made the two halves disagree, and the disagreement
+    is unwinnable rather than merely wasteful: a measured run walked its nineteen
+    pages three times as drafts, was told on the first real build that eighteen had
+    never been seen, and spent the rest of its budget walking them again one non-draft
+    build at a time. It reasoned its way to the cause and said so -- "draft renders do
+    not count towards the seen record" -- which is a fact about this code and not
+    about the deck.
+    """
+    from raven.ppt.services import seen
+
+    outcome = _ten_pages(project)
+    stage = _stage(project, outcome=outcome)
+
+    await stage.run(project, slides=[1, 2, 3], draft=True)
+
+    recorded = set(json.loads(seen.seen_path(project).read_text())["pages"])
+    assert recorded == {"1", "2", "3"}, "a draft render is a page seen"
+
+    # And the deck built straight afterwards does not ask for them again.
+    result = await stage.run(project, slides=[1, 2, 3])
+    unseen = [f for f in result.findings if f.kind == "unseen_page"]
+    assert unseen, "the seven nobody looked at still refuse"
+    assert unseen[0].detail["pages"] == [4, 5, 6, 7, 8, 9, 10]
+
+
+@pytest.mark.asyncio
+async def test_a_draft_walk_leaves_nothing_for_the_real_build_to_refuse(project: Project) -> None:
+    """The whole point, as a run actually does it: draft through the deck, then publish.
+
+    Before this, the same walk left the record empty and the publishing build refused
+    every page -- so the author had to repeat the entire walk with `draft` off.
+    """
+    outcome = _ten_pages(project)
+    stage = _stage(project, outcome=outcome)
+
+    for first in (1, 4, 7, 10):
+        await stage.run(project, page_from=first, draft=True)
+
+    result = await stage.run(project, page_from=1)
+
+    assert [f.kind for f in result.findings if f.kind == "unseen_page"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_render_that_did_not_happen_is_not_a_page_seen(project: Project) -> None:
+    """The guard that survives the move. A page whose render failed was never put in
+    front of anyone, and recording it would say the author saw code that drew nothing."""
+    from raven.ppt.services import seen
+
+    outcome = _ten_pages(project)
+    stage = _stage(project, outcome=outcome, findings=[_warning("unrendered")])
+
+    await stage.run(project, slides=[1, 2, 3], draft=True)
+
+    assert not seen.seen_path(project).exists()

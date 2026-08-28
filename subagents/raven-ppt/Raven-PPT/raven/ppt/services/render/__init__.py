@@ -43,9 +43,13 @@ from raven.ppt.services.render.pdf import (
     DEFAULT_DPI,
     MAX_DPI,
     PAGE_PNG,
+    is_page_render,
     page_count,
+    page_number,
+    page_pixels,
     page_sizes,
     to_pngs,
+    unusable_pages,
     word_boxes,
 )
 from raven.ppt.services.render.service import DeckRenderer, LocalDeckRenderer
@@ -64,9 +68,13 @@ __all__ = [
     "RenderUnavailableError",
     "available",
     "contact_sheet",
+    "is_page_render",
     "page_count",
+    "page_number",
+    "page_pixels",
     "page_sizes",
     "to_pdf",
     "to_pngs",
+    "unusable_pages",
     "word_boxes",
 ]

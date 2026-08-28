@@ -176,3 +176,63 @@ def test_strip_json_error_body_without_a_message_leaves_text_alone():
 
     text = 'Config invalid: {"foo": "bar"} retry with a valid key'
     assert _strip_json_error_body(text) == text
+
+
+def test_a_gateway_upstream_failure_is_retried_rather_than_fatal():
+    """The wording OpenRouter uses when the host behind it failed.
+
+    It answers 200 with that body, so there is no status code and no exception
+    class to read, and the phrase matches none of the other server-bucket
+    substrings -- it fell through to `unknown`, which is neither retryable nor a
+    fallback. A measured run died on it at iteration 72 after 82 minutes, while
+    three earlier upstream failures in the same run recovered on their first
+    retry because those had arrived worded as "service unavailable".
+    """
+    from raven.providers.base import LLMProvider
+
+    verdict = LLMProvider.classify_error(content="APIError: OpenrouterException - Provider returned error")
+
+    assert verdict.retryable and verdict.should_fallback
+
+    # And through the wrapper the loop actually logs, which is the form the run's
+    # own transcript carried.
+    wrapped = LLMProvider.classify_error(
+        content="Error calling LLM (unknown@ppt): APIError: OpenrouterException - Provider returned error"
+    )
+    assert wrapped.retryable and wrapped.should_fallback
+
+
+def test_the_same_wording_over_a_permanent_refusal_stays_fatal():
+    """The reason the branch is last and not in the server bucket.
+
+    "Provider returned error" is the *outer* wrapper OpenRouter puts on anything an
+    upstream host returns, so it also heads a permanent 400 whose real cause sits in
+    `metadata.raw`. Putting the phrase in the server bucket made this exact wire text
+    -- an endpoint refusing an image inside a role="tool" message -- read as a
+    transient failure worth four retries, which lost the one verdict that can be
+    acted on.
+    """
+    from raven.providers.base import LLMProvider
+
+    refusal = (
+        "litellm.BadRequestError: OpenrouterException - "
+        '{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":'
+        "\"Image URLs are only allowed for messages with role 'user', but this message "
+        "with role 'tool' contains an image URL.\"}}}"
+    )
+
+    verdict = LLMProvider.classify_error(content=refusal)
+
+    assert verdict.should_drop_tool_images is True
+    assert not verdict.retryable
+
+
+def test_a_permanent_refusal_is_still_not_retried():
+    """The bucket above is worded narrowly on purpose: a provider that refuses the
+    request rather than failing to serve it must stay fatal, or every bad key and
+    every rejected prompt buys four retries and a fallback."""
+    from raven.providers.base import LLMProvider
+
+    for text in ("invalid api key", "invalid_request: tools are not supported"):
+        verdict = LLMProvider.classify_error(content=text)
+        assert not verdict.retryable, text

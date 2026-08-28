@@ -852,6 +852,20 @@ class PptToolConfig(Base):
     render_concurrency: int = Field(default=2, ge=1, le=8)
     """Concurrent LibreOffice conversions. Each takes seconds and holds a profile
     directory of its own, so this is a machine limit rather than a preference."""
+    views_per_call: int = Field(default=3, ge=1, le=12)
+    """How many page renders one `ppt_build` reply carries, which is also the most
+    pages one call may name in `slides`. It is one number on purpose: the gate that
+    refuses a deck holding an unseen page records what the reply showed, so a cap
+    that disagreed would either forbid pages the reply carried or mark a page seen
+    that was never rendered.
+
+    Three by default. At `render_dpi` 144 a page render costs the 1568-token image
+    ceiling, so a batch of three is under half a percent of a 1M-token window, and
+    the two failures on either side are both measured: twelve renders in one reply
+    read as a batch to skim, and one render per reply makes a nineteen-page deck
+    nineteen builds to look at once. Raise it to sweep a long deck in fewer calls,
+    or set it to 1 to put the author back on one page per call. Above ten the reply
+    approaches the content-block ceiling one endpoint has already refused."""
     deck_name: str = "deck.pptx"
 
     @field_validator("profile")

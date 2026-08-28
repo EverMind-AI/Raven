@@ -2,6 +2,35 @@
 
 Called from §6 of the skill.
 
+## First: does this want to be a table at all
+
+**A table is for figures.** Its whole value is that a reader scans *down a column* and
+compares -- 93.05% against 66.80%, 200ms against 3000ms. That comparison is what the grid
+buys, and it is the only thing it buys.
+
+**Rows of words are not that.** Three rows reading "前史 / 1959-1998 / 生物启发 / Hubel &
+Wiesel" are three *things*, not three readings of one measurement, and a grid around them
+costs the page a third of its height and gives back nothing: no icon, no ground, no
+scannable column, and a reader who has to take each row as a unit anyway. Those are cards
+-- `card()` per thing, `card_size()` to level the row, `plane()` under the set (§7) -- and
+the page fills instead of ending two thirds of the way down.
+
+The test, before you write `table(`:
+
+| The cells are | Draw |
+| --- | --- |
+| figures a reader compares down a column | a table |
+| a state per cell that reads at a glance -- a tick, a cross, a filled scale | a table, with `marks` (below) |
+| words, phrases, or a sentence per cell | **cards**, one per row |
+| one word plus a sentence explaining it | **cards**, and the word is the card's title |
+
+A column of "支持 / 不支持 / 部分" is the second row of that table only when it is drawn as
+marks. Written as those words it is the third, and it is three cards.
+
+**Everything below is for the first two.** The parameters are worth knowing and the calls
+are worth copying, but a beautiful table around content that wanted cards is still the
+wrong page.
+
 ## Two ways to put a grid on a page, and both are yours
 
 **Draw the table.** Nothing about a grid is privileged: a table is columns of boxes
@@ -177,6 +206,37 @@ arithmetic rather than design: **it sizes each column from what that column hold
 a 22-character benchmark name gets the room it needs and a 4-character metric does not.
 `weights` is still there for a column you want wider than its content.
 
+**A ground behind a table is cut to the table, never to the band.** `plane` at the band
+and `table` in the same band is the commonest way to make a table look broken, because the
+table is as wide as its content and as tall as its rows while the surface is as big as the
+region -- measured on one band: the surface overhung the table by 2.87in to the right and
+0.74in below, and the colour makes the mismatch loud where a bare table only looks narrow.
+`weights` closes the horizontal half and not the vertical one. `table_size` answers both,
+and it answers for the table that will be drawn as long as it is passed what `table` is
+passed:
+
+```python
+laid = table_size(rows, T, box=band, marks=marks)          # the drawn size, both axes
+plane(slide, Box.at(band.x0, band.y0, w=laid.w, h=laid.h), T, T["surface"])
+table(slide, band, rows, T, marks=marks)
+```
+
+**And `weights` is the only way to make a table fill its box.** Without `weights` the box is a
+ceiling, not a target: the table comes out as wide as its content wants and stops, however
+much room you hand it. That is right for a two-column lookup and wrong under a full-width
+row of cards -- measured on a delivered page whose five-column table ended at 56% of a
+band whose three cards above it ran to 94%, and where widening the box changed nothing at
+all, because the box was never what decided. Given `weights` are proportions and mean
+"fill the box", so a table that has to line up with something above it declares them:
+
+```python
+ppt_layout.table(slide, band, rows, T, weights=(2.0, 1.4, 1.6, 1.6, 1.8))
+```
+
+The numbers are relative, so they read as "the first column gets a fifth more than the
+second"; only their ratios matter. `table_size(rows, T, box=band)` answers with the width
+either way, so the disagreement is visible before the page is drawn.
+
 **Rows are measured, not assumed.** Each row is as tall as the lines its own cells wrap
 onto at the widths the columns actually get, and a declared row height is only a floor.
 The rules are the cells' own borders, so they sit on the boundary wherever the boundary
@@ -207,8 +267,8 @@ Preserve units, scales, qualifiers, series meaning and source labels exactly.
 ## The dials, and when to turn them
 
 The defaults are an argument, not a rule: no vertical rules, no banding, nothing
-filled, a frame around the table and a hairline at every row boundary in the theme's
-`grid` tone, one accent rule under the
+filled, a frame around the table in the `muted` tone, a hairline at every row boundary
+in the quieter `grid` tone, one accent rule under the
 header, and header and body at one size. Every one of them is a keyword away from
 being something else, and a page that needs the other thing should have it. **The
 reason a default is what it is is written beside it, so that overruling it is a
@@ -224,8 +284,11 @@ baselines to find which cell went with which label. So the outer
 edge is closed and the rows are told apart for you, and a bare
 `table(slide, box, rows, T)` is something a deck can
 ship. It is not the Office look coming back: that is a hairline around every one of 25
-cells with banding under them, and this is one rectangle and one horizontal per row in
-the quietest tone the theme carries, all at the same weight. Nothing inside the table
+cells with banding under them, and this is one rectangle and one horizontal per row, all
+at the same weight. Two tones and not one: the frame separates the table from the page
+and the hairlines separate rows from each other, so the frame takes the `muted` tone and
+the interior lines the `grid` one -- which is picked to sit under the copy and, drawn
+around the outside, reads on a projector as no edge at all. Nothing inside the table
 is outlined down its columns unless `column_rules` asks for it.
 
 | | | |
@@ -233,8 +296,8 @@ is outlined down its columns unless `column_rules` asks for it.
 | `size` | body type, 14pt | the floor is 14; going under it is refused elsewhere in the pipeline |
 | `header_size` | `size` | raise it a step or two when the header is doing work — column headings that are questions, or a header over three-line cells. Never set it under `size` |
 | `align` | measured per column | `("left", "right", "right", "center")`, one per column. Turn to it for a centred column, or where the measurement reads a column differently from the page |
-| `rule_pt` | 2.25 | the accent rule under the header. Heavier where the table is the page; lighter where it sits beside a chart |
-| `grid_pt` | 1.0 | every line but the header's at once — the frame, a row hairline, a total's rule, a column rule. Under 1pt it does not resolve in the render at all, so do not go under 1 |
+| `rule_pt` | 3.5 | the accent rule under the header. Heavier where the table is the page; lighter where it sits beside a chart, but never under `grid_pt` -- it is the line the table is read from |
+| `grid_pt` | 2.5 | the weight of every line but the header's at once — the frame, a row hairline, a total's rule, a column rule. One weight, three tones: `muted` for the frame, `grid` inside, `muted` again under a total. In the `grid` tone a line under 2pt comes back from a 110dpi render as no line at all, so do not go under 2 |
 | `padding` | 0.03in | the air above and below a row's copy. The single number that decides dense against open |
 | `row_height` / `header_height` | measured | a floor you set, in inches. A row still grows past it for copy that needs the room — a declared height cannot shrink a line |
 | `fill` | `True` | `False` to keep the table at the size its content asks for |
@@ -257,6 +320,104 @@ the row hairlines are ink on that reading too: a border is drawn on the boundary
 beside it, so it moves no glyph and no other rule. Raising `grid_pt` does not make the
 answer stale, and neither did giving every style the row hairlines: the same rows come
 back at the same height they did when only `row_rules` drew them.
+
+## Three tables worth copying
+
+Everything above is a dial and none of it is a table. Three whole calls, because a
+comparison drawn from the defaults alone is legible and says nothing: it puts five
+columns on the page without saying which one the page is about.
+
+**The comparison, where one column is the claim.** The tint says where to look and the
+last row is the one the argument rests on, so the reader arrives at both without being
+told. Every cell is a reading of the same measurement, which is what makes the columns
+comparable: a "相对劣势 48%" or a "基准线" among the figures costs that column its right
+edge and the reader the comparison, and it is the first sign the page wanted cards.
+
+```python
+rows = [["指标", "EverOS", "传统 RAG", "全量上下文", "其他记忆基础设施"],
+        ["LoCoMo 准确率", "93.05%", "48.30%", "—", "66.80%"],
+        ["LongMemEval", "83.00%", "—", "—", "—"],
+        ["检索延迟", "180ms", "350ms", "0ms", "1900ms"],
+        ["Token 用量", "1.0x", "9.4x", "10.0x", "4.1x"]]
+laid = table_size(rows, T, size=BODY_PT, padding=0.08)
+table(slide, down.take(laid.h), rows, T, size=BODY_PT, numeric_from=1,
+      emphasize_columns=(1,),      # our column, tinted -- not bolded, not coloured type
+      total_rows=(4,),             # the row the claim rests on, bold under a rule
+      column_rules=True,           # the boundary a centred label is centred against
+      padding=0.08)                # the one dial that decides dense against open
+```
+
+**`column_rules` on every one of these.** The default draws the frame and a rule at each
+row boundary and nothing vertical, which is right for a table read across one row at a
+time. These are read *down*, and a centred cell with no visible column edge does not read
+as centred at all -- measured: the label column below is centre-aligned and looks
+arbitrary until the rule is there for it to be centred against.
+
+**The table with sections.** `group_rows` is `{row: "name"}` and that row becomes one
+band carrying the name -- its own cells stay empty. Reach for it when the *figures* fall
+into two or three kinds and the kinds are part of the point; nine rows of numbers with no
+bands are read as nine unrelated lines. The cells are still figures: a band does not turn
+a column of sentences into a table.
+
+```python
+rows = [["模型", "参数量", "top-5 错误率"],
+        ["2012-2014", "", ""],                 # the band's own row: empty cells
+        ["AlexNet", "6,000 万", "15.3%"],
+        ["VGG16", "1.38 亿", "7.3%"],
+        ["2015-2017", "", ""],
+        ["ResNet-152", "6,000 万", "3.57%"],
+        ["SENet", "1.46 亿", "2.251%"]]
+table(slide, box, rows, T, size=BODY_PT, numeric_from=1, padding=0.08,
+      group_rows={1: "2012-2014", 4: "2015-2017"}, emphasize_columns=(2,),
+      column_rules=True)
+```
+
+**The lookup table nobody reads straight through.** Twenty rows of figures somebody scans
+down for one line: `row_height` stops the rows collapsing to their type and
+`column_rules` is the line that parts the columns.
+
+```python
+rows = [["年份", "冠军", "top-5 错误率", "层数"], ...]
+table(slide, box, rows, T, size=BODY_PT, numeric_from=2,
+      row_height=0.46, column_rules=True)
+```
+
+`numeric_from=2` and not 1: it means "figures from this column rightwards", so it has to
+name the first column that actually holds figures. Pointing it one column early
+right-aligns a column of names against nothing, which is what `冠军` did.
+
+`banding` is deliberately not here. Tinting alternate rows is the Office default this
+module turns off on purpose -- it is the single thing that makes a table read as cheap,
+and at twenty rows the row rules and the row height already give the eye its rail. Turn it
+on only for a table long enough that a reader loses the line, and know that it is the look
+you are spending.
+
+**A fourth, with `marks`, which is the one way a non-numeric column earns a grid.** A
+column of the words "支持 / 不支持 / 部分" is prose in a grid and wants cards. The same
+column as a tick, a cross and a half-filled dot is a *state per cell that reads at a
+glance*, which is what a figure does, and the row becomes scannable across. `column_rules`
+earns its place here: the eye is crossing the row to compare two marks, and without a line
+between the columns it has nothing to cross by. A marked column stays left-aligned so the
+mark has the other side of the cell to sit in.
+
+```python
+ppt_layout.table(slide, band, rows, T,
+      weights=(2.4, 1.6, 1.6, 1.4, 2.6), column_rules=True,
+      marks={(1, 1): "check", (1, 2): "cross",
+             (2, 1): "harvey:4", (2, 2): "harvey:2",
+             (3, 1): "check", (3, 2): "partial"})
+```
+
+A mark takes the room the columns leave over, and `weights` leave none -- so with
+weights declared, every column comes out exactly where you put it and each mark is drawn
+inside its own column's share. Without weights the table widens by what the marks ask.
+Either way the mark is drawn at the size of the type beside it, so the same table in a
+tall band and in a short one has the same column widths.
+
+**A mark cannot wrap, and copy can.** In a box too narrow for both, the columns keep
+their content and the mark is what shrinks -- a ten-step scale in a 1.68in table comes
+out a texture. That is visible in the render: a scale you cannot count the steps of
+wants a wider box or fewer steps, not a keyword.
 
 ## Which row, which column
 

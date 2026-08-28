@@ -26,7 +26,7 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.prompt_cache import CACHE_CONTROL
+from raven.providers.prompt_cache import CACHE_CONTROL, MAX_BREAKPOINTS
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.registry import (
     canonical_provider_name,
@@ -103,6 +103,75 @@ def session_affinity_headers() -> dict[str, str]:
     header, so a stable value per provider instance keeps prefix-cache hits warm.
     """
     return {"x-session-affinity": uuid.uuid4().hex}
+
+
+def _usage_with_cache(usage: Any) -> dict[str, Any]:
+    """One usage dict, with the cache counts under the keys the rest of raven reads.
+
+    LiteLLM hands the same numbers back in four shapes depending on where the
+    response came from -- Anthropic native, LiteLLM's own underscored copies, and
+    OpenAI/OpenRouter's nested ``prompt_tokens_details`` -- and everything
+    downstream (``raven.tracing.usage``, the loop's snapshot) reads the flat
+    Anthropic spelling. Flattening here is what makes the streaming and
+    non-streaming paths agree: they used to each carry their own copy of this,
+    and only one of the copies did the cache half, so a streamed call reported
+    every cached token as fresh and was costed at full price.
+
+    ``model_dump`` first when the object offers it, so nothing the provider sent
+    is lost -- the flat keys are added beside the nested ones rather than
+    replacing them.
+    """
+    try:
+        base: dict[str, Any] = dict(usage.model_dump())
+    except AttributeError:
+        base = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+    details = getattr(usage, "prompt_tokens_details", None)
+    read = (
+        getattr(usage, "cache_read_input_tokens", None)
+        or getattr(usage, "_cache_read_input_tokens", None)
+        or (getattr(details, "cached_tokens", None) if details else None)
+        or 0
+    )
+    written = (
+        getattr(usage, "cache_creation_input_tokens", None)
+        or getattr(usage, "_cache_creation_input_tokens", None)
+        or (getattr(details, "cache_write_tokens", None) if details else None)
+        or 0
+    )
+    if read:
+        base["cache_read_input_tokens"] = int(read)
+    if written:
+        base["cache_creation_input_tokens"] = int(written)
+    return base
+
+
+def _with_cache_control(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """A copy of ``msg`` with the breakpoint on its last content block.
+
+    ``None`` when the message has nothing that can carry the field -- the caller
+    needs to tell that apart from a mark it placed, because a breakpoint spent on
+    a message the vendor will not read it from is a breakpoint lost.
+    """
+    content = msg.get("content")
+    if isinstance(content, str) and content:
+        return {**msg, "content": [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]}
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        new_content = list(content)
+        new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
+        return {**msg, "content": new_content}
+    return None
+
+
+# A provider's own word for "this turn failed", which litellm's `map_finish_reason`
+# has no entry for and answers "stop" to. Only what was observed on the wire:
+# OpenRouter passes `error` through from an upstream host, and zhipu sends
+# `network_error`. Anything else stays unmapped rather than guessed at, because a
+# false entry here discards a turn the model really did finish.
+_UPSTREAM_FAILED_FINISH = frozenset({"error", "network_error"})
 
 
 class LiteLLMProvider(LLMProvider):
@@ -303,24 +372,53 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies of messages and tools with cache_control injected."""
-        new_messages = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                content = msg["content"]
-                if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
-                else:
-                    new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
-                new_messages.append({**msg, "content": new_content})
-            else:
-                new_messages.append(msg)
+        """Return copies of messages and tools with cache_control injected.
+
+        Four breakpoints, and the last two are what make an agent loop affordable.
+        Tools and the system prompt are the stable head, so marking them caches a
+        fixed amount once; everything after is the conversation, which only ever
+        grows. Marked nowhere, that growing part is re-read fresh on every call,
+        and a run whose history reaches a few hundred thousand tokens pays for it
+        on every one of its iterations -- the cached share falls as the run gets
+        longer, which is the opposite of what caching is for. A breakpoint on each
+        of the last two messages fixes that: history is append-only, so the prefix
+        up to the previous tail still matches, a write only covers what was
+        appended since, and the next call reads the rest.
+
+        Two rather than one because a tool chain writes a message per iteration:
+        with a single rolling mark, an iteration that appends two messages leaves
+        the older one past the last breakpoint and uncacheable.
+        """
+        budget = MAX_BREAKPOINTS
 
         new_tools = tools
         if tools:
             new_tools = list(tools)
             new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
+            budget -= 1
+
+        new_messages = []
+        for msg in messages:
+            marked = _with_cache_control(msg) if msg.get("role") == "system" and budget > 0 else None
+            if marked is None:
+                new_messages.append(msg)
+            else:
+                new_messages.append(marked)
+                budget -= 1
+
+        for i in range(len(new_messages) - 1, -1, -1):
+            if budget <= 0:
+                break
+            if new_messages[i].get("role") == "system":
+                continue
+            marked = _with_cache_control(new_messages[i])
+            if marked is None:
+                # An assistant turn that is only tool calls has no content block to
+                # hang the field on. Skipping it rather than spending the budget
+                # keeps the mark for a message that can carry one.
+                continue
+            new_messages[i] = marked
+            budget -= 1
 
         return new_messages, new_tools
 
@@ -656,15 +754,23 @@ class LiteLLMProvider(LLMProvider):
         `self._gateway` / `find_by_model(...).name` if/when needed.
         """
         try:
+            # Read before the guards below. A provider asked for usage answers
+            # with a trailing frame whose ``choices`` is an empty array -- that is
+            # OpenAI's own ``include_usage`` contract, and OpenRouter follows it --
+            # so dropping a chunk for having no choices drops the only frame that
+            # carries the token counts. Streaming then reported no cache at all
+            # and every cached token was costed as fresh.
+            usage = getattr(chunk, "usage", None)
             choices = getattr(chunk, "choices", None)
             if not choices:
-                return None
+                return (
+                    StreamDelta(content=None, tool_call_delta=None, usage=_usage_with_cache(usage)) if usage else None
+                )
             delta_obj = getattr(choices[0], "delta", None)
             if delta_obj is None:
                 return None
             content = getattr(delta_obj, "content", None)
             tool_calls = getattr(delta_obj, "tool_calls", None)
-            usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
             # Upstream states why it stopped only on the terminal chunk, which
             # otherwise carries no payload at all. Dropping that chunk (as the
@@ -696,16 +802,7 @@ class LiteLLMProvider(LLMProvider):
                         )
                 tool_call_delta = {"tool_calls": serialized}
 
-            usage_dict: dict[str, Any] | None = None
-            if usage is not None:
-                try:
-                    usage_dict = usage.model_dump()
-                except AttributeError:
-                    usage_dict = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
-                        "completion_tokens": getattr(usage, "completion_tokens", None),
-                        "total_tokens": getattr(usage, "total_tokens", None),
-                    }
+            usage_dict = _usage_with_cache(usage) if usage is not None else None
 
             if (
                 content is None
@@ -783,35 +880,7 @@ class LiteLLMProvider(LLMProvider):
 
         usage = {}
         if hasattr(response, "usage") and response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-            # Cache token extraction. LiteLLM normalizes these across providers
-            # in different shapes depending on where the response came from:
-            #   - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
-            #   - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
-            #   - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
-            #   - OpenRouter:        usage.prompt_tokens_details.cached_tokens
-            #                        usage.prompt_tokens_details.cache_write_tokens
-            details = getattr(response.usage, "prompt_tokens_details", None)
-            cache_read = (
-                getattr(response.usage, "cache_read_input_tokens", None)
-                or getattr(response.usage, "_cache_read_input_tokens", None)
-                or (getattr(details, "cached_tokens", None) if details else None)
-                or 0
-            )
-            cache_write = (
-                getattr(response.usage, "cache_creation_input_tokens", None)
-                or getattr(response.usage, "_cache_creation_input_tokens", None)
-                or (getattr(details, "cache_write_tokens", None) if details else None)
-                or 0
-            )
-            if cache_read:
-                usage["cache_read_input_tokens"] = int(cache_read)
-            if cache_write:
-                usage["cache_creation_input_tokens"] = int(cache_write)
+            usage = _usage_with_cache(response.usage)
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
@@ -819,6 +888,32 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
+
+        # The same upstream failure, when it did not arrive empty. litellm maps a
+        # provider's `finish_reason: "error"` to "stop" and the guard below only
+        # sees a completion with nothing at all in it -- so a turn that failed
+        # upstream *after* saying a few words arrives looking like an agent that
+        # finished and chose to stop. Measured: a run ended at iteration 26 of 600
+        # with the deck unbuilt, its last assistant turn holding one sentence of
+        # preamble and no tool call, and the only trace of the failure anywhere was
+        # litellm's own "Unmapped finish_reason 'error'" warning.
+        #
+        # `Choices.__init__` keeps the value it rewrote under
+        # `native_finish_reason`, which is the one place the signal survives. Only
+        # when there is nothing to execute: a turn that came back with tool calls
+        # has work in it, and throwing that away would cost more than it saves.
+        native = getattr(choice, "provider_specific_fields", None)
+        native_finish = native.get("native_finish_reason") if isinstance(native, dict) else None
+        if not tool_calls and native_finish in _UPSTREAM_FAILED_FINISH:
+            return LLMResponse(
+                content=(
+                    f"Error calling LLM (upstream_error): the provider ended the turn with "
+                    f"finish_reason {native_finish!r}"
+                ),
+                finish_reason="error",
+                usage=usage,
+                error_classification=ErrorClassification("server", retryable=True, should_fallback=True),
+            )
 
         # litellm has no mapping for a provider's `finish_reason: "error"` (nor
         # for zhipu's `network_error`) and answers "stop" for both, so a call

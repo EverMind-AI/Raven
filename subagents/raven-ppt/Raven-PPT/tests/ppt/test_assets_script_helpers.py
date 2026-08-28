@@ -1386,6 +1386,23 @@ def test_a_cjk_header_sets_no_floor_of_its_own(tmp_path) -> None:
 # would pass for a module with a NameError in it.
 
 
+
+def test_a_box_reads_back_under_the_names_it_was_built_with(helpers) -> None:
+    """`Box.at` is spelled (x, y, w=, h=). Two of those four read back and two raised
+    AttributeError, so a program passing one box's geometry into another got three
+    quarters of the line right and still crashed -- measured on a live run that wrote
+    `Box.at(inner.x, inner.y, w=inner.w, h=inner.h)`.
+    """
+    layout = helpers.ppt_layout
+
+    box = layout.Box.at(1.0, 2.0, w=3.0, h=4.0)
+
+    assert (box.x, box.y, box.w, box.h) == (1.0, 2.0, 3.0, 4.0)
+    # And the corners stay what they were: these are aliases, not a second geometry.
+    assert (box.x0, box.y0, box.x1, box.y1) == (1.0, 2.0, 4.0, 6.0)
+    assert layout.Box.at(box.x, box.y, w=box.w, h=box.h) == box
+
+
 def _slide(module):
     from pptx import Presentation
 
@@ -1766,7 +1783,60 @@ def test_a_marked_column_is_wide_enough_for_the_mark_in_it(tmp_path) -> None:
             if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE and _within(module, shape, rating)
         ]
         assert len(dots) == 5, f"a five-step scale drew {len(dots)} steps"
-        assert min(shape.width / unit for shape in dots) >= row_height * 0.45, "the steps are a texture, not a scale"
+        # Read against the type the mark sits with, not against the row. The row here
+        # is 0.39in because the table was spread into a 3.6in band, and a step held to
+        # a share of that is half an inch of dot beside 14pt copy.
+        scale = module._mark_scale(module.LABEL_PT, module._CELL_ENDS)
+        assert row_height > scale, "the band did not stretch the rows, so this measures nothing"
+        assert min(shape.width / unit for shape in dots) >= scale * 0.45, "the steps are a texture, not a scale"
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_mark_does_not_widen_its_column_because_the_band_is_tall(tmp_path) -> None:
+    """The same five rows asked 1.72in for their rating column in a 1.6in band and
+    2.52in in a 3.6in one, because every mark took its size out of the row and a row
+    grows to fill the band it is spread into. A column whose width depends on how much
+    air is under the table is a column that cannot be planned.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        theme = THEMES["ink-graphite"]
+        slide = _slide(module)
+        short = module.table(slide, module.Box(0.72, 1.6, 12.61, 3.0), _GRID, theme, marks=_GRID_MARKS)
+        tall = module.table(slide, module.Box(0.72, 1.6, 12.61, 5.4), _GRID, theme, marks=_GRID_MARKS)
+
+        assert tall.rows[2].height > short.rows[2].height, "the taller band did not stretch the rows"
+        assert [column.width for column in tall.columns] == [column.width for column in short.columns]
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_mark_takes_no_room_from_a_column_the_weights_gave_it(tmp_path) -> None:
+    """Weights say how the box is divided. A rating charged against the whole table
+    instead of against its own share took 0.47in off a declared label column, and in a
+    box too narrow for two ratings it took a 1.15in label column down to 0.51in --
+    under the floor every other path holds.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        theme = THEMES["ink-graphite"]
+        slide = _slide(module)
+        weights = (2.4, 1.6, 1.6, 1.4, 2.6)
+        wide = module.Box(0.72, 1.6, 12.61, 3.6)
+
+        plain = module.table(slide, wide, _GRID, theme, weights=weights)
+        marked = module.table(slide, wide, _GRID, theme, weights=weights, marks=_GRID_MARKS)
+        assert [c.width for c in marked.columns] == [c.width for c in plain.columns]
+
+        narrow = module.Box(0.72, 1.6, 6.72, 3.6)
+        bare = module.table(slide, narrow, _GRID, theme)
+        squeezed = module.table(slide, narrow, _GRID, theme, marks=_GRID_MARKS)
+        assert squeezed.columns[0].width == bare.columns[0].width, "the label column paid for the marks"
     finally:
         _drop(tmp_path)
 
@@ -2103,6 +2173,15 @@ def test_a_mark_never_takes_so_much_room_that_its_label_column_collapses(tmp_pat
     proportion because they did not fit, and the label column came out 0.18in --
     under `_NARROWEST_IN`, which is the width every other path holds so a column
     still has a header over it.
+
+    A ten-step scale and a four-character label do not both fit in 1.68in, and the
+    ceiling that used to settle it settled it the wrong way round: the mark took what
+    it asked and the label was left the floor. Which of the two survives is a choice,
+    and it goes to the label -- copy still reads wrapped, a mark shrinks to a texture
+    and carries nothing, and a row whose subject is unreadable has nothing left for a
+    mark to qualify. The scale coming out the narrower of the two here is that choice
+    and not a collapse; what the render shows is a small scale, which is the author's
+    to see and answer with a wider box or fewer steps.
     """
     _, module = _layout(tmp_path)
     try:
@@ -2112,12 +2191,14 @@ def test_a_mark_never_takes_so_much_room_that_its_label_column_collapses(tmp_pat
         slide = _slide(module)
         unit = module.Inches(1)
         box = module.Box(0.72, 1.6, 0.72 + 1.68, 3.6)
+        rows = [["标签", "评分"], ["单点登录", ""]]
 
-        table = module.table(slide, box, [["标签", "评分"], ["单点登录", ""]], theme, marks={(1, 1): "harvey:3.5/10"})
+        table = module.table(slide, box, rows, theme, marks={(1, 1): "harvey:3.5/10"})
         widths = [column.width / unit for column in table.columns]
+        bare = [column.width / unit for column in module.table(slide, box, rows, theme).columns]
 
         assert widths[0] >= module._NARROWEST_IN - 0.001, f"the label column collapsed to {widths[0]:.2f}in"
-        assert widths[1] > widths[0], "and the scale still has the wider column of the two"
+        assert widths[0] == pytest.approx(bare[0], abs=0.01), "the label column paid for the scale"
         assert sum(widths) == pytest.approx(box.w, abs=0.02)
 
         # A table with room to give still gives the marks everything they asked for.
@@ -3425,7 +3506,7 @@ def test_a_row_is_as_tall_as_the_lines_its_cells_wrap_onto(helpers) -> None:
     # And what the measured heights are for: the boundary under a row is that row's
     # own edge, so it goes where the row goes instead of being predicted from a pitch.
     quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
-    assert _border(module, drawn.cell(2, 0), "lnB") == quiet
+    assert _border(module, drawn.cell(1, 0), "lnB") == quiet
     assert _border(module, drawn.cell(0, 0), "lnB")[1] == pytest.approx(module.HEADER_RULE_PT, abs=0.01)
 
 
@@ -3438,21 +3519,30 @@ def test_a_bare_table_is_closed_by_a_frame_in_every_style(helpers) -> None:
     that was not finished rather than as one that was held back, and which came back
     as that reading four times over. The frame is
     the table's own edge and it is not the Office look: that is a hairline around
-    every one of 25 cells, and this is one rectangle in the theme's quietest tone.
+    every one of 25 cells, and this is one rectangle.
+
+    In the firm tone and not the quiet one. The grid tone is picked to sit under the
+    copy without competing with it, which is right for the boundaries inside the
+    table and leaves its outer edge indistinguishable from no edge at all once the
+    page is projected; the frame separates the table from the page and the interior
+    lines separate rows from each other, so they are not the same reading and cannot
+    be the same tone.
     """
     module, theme = helpers.ppt_layout, helpers.theme
     box = module.Box.corners(0.72, 1.93, 12.60, 5.63)
     quiet = (str(module._rgb(theme["grid"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    firm = (str(module._rgb(theme["muted"])), pytest.approx(module.GRID_RULE_PT, abs=0.01))
+    assert firm[0] != quiet[0], "the frame and the row hairline are the same tone"
     last = len(_WRAPPING) - 1
     columns = len(_WRAPPING[0])
 
     for style in ("minimal", "header_tint", "row_rules", "compact"):
         drawn = module.table(_slide(module), box, _WRAPPING, theme, style=style)
-        assert _border(module, drawn.cell(0, 0), "lnT") == quiet, f"{style} has no top edge"
-        assert _border(module, drawn.cell(last, 0), "lnB") == quiet, f"{style} has no bottom edge"
+        assert _border(module, drawn.cell(0, 0), "lnT") == firm, f"{style} has no top edge"
+        assert _border(module, drawn.cell(last, 0), "lnB") == firm, f"{style} has no bottom edge"
         for row in range(len(_WRAPPING)):
-            assert _border(module, drawn.cell(row, 0), "lnL") == quiet, f"{style} row {row} has no left edge"
-            assert _border(module, drawn.cell(row, columns - 1), "lnR") == quiet, f"{style} row {row} has no right"
+            assert _border(module, drawn.cell(row, 0), "lnL") == firm, f"{style} row {row} has no left edge"
+            assert _border(module, drawn.cell(row, columns - 1), "lnR") == firm, f"{style} row {row} has no right"
         # And the frame is the only vertical the default draws: an interior edge is
         # still bare, which is the difference from the grid `column_rules` asks for.
         assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
@@ -3467,7 +3557,7 @@ def test_a_bare_table_is_closed_by_a_frame_in_every_style(helpers) -> None:
     # The frame takes its weight from `grid_pt` and nothing else, so a page that wants
     # a heavier edge has the same dial the row hairlines have.
     heavier = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=2.0)
-    assert _border(module, heavier.cell(0, 0), "lnT") == (str(module._rgb(theme["grid"])), pytest.approx(2.0))
+    assert _border(module, heavier.cell(0, 0), "lnT") == (str(module._rgb(theme["muted"])), pytest.approx(2.0))
 
     # A border is drawn on the boundary and takes no room from the row it edges, so
     # the frame cannot make `table_size` answer for a table that is not the drawn one.
@@ -3516,8 +3606,12 @@ def test_every_row_boundary_carries_a_hairline_in_every_style(helpers) -> None:
         assert module.GRID_RULE_PT < module.HEADER_RULE_PT, "the row hairline is at the header rule's weight"
         assert quiet[0] != header[0], f"{style} draws its row hairline in the accent tone"
         # The bottom boundary is the frame's own edge, already drawn, so it is one line
-        # and not a hairline laid over a hairline.
-        assert _border(module, drawn.cell(last, 0), "lnB") == quiet, f"{style} has no bottom edge"
+        # and not a hairline laid over a hairline -- and it is the frame's tone, which
+        # is how the table's outer edge reads as different from a row boundary.
+        assert _border(module, drawn.cell(last, 0), "lnB") == (
+            str(module._rgb(theme["muted"])),
+            pytest.approx(module.GRID_RULE_PT, abs=0.01),
+        ), f"{style} has no bottom edge"
         assert _border(module, drawn.cell(1, 0), "lnR") is None, f"{style} boxed its cells"
 
     # A border is drawn on the boundary rather than beside it, so the hairlines take no
@@ -3596,15 +3690,17 @@ def test_a_table_takes_the_look_it_is_told_to_take(helpers) -> None:
     )
 
     assert _border(module, drawn.cell(0, 0), "lnB") == (str(module._rgb(theme["accent"])), pytest.approx(3.0))
-    assert _border(module, drawn.cell(2, 0), "lnB") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
+    assert _border(module, drawn.cell(2, 0), "lnB") == (str(module._rgb(theme["muted"])), pytest.approx(1.5))
     assert _border(module, drawn.cell(1, 0), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
     # `column_rules` puts a rule between two columns; the rule on the outside of the
     # last one is the frame, which every table draws and this one only meets. Both
-    # weights come off `grid_pt`, so the two lines cannot come out different widths.
-    assert _border(module, drawn.cell(1, 2), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
+    # weights come off `grid_pt`, so the two lines cannot come out different widths --
+    # and the frame keeps its own tone, so the outer edge is not read as one more
+    # column boundary.
+    assert _border(module, drawn.cell(1, 2), "lnR") == (str(module._rgb(theme["muted"])), pytest.approx(1.5))
     unruled = module.table(_slide(module), box, _WRAPPING, theme, grid_pt=1.5)
     assert _border(module, unruled.cell(1, 0), "lnR") is None, "a vertical rule nobody asked for"
-    assert _border(module, unruled.cell(1, 2), "lnR") == (str(module._rgb(theme["grid"])), pytest.approx(1.5))
+    assert _border(module, unruled.cell(1, 2), "lnR") == (str(module._rgb(theme["muted"])), pytest.approx(1.5))
 
     sizes = {run.font.size.pt for run in drawn.cell(0, 0).text_frame.paragraphs[0].runs}
     assert sizes == {18.0}, f"the header was set at {sizes}, not at header_size"
@@ -3628,3 +3724,170 @@ def test_a_table_takes_the_look_it_is_told_to_take(helpers) -> None:
         module.table(_slide(module), box, _WRAPPING, theme, fills={(None, 1): "font_family"})
     with pytest.raises(ValueError, match="a fill names column 9"):
         module.table(_slide(module), box, _WRAPPING, theme, fills={(None, 9): "accent_soft"})
+
+
+def test_a_run_shorter_than_its_region_can_be_centred_in_it(tmp_path) -> None:
+    """A cursor runs from the top, so every inch a column does not use piles up under
+    it. Beside a figure filling its own column that reads as the page slipping upward:
+    measured on a delivered page whose five points ended 62% down while the figure
+    beside them ran to 88%, and the whole API had no way to say "centre this".
+    """
+    _, module = _layout(tmp_path)
+    try:
+        region = module.Box(7.0, 1.4, 12.6, 6.8)  # 5.4in tall, as on that page
+        runs = [0.62, 0.82, 0.62, 0.42, 0.82]
+        gaps = [0.18] * 4
+
+        hung = module.stack(region, gutter=0.18)
+        bands = [hung.take(height) for height in runs]
+        assert bands[0].y0 == pytest.approx(region.y0), "a plain cursor starts at the top"
+        under = region.y1 - bands[-1].y1
+
+        middle = module.stack(region, gutter=0.18).centre(*runs, *gaps)
+        centred = [middle.take(height) for height in runs]
+        above = centred[0].y0 - region.y0
+        below = region.y1 - centred[-1].y1
+
+        assert above == pytest.approx(below, abs=0.005), "the leftover is split, not moved"
+        assert above == pytest.approx(under / 2, abs=0.005)
+        assert centred[-1].y1 <= region.y1 + 1e-9, "and it still ends inside the region"
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_run_shorter_than_its_region_can_spend_the_slack_between_its_bands(tmp_path) -> None:
+    """The other answer to the same leftover, and the one a lane of cards wants.
+
+    An independent per-page review of a delivered nineteen-page deck reported a band
+    of empty page under the content on eleven of the eighteen pages it could read,
+    and four more where two side-by-side columns stopped at different heights. Both
+    are one cursor ending above its region's bottom edge: `centre` halves the gap
+    without closing it, and closing it is what makes two columns come out level.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        region = module.Box(7.0, 1.4, 12.6, 6.8)
+        cards = [1.05, 0.78, 1.05]
+
+        down = module.stack(region).spread(*cards)
+        bands = [down.take(height) for height in cards]
+        assert bands[0].y0 == pytest.approx(region.y0), "the run still starts at the top"
+        assert bands[-1].y1 == pytest.approx(region.y1, abs=1e-9), "and now ends on the bottom edge"
+        gaps = [b.y0 - a.y1 for a, b in zip(bands, bands[1:])]
+        assert gaps[0] == pytest.approx(gaps[1]), "the leftover is shared, not spent on the first gap"
+
+        # Two columns given the same region and different content come out level,
+        # which is the finding this answers.
+        beside = module.stack(region).spread(2.4, 0.9)
+        assert [beside.take(h) for h in (2.4, 0.9)][-1].y1 == pytest.approx(region.y1, abs=1e-9)
+
+        # A run with no slack keeps what it had: raising the gap to the deck's usual
+        # one would spend height the region cannot pay and push the last band off.
+        tight = module.Box(7.0, 1.4, 12.6, 1.4 + sum(cards))
+        packed = module.stack(tight).spread(*cards)
+        assert packed.gutter == 0.0
+        assert [packed.take(h) for h in cards][-1].y1 == pytest.approx(tight.y1, abs=1e-9)
+
+        # One band has no between, so it falls back to the answer that does apply.
+        alone = module.stack(region).spread(1.4)
+        assert alone.take(1.4).y0 == pytest.approx(region.y0 + (region.h - 1.4) / 2, abs=0.005)
+    finally:
+        _drop(tmp_path)
+
+
+def test_the_band_that_refuses_says_what_the_region_already_paid_out(tmp_path) -> None:
+    """The band that overruns is never the band that overspent.
+
+    A live run wrote one helper that measured every card with `card_size` and never
+    asked `short_by`; on the page whose cards did not fit it read "1.62in was asked
+    for and 0.13in is left", shortened the last card, and got the same sentence
+    again -- twice, identically, because the cards that did not fit were the earlier
+    ones. The count and the running total are what say that.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        region = module.Box(0.72, 1.40, 6.00, 6.50)
+        down = module.stack(region)
+        for _ in range(3):
+            down.take(1.62)
+        with pytest.raises(ValueError) as refused:
+            down.take(1.62)
+        said = str(refused.value)
+        assert "after 3 band(s) spent 4.86in of its 5.10in" in said, said
+
+        # A cursor that has taken nothing has nothing to report about, and the
+        # sentence would be noise on the commonest overrun of all: one band too big
+        # for an untouched region.
+        fresh = module.stack(region)
+        with pytest.raises(ValueError) as first:
+            fresh.take(region.h + 1.0)
+        assert "band(s) spent" not in str(first.value)
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_cursor_that_spends_a_gap_says_so_when_it_runs_out(tmp_path) -> None:
+    """What the first live use of `spread` hit, and what the refusal did not say.
+
+    A run wrote `spread(*heights)` and then a `skip(0.10)` after each card. `spread`
+    sizes its gap so the run ends exactly on the bottom edge, so every skip on top of
+    it overruns by exactly what was skipped -- and the refusal answered with "measure
+    every band first and ask short_by", which is what that script had already done.
+    The heights were right; the gaps were the height nobody had counted.
+    """
+    _, module = _layout(tmp_path)
+    try:
+        region = module.Box(7.0, 1.4, 12.6, 6.8)
+        cards = [1.05, 0.78, 1.05]
+        down = module.stack(region).spread(*cards)
+        with pytest.raises(ValueError) as refused:
+            for height in cards:
+                down.take(height)
+                down.skip(0.10)
+        said = str(refused.value)
+        # Named as the call that set it, because that is the line to delete. A run
+        # that met the older wording -- which said only "measure every band first",
+        # the thing the script had already done -- deleted `spread` from all three
+        # of its pages instead and went back to arithmetic on y.
+        assert "spread() already sized this region's gap" in said, said
+        assert f"{down.gutter:.2f}in" in said, said
+        assert "add nothing between them" in said, said
+        assert "short_by" in said, "the refusal dropped the answer it already had"
+
+        # A gutter the caller chose is not spread's, so it gets the general sentence
+        # and not an instruction to delete a call it never made.
+        chosen = module.stack(region, gutter=2.4)
+        with pytest.raises(ValueError) as own:
+            for height in cards:
+                chosen.take(height)
+        assert "gap after every band" in str(own.value)
+        assert "spread()" not in str(own.value)
+
+        # A cursor with no gap says nothing about one: the sentence would be noise on
+        # every other overrun, which is most of them.
+        plain = module.stack(region)
+        with pytest.raises(ValueError) as bare:
+            plain.take(region.h + 1.0)
+        assert "gap after every band" not in str(bare.value)
+    finally:
+        _drop(tmp_path)
+
+
+def test_slack_is_short_by_asked_the_other_way(tmp_path) -> None:
+    """Both questions come up before the first band is drawn and only one had an
+    answer. A run that overruns has no slack to split, so `centre` leaves it where it
+    is and the refusal still lands at the band that overruns."""
+    _, module = _layout(tmp_path)
+    try:
+        region = module.Box(0.72, 1.66, 12.61, 6.51)  # 4.85in
+        plan = module.stack(region)
+
+        assert plan.slack(1.6, 0.12, 2.0) == pytest.approx(1.13)
+        assert plan.slack([1.6, 0.12, 2.0]) == pytest.approx(1.13), "a plan built in a loop"
+        assert plan.slack(9.0) == 0.0, "nothing to spread when it does not fit"
+        assert plan.left == pytest.approx(4.85), "asking a plan spends nothing"
+
+        overrun = module.stack(region).centre(9.0)
+        assert overrun.left == pytest.approx(4.85), "centre skipped nothing"
+    finally:
+        _drop(tmp_path)

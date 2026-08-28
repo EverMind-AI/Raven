@@ -291,10 +291,29 @@ def _resolve(name):
     if key in _DATA:
         return key
     near = find_icons(key)
+    # The same sentence the service raises, spelled out again because this module
+    # runs alone in a build directory and can import nothing from it. Kept honest by
+    # a test that asks both sides for the same miss and compares the two strings.
+    #
+    # Candidates are named as candidates and not as the answer: the search ranks by
+    # name, then by the upstream keywords, then by spelling, so its last resort is a
+    # string that looks like what was typed and means nothing like it -- `trophy`
+    # came back as `typography`, on a set that does hold `award`.
     if near:
-        hint = "; closest: " + ", ".join(near)
+        hint = (
+            "; nearest: " + ", ".join(near) + f". Ranked by name, then by the upstream keywords, "
+            f"then by spelling -- one that means nothing like {name!r} is a spelling match and not "
+            "an answer. This raise ended the script, so the pages after it went unwritten. Every "
+            "name is a key in deck/build/icons.json -- grep it from a shell to check a name for "
+            "nothing -- and find_icons searches meanings ('deadline' finds calendar_due), or read "
+            "deck/build/references/icons.md"
+        )
     else:
-        hint = f"; nothing close -- all {len(ICON_NAMES)} names are in ICON_NAMES"
+        hint = (
+            "; nothing close -- find_icons takes a meaning rather than a name, so try two or three "
+            f"words for the thing itself; all {len(ICON_NAMES)} names are in ICON_NAMES and "
+            "deck/build/references/icons.md"
+        )
     raise LookupError(f"unknown icon {name!r}{hint}")
 
 

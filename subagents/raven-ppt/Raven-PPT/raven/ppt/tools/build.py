@@ -16,13 +16,16 @@ instruction it got while seventeen colour bars stood untouched.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
+from raven.ppt.backends.script import script_path
 from raven.ppt.contracts import (
     Finding,
-    PlannedTable,
     Profile,
     Project,
     Severity,
@@ -33,17 +36,27 @@ from raven.ppt.contracts import (
     load_plan,
     outline_path,
 )
+from raven.ppt.services import regress
+from raven.ppt.services.regress import Regression
 from raven.ppt.stages.build import BuildStage
 from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_ints
+from raven.ppt.tools.review import _already_read as _pages_read
 from raven.utils.helpers import image_block, text_block
 
-# The most pages one call may name in `slides`. One render comes back either way:
-# `execute` passes `slides=[page_from]` when none is named, so omitting `slides` walks
-# the deck a page at a time rather than a batch at a time. The stage's own BATCH_VIEWS
-# (raven/ppt/stages/build.py) bounds what it would show and is where the unseen-page
-# record is kept.
-BATCH_VIEWS = 1
+
+@dataclass(frozen=True)
+class Reading:
+    """What the first automatic review contributes to a build reply."""
+
+    payload: dict[str, Any]
+    asks: list[str]
+    blocks: list[Any]
+
+
+def _read_payload(read: dict[str, Any]) -> dict[str, Any]:
+    """The reading's own fields, without the envelope this reply already has."""
+    return {key: value for key, value in read.items() if key not in ("ok", "project", "next_step")}
 
 
 class PptBuildTool(Tool):
@@ -52,8 +65,9 @@ class PptBuildTool(Tool):
         "Build the deck by running the python-pptx program you write, then look at every page it made. "
         "Write the program to deck/build/build.py with write_file -- that whole path, "
         "relative to the workspace -- revise it with edit_file, then call this with just the project. "
-        "It returns one rendered page, whatever the script printed to stdout, and everything measured on "
-        "the deck. "
+        "It returns a batch of rendered pages, whatever the script printed to stdout, and everything "
+        "measured on the deck; the reply names how many pages it did not show and which page to pass to "
+        "page_from to see the next of them. "
         "It refuses until ppt_prepare has read the task, ppt_brief holds what the user decides and "
         "ppt_outline has recorded what each page argues; and it refuses to publish a deck holding a page "
         "whose current code has never been rendered back to you, which is answered by building again and "
@@ -62,11 +76,30 @@ class PptBuildTool(Tool):
     )
     timeout_seconds = 900.0
 
-    def __init__(self, workspace: Path, stage: BuildStage, views: Any, profile: Profile) -> None:
+    def __init__(
+        self, workspace: Path, stage: BuildStage, views: Any, profile: Profile, review: Any | None = None
+    ) -> None:
         self.workspace = workspace
         self.stage = stage
         self.views = views
         self.profile = profile
+        # The second reading, run once by this tool rather than waited for. Asking the
+        # author to call it left it to the author: one run made twenty builds and
+        # reached it at iteration 61 on its own, and a run that never leaves draft
+        # never meets the sentence that names it at all. The first finished deck is
+        # the moment it is worth having, and that moment is here.
+        self.review = review
+
+    @property
+    def views_per_call(self) -> int:
+        """How many page renders one reply carries, which is also the `slides` cap.
+
+        Read off the stage rather than held here. Two constants carried this number and
+        drifted to 1 and 3: the stage writes the unseen-page record from the pages it
+        selected, so a cap of its own on this side either forbids pages the reply would
+        have carried or lets a call name pages the reply drops without saying so.
+        """
+        return self.stage.views_per_call
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -87,19 +120,21 @@ class PptBuildTool(Tool):
                 "slides": {
                     "type": "array",
                     "items": {"type": "integer", "minimum": 1},
-                    "maxItems": BATCH_VIEWS,
+                    "maxItems": self.views_per_call,
                     "description": (
-                        "one page to render back, when you want that page rather than the one page_from "
-                        "names. One page comes back either way -- look at every page before deciding it is "
-                        "done, and name a page again after editing it"
+                        f"up to {self.views_per_call} page(s) to render back, when you want those pages "
+                        "rather than the batch page_from starts at -- the pages you just edited, usually. "
+                        "Look at every page before deciding it is done, and name a page again after "
+                        "editing it"
                     ),
                 },
                 "page_from": {
                     "type": "integer",
                     "minimum": 1,
                     "description": (
-                        "which page comes back as a render; omit to start at page 1 and pass the "
-                        "number the previous reply named to see the next"
+                        "the first page of the batch that comes back as renders, up to "
+                        f"{self.views_per_call} of them; omit to start at page 1 and pass the number the "
+                        "previous reply named to see the next batch"
                     ),
                 },
                 "draft": {
@@ -166,12 +201,15 @@ class PptBuildTool(Tool):
         try:
             wanted = as_ints(slides, "slides") or None
         except ArgumentError as exc:
-            return _return.failed(str(exc), hint="slides: [7] -- one page at a time")
+            return _return.failed(str(exc), hint="slides: [7] -- page numbers, one per page you want back")
 
+        # `wanted` and not `wanted or [page_from]`: filling it in made the stage's
+        # walk branch unreachable, so omitting `slides` returned a single page whatever
+        # the budget was, and a nineteen-page deck took nineteen builds to look at once.
         result = await self.stage.run(
             deck,
             script,
-            slides=wanted or [page_from],
+            slides=wanted,
             page_from=page_from,
             draft=draft,
         )
@@ -267,16 +305,96 @@ class PptBuildTool(Tool):
                 "refuses it: the findings below are reports, and the renders are the judge. Look at the "
                 "pages first and trust what you see -- a finding you look at and disagree with is a finding "
                 "to leave alone, and a page that reads wrong is worth fixing whether or not anything "
-                "measured it. Answer the ones you agree with by editing the program and building again, "
-                "or stop here"
+                "measured it. Answer the ones you agree with by editing the program and building again. "
+                "A second reader has already read this deck once on an empty context -- that is "
+                "first_reading above, if it is there -- and ppt_review reads it again, or "
+                "ppt_review(pages=[...]) reads back the pages you have just changed"
                 if not draft
                 else "nothing refuses this draft. The findings are reports and the renders are the judge: "
                 "read the pages, fix what looks wrong to you whether or not it was measured, and leave a "
                 "finding you disagree with alone. When the pages read right, build again without `draft` -- "
-                "that is the call that runs every gate and delivers the deck",
+                "that is the call that runs every gate and delivers the deck -- and it runs ppt_review on "
+                "it without being asked, so a second reader reads every page on an empty context and hands "
+                "back what is wrong. A deck that stays in draft is a deck nobody but you has read",
             )
+        # Last, so it reads first: an author told a page got worse by the fix it just
+        # made has to see that before it picks the next fix, or it answers the damage
+        # of its own last round.
+        regressed = self._regressions(deck, outcome, findings)
+        if regressed:
+            payload["regressed"] = _regressed(regressed)
+            asks.insert(0, _regression_ask(regressed))
+        read = await self._first_reading(deck, project, draft, blocking, payload)
+        if read is not None:
+            payload["first_reading"] = read.payload
+            asks[0:0] = read.asks
+            body = _return.done(blocking=blocking, asks=asks, **payload)
+            # The reviewer's pages rather than this call's batch: those are the ones
+            # something was found on, and a reply cannot carry both sets.
+            return _return.with_images(body, read.blocks) if read.blocks else body
         body = _return.done(blocking=blocking, asks=asks, **payload)
         return await self._with_views(deck, outcome, body, findings, shown)
+
+    async def _first_reading(
+        self, deck: Project, project: str, draft: bool, blocking: Sequence[Finding], payload: dict[str, Any]
+    ) -> Reading | None:
+        """The second reader, on the first deck that is finished enough to have one.
+
+        Once, and only here: a delivered build with nothing refusing it. A draft is a
+        part-written deck and a refused one is not a deck, so a reading of either is a
+        list about pages that are about to change. After this the author calls
+        `ppt_review` itself, which is what the reply tells it to do.
+
+        The record on disk is what says it has run, so a resumed job does not pay for
+        it twice.
+        """
+        if self.review is None or draft or blocking or "pptx_path" not in payload:
+            return None
+        # Not "a record exists" but "every page is in it". `ppt_outline` takes up to 40
+        # pages and one reading covers 30, so the existence test marked a 40-page deck
+        # read after 30 and pages 31-40 never got the reading the tool description
+        # promises. The reader puts the uncovered pages first, so the remainder is read
+        # on the next delivered build.
+        built_pages = payload.get("slides")
+        if isinstance(built_pages, int) and built_pages > 0 and len(_pages_read(deck)) >= built_pages:
+            return None
+        try:
+            reply = await self.review.execute(project=project)
+        except Exception:  # noqa: BLE001 -- a reading that failed must not cost the delivery
+            return None
+        said = reply if isinstance(reply, str) else reply.model_text
+        try:
+            read = json.loads(said[said.index("{") : said.rindex("}") + 1])
+        except (ValueError, AttributeError):
+            return None
+        if not read.get("ok"):
+            return None
+        asks = [read.get("next_step")] if read.get("next_step") else []
+        blocks = list(getattr(reply, "blocks", None) or [])
+        return Reading(payload=_read_payload(read), asks=asks, blocks=blocks)
+
+    def _regressions(self, deck: Project, outcome: Any, findings: list[Finding]) -> tuple[Regression, ...]:
+        """What this build broke, and the baseline moved on to this build.
+
+        Both, in this order: the comparison has to be made against the previous
+        build before the record is overwritten with this one. One basis for the two
+        calls so they cannot diverge -- comparing on one rule and recording on
+        another would report a page as regressed on a finding that never counted.
+        """
+        try:
+            script = script_path(deck).read_text(encoding="utf-8")
+        except OSError:
+            return ()
+        basis: dict[str, Any] = {
+            "script": script,
+            "sources": outcome.sources,
+            "findings": findings,
+            "blocking_kinds": self.profile.blocking_kinds,
+            "pages": outcome.pages,
+        }
+        regressed = regress.compare(deck, **basis)
+        regress.record(deck, **basis)
+        return regressed
 
     async def _with_views(
         self, deck: Project, outcome: Any, body: str, findings: list[Finding], wanted: list[int]
@@ -304,15 +422,6 @@ class PptBuildTool(Tool):
                 said.append(f"Planned claim: {plan.claim}")
                 if plan.carries:
                     said.append(f"Planned visual/layout: {plan.carries}")
-                # As a grid, not as the dict it is stored in: the author was handed
-                # `{'columns': ('指标', '自研'), 'rows': ((...),)}` -- tuples, quotes and
-                # all -- two lines above the planned points, which are a list. A row
-                # short of the header shows as a gap, because after `PlannedTable` a
-                # short row is the only way a plan can still be missing a cell.
-                if plan.table_plan:
-                    said.append(
-                        "Planned table information shape:\n" + "\n".join(PlannedTable.of(plan.table_plan).lines())
-                    )
                 if plan.says:
                     said.append("Planned supporting points:\n" + "\n".join(f"  - {point}" for point in plan.says))
                 if plan.figures:
@@ -323,6 +432,52 @@ class PptBuildTool(Tool):
             blocks.append(text_block("\n".join(said)))
             blocks.append(image_block(self.views.data_uri(renders[number])))
         return _return.with_images(body, blocks)
+
+
+def _regressed(regressed: Sequence[Regression]) -> dict[str, Any]:
+    """The comparison, page by page, for a reader acting on it rather than reading it."""
+    return {
+        "note": (
+            "these pages carry a blocking finding they did not carry in the previous build. Nothing has "
+            "been rolled back: this deck is generated from your program, so putting the file back would "
+            "leave the program describing a deck that no longer exists -- and the edit that caused this "
+            "may be right in every other respect. The choice of whether to undo it is yours"
+        ),
+        "pages": {
+            str(entry.page): {
+                "gained_blocking": list(entry.gained),
+                "blocking_before": list(entry.had),
+                "page_block_changed": entry.recoded,
+            }
+            for entry in regressed
+        },
+    }
+
+
+def _regression_ask(regressed: Sequence[Regression]) -> str:
+    """Said in the reply, not only in the payload.
+
+    A page that got worse is a fact about the author's own last edit, and the whole
+    point of reporting it is that the next move should be backwards. A payload key
+    the model may or may not read is not where that belongs.
+    """
+    said = "; ".join(_one_regression(entry) for entry in regressed)
+    return (
+        f"{len(regressed)} page(s) came back from this build worse than they went in -- {said}. Look at "
+        "those pages and consider undoing the edit that introduced this, rather than adding a second fix "
+        "on top of the first; nothing was rolled back for you, because the program is the deck"
+    )
+
+
+def _one_regression(entry: Regression) -> str:
+    gained = ", ".join(entry.gained)
+    had = ", ".join(entry.had) if entry.had else "nothing blocking"
+    cause = (
+        "its own block changed since then"
+        if entry.recoded
+        else "its own block did not change, so the shared setup, a helper it calls or the design pass did this"
+    )
+    return f"page {entry.page} now has {gained} and carried {had} before ({cause})"
 
 
 def _asks(findings: list[Finding], blocking: list[Finding]) -> list[str]:
@@ -349,9 +504,6 @@ _ASK = {
     "unseen_page": "look at the {count} page(s) you have not been shown, by running the build again",
     "evidence": "put something on the pages that are all prose: a figure, a table, a diagram",
     "wide_table": "narrow {count} table(s) or split them",
-    "unplaced_table": "draw the table {count} page(s) planned, or call ppt_outline again without one",
-    "table_grid": "put back the cells {count} table(s) dropped from their plan, or replan those pages",
-    "table_room": "drop a column or split {count} planned table(s) the page has no room for",
 }
 
 

@@ -285,10 +285,10 @@ def sample(tmp_path: Path, image) -> Sample:
                     # own cells want more width than any page carries -- the grid row
                     # and the room row, one for each half of a plan the file did not
                     # keep.
-                    PagePlan(page=2, claim="a talk's worth of copy", table_plan=_WIDE_PLAN),
+                    PagePlan(page=2, claim="a talk's worth of copy"),
                     PagePlan(page=3, claim="a card, a rule and a label"),
                     # And a page whose plan names a table that was never drawn at all.
-                    PagePlan(page=4, claim="results", prototype=1, table_plan=_UNDRAWN_PLAN),
+                    PagePlan(page=4, claim="results", prototype=1),
                 ),
             ),
         ),
@@ -489,7 +489,6 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
     a collision only trades one finding for another, and the move a collision
     actually wants is a wider box, which costs the page nothing.
 
-    One joined it: `unplaced_table`, which belongs with what the deck and the plan
     agreed between them rather than with the measurements. A page whose outline names
     a table and whose file holds none is not a page that is nearly right, nothing
     about it is answered by making the page smaller, and both ways out are one edit
@@ -508,7 +507,6 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "word_collision",
         "covered_shape",
         "literal_escape",
-        "unplaced_table",
     }
     assert {finding.kind for finding in warnings(findings)} == {
         # A caption written by looking at a figure, naming something the materials
@@ -519,8 +517,6 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "evidence",
         "wide_table",
         "native_table",
-        "table_grid",
-        "table_room",
         "band",
         "flat_formula",
         "listed_claims",
@@ -698,3 +694,144 @@ def test_findings_carry_a_message_a_model_can_act_on(sample: Sample) -> None:
     for finding in check_deck(sample.deck):
         assert isinstance(finding, Finding)
         assert len(finding.message) > 20
+
+
+# One shared cause, reported once
+#
+# A live 19-page run came back with the same title-row warning on every page, and the
+# model spent a round on each: nineteen concrete per-page problems read as nineteen
+# decisions, where there was one setup to change.
+
+
+def _repeating(kind: str, message: str, pages: range, severity: Severity) -> list[Finding]:
+    return [
+        Finding(kind=kind, severity=severity, page=page, message=message, detail={"at": [0.72, 1.3]})
+        for page in pages
+    ]
+
+
+def test_one_cause_repeating_across_pages_arrives_as_one_finding(sample: Sample, monkeypatch) -> None:
+    from raven.ppt.services.gates import registry
+
+    said = "this page's title sits at (0.72, 1.30) 11.88in wide and the template puts its own elsewhere"
+
+    def repeating() -> dict:
+        return {
+            "title_row": lambda _deck: _repeating("title_row", said, range(1, 20), Severity.WARNING)
+        }
+
+    monkeypatch.setattr(registry, "checks", repeating)
+
+    findings = check_deck(sample.deck)
+
+    assert len(findings) == 1, "nineteen pages, one cause, one decision"
+    assert findings[0].page is None, "a cause shared by nineteen pages is not on one of them"
+    assert findings[0].detail["on_pages"] == list(range(1, 20))
+    assert "pages 1, 2, 3" in findings[0].message and "19" in findings[0].message
+    assert said in findings[0].message, "the original message survives, so the fix is still stated"
+
+
+def test_a_finding_that_differs_per_page_stays_per_page(sample: Sample, monkeypatch) -> None:
+    """Only a shared cause folds. A message that names what is wrong with the page it
+    is on is a different problem on every page, and there is no list of kinds to keep
+    in step with the registry -- the messages decide."""
+    from raven.ppt.services.gates import registry
+
+    def per_page() -> dict:
+        return {
+            "citation": lambda _deck: [
+                Finding(
+                    kind="citation",
+                    severity=Severity.BLOCKING,
+                    page=page,
+                    message=f"page {page} credits figure {page} to a source that never showed it",
+                )
+                for page in (2, 4, 6)
+            ]
+        }
+
+    monkeypatch.setattr(registry, "checks", per_page)
+
+    findings = check_deck(sample.deck)
+
+    assert [finding.page for finding in findings] == [2, 4, 6]
+    assert all("on_pages" not in finding.detail for finding in findings)
+
+
+def test_an_aggregated_blocking_finding_still_blocks(sample: Sample, monkeypatch) -> None:
+    from raven.ppt.services.gates import registry
+
+    def repeating() -> dict:
+        return {
+            "placeholder_copy": lambda _deck: _repeating(
+                "placeholder_copy",
+                "this page still carries the template's own copy",
+                range(3, 8),
+                Severity.BLOCKING,
+            )
+        }
+
+    monkeypatch.setattr(registry, "checks", repeating)
+
+    findings = check_deck(sample.deck)
+
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.BLOCKING
+    assert blocking(findings) == findings, "folding a cause does not release the deck"
+
+
+def test_a_cause_on_one_page_is_left_where_it_is(sample: Sample, monkeypatch) -> None:
+    """More than one page is what makes a cause repeated, and one page is not."""
+    from raven.ppt.services.gates import registry
+
+    def once() -> dict:
+        return {
+            "title_row": lambda _deck: _repeating(
+                "title_row",
+                "this page's title is not where the template puts one",
+                range(4, 5),
+                Severity.WARNING,
+            )
+        }
+
+    monkeypatch.setattr(registry, "checks", once)
+
+    findings = check_deck(sample.deck)
+
+    assert [finding.page for finding in findings] == [4]
+    assert "on_pages" not in findings[0].detail
+
+
+def test_a_repeated_cause_and_a_per_page_one_in_the_same_run(sample: Sample, monkeypatch) -> None:
+    """The fold is per cause, not per run: the shared one collapses and the page-specific
+    ones beside it are untouched, in registry order."""
+    from raven.ppt.services.gates import registry
+
+    def mixed() -> dict:
+        return {
+            "title_row": lambda _deck: _repeating(
+                "title_row",
+                "every page puts its title in the same wrong box",
+                range(1, 5),
+                Severity.WARNING,
+            ),
+            "overset_copy": lambda _deck: [
+                Finding(
+                    kind="overset_copy",
+                    severity=Severity.WARNING,
+                    page=page,
+                    message=f"the copy in the second card of page {page} is longer than the card",
+                )
+                for page in (2, 3)
+            ],
+        }
+
+    monkeypatch.setattr(registry, "checks", mixed)
+
+    findings = check_deck(sample.deck)
+
+    assert [(finding.kind, finding.page) for finding in findings] == [
+        ("title_row", None),
+        ("overset_copy", 2),
+        ("overset_copy", 3),
+    ]

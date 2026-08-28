@@ -27,6 +27,7 @@ marketing banner and no source words captioned it as an architecture diagram.
 from __future__ import annotations
 
 import asyncio
+import json
 import io
 import re
 import zipfile
@@ -64,6 +65,65 @@ _CAPTION_ON_A_DOCUMENT = (
 # Where material lands when this deck has no directory of its own yet.
 
 
+def _figure_id(deck, path: Path) -> str | None:
+    """The id the figure catalogue keys this file under, once ingest has run.
+
+    Handed back because nothing else can be derived from what this tool returns: the
+    catalogue keys a picture as `<stem>-<digest>`, and `ppt_figure_inspect` takes those
+    ids and nothing else. A measured run fetched ten images, called inspect with the
+    filenames it had just passed here, was told none of them was in the catalogue,
+    guessed at the digests on its second try and got their length wrong -- two
+    iterations spent recovering a string this tool already had.
+
+    None when the catalogue is not there yet or holds no entry for this file, which is
+    the state before ingest has read it.
+    """
+    from raven.ppt.services.ingest.pipeline import CATALOGUE_FILE
+
+    try:
+        loaded = json.loads((deck.ingest_dir / CATALOGUE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    assets = loaded.get("assets") if isinstance(loaded, dict) else None
+    for name, entry in (assets or {}).items():
+        if isinstance(entry, dict) and entry.get("source_file") == path.name:
+            return str(name)
+    return None
+
+
+def _why(exc: Exception) -> str:
+    """The exception as something to read.
+
+    `httpx.ConnectTimeout("")` renders as the empty string, so the message that
+    reached one run was `the download failed: ` with nothing after the colon --
+    no cause, no class, nothing to act on.
+    """
+    said = str(exc).strip()
+    return f"{type(exc).__name__}: {said}" if said else type(exc).__name__
+
+
+def _reach_hint(exc: Exception, proxy: str | None) -> dict[str, str]:
+    """What to try when the host was never reached, as opposed to refusing.
+
+    A status is the server talking and needs no hint. A connect or read timeout
+    is the network, and on a machine that reaches the internet through a proxy it
+    is almost always that this tool is not using one: every client here is built
+    `trust_env=False`, so `HTTPS_PROXY` in the environment -- the setting anyone
+    would reach for first -- is deliberately ignored and the tool goes direct.
+    Measured on one run: three fetches timed out at 50s each while curl through
+    the very same proxy answered in 0.86s, and nothing in the refusal said why.
+    """
+    if isinstance(exc, httpx.HTTPStatusError) or proxy:
+        return {}
+    if not isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout)):
+        return {}
+    return {
+        "hint": "the host was never reached and no proxy is configured. This tool ignores HTTPS_PROXY in "
+        "the environment on purpose; set tools.web.proxy in the config instead, which the web tools and "
+        "this one all read"
+    }
+
+
 class PptFetchTool(Tool):
     name = "ppt_fetch"
     description = (
@@ -73,7 +133,9 @@ class PptFetchTool(Tool):
         "figures are in the deck's evidence when this returns; a .pptx is bound as the deck's template. "
         "The format is decided by the bytes rather than by the URL or the server's content type. When you "
         "fetch a picture, pass the words the page printed about it as caption -- that is the only way they "
-        "reach the figure catalogue, since nothing here can see the page the picture came off."
+        "reach the figure catalogue, since nothing here can see the page the picture came off. A picture "
+        "comes back with the figure_id the catalogue keys it under; that is what ppt_figure_inspect and a "
+        "page's figure take, and it is not the filename you asked for."
     )
     timeout_seconds = 120.0
 
@@ -137,7 +199,7 @@ class PptFetchTool(Tool):
         try:
             payload = await self._download(url)
         except httpx.HTTPError as exc:
-            return _return.failed(f"the download failed: {exc}")
+            return _return.failed(f"the download failed: {_why(exc)}", **_reach_hint(exc, self.proxy))
         except ValueError as exc:
             return _return.failed(str(exc))
 
@@ -169,12 +231,14 @@ class PptFetchTool(Tool):
         if source is None:
             return _return.failed(f"nothing here can read a {suffix} file")
         read = await self._read(deck)
+        figure_id = _figure_id(deck, source.path) if kind == _IMAGE else None
         return _return.done(
             project=project,
             url=url,
             kind=kind,
             path=str(source.path),
             bytes=len(payload),
+            **({"figure_id": figure_id} if figure_id else {}),
             **({"caption": source.caption} if source.caption else {}),
             **({"note": _CAPTION_ON_A_DOCUMENT} if caption and kind != _IMAGE else {}),
             **({"sources_read": read} if read else {}),

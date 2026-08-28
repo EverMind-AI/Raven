@@ -64,8 +64,16 @@ from raven.ppt.services.measure.type_size import census, rendered_spans
 from raven.ppt.services.publish import PublishRefusedError, publish, stage
 from raven.ppt.services.template import house_style, prepared_path
 
-# How many page renders one reply carries. Here rather than in the tool because the
-# unseen check has to agree with what the tool will actually show.
+# Default for `BuildStage.views_per_call`, which is how many page renders one reply
+# carries. The effective number is the stage's field, set from `tools.ppt.viewsPerCall`,
+# and `ppt_build` reads it off the stage rather than keeping a constant of its own.
+# That is the whole point of one number: the unseen record is written from the pages
+# the stage decided to show, so a `slides` cap that disagreed either forbids pages the
+# reply would have carried or lets a call name pages the reply silently drops.
+# Three is a compromise between two measured failures. Twelve renders in one reply read
+# as a batch to skim -- a run voiced one problem while several stood -- and one render
+# per reply makes a nineteen-page deck nineteen builds to look at once, which is most of
+# why a measured run spent 147 iterations.
 BATCH_VIEWS = 3
 
 # A plurality of pages is not a majority of them, and the difference is where this
@@ -91,6 +99,10 @@ class BuildStage:
     measure: Callable[..., Any]
     profile: Profile
     destination: Callable[[Project], Path] = field(default=lambda p: p.exports_dir / "deck.pptx")
+    # One field rather than a constant on each side of the call, because those are what
+    # drifted: `ppt_build` bounds `slides` by this and the unseen record is written from
+    # what it selects, so the two cannot be allowed to hold different numbers.
+    views_per_call: int = BATCH_VIEWS
 
     async def run(
         self,
@@ -121,13 +133,18 @@ class BuildStage:
             # length and what was agreed are not asked of a draft. Everything else is
             # measured, and nothing is published.
             findings = [finding for finding in findings if finding.kind not in _DRAFT_EXEMPT]
-            showing = _showing(outcome.pages, slides, page_from)
+            showing = _showing(outcome.pages, slides, page_from, self.views_per_call)
+            # A draft render is a page put in front of the author, so it counts as
+            # seen. See `_record_shown` for what recording it only on publication
+            # cost one measured run.
+            _record_shown(project, outcome, showing, findings)
             data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing, "draft": True}
             return StageResult(ok=True, findings=tuple(findings), data=data, note="draft: not published")
 
-        showing = _showing(outcome.pages, slides, page_from)
+        showing = _showing(outcome.pages, slides, page_from, self.views_per_call)
         findings.extend(_unplaced_figure_findings(project, outcome))
-        findings.extend(_unseen_findings(project, outcome, showing, findings))
+        _record_shown(project, outcome, showing, findings)
+        findings.extend(_unseen_findings(project, outcome))
 
         blocking = self._blocking(findings)
         data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing}
@@ -267,12 +284,17 @@ def _render_of(project: Project, pptx: Path) -> Path | None:
         return None
 
 
-def _showing(pages: int, slides: Sequence[int] | None, page_from: int) -> list[int]:
-    """The pages this call will render back: the ones asked for, or the next batch."""
+def _showing(pages: int, slides: Sequence[int] | None, page_from: int, views: int = BATCH_VIEWS) -> list[int]:
+    """The pages this call will render back: the ones asked for, or the next batch.
+
+    `views` is passed rather than read off the module so one build's budget is one
+    value: `ppt_build` publishes the same number as its `slides` cap, and the unseen
+    record below is written from what this returns.
+    """
     if slides:
-        return sorted(set(slides))[:BATCH_VIEWS]
+        return sorted(set(slides))[:views]
     first = max(1, min(page_from, pages or 1))
-    return list(range(first, min(pages, first + BATCH_VIEWS - 1) + 1))
+    return list(range(first, min(pages, first + views - 1) + 1))
 
 
 def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
@@ -331,16 +353,42 @@ def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[F
     return findings
 
 
-def _unseen_findings(
+def _record_shown(
     project: Project, outcome: BuildOutcome, showing: Sequence[int], measured: Sequence[Finding]
-) -> list[Finding]:
-    """Refuse a deck carrying a page whose current code nobody has been shown.
+) -> None:
+    """Remember that these pages were rendered back, as their code stood.
 
-    Recorded here rather than in the tool because this is where publication happens:
-    a check the tool ran afterwards would be a check on a file already delivered.
+    Called from the draft path as well as the publishing one, and that is the whole
+    point: a draft render is a page put in front of the author, so it is what the
+    record is about. Recording only on publication made the two states disagree --
+    a measured run walked its nineteen pages three times as drafts, was told on the
+    first real build that eighteen of them had never been seen, and spent the rest
+    of its budget walking them again one non-draft build at a time. The pages had
+    been looked at; only the record disagreed.
+
+    A render that did not happen is still not a page seen: the `unrendered` guard
+    stays, because the fingerprint would otherwise say the author was shown code
+    that produced no picture.
     """
     if any(finding.kind == "unrendered" for finding in measured):
-        return []
+        return
+    try:
+        script = script_path(project).read_text(encoding="utf-8")
+    except OSError:
+        return
+    blocks = seen.blocks_of(script, outcome.sources)
+    if not blocks:
+        return
+    seen.record(project, {page: blocks[page] for page in showing if page in blocks})
+
+
+def _unseen_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
+    """Refuse a deck carrying a page whose current code nobody has been shown.
+
+    Read here rather than in the tool because this is where publication happens: a
+    check the tool ran afterwards would be a check on a file already delivered. The
+    recording half is `_record_shown`, which both paths call.
+    """
     try:
         script = script_path(project).read_text(encoding="utf-8")
     except OSError:
@@ -348,7 +396,6 @@ def _unseen_findings(
     blocks = seen.blocks_of(script, outcome.sources)
     if not blocks:
         return []
-    seen.record(project, {page: blocks[page] for page in showing if page in blocks})
     absent = seen.unseen(project, blocks)
     if not absent:
         return []

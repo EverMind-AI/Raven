@@ -20,6 +20,7 @@ from raven.ppt.backends.script.submission import carries_a_program, submission_r
 from raven.ppt.backends.script.workspace import (
     HelperSources,
     asset_helpers,
+    deck_path,
     provision,
     script_path,
     with_template_helpers,
@@ -32,6 +33,7 @@ __all__ = [
     "ScriptBackend",
     "broken_page",
     "carries_a_program",
+    "deck_path",
     "page_blocks",
     "page_sources",
     "provision",
