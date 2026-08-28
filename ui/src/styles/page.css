@@ -4789,3 +4789,288 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    three passages are in this order. */
 .kbhit .st .mdl { font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
 .kbhit .ds { font-size: 12.5px; color: var(--text); line-height: 1.7; }
+
+/* ── playbooks (pb*) ─────────────────────────────────────────────────
+   Two views on one page: a wall of fixed cards, and one playbook's graph.
+
+   The card is a fixed rectangle with three fixed slots (name, the file's own
+   one-line description, the shape), so a long description and a long graph
+   produce the same card and the wall keeps its rhythm. Everything that varies
+   is inside the shape slot, where the diagram is clipped and counted rather
+   than scaled -- see features/playbooks/shape.ts for why. */
+.pbcount { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.pbgrid {
+  margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 320px));
+  justify-content: start; gap: 14px;
+}
+.pbcard {
+  height: 250px; overflow: hidden; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--ink); box-shadow: var(--elev);
+  padding: 15px 16px 14px; display: flex; flex-direction: column; gap: 11px; min-width: 0;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1), box-shadow .26s cubic-bezier(.22, .61, .36, 1);
+}
+.pbcard:hover { transform: translateY(-1px); box-shadow: var(--elev-up); }
+.pbcard:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .pbcard { transition: none; }
+  .pbcard:hover { transform: none; }
+}
+/* An unreadable file is a card that says why, and does not pretend to open. */
+.pbcard.bad { border-left: 2px solid var(--clay); cursor: default; }
+.pbcard.bad:hover { transform: none; box-shadow: var(--elev); }
+.pbcard.off { opacity: .62; }
+.pbcard.skel { pointer-events: none; gap: 9px; }
+.pbtop { display: flex; align-items: center; gap: 10px; min-width: 0; flex: none; }
+.pbnm { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbown { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); flex: none; }
+/* Exactly two lines, whether the description fills them or not: the shape slot
+   below has to start at the same height on every card. */
+.pbwhen {
+  margin: 0; font-size: 12.5px; color: var(--muted); line-height: 21px; height: 42px; flex: none;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pbshape {
+  margin-top: auto; height: 112px; flex: none; padding: 8px; background: var(--surface);
+  border-radius: 10px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 2px; overflow: hidden;
+}
+.pbshape.err { justify-content: flex-start; padding: 12px 13px; }
+.pbrib { display: block; width: 100%; }
+.pbcap { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+/* Structure only. Colour on a card would be an encoding with no key on the
+   card; the executor's name is in the detail, where it can be read. */
+.pbcell { fill: var(--faint); opacity: .5; }
+.pbcell.open { fill: none; stroke: var(--sky); stroke-width: 1.1; stroke-dasharray: 3 3; }
+.pbedge { stroke: color-mix(in oklab, var(--faint) 45%, transparent); stroke-width: 1.2; fill: none; }
+.pbedge.cut { stroke-dasharray: 3 3; }
+.pbmore { font-family: var(--mono); font-size: 10px; fill: var(--faint); }
+.pberr {
+  font-size: 11.5px; line-height: 1.7; color: var(--clay); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+}
+
+/* ── one playbook ── */
+.pbcrumb { margin: 0 0 12px; }
+/* The name is the largest thing on the page, and it is data, so it is mono.
+   Everything under it steps down in real jumps -- a page whose whole range is
+   11px to 13px has no emphasis anywhere, only uniform grey. */
+.pbhead { display: flex; align-items: center; gap: 15px; margin: 2px 0 13px; }
+.pbhead .pmtile { width: 48px; height: 48px; border-radius: 14px; font-size: 18px; flex: none; }
+.pbhead h1 {
+  margin: 0; font-family: var(--mono); font-size: var(--step-3); font-weight: 700;
+  letter-spacing: -.025em; line-height: 1.15; min-width: 0; overflow-wrap: anywhere;
+}
+/* Local to this machine, not in the file, and it stops the playbook from ever
+   firing -- the one thing in the header worth a colour. */
+.pboff {
+  flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--clay);
+  border: 1px solid color-mix(in oklab, var(--clay) 35%, transparent); border-radius: 6px; padding: 2px 7px;
+}
+/* What running this dispatches, at reading size. */
+.pbsum { margin: 0 0 17px; font-size: var(--step-1); line-height: 1.6; color: var(--text); max-width: 68ch; }
+/* The standing facts: label over value, packed left. Three short values spread
+   across equal columns would read as three unrelated things. */
+.pbmeta {
+  display: grid; grid-template-columns: repeat(3, max-content); gap: 56px;
+  padding: 15px 0 16px; border-top: 1px solid var(--line);
+}
+/* Named `pblab` / `pbval` rather than the bare `lab` / `val` the page already
+   has: those two carry an uppercase transform and a 9px left margin, which is
+   what put every value out of line with its own label. */
+.pblab { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+.pbval { font-size: 15px; color: var(--text); }
+.pbval.mono { font-family: var(--mono); font-size: 14px; }
+/* Two views of one playbook, not two sections of one page: the contract is a
+   table of unbounded length, and stacked above the graph it pushes the graph --
+   the thing the reader opened this for -- off the first screen. */
+.pbtabs { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+.pbtab {
+  appearance: none; background: none; border: 0; padding: 11px 0 10px; cursor: pointer;
+  font-family: inherit; font-size: var(--step-0); color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.pbtab[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--text); }
+.pbtab:hover { color: var(--text); }
+.pbtab:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.pbsec { margin-bottom: 30px; }
+.pbsec > h2 { margin: 0 0 12px; font-size: var(--step-0); font-weight: 600; }
+.pbsec .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pbsec .chips .tag { font-size: 12px; padding: 4px 9px; }
+.pbnone { margin: 0; font-size: 13px; color: var(--faint); }
+/* The graph and the panel that reads one of its nodes. The panel is beside the
+   canvas rather than over it: clicking a step must not hide the step. */
+.pbwork { display: grid; grid-template-columns: minmax(0, 1fr) 344px; gap: 16px; align-items: stretch; }
+/* Prompt mode has no node panel, so the guidance takes the whole width. */
+.pbwork.solo { grid-template-columns: minmax(0, 1fr); }
+/* Hidden, not unmounted: the board holds the pan and zoom the reader set,
+   and a look at the contract must not throw those away. */
+.pbwork.gone { display: none; }
+@media (max-width: 1140px) { .pbwork { grid-template-columns: minmax(0, 1fr); } }
+/* A viewport the reader pans and zooms, not a picture the page sized for them.
+   The dotted ground is what makes panning legible -- without a texture that
+   moves, dragging a graph inside a plain box reads as nothing happening. */
+.pbboard { position: relative; height: 100%; }
+.pbstage {
+  position: relative; overflow: hidden; touch-action: none; cursor: grab;
+  border: 1px solid var(--line); border-radius: 16px;
+  height: 100%; min-height: 340px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--faint) 42%, transparent) 1.1px, transparent 0)
+      0 0 / 20px 20px,
+    var(--ink);
+}
+.pbstage:active { cursor: grabbing; }
+.pbstage:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; }
+.pbview { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+/* The prompt-mode stage is a page of text, not a canvas. */
+.pbstage.prose {
+  overflow: auto; cursor: auto; height: auto; min-height: 0; max-height: 66vh;
+  padding: 14px 16px; background: var(--surface);
+}
+.pbstage.prose .cap {
+  display: block; margin-bottom: 8px; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .02em; color: var(--faint);
+}
+.pbzoom {
+  position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 1px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--ink); box-shadow: var(--elev);
+  padding: 2px;
+}
+.pbzb, .pbzpct {
+  border: 0; background: none; color: var(--muted); font-family: var(--mono); cursor: pointer;
+  border-radius: 6px; line-height: 1;
+}
+.pbzb { width: 22px; height: 22px; font-size: 13px; }
+.pbzpct { min-width: 44px; height: 22px; font-size: 10.5px; }
+.pbzb:hover, .pbzpct:hover { background: var(--surface); color: var(--text); }
+.pbcanvas { position: relative; }
+.pbedges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.pbwire { stroke: color-mix(in oklab, var(--faint) 60%, transparent); stroke-width: 1.4; fill: none; }
+.pbtip {
+  stroke: color-mix(in oklab, var(--faint) 75%, transparent); stroke-width: 1.4; fill: none;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.pbnode {
+  position: absolute; text-align: left; border: 1px solid var(--line); border-radius: 11px;
+  background: var(--ink); box-shadow: var(--elev); padding: 10px 12px;
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.pbnode:hover { border-color: var(--faint); transform: translateY(-1px); }
+.pbnode[data-picked] {
+  border-color: var(--text); box-shadow: 0 0 0 1.5px var(--text), var(--elev-up); transform: translateY(-1px);
+}
+.pbnode[data-picked] .l1 { font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .pbnode { transition: none; }
+  .pbnode:hover, .pbnode[data-picked] { transform: none; }
+}
+/* A step whose executor or prompt the author left for the caller to fill:
+   dashed, because that file cannot run until something fills it. */
+.pbnode.blank { border-style: dashed; border-color: color-mix(in oklab, var(--sky) 55%, var(--line)); }
+/* The step's id: an identifier, set as one. */
+.pbnode .l1 {
+  font-family: var(--mono); font-size: 12px; font-weight: 700; line-height: 16px; height: 16px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pbnode .l2 { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+.pbnode .ag { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.pbnode .hd { font-family: var(--mono); font-size: 10px; color: var(--sky); }
+.pbnode .mk {
+  font-family: var(--mono); font-size: 9.5px; color: var(--moss);
+  border: 1px solid color-mix(in oklab, var(--moss) 35%, transparent); border-radius: 5px; padding: 0 5px;
+}
+/* Declared, and currently inert: a per-node mcp list is not attached to a
+   sub-agent session yet, so it must not look like the skills beside it. */
+.pbnode .mk.dim { color: var(--faint); border-color: var(--line); }
+/* The one fact the arrows cannot carry: these steps are one session, so the
+   later one remembers what the earlier one wrote. */
+.pblane {
+  position: absolute; border: 1px dashed color-mix(in oklab, var(--sky) 45%, transparent);
+  border-radius: 15px; background: color-mix(in oklab, var(--sky) 6%, var(--ink));
+}
+.pblane b {
+  position: absolute; top: -9px; left: 13px; background: var(--ink); padding: 0 6px;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500; color: var(--sky);
+}
+/* One step's own fields. Ink & Amber rules apply as written: mono carries the
+   labels and every value that is data, the sans carries only the author's prose,
+   sections are separated by a shift of ground and a gap rather than by a drawn
+   rule, and the one place colour is spent is the field a caller still has to
+   fill -- which is the only thing on this panel that is happening. */
+.pbpanel {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--ink); box-shadow: var(--elev);
+  padding: 16px 16px 18px; position: sticky; top: 8px; max-height: 66vh; overflow: auto;
+  display: grid; gap: 16px; align-content: start;
+}
+.pbpanel.empty {
+  display: block; color: var(--faint); font-size: 12.5px; line-height: 1.8; box-shadow: none;
+  background: var(--surface); border-style: dashed;
+}
+/* The step's identity: the id set as an identifier, the author's line as prose. */
+.pbphead b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.pbphead p { margin: 7px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.75; }
+/* Sits on the shared .kv metric; only the value faces are this panel's own. */
+.pbkv { align-items: baseline; }
+.pbkv dd { color: var(--text); }
+.pbkv .who { font-family: var(--mono); font-size: 11.5px; }
+/* A field the author never wrote, and an empty list they did: a gap in the
+   column either way, since neither is anything the reader must act on. */
+.pbkv .gap { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+/* A section is a block of different ground, captioned. No rule between. */
+.pbpsec { background: var(--surface); border-radius: 10px; padding: 11px 12px 12px; }
+.pbpsec .cap {
+  display: block; margin-bottom: 8px; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .02em; color: var(--faint);
+}
+/* Per-node inputs: the key, then which of the three forms the value takes --
+   a path and a node id are indistinguishable without that word. */
+.pbin { margin: 0; display: grid; gap: 6px; }
+.pbin > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.pbin dt { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+.pbin dd { margin: 0; display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.pbin .kind {
+  flex: none; font-family: var(--mono); font-size: 9.5px; color: var(--faint);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; background: var(--ink);
+}
+.pbin .val { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+/* The prompt is already on the section's ground, so it carries no ground of its
+   own -- and no scroll of its own either: a pane inside a pane gives a reader two
+   scrollbars and a block that is cut off at both ends. The panel is the scroller. */
+.pbprompt {
+  margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.8; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+/* Two substitution times, two marks: `${...}` is filled before dispatch,
+   `{{...}}` while the graph runs. */
+.pbprompt .ph { font-style: normal; border-radius: 3px; padding: 0 2px; }
+.pbprompt .ph.now {
+  color: var(--gold); background: color-mix(in oklab, var(--gold) 9%, transparent);
+}
+.pbprompt .ph.run {
+  color: var(--sky); background: color-mix(in oklab, var(--sky) 9%, transparent);
+}
+/* The runtime inputs are a table, and a table is what the system draws rules
+   for -- the one content type the no-lines rule makes an exception of. */
+.pbtbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.pbtbl th {
+  text-align: left; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 0 14px 8px 0; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.pbtbl th.wide { width: 48%; }
+.pbtbl td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--line-soft); vertical-align: baseline; }
+.pbtbl tr:last-child td { border-bottom: 0; }
+.pbtbl .nm { font-family: var(--mono); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+/* Carried on the name rather than in a column of its own: a column would print
+   "no" once per optional param, which is most of them. */
+.pbtbl .req {
+  font-family: var(--sans); font-size: 11px; font-weight: 600; color: var(--gold);
+  background: color-mix(in oklab, var(--gold) 13%, transparent); border-radius: 4px;
+  padding: 1px 5px; margin-left: 7px; vertical-align: 1px;
+}
+.pbtbl .ty, .pbtbl .df { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.pbtbl .df { white-space: nowrap; }
+.pbtbl .gap { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.pbtbl .ds { color: var(--muted); line-height: 1.6; }
+.pbtbl .en { display: block; font-family: var(--mono); font-size: 12px; color: var(--faint); margin-top: 2px; }
+

@@ -53,6 +53,7 @@ from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
+from raven.rpc.methods.playbooks import register_playbooks_methods
 from raven.rpc.methods.plughub import register_plughub_methods
 from raven.rpc.methods.question import register_question_methods
 from raven.rpc.methods.reload import register_reload_methods
@@ -245,6 +246,10 @@ def register_aligned_methods_except_system(
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
     register_knowledge_methods(dispatcher)
+    # playbooks.* -- read-only view of the two-layer playbook library, so the
+    # page can list what is stored and read one whole spec. Registered
+    # unconditionally: the library is files on disk, with no engine behind it.
+    register_playbooks_methods(dispatcher)
     # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
     # already runs: skills (memory_engine.skill_forge) and plugins
     # (raven.plugin). Registered unconditionally so a network failure reads as a
@@ -275,6 +280,7 @@ __all__ = [
     "register_console_methods",
     "register_knowledge_methods",
     "register_memory_methods",
+    "register_playbooks_methods",
     "register_plughub_methods",
     "register_session_methods",
     "register_skillhub_methods",

@@ -9,6 +9,7 @@ const NAV_OF = {
   xaPage: 'moreBtn',
   connPage: 'moreBtn',
   memPage: 'memBtn',
+  pbPage: 'pbBtn',
   kbPage: 'kbBtn',
   cronPage: 'moreBtn',
 };

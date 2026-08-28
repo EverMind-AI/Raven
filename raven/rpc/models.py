@@ -3370,6 +3370,111 @@ class KnowledgeSearchResult(_Strict):
     hits: list[KnowledgeHit]
 
 
+# ── playbooks.* — the stored library, read-only ────────────────────────────
+
+
+class PlaybookNodeShape(_Strict):
+    """Just enough of one step to draw the graph: which step it is, and what it
+    waits for.
+
+    The library page draws a concept diagram per card, so the list has to carry
+    the shape; carrying the prompts and per-node config the detail view needs
+    would be the whole library shipped on page open."""
+
+    id: str
+    depends_on: list[str]
+
+
+class PlaybookRow(_Strict):
+    """One playbook as the library list needs it.
+
+    ``error`` is empty unless the file would not parse, in which case it carries
+    the reason and ``nodes`` is empty -- one unreadable file in a directory of
+    user-edited text must not take the page down with it. ``disabled`` lives in
+    config rather than in the file, because the file is the distribution unit and
+    the switch is local to this machine."""
+
+    name: str
+    description: str
+    task_summary: str
+    mode: Literal["dag", "prompt"]
+    confirm: bool
+    origin: str
+    disabled: bool
+    nodes: list[PlaybookNodeShape]
+    error: str
+
+
+class PlaybookParam(_Strict):
+    """One runtime input. ``description`` is the sentence the caller is asked
+    when the value is missing, so a form built from this uses it as the label."""
+
+    type: str
+    required: bool
+    default: Any = None
+    enum: list[str] | None = None
+    description: str
+
+
+class PlaybookNode(_Strict):
+    """One step, whole.
+
+    ``subagent`` / ``node_summary`` / ``prompt_template`` may be empty: those
+    three are the fields an author may leave blank for the caller to fill at run
+    time. ``skills`` / ``mcps`` are three-state -- null means the author said
+    nothing, ``[]`` means the author wrote an empty list, and a list names what
+    to consider."""
+
+    id: str
+    subagent: str
+    node_summary: str
+    prompt_template: str
+    depends_on: list[str]
+    skills: list[str] | None = None
+    mcps: list[str] | None = None
+    instance: str
+    inputs: dict[str, Any]
+
+
+class PlaybookDetail(_Strict):
+    """One whole playbook: its identity, its runtime inputs, and either the graph
+    (``mode: dag``) or the assembly guidance a model turns into one
+    (``mode: prompt``). ``path`` is the file this was read from.
+
+    ``version`` is the spec format version the file declares, not a revision of
+    the playbook's content."""
+
+    name: str
+    description: str
+    task_summary: str
+    version: int
+    mode: Literal["dag", "prompt"]
+    confirm: bool
+    origin: str
+    disabled: bool
+    path: str
+    keywords: list[str]
+    params: dict[str, PlaybookParam]
+    nodes: list[PlaybookNode]
+    prompts: str
+
+
+class PlaybooksListParams(_Strict):
+    pass
+
+
+class PlaybooksListResult(_Strict):
+    playbooks: list[PlaybookRow]
+
+
+class PlaybooksGetParams(_Strict):
+    name: str
+
+
+class PlaybooksGetResult(_Strict):
+    playbook: PlaybookDetail
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -3382,6 +3487,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
+    # playbooks.* -- the stored library, read-only
+    "playbooks.list": (PlaybooksListParams, PlaybooksListResult),
+    "playbooks.get": (PlaybooksGetParams, PlaybooksGetResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
@@ -3631,6 +3739,16 @@ __all__ = [
     "MediaPayload",
     "CronMissedItem",
     "CronMissedPayload",
+    # playbooks
+    "PlaybookDetail",
+    "PlaybookNode",
+    "PlaybookNodeShape",
+    "PlaybookParam",
+    "PlaybookRow",
+    "PlaybooksGetParams",
+    "PlaybooksGetResult",
+    "PlaybooksListParams",
+    "PlaybooksListResult",
     # registry
     "METHOD_MODELS",
 ]

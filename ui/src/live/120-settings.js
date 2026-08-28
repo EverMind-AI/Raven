@@ -192,6 +192,7 @@ function redrawAll() {
   try { drawXa(); } catch { /* agents not loaded yet */ }
   try { drawMem(); } catch { /* memory not loaded yet */ }
   try { drawKb(); } catch { /* knowledge not loaded yet */ }
+  try { drawPb(); } catch { /* playbooks not loaded yet */ }
   // The More rows are redrawn on each open, so only a group standing open at
   // the moment of the flip keeps the old names.
   drawMoreFly();
