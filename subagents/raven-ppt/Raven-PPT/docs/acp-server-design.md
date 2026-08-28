@@ -147,11 +147,29 @@ Served:
 | method | behaviour |
 |---|---|
 | `initialize` | `protocolVersion` via `negotiated_version` (tolerant of `"1"` / `1.0`), `agentCapabilities`, `authMethods: []`, `agentInfo`. Re-initialising is allowed. |
-| `session/new` | Validates `cwd`, refuses a non-empty `mcpServers`, mints `acp:<chat_id>`, builds this session's engine, answers `{"sessionId": ...}`. |
+| `session/new` | Validates `cwd`, refuses a non-empty `mcpServers`, reuses a returning `sessionId` whose job directory is still on disk and mints `acp:<chat_id>` when there is none, builds this session's engine, answers `{"sessionId": ...}`. A returning id still *open* on this connection is answered with that session, as `session/load` answers one. |
+| `session/load` | Reopens a held session under its own id and root, replays its stored turns as `session/update` notifications, answers `{}`. An id this machine does not hold is refused with `-32002` rather than minted. |
+| `session/resume` | `session/load` minus the replay, for a client that still has the transcript on screen. Same `_reopen`, same refusal. |
 | `session/prompt` | Reads content blocks, stages material, runs one turn, answers `{"stopReason": ...}`. |
 | `session/cancel` | Cancels the lane, then settles the pending prompt as `cancelled` -- in that order, and unconditionally (`methods.py:620-643`). |
 | `session/close` | Cancels a running turn, settles its prompt, and releases the session's engine. |
 | `session/update` | Outbound notification only. |
+
+`session/new`, `session/load` and `session/resume` all open a session through one
+path (`_open_session`), and all three answer an id already open on this
+connection with the session itself (`_reuse_open`). Two single-writer rules about
+the session table, and neither is optional:
+
+- **Nothing may replace an entry.** `SessionTable.add` overwrites and the table
+  is the only handle on an engine, so a replacement entry leaves the former
+  engine running on the same job directory with no route to a teardown -- see
+  section 8.
+- **A session opened by one method is in the state the others would have left it
+  in.** That is what the shared path buys: the job root outlives the process that
+  staged into it, so opening a session includes recovering the staging
+  bookkeeping over its `materials/` (section 6). A follow-up turn that behaved
+  differently after a reopen than after a `session/new` would be doing so for a
+  reason nothing on the wire shows.
 
 The launcher's one fatal condition softens into a turn-level one. `run.py` exits
 with "no source material"; here that is an `agent_message_chunk` naming the fenced
@@ -164,8 +182,6 @@ routes work into them:
 
 | method | why |
 |---|---|
-| `session/load` | `loadSession: false`. Replaying a transcript as `session/update` notifications needs a transcript renderer this checkout does not have; declaring it true would show a person an empty history for a conversation that has one. |
-| `session/resume` | `sessionCapabilities` omits `resume`. This also makes `AcpAgentBackend.is_stateful` false, so the host will not bind an instance handle to a session it cannot reopen -- which is the honest answer, because a deck's workspace is the session and a resumed one would have to find it again. |
 | `session/list`, `session/delete` | Not declared. Each declared capability is a method that must then work. |
 | `session/set_mode`, `session/set_config_option` | No modes; the model is fixed by the rendered config, not switchable per session. |
 | `session/request_permission` (outbound) | Not sent. There is no interactive approver behind this process, so a request would be a promise nobody keeps. `ExecTool` without an `ApprovalResponder` fails closed, which is exactly what `raven agent -m` does today -- unchanged behaviour, stated rather than discovered. |
@@ -209,6 +225,32 @@ can be reported back.
 Staging happens at `session/prompt`, not `session/new`, because the paths are in
 the prompt. That is a gain over the launcher: a second turn on the same session
 can add material.
+
+`stage` keeps two things to make that second turn work -- the (source, copy)
+pairs the prompt block is built from, and the basenames the directory has already
+given out -- and neither survives the process while the job root does. So a
+session opened on a job that already has copies recovers both from the copies
+themselves (`materials.rehydrate`), each standing as its own source, because
+where a copy was copied from is recorded nowhere and what the pairing owes the
+agent is the file to read. That is what makes a turn after a reopen the same turn
+it would have been on the connection that staged: the follow-up prompt lists the
+material the job holds instead of claiming none is staged, and a new source whose
+basename is already used is suffixed instead of overwriting the copy that has it.
+
+The recovered pairing cannot be compared by path, which is the one place this
+costs something. A dispatching agent repeats its declared block on a follow-up,
+and those paths match no recovered source -- so `materials.unstaged` reads a
+second signal, whether the source is byte-identical to a copy it could have been
+written to. Without it the repeat would be staged again under a suffix, and the
+prompt would list one document twice.
+
+Which copies those are is `stage`'s own naming rule read forward: a basename can
+hold a whole family of names, so two sources both called `report.txt` become
+`report.txt` and `report-2.txt`, and a returning source compared against the
+exact name alone misses the rest of its family. Both sides generate the family
+from one place (`materials._copy_names`) rather than one of them matching the
+suffix back with a pattern, which would be a second spelling of the rule and free
+to drift from it.
 
 The layout is unchanged. Each session gets
 
@@ -300,6 +342,13 @@ Each step is where it is for a reason that only shows up when it is moved:
 - **Draining cannot come first either**, which is what the settle is for: a
   handler suspended on a turn's future would otherwise sit out the whole grace
   period.
+- **And nothing may take an engine out of the table.** Every step above reaches
+  an engine through `SessionTable`: `session/close` looks its id up, `aclose`
+  walks the table. An entry overwritten in place therefore leaves that engine
+  running with no route to a teardown at all, and its outlet worker and MCP
+  subprocesses outlive the connection. Hence every method that accepts a
+  returning session id answers with the open session rather than constructing a
+  replacement (section 5).
 - **And a settle sweep is not enough on its own.** A prompt frame read before EOF
   whose handler has not run yet would open its turn *after* the sweep passed, and
   wait for a settle that is never coming. So `settle_all` also latches
@@ -319,6 +368,7 @@ published would hand the caller a deck the agent never finished reviewing.
 | 2 | `protocol.py`, `capabilities.py`, `tool_kinds.py`, `session.py`, `spine.py` (`AcpOutlet` + `build_acp`), `materials.py`, `methods.py`. |
 | 3 | `stdio.py`, `server.py`, `engine.py`, `raven/cli/acp_commands.py` (`raven acp`), `subagents/raven-ppt/run.py --acp`, `subagents/raven-ppt/subagent.json` (`kind: "acp"`). |
 | 4 | `outbound.py`, `questions.py`: the agent-to-client direction, which nothing above had. `ask_user` is answerable over ACP because of it. |
+| 5 | `session/load` / `session/resume`, and a `session/new` that honours a returning id. Phase 3 shipped a server on which every call to one instance was a fresh conversation: the id was minted unconditionally and never read back, and that id is the raven session key naming the transcript under the job. Both reasons Phase 1 gave for refusing these methods had expired -- the replay is eleven lines over `SessionManager`, not the transcript renderer this checkout was said to lack, and a reopened deck finds its workspace because the job root is derived from the id rather than searched for. Opening a session is one path for all three methods, so a reopened one recovers the staging bookkeeping the job's `materials/` still carries and a returning id already open is answered with itself rather than replacing the table entry it is reachable through. |
 
 Tests: `tests/test_acp_{spine,methods,materials,server,stdio}.py` and
 `tests/test_cli_acp_commands.py`. None starts a subprocess or opens a socket: the
@@ -331,8 +381,8 @@ Verified beyond the unit tests:
 - `subagent.json` validated against the host's own `ThirdPartyAcpSubagentConfig`,
   its write-path rejector, the discriminated union the roster is built from, and
   `build_third_party_backend` -- which yields an `AcpAgentBackend` with `cwd=None`
-  (so the host's session workspace is used) and `stateful=False` (so no instance
-  handle is bound to a session that cannot be reopened).
+  (so the host's session workspace is used) and `stateful=True` (so the host binds an
+  instance handle and hands the stored id back on the next task).
 - `discover_vendored_rows` run over the folder tree, which now returns
   `Raven-PPT kind=acp enabled=True` beside `Raven-Code` and `Raven-Research`.
 - A real `raven acp` process, handshaked over a pipe: two clean frames on stdout,

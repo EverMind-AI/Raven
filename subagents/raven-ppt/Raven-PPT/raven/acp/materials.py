@@ -28,11 +28,13 @@ one still is.
 
 from __future__ import annotations
 
+import filecmp
 import json
 import os
 import re
 import shutil
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 MATERIAL_SUFFIXES = {
@@ -153,6 +155,96 @@ def unique_sources(paths: list[str]) -> list[str]:
     return unique
 
 
+def unstaged(sources: list[str], staged: list[tuple[str, Path]]) -> list[str]:
+    """The given sources minus the ones this session already holds a copy of.
+
+    Two ways a source is already held, and both have to be read. By real path,
+    which is one file named again on a later turn of the same connection. By
+    content, under any of the names ``stage`` could have copied it to, which is
+    that same repeat across a reopen: a pairing recovered by ``rehydrate`` records
+    each copy as its own source, so the path the client declares matches nothing
+    there and the file would be staged again under a collision-suffixed name --
+    leaving the prompt listing one document twice, which is what the real-path
+    check exists to stop.
+
+    A family of names rather than the one exact match, because a single basename
+    can hold several: two sources both named ``report.txt`` are copied to
+    ``report.txt`` and ``report-2.txt``, and a repeat compared against
+    ``report.txt`` alone misses the second copy and stages it a third time.
+    """
+    held = {os.path.realpath(source) for source, _ in staged}
+    by_name = {target.name: target for _, target in staged}
+    return [
+        source for source in sources if os.path.realpath(source) not in held and not _copied_already(source, by_name)
+    ]
+
+
+def _copied_already(source: str, by_name: dict[str, Path]) -> bool:
+    """Whether one of the copies is ``source``, under any name it could have got.
+
+    Walks the names ``stage`` would have tried for this basename in that same
+    order and stops at the first the directory does not hold, which is where the
+    family ends: ``stage`` always takes the lowest free name, so the copies of one
+    basename run from the front. A basename nothing collides with is therefore
+    compared once, and ``filecmp`` opens neither file when the two sizes differ.
+    """
+    for name in _copy_names(Path(source).name):
+        if (copy := by_name.get(name)) is None:
+            break
+        if _same_bytes(source, copy):
+            return True
+    return False
+
+
+def _same_bytes(source: str, copy: Path) -> bool:
+    """Whether ``source`` and ``copy`` are the same document.
+
+    Unreadable is not the same: a source that cannot be opened has to reach
+    ``stage``, which is the one place that turns it into a ``StagingError`` the
+    turn reports rather than a file dropped without a word.
+    """
+    try:
+        return filecmp.cmp(source, copy, shallow=False)
+    except OSError:
+        return False
+
+
+def _copy_names(basename: str) -> Iterator[str]:
+    """The names ``stage`` gives a copy of ``basename``, in the order it tries them.
+
+    The collision suffix is ``stage``'s own invention, so the names one basename
+    can occupy are generated in one place: ``unstaged`` has to recognise a
+    recovered copy under any of them, and a pattern matching them back would be a
+    second spelling of this rule, free to drift from it.
+    """
+    stem, suffix = Path(basename).stem, Path(basename).suffix
+    yield stem + suffix
+    nth = 2
+    while True:
+        yield f"{stem}-{nth}{suffix}"
+        nth += 1
+
+
+def rehydrate(materials_dir: Path) -> tuple[list[tuple[str, Path]], set[str]]:
+    """The staging bookkeeping for a job whose ``materials/`` already has copies.
+
+    ``stage`` keeps two things across a session: the (source, copy) pairs the
+    prompt block is built from, and the basenames the directory has already given
+    out. Neither survives the process while the job root does, so a session
+    reopened on an existing job recovers both from the copies themselves -- the
+    only record of a past staging still there. Without it the next prompt tells
+    the agent that nothing is staged, and a new source of a name already used
+    overwrites the copy holding it instead of being suffixed.
+
+    Each copy stands as its own source. Where it was copied from is recorded
+    nowhere, and what the pairing owes the agent is the file it is to read.
+    """
+    if not materials_dir.is_dir():
+        return [], set()
+    copies = sorted(path for path in materials_dir.iterdir() if path.is_file())
+    return [(str(path), path) for path in copies], {path.name for path in copies}
+
+
 def stage(materials_dir: Path, sources: list[str], taken: set[str]) -> list[tuple[str, Path]]:
     """Copy each source into ``materials_dir``, returning (source, copy) pairs.
 
@@ -162,15 +254,13 @@ def stage(materials_dir: Path, sources: list[str], taken: set[str]) -> list[tupl
     collision loses material exactly as silently as a skipped copy would --
     ``copyfile`` succeeds, and the prompt would list two entries resolving to one
     file, so the agent believes it holds two documents and grounds the deck twice
-    in one of them.
+    in one of them. The names it tries come from ``_copy_names`` because the
+    held-check has to recognise a copy under any of them.
     """
     materials_dir.mkdir(parents=True, exist_ok=True)
     staged: list[tuple[str, Path]] = []
     for source in sources:
-        stem, suffix = Path(source).stem, Path(source).suffix
-        name, nth = stem + suffix, 2
-        while name in taken:
-            name, nth = f"{stem}-{nth}{suffix}", nth + 1
+        name = next(candidate for candidate in _copy_names(Path(source).name) if candidate not in taken)
         taken.add(name)
         target = materials_dir / name
         try:
@@ -313,8 +403,10 @@ __all__ = [
     "describe",
     "inputs_from_prompt",
     "materials_from_prompt",
+    "rehydrate",
     "slide_count",
     "stage",
     "unique_sources",
+    "unstaged",
     "verified_deck",
 ]
