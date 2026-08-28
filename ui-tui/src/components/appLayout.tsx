@@ -3,13 +3,15 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { AlternateScreen, Box, NoSelect, ScrollBox, Text } from '@hermes/ink'
+import { AlternateScreen, Box, NoSelect, ScrollBox, stringWidth, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { Fragment, memo, useMemo, useRef } from 'react'
 
+import type { DirectTargetRef } from '../app/directChatStore.js'
 import type { AppLayoutProps } from '../app/interfaces.js'
+import type { Theme } from '../theme.js'
 
-import { $copyNotice } from '../app/copyNoticeStore.js'
+import { $directChat, sendingPausedReason } from '../app/directChatStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiState } from '../app/uiStore.js'
@@ -23,16 +25,71 @@ import {
   stableComposerColumns
 } from '../lib/inputMetrics.js'
 import { PerfPane } from '../lib/perfPane.js'
+import { compactPreview } from '../lib/text.js'
 import { AgentsOverlay } from './agentsOverlay.js'
-import { GoodVibesHeart, StatusRule, StickyPromptTracker, TranscriptScrollbar } from './appChrome.js'
+import { GoodVibesHeart, StatusRule, TranscriptScrollbar, WorkingIndicator } from './appChrome.js'
 import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel, StartupLoader } from './branding.js'
 import { FpsOverlay } from './fpsOverlay.js'
 import { HelpHint } from './helpHint.js'
+import { LiveAgentsStrip } from './liveAgentsStrip.js'
 import { MessageLine } from './messageLine.js'
 import { QueuedMessages } from './queuedMessages.js'
 import { LiveTodoPanel, StreamingAssistant } from './streamingAssistant.js'
 import { TextInput, type TextInputMouseApi } from './textInput.js'
+
+const ESC_CLEAR_HINT = 'esc again to clear'
+
+// The composer's top border: a transient hint and, at the right end, the name
+// of the direct-chat target (which the chips row this replaces used to say).
+// Rendered as one row of segments rather than a spliced string so each segment
+// can carry its own color without re-measuring the rule. Always exactly one
+// row: width pressure sheds the target name before the hint -- the hint offers
+// the keypress the user is mid-way through, the name is standing state the
+// Agents Overlay can also answer -- and never wraps.
+const ComposerTopRule = memo(function ComposerTopRule({
+  hint,
+  t,
+  target,
+  width
+}: {
+  hint: string
+  t: Theme
+  target: DirectTargetRef | null
+  width: number
+}) {
+  const hintW = hint ? hint.length + 3 : 0
+  let label =
+    target === null ? '' : compactPreview(`${target.agent}/${target.handle}`, Math.max(8, Math.floor(width / 2)))
+  const tailWidth = () => (label ? stringWidth(` ${label} `) + 1 : 0)
+
+  if (width - tailWidth() - hintW < 4) {
+    label = ''
+  }
+
+  const dashes = width - tailWidth() - hintW
+
+  if (dashes < 4) {
+    return <Text color={t.color.primary}>{'─'.repeat(width)}</Text>
+  }
+
+  return (
+    <Box>
+      <Text color={t.color.primary}>{'─'.repeat(dashes)}</Text>
+      {hint !== '' && <Text color={t.color.warn}>{` ${hint} `}</Text>}
+      {hint !== '' && <Text color={t.color.primary}>{'─'}</Text>}
+
+      {label !== '' && (
+        <>
+          <Text bold color={t.color.accent}>
+            {` ${label}`}
+          </Text>
+          <Text color={t.color.primary}> ─</Text>
+        </>
+      )}
+    </Box>
+  )
+})
 
 const PromptPrefix = memo(function PromptPrefix({
   bold = false,
@@ -63,8 +120,9 @@ const TranscriptPane = memo(function TranscriptPane({
   actions,
   composer,
   progress,
+  status,
   transcript
-}: Pick<AppLayoutProps, 'actions' | 'composer' | 'progress' | 'transcript'>) {
+}: Pick<AppLayoutProps, 'actions' | 'composer' | 'progress' | 'status' | 'transcript'>) {
   const ui = useStore($uiState)
 
   // LiveTodoPanel rides as a child of the latest user-message row so it
@@ -155,19 +213,14 @@ const TranscriptPane = memo(function TranscriptPane({
             progress={progress}
             sections={ui.sections}
           />
+
+          <WorkingIndicator busy={ui.busy} color={status.statusColor} startedAt={status.turnStartedAt} />
         </Box>
       </ScrollBox>
 
       <NoSelect flexShrink={0} marginLeft={1}>
         <TranscriptScrollbar scrollRef={transcript.scrollRef} t={ui.theme} />
       </NoSelect>
-
-      <StickyPromptTracker
-        messages={transcript.historyItems}
-        offsets={transcript.virtualHistory.offsets}
-        onChange={actions.setStickyPrompt}
-        scrollRef={transcript.scrollRef}
-      />
     </>
   )
 })
@@ -179,7 +232,8 @@ const ComposerPane = memo(function ComposerPane({
 }: Pick<AppLayoutProps, 'actions' | 'composer' | 'status'>) {
   const ui = useStore($uiState)
   const isBlocked = useStore($isBlocked)
-  const copyNotice = useStore($copyNotice)
+  const directChat = useStore($directChat)
+  const sendingPaused = sendingPausedReason(directChat)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
   const promptText = sh ? '$' : ui.theme.brand.prompt
   const promptWidth = composerPromptWidth(promptText)
@@ -247,42 +301,11 @@ const ComposerPane = memo(function ComposerPane({
         </Text>
       )}
 
-      {status.showStickyPrompt ? (
-        <Text color={ui.theme.color.muted} wrap="truncate-end">
-          <Text color={ui.theme.color.label}>↳ </Text>
-
-          {status.stickyPrompt}
-        </Text>
-      ) : (
-        <Box height={1} onMouseDown={captureInputDrag} onMouseDrag={dragFromSpacer} onMouseUp={endInputDrag} />
-      )}
+      <Box height={1} onMouseDown={captureInputDrag} onMouseDrag={dragFromSpacer} onMouseUp={endInputDrag} />
 
       <StatusRulePane at="top" composer={composer} status={status} />
 
-      {copyNotice && <Text color={ui.theme.color.muted}>{copyNotice}</Text>}
-
-      {/* When a blocking overlay opens the input rows unmount, collapsing this
-          box to height 0. At statusBar='bottom' the StatusRule sibling then
-          shares its computed top, tripping the renderer's height-0 skip
-          (render-node-to-output siblingSharesY) which drops the box AND its
-          absolute FloatingOverlays child — popups vanish. Reserve a 1-row
-          floor in that layout so the anchor box always renders. */}
-      <Box
-        flexDirection="column"
-        marginTop={ui.statusBar === 'top' ? 0 : 1}
-        minHeight={ui.statusBar === 'bottom' ? 1 : undefined}
-        position="relative"
-      >
-        <FloatingOverlays
-          cols={composer.cols}
-          compIdx={composer.compIdx}
-          completions={composer.completions}
-          onModelSelect={actions.onModelSelect}
-          onPickerDeleteActive={actions.deleteSessionWithFallback}
-          onPickerSelect={actions.resumeById}
-          pagerPageSize={composer.pagerPageSize}
-        />
-
+      <Box flexDirection="column" marginTop={ui.statusBar === 'top' ? 0 : 1}>
         {composer.input === '?' && !composer.inputBuf.length && <HelpHint t={ui.theme} />}
 
         {!isBlocked && (
@@ -301,7 +324,12 @@ const ComposerPane = memo(function ComposerPane({
               </Box>
             ))}
 
-            <Text color={ui.theme.color.primary}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
+            <ComposerTopRule
+              hint={ui.escClearArmed ? ESC_CLEAR_HINT : ''}
+              t={ui.theme}
+              target={directChat.active}
+              width={Math.max(1, composer.cols - 2)}
+            />
             <Box
               onMouseDown={captureInputDrag}
               onMouseDrag={dragFromPromptRow}
@@ -310,7 +338,9 @@ const ComposerPane = memo(function ComposerPane({
               width={Math.max(1, composer.cols - 2)}
             >
               <Box width={promptWidth}>
-                {sh ? (
+                {sendingPaused !== null ? (
+                  <PromptPrefix color={ui.theme.color.muted} promptText={promptText} width={promptWidth} />
+                ) : sh ? (
                   <PromptPrefix color={ui.theme.color.shellDollar} promptText={promptText} width={promptWidth} />
                 ) : composer.inputBuf.length ? (
                   <Text color={ui.theme.color.prompt}>{promptBlank}</Text>
@@ -350,6 +380,8 @@ const ComposerPane = memo(function ComposerPane({
         )}
       </Box>
 
+      {sendingPaused !== null && <Text color={ui.theme.color.muted}>{sendingPaused}</Text>}
+
       {!composer.empty && !ui.sid && (
         <Text color={ui.theme.color.muted}>
           {ui.theme.brand.icon} {ui.status}
@@ -357,7 +389,51 @@ const ComposerPane = memo(function ComposerPane({
       )}
 
       <StatusRulePane at="bottom" composer={composer} status={status} />
+      <LiveAgentsStrip cols={composer.cols} t={ui.theme} />
     </NoSelect>
+  )
+})
+
+const BottomDock = memo(function BottomDock({
+  actions,
+  composer,
+  status
+}: Pick<AppLayoutProps, 'actions' | 'composer' | 'status'>) {
+  const ui = useStore($uiState)
+
+  return (
+    <Box flexDirection="column" flexShrink={0} position="relative">
+      <FloatingOverlays
+        cols={composer.cols}
+        compIdx={composer.compIdx}
+        completions={composer.completions}
+        onModelSelect={actions.onModelSelect}
+        onPickerDeleteActive={actions.deleteSessionWithFallback}
+        onPickerSelect={actions.resumeById}
+        pagerPageSize={composer.pagerPageSize}
+      />
+
+      <PerfPane id="prompt">
+        <PromptZone
+          cols={composer.cols}
+          onApprovalChoice={actions.answerApproval}
+          onClarifyAnswer={actions.answerClarify}
+          onConfirmAnswer={actions.answerConfirm}
+          onSecretSubmit={actions.answerSecret}
+          onSudoSubmit={actions.answerSudo}
+        />
+      </PerfPane>
+
+      <PerfPane id="composer">
+        <ComposerPane actions={actions} composer={composer} status={status} />
+      </PerfPane>
+
+      {SHOW_FPS && (
+        <Box flexShrink={0} justifyContent="flex-end" paddingRight={1}>
+          <FpsOverlay t={ui.theme} />
+        </Box>
+      )}
+    </Box>
   )
 })
 
@@ -368,9 +444,10 @@ const AgentsOverlayPane = memo(function AgentsOverlayPane() {
 
   return (
     <AgentsOverlay
+      focusId={overlay.agentsFocusId}
       gw={gw}
       initialHistoryIndex={overlay.agentsInitialHistoryIndex}
-      onClose={() => patchOverlayState({ agents: false, agentsInitialHistoryIndex: 0 })}
+      onClose={() => patchOverlayState({ agents: false, agentsFocusId: null, agentsInitialHistoryIndex: 0 })}
       t={ui.theme}
     />
   )
@@ -391,7 +468,6 @@ const StatusRulePane = memo(function StatusRulePane({
     <Box marginTop={at === 'top' ? 1 : 0}>
       <StatusRule
         bgCount={ui.bgTasks.size}
-        busy={ui.busy}
         cols={composer.cols}
         cwdLabel={status.cwdLabel}
         model={ui.info?.model ?? ''}
@@ -404,7 +480,6 @@ const StatusRulePane = memo(function StatusRulePane({
         status={ui.status}
         statusColor={status.statusColor}
         t={ui.theme}
-        turnStartedAt={status.turnStartedAt}
         usage={ui.usage}
       />
     </Box>
@@ -420,7 +495,6 @@ export const AppLayout = memo(function AppLayout({
   transcript
 }: AppLayoutProps) {
   const overlay = useStore($overlayState)
-  const ui = useStore($uiState)
 
   // Inline mode skips AlternateScreen so the host terminal's native
   // scrollback captures rows scrolled off the top; composer + progress
@@ -430,43 +504,35 @@ export const AppLayout = memo(function AppLayout({
 
   return (
     <Shell {...shellProps}>
-      <Box flexDirection="column" flexGrow={1}>
-        <Box flexDirection="row" flexGrow={1}>
+      {/* flexBasis 0 on both growing boxes, for the reason the agents overlay's
+          detail row has it: with an auto basis yoga measures the box against
+          its content to resolve the basis, which writes the transcript's full
+          content height into the ScrollBox, and a cached final pass can leave
+          that height standing for one frame -- the view jumps to its top and
+          snaps back. Which keystrokes trigger the re-measure depends on the
+          composer's own wrapping, so it shows rarely here and often there.
+          Only under the alternate screen: inline mode has no fixed height to
+          grow into, and a zero basis there would collapse the transcript. */}
+      <Box flexDirection="column" flexGrow={1} {...(INLINE_MODE ? {} : { flexBasis: 0, flexShrink: 1, minHeight: 0 })}>
+        <Box flexDirection="row" flexGrow={1} {...(INLINE_MODE ? {} : { flexBasis: 0, flexShrink: 1, minHeight: 0 })}>
           {overlay.agents ? (
             <PerfPane id="agents">
               <AgentsOverlayPane />
             </PerfPane>
           ) : (
             <PerfPane id="transcript">
-              <TranscriptPane actions={actions} composer={composer} progress={progress} transcript={transcript} />
+              <TranscriptPane
+                actions={actions}
+                composer={composer}
+                progress={progress}
+                status={status}
+                transcript={transcript}
+              />
             </PerfPane>
           )}
         </Box>
 
-        {!overlay.agents && (
-          <>
-            <PerfPane id="prompt">
-              <PromptZone
-                cols={composer.cols}
-                onApprovalChoice={actions.answerApproval}
-                onClarifyAnswer={actions.answerClarify}
-                onConfirmAnswer={actions.answerConfirm}
-                onSecretSubmit={actions.answerSecret}
-                onSudoSubmit={actions.answerSudo}
-              />
-            </PerfPane>
-
-            <PerfPane id="composer">
-              <ComposerPane actions={actions} composer={composer} status={status} />
-            </PerfPane>
-
-            {SHOW_FPS && (
-              <Box flexShrink={0} justifyContent="flex-end" paddingRight={1}>
-                <FpsOverlay t={ui.theme} />
-              </Box>
-            )}
-          </>
-        )}
+        {!overlay.agents && <BottomDock actions={actions} composer={composer} status={status} />}
       </Box>
     </Shell>
   )

@@ -4,11 +4,17 @@
 
 import type { Episode, EpisodeTool } from '../types.js'
 
+import { hasMeaningfulReasoning } from '../lib/reasoning.js'
+import { claudeRule } from './claudeCodeTools.js'
+import { codexRule } from './codexTools.js'
+
 // Per-tool phrasing. `style` decides how a run of the same tool collapses:
 //   count  — homogeneous info tools -> "read 6 files"; single -> the target
 //   target — heterogeneous/mutating tools -> show the target; many -> "ran 3 commands"
-// Verbs are deliberately Raven's own plain lowercase (not Claude Code's labels).
-interface VerbRule {
+// A rule's verb is whichever vocabulary its own table uses: Raven's own plain
+// lowercase in OVERRIDES below, or an adapter's label verbatim in CODEX_VERBS /
+// CLAUDE_VERBS.
+export interface VerbRule {
   verb: string
   unit: string
   style: 'count' | 'target'
@@ -41,19 +47,172 @@ const OVERRIDES: Record<string, VerbRule> = {
 // "image_generate" -> "image generate". Never misleading, always maintenance-free.
 const humanize = (name: string) => name.split('_').filter(Boolean).join(' ')
 
-// The rule for any tool: its override if we have one, else a generic rule built
-// from the humanized name. This is what keeps the table from needing a row per
-// tool — unknown tools get a real label ("image generate"), not a wrong "ran".
+// The rule for any tool: its override if we have one, else an adapter's own
+// table, else a generic rule built from the humanized name. The adapter tables
+// are consulted after OVERRIDES rather than merged into it because the three are
+// keyed by different vocabularies -- OVERRIDES by Raven's names, CODEX_VERBS by
+// codex's, CLAUDE_VERBS by Claude Code's.
 const ruleFor = (name: string): VerbRule =>
-  OVERRIDES[name] ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
+  OVERRIDES[name] ??
+  codexRule(name) ??
+  claudeRule(name) ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
 
 // Search-like tools read better with the needle quoted: searched "DeviceFlow".
-const QUOTED = new Set(['grep', 'find', 'web_search'])
+const QUOTED = new Set(['grep', 'find', 'web_search', 'Grep', 'Glob', 'WebSearch'])
+
+// A shell command is an argument, never a label: a 100-char pipeline as the row
+// title is what made the transcript unreadable. Name the programs it runs
+// instead -- `curl -s "…" | python3 -c "…"` becomes `curl -> python3` -- and
+// leave the command itself for the expanded detail. Env assignments and `sudo`
+// are stepped over so the reported program is the one doing the work.
+//
+// The model's own intent (`tool.intent`, read in `target()` below) wins when
+// the transport sends one; this is the fallback for a call that carries none.
+const SHELL_NOISE = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env'])
+
+// Split on shell operators that are NOT inside quotes. Naively splitting on `;`
+// tore `python3 -c "import sys; ..."` in half and put the fragment on the row.
+const shellStages = (command: string): string[] => {
+  const stages: string[] = []
+  let quote: '"' | "'" | null = null
+  let current = ''
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+
+    if (quote) {
+      if (ch === quote && command[i - 1] !== '\\') {
+        quote = null
+      }
+
+      current += ch
+      continue
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      current += ch
+      continue
+    }
+
+    // A `&` touching a redirection is part of it (`2>&1`, `&>log`), not a stage
+    // break: splitting there left `1` standing where a program name goes.
+    const redirected = ch === '&' && (command[i - 1] === '>' || command[i + 1] === '>')
+
+    if ((ch === ';' || ch === '|' || ch === '&') && !redirected) {
+      // Collapse the two-character forms (`&&`, `||`) into one break.
+      if (command[i + 1] === ch) {
+        i++
+      }
+
+      stages.push(current)
+      current = ''
+      continue
+    }
+
+    current += ch
+  }
+
+  stages.push(current)
+
+  return stages.filter(s => s.trim())
+}
+
+// `ruff check`, `git status`, `pip show` -- the subcommand is half the meaning,
+// so a bare word right after the program joins it. A flag, a path, or anything
+// quoted is an argument, and arguments belong in the expanded detail.
+const isSubcommand = (word: string) => /^[a-z][\w-]*$/i.test(word)
+
+// Plumbing a command is piped THROUGH, never the point of running it. Naming it
+// buries the program that did the work ("ls -> head -> find").
+const PLUMBING = new Set(['head', 'tail', 'wc', 'cat', 'less', 'more', 'tee', 'sort', 'uniq', 'xargs'])
+
+// Where the work happened, not what it was.
+const CHDIR = new Set(['cd', 'pushd', 'popd'])
+
+// How many programs a row names before it stops being a label and starts being
+// a command again.
+const EXEC_LABEL_STAGES = 2
+
+export const execLabel = (command: string): string => {
+  const named: { label: string; program: string }[] = []
+  const stages = shellStages(command)
+
+  for (const stage of stages) {
+    const words = stage.trim().split(/\s+/)
+    // `FOO=bar cmd` -- step over assignments and wrappers to the real program.
+    const at = words.findIndex(w => w && !w.includes('=') && !SHELL_NOISE.has(w))
+
+    if (at < 0) {
+      continue
+    }
+
+    // Checked before the basename strip, which would turn `2>/dev/null` into
+    // `null` and name a device file as the program that did the work.
+    if (/^\d*[<>]/.test(words[at]!)) {
+      continue
+    }
+
+    const program = words[at]!.replace(/^.*\//, '')
+
+    if (!program || program.startsWith('-')) {
+      continue
+    }
+
+    // `cd /repo && git status` is one intent. Naming the chdir spends a slot on
+    // where the work happened rather than on what it was -- but a lone `cd` is
+    // still the whole command, so it only steps aside for another stage.
+    if (CHDIR.has(program) && stages.length > 1) {
+      continue
+    }
+
+    // `... | head -20` adds nothing; but a bare `head file` is the work itself.
+    if (PLUMBING.has(program) && named.length) {
+      continue
+    }
+
+    // `which raven || which hermes` is one intent, not two stages.
+    if (named.at(-1)?.program === program) {
+      continue
+    }
+
+    const next = words[at + 1]
+
+    named.push({ label: next && isSubcommand(next) ? `${program} ${next}` : program, program })
+  }
+
+  if (!named.length) {
+    // Nothing named a program -- a flag sat where one was expected, as in
+    // `sudo -u postgres psql`. Name the wrapper rather than falling back to the
+    // command itself: a row is a title, and the command is what the detail
+    // block is for.
+    return clip(command.trim().split(/\s+/)[0] ?? command, 40)
+  }
+
+  const shown = named.slice(0, EXEC_LABEL_STAGES).map(n => n.label)
+
+  return named.length > EXEC_LABEL_STAGES ? `${shown.join(' -> ')} -> …` : shown.join(' -> ')
+}
 
 // Only path-like arguments are clipped from the LEFT (a path's meaning lives in
 // its tail). Questions, commands and prose must keep their head, or the row
 // becomes unreadable ("…体是指哪个？").
-const PATHY = new Set(['read_file', 'write_file', 'edit_file', 'list_dir'])
+const PATHY = new Set([
+  'read_file',
+  'write_file',
+  'edit_file',
+  'list_dir',
+  'apply_patch',
+  'fileChange',
+  'imageView',
+  'commandExecution.read',
+  'commandExecution.listFiles',
+  'Read',
+  'Write',
+  'Edit',
+  'NotebookEdit',
+  'LS'
+])
 
 const titleName = (name: string) =>
   name
@@ -68,38 +227,70 @@ const clip = (s: string, n = 40) => {
   return one.length > n ? `${one.slice(0, n - 1)}…` : one
 }
 
+// Tools whose subject is a shell command, so the row names the programs it ran
+// rather than printing the pipeline.
+const SHELL = new Set(['exec', 'commandExecution', 'Bash', 'BashOutput'])
+
 // The visible target for a single call: a file basename for path-like tools, a
 // quoted needle for search tools, else the trimmed argument itself.
-const target = (tool: EpisodeTool): string => {
-  const raw = tool.summary.trim()
+// A URL's identity is its host and path; the scheme is noise on a row that
+// already says "fetched".
+const shortUrl = (raw: string) => raw.replace(/^https?:\/\//, '').replace(/\/$/, '')
+
+// Tools whose subject is a URL, so the row strips the scheme instead of keeping it.
+const FETCHED_URL = new Set(['web_fetch', 'WebFetch'])
+
+const target = (tool: EpisodeTool, budget?: number): string => {
+  // The model's own description of the call, when the transport sent one. It
+  // names the intent, which every derived label below can only approximate.
+  if (tool.intent) {
+    return clip(tool.intent, budget)
+  }
+
+  let raw = tool.summary.trim()
+
+  // Some transports lead the summary with the tool's own name ("web_fetch:
+  // https://..."); the verb already says that, so the row would say it twice
+  // ("fetched web_fetch: ..."). Only a prefix with something after it is
+  // stripped -- a bare echo of the name is all such a summary has to show.
+  const prefix = `${tool.name}:`
+
+  if (raw.toLowerCase().startsWith(prefix.toLowerCase()) && raw.length > prefix.length) {
+    raw = raw.slice(prefix.length).trim() || raw
+  }
 
   if (!raw) {
     return ''
   }
 
-  if (
-    tool.name === 'read_file' ||
-    tool.name === 'write_file' ||
-    tool.name === 'edit_file' ||
-    tool.name === 'list_dir'
-  ) {
+  if (PATHY.has(tool.name)) {
     return clip(raw.split(/[\\/]/).pop() || raw)
   }
 
   if (QUOTED.has(tool.name)) {
-    return `"${clip(raw, 32)}"`
+    // Room permitting the whole needle fits, which lets the detail block skip
+    // repeating it as its argument line.
+    return `"${clip(raw, Math.min(budget ?? 40, 72))}"`
   }
 
-  return clip(raw)
+  if (SHELL.has(tool.name)) {
+    return execLabel(raw)
+  }
+
+  if (FETCHED_URL.has(tool.name)) {
+    return clip(shortUrl(raw), budget ?? 40)
+  }
+
+  return clip(raw, budget)
 }
 
-const phraseFor = (tools: EpisodeTool[]): string => {
+const phraseFor = (tools: EpisodeTool[], budget?: number): string => {
   const rule = ruleFor(tools[0]!.name)
   const verb = rule.verb
 
   if (tools.length === 1) {
     const only = tools[0]!
-    const t = target(only)
+    const t = target(only, budget)
     const base = t ? `${verb} ${t}` : verb || titleName(only.name)
     const stat = only.added != null || only.removed != null ? ` (+${only.added ?? 0} -${only.removed ?? 0})` : ''
 
@@ -124,22 +315,47 @@ const clipPath = (s: string, n = 60): string => {
 // label (which uses the basename), the expanded row shows the fuller argument
 // (full path / command) so drilling in restores the detail: read
 // (…/memory/agent_memory.go), ran (ls -la /tmp/…), edited (notes.md +12 -3).
+// The one-line label for a single call, used by every row that names one call.
+// Deliberately SHORT: the full argument belongs to `toolArgument`, which the
+// expanded detail block renders in full. A row is a title, not a payload.
 export const toolParts = (tool: EpisodeTool): { verb: string; detail: string } => {
   const verb = ruleFor(tool.name).verb
   const raw = tool.summary.trim()
   const stat = tool.added != null || tool.removed != null ? `+${tool.added ?? 0} -${tool.removed ?? 0}` : ''
-  // Budget is generous: the row itself truncates to the terminal width, so
-  // pre-clipping only guards against pathological one-liners.
-  const arg = QUOTED.has(tool.name)
-    ? raw
-      ? `"${clip(raw, 120)}"`
-      : ''
-    : PATHY.has(tool.name)
-      ? clipPath(raw, 120)
-      : clip(raw, 120)
+  const arg = PATHY.has(tool.name) && !tool.intent ? clipPath(raw, 60) : target(tool, 60)
   const detail = [arg, stat].filter(Boolean).join(' ')
 
   return { verb: verb || titleName(tool.name), detail }
+}
+
+// The full argument, for the expanded detail block: the whole command, the whole
+// URL, the whole path. Never clipped here -- the block wraps it.
+export const toolArgument = (tool: EpisodeTool): string => tool.summary.trim()
+
+// The backend reports some failures as an "Error: ..." result rather than as a
+// failed call (ToolRegistry.execute checks the very same prefix before adding
+// its hint). Mirroring that here is what keeps such a call red instead of
+// silently reading as success.
+export const callFailed = (tool: EpisodeTool): boolean =>
+  !tool.ok || /^error\b/i.test((tool.resultPreview ?? '').trimStart())
+
+// What a folded block says about its failures. One failure is named, because
+// knowing *which* call broke is the whole point of not auto-expanding; several
+// only fit as a count.
+export const failureNote = (tools: EpisodeTool[]): string => {
+  const failed = tools.filter(callFailed)
+
+  if (!failed.length) {
+    return ''
+  }
+
+  if (failed.length > 1) {
+    return `${failed.length} failed`
+  }
+
+  const { verb, detail } = toolParts(failed[0]!)
+
+  return `${detail || verb} failed`
 }
 
 // Splits an episode's tools into consecutive same-name runs, e.g.
@@ -161,9 +377,123 @@ export const groupTools = (tools: EpisodeTool[]): EpisodeTool[][] => {
   return groups
 }
 
+// How many result rows a tool shows before the rest folds behind a "+N" row.
+// The view and the height estimator both read this; a mismatch reserves the
+// wrong number of rows and leaves stale cells in the transcript.
+export const TOOL_PREVIEW_ROWS = 5
+
+// Every line of a call's result, for the detail block. Nothing is filtered for
+// being "redundant with the row above": a row carries a short label and the
+// block is the one place the raw output appears, so dropping a payload here
+// leaves the reader with an empty box and no way to see what came back.
+export const previewLines = (tool: EpisodeTool): string[] => {
+  const raw = tool.resultPreview ?? ''
+
+  if (!raw) {
+    return []
+  }
+
+  return (
+    raw
+      .split('\n')
+      .map(l => l.trim())
+      // A read_file preview keeps source line numbers, so a blank source line
+      // arrives as a non-empty "12|" that a plain emptiness check can't drop.
+      .filter(l => l && !/^\d+\|\s*$/.test(l))
+  )
+}
+
+// Rows the preview occupies. `dense` is the inside-an-expanded-run view, where
+// every result is squeezed onto one line so the run reads as a list of calls
+// rather than a wall of output.
+export const foldedPreviewRows = (tool: EpisodeTool, dense = false): number => {
+  const n = previewLines(tool).length
+
+  if (dense) {
+    return n > 0 ? 1 : 0
+  }
+
+  return n > TOOL_PREVIEW_ROWS ? TOOL_PREVIEW_ROWS + 1 : n
+}
+
 // Groups an episode's tools by name (consecutive runs) and joins the phrases:
-// "read 6 files, ran ls, edited notes.md".
-export const toolsSummary = (tools: EpisodeTool[]): string => groupTools(tools).map(phraseFor).join(', ')
+// "read 6 files, ran ls, edited notes.md". `budget` is the row's own width; it
+// only reaches a step whose entire activity is one target-style call, which has
+// the row to itself. Phrases that must share a row keep the tight default, or
+// a long first phrase would push the later ones off the end.
+export const toolsSummary = (tools: EpisodeTool[], budget?: number): string => {
+  const groups = groupTools(tools)
+
+  if (!budget) {
+    return groups.map(g => phraseFor(g)).join(', ')
+  }
+
+  // Share the row between the phrases instead of letting the first one spend it
+  // all: three calls at the full budget each ran off the edge and the row ended
+  // in a bare ", …". 2 = the ", " each phrase after the first costs.
+  const share = Math.max(16, Math.floor(budget / groups.length) - 2)
+
+  return groups.map(g => phraseFor(g, share)).join(', ')
+}
 
 // Whether any tool in the episode failed (drives the error tint on the label).
 export const episodeFailed = (ep: Episode): boolean => ep.tools.some(t => !t.ok)
+
+// The phrase a finished run of same-name calls collapses to: "read 6 files",
+// "fetched 2 urls". Same producer as the collapsed step label, so a folded group
+// and a folded step never describe the same work with different words.
+export const toolsPhrase = (tools: EpisodeTool[]): string => phraseFor(tools)
+
+export const failedCount = (tools: EpisodeTool[]): number => tools.filter(callFailed).length
+
+// Undefined when nothing reported a duration, so the caller can omit the suffix
+// instead of printing a confident "0s".
+export const totalDurationMs = (tools: EpisodeTool[]): number | undefined => {
+  const timed = tools.filter(t => t.durationMs != null)
+
+  return timed.length ? timed.reduce((sum, t) => sum + t.durationMs!, 0) : undefined
+}
+
+// A turn reads as an alternating stream: the model speaks, the machine works,
+// the model speaks again. `talk` carries one episode's reasoning + narration;
+// `work` carries every call made between two things the model said, which is
+// what a reader treats as "one stretch of work" -- so it spans episode
+// boundaries. This replaces the old run/group split: one construct, not three.
+export type Segment =
+  | { episode: Episode; kind: 'talk' }
+  | { key: string; kind: 'work'; live: boolean; tools: EpisodeTool[] }
+
+export const segmentTurn = (episodes: Episode[], liveIndex?: number): Segment[] => {
+  const segments: Segment[] = []
+  let pending: EpisodeTool[] = []
+  let pendingLive = false
+
+  const flush = () => {
+    if (pending.length) {
+      segments.push({ key: pending[0]!.id, kind: 'work', live: pendingLive, tools: pending })
+    }
+
+    pending = []
+    pendingLive = false
+  }
+
+  for (const ep of episodes) {
+    const speaks =
+      Boolean((ep.narration ?? '').trim()) ||
+      Boolean(ep.steer) ||
+      hasMeaningfulReasoning((ep.reasoning ?? '').trim())
+
+    // Anything the model said closes the stretch of work before it.
+    if (speaks) {
+      flush()
+      segments.push({ episode: ep, kind: 'talk' })
+    }
+
+    pending.push(...ep.tools)
+    pendingLive = pendingLive || ep.index === liveIndex
+  }
+
+  flush()
+
+  return segments
+}

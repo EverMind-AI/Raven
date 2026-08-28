@@ -1,0 +1,56 @@
+# Secrets. `.env.example` is the published template; `.env` never ships.
+.env
+.config.rendered.*.json
+# The pre-pid name is still ignored. A checkout can already hold one, with the
+# keys in it, precisely because an earlier revision ignored it -- dropping the
+# pattern would make that file untracked and eligible for the next `git add -A`.
+.config.rendered.json
+
+# The config loader's own bookkeeping: it writes `<config>.migrations.json`
+# beside whatever config file it loaded, to record the schema version already
+# applied. It is written by the runtime, read by the runtime, and carries
+# nothing a checkout needs.
+config.migrations.json
+
+# Local records of an install, and of the config that preceded an update. Both
+# carry this machine's absolute paths, and a backup taken through install.py
+# carries every other subagent registered on it.
+subagents-backup-*.json
+config.json.bak-*
+*.tar.gz
+
+# The docker era. The image and its exported tarball are 1.6 GB of build
+# output, and the sample deck is a rendered artifact -- none of it is source.
+# Kept as patterns rather than deleted lines so a stray re-export cannot walk
+# back into the repo.
+*.tar
+*.pptx
+
+# The bundled templates are the exception: they are what a task with no template
+# of its own is offered, so a checkout without them resolves an empty catalogue.
+# They are source in the sense that matters here -- nothing in this repo builds
+# them -- and they are large, so a change to this directory is a decision.
+!Raven-PPT/raven/ppt/assets/templates/*.pptx
+
+# Runtime state. Every one of these is a record of real runs -- the materials a
+# caller pointed at, the decks built, the pages rendered for review -- so it is
+# work data, not sample data. Anchored to this folder, because the vendored
+# build below carries real packages under some of these names.
+/runs/
+/sessions/
+/exports/
+/materials/
+/workspace/
+/cache/
+/logs/
+/traces/
+__pycache__/
+
+# The vendored checkout ships, but not everything inside it.
+#
+# `.venv/` is the ppt extra's whole dependency set - PyMuPDF, python-pptx,
+# Pillow - whose console scripts carry this machine's absolute paths baked into
+# their shebangs. `uv sync --extra ppt` in the checkout rebuilds it correctly;
+# a copied one fails outright.
+Raven-PPT/.venv/
+Raven-PPT/**/__pycache__/

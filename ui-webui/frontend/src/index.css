@@ -1,0 +1,339 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fontsource-variable/atkinson-hyperlegible-next';
+@import '@fontsource-variable/cormorant-garamond';
+@import '@fontsource/bungee-shade';
+@import '@fontsource-variable/brygada-1918';
+
+@plugin '@tailwindcss/typography';
+
+html,
+body,
+#root {
+	height: 100%;
+	width: 100%;
+}
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+	color-scheme: light dark;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+
+	@media (max-width: 1024px) {
+		font-size: 16px;
+	}
+
+	/* EverMind brand tokens (accent + glow) */
+	--gold: #d99400;
+	--gold-light: #f7cb72;
+	--gold-olive: #9c7c1e;
+	--gold-foreground: #1c1b1b;
+	--glow: rgba(252, 191, 78, 0.58);
+
+	--background: #fcfcf5;
+	--foreground: #1c1b1b;
+	--card: #f2f1e9;
+	--card-foreground: #1c1b1b;
+	--popover: #f2f1e9;
+	--popover-foreground: #1c1b1b;
+	--primary: #1c1b1b;
+	--primary-foreground: #f2f1e9;
+	--secondary: #f2f1e9;
+	--secondary-foreground: #1c1b1b;
+	--muted: #ebe8dd;
+	--muted-foreground: #70695a;
+	--accent: #ebe8dd;
+	--accent-foreground: #1c1b1b;
+	--destructive: #b4472b;
+	--border: rgba(49, 48, 46, 0.08);
+	--input: rgba(49, 48, 46, 0.12);
+	--ring: #d99400;
+	--chart-1: #d99400;
+	--chart-2: #9c7c1e;
+	--chart-3: #70695a;
+	--chart-4: #8f887b;
+	--chart-5: #423924;
+	--radius: 4px;
+	--sidebar: #f2f1e9;
+	--sidebar-foreground: #1c1b1b;
+	--sidebar-primary: #1c1b1b;
+	--sidebar-primary-foreground: #f2f1e9;
+	--sidebar-accent: rgba(217, 148, 0, 0.14);
+	--sidebar-accent-foreground: #1c1b1b;
+	--sidebar-border: rgba(49, 48, 46, 0.08);
+	--sidebar-ring: #d99400;
+}
+
+@theme inline {
+	--font-sans: 'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', sans-serif;
+	--font-heading: 'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', sans-serif;
+	--font-serif: 'Cormorant Garamond', serif;
+	--font-display: 'Bungee Shade', sans-serif;
+	--font-label: 'Brygada 1918', serif;
+	--color-gold: var(--gold);
+	--color-gold-light: var(--gold-light);
+	--color-gold-olive: var(--gold-olive);
+	--color-gold-foreground: var(--gold-foreground);
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+	--radius-xl: 12px;
+	--radius-2xl: 16px;
+	--radius-3xl: 16px;
+	--radius-4xl: 999px;
+}
+
+.dark {
+	--background: #050505;
+	--foreground: #f2f1e9;
+	--card: #1c1b1b;
+	--card-foreground: #f2f1e9;
+	--popover: #1c1b1b;
+	--popover-foreground: #f2f1e9;
+	--primary: #f2f1e9;
+	--primary-foreground: #1c1b1b;
+	--secondary: #2a2724;
+	--secondary-foreground: #f2f1e9;
+	--muted: #2a2724;
+	--muted-foreground: #ababa2;
+	--accent: #2a2724;
+	--accent-foreground: #f2f1e9;
+	--destructive: #c75b3e;
+	--border: rgba(242, 241, 233, 0.1);
+	--input: rgba(242, 241, 233, 0.14);
+	--ring: #d99400;
+	--chart-1: #d99400;
+	--chart-2: #f7cb72;
+	--chart-3: #ababa2;
+	--chart-4: #8f887b;
+	--chart-5: #f2f1e9;
+	--sidebar: #1c1b1b;
+	--sidebar-foreground: #f2f1e9;
+	--sidebar-primary: #f2f1e9;
+	--sidebar-primary-foreground: #1c1b1b;
+	--sidebar-accent: rgba(217, 148, 0, 0.2);
+	--sidebar-accent-foreground: #f2f1e9;
+	--sidebar-border: rgba(242, 241, 233, 0.1);
+	--sidebar-ring: #d99400;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+	html {
+		@apply font-sans;
+	}
+	h1,
+	h2,
+	h3,
+	h4 {
+		font-weight: 500;
+	}
+	h1 {
+		letter-spacing: -0.05em;
+		line-height: 1.02;
+	}
+	h2 {
+		letter-spacing: -0.02em;
+	}
+	.em-accent {
+		font-family: var(--font-serif);
+		font-style: italic;
+		font-weight: 500;
+		color: var(--gold-olive);
+	}
+	.em-kicker {
+		color: var(--gold);
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 0.8rem;
+	}
+	.em-hero--dark {
+		background:
+			radial-gradient(1px 1px at 20% 30%, var(--gold-light) 50%, transparent 51%),
+			radial-gradient(1px 1px at 70% 60%, var(--gold-light) 50%, transparent 51%),
+			radial-gradient(1px 1px at 45% 80%, var(--gold) 50%, transparent 51%),
+			radial-gradient(1px 1px at 85% 25%, var(--gold-light) 50%, transparent 51%), #1c1b1b;
+		color: #f2f1e9;
+	}
+	.em-wordmark {
+		font-family: var(--font-display);
+		text-transform: uppercase;
+		letter-spacing: -0.03em;
+		font-size: clamp(2.5rem, 8vw, 5rem);
+		line-height: 1;
+		text-align: center;
+	}
+}
+
+.prose {
+	--tw-prose-body: var(--foreground);
+	--tw-prose-headings: var(--foreground);
+	--tw-prose-lead: var(--muted-foreground);
+	--tw-prose-links: var(--gold-olive);
+	--tw-prose-bold: var(--foreground);
+	--tw-prose-counters: var(--muted-foreground);
+	--tw-prose-bullets: var(--muted-foreground);
+	--tw-prose-hr: var(--border);
+	--tw-prose-quotes: var(--foreground);
+	--tw-prose-quote-borders: var(--gold);
+	--tw-prose-captions: var(--muted-foreground);
+	--tw-prose-code: var(--foreground);
+	--tw-prose-pre-code: var(--foreground);
+	--tw-prose-pre-bg: var(--muted);
+	--tw-prose-th-borders: var(--border);
+	--tw-prose-td-borders: var(--border);
+}
+.dark .prose {
+	--tw-prose-body: var(--foreground);
+	--tw-prose-headings: var(--foreground);
+	--tw-prose-links: var(--gold-light);
+	--tw-prose-bold: var(--foreground);
+	--tw-prose-quote-borders: var(--gold);
+	--tw-prose-pre-bg: var(--muted);
+	--tw-prose-code: var(--foreground);
+	--tw-prose-pre-code: var(--foreground);
+	--tw-prose-hr: var(--border);
+	--tw-prose-th-borders: var(--border);
+	--tw-prose-td-borders: var(--border);
+	--tw-prose-bullets: var(--muted-foreground);
+	--tw-prose-counters: var(--muted-foreground);
+}
+
+.diff-code-insert,
+.diff-gutter-insert {
+	background: color-mix(in srgb, var(--gold-olive) 12%, transparent);
+}
+.diff-code-delete,
+.diff-gutter-delete {
+	background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+
+.react-flow {
+	--xy-background-color-default: var(--muted);
+	--xy-edge-stroke-default: var(--border);
+	--xy-edge-stroke-selected: var(--gold);
+	--xy-background-pattern-dots-color-default: color-mix(
+		in srgb,
+		var(--muted-foreground) 40%,
+		transparent
+	);
+	--xy-node-boxshadow-selected-default: 0 0 0 2px var(--glow);
+	--xy-selection-background-color-default: color-mix(in srgb, var(--gold) 10%, transparent);
+	--xy-handle-border-color-default: var(--border);
+	--xy-controls-button-background-color-default: var(--popover);
+	--xy-controls-button-background-color-hover-default: var(--accent);
+	--xy-controls-button-color-default: var(--foreground);
+	--xy-controls-button-border-color-default: var(--border);
+}
+.react-flow.dark {
+	--xy-background-color-default: var(--card);
+}
+.react-flow__controls-button {
+	border-radius: 0;
+	box-shadow: none;
+}
+.react-flow__edge.animated path {
+	stroke: var(--gold);
+}
+
+/* Main nav rail icons (AppSidebar only): Solar bold-duotone rendered as a
+   gold-on-black two-tone. Each icon has two layers — the path carrying
+   opacity=".5" is the base silhouette, the solid path is the accent. Scoped to
+   .app-nav-rail so the header brand logo AND other pages' sidebars (e.g. the
+   credentials provider list) keep their own colors. */
+.app-nav-rail [data-sidebar='content'] svg path,
+.app-nav-rail [data-sidebar='footer'] svg path {
+	opacity: 1;
+}
+.app-nav-rail [data-sidebar='content'] svg path[opacity],
+.app-nav-rail [data-sidebar='footer'] svg path[opacity] {
+	fill: #d99400;
+}
+.app-nav-rail [data-sidebar='content'] svg path:not([opacity]),
+.app-nav-rail [data-sidebar='footer'] svg path:not([opacity]) {
+	fill: #1c1b1b;
+}
+/* Keep the black accent visible on the dark-theme (dark) sidebar. */
+.dark .app-nav-rail [data-sidebar='content'] svg path:not([opacity]),
+.dark .app-nav-rail [data-sidebar='footer'] svg path:not([opacity]) {
+	fill: oklch(0.985 0 0);
+}
+
+/* Per-icon flip (.icon-flip): black base + gold accent — the inverse of the
+   nav-rail default. Higher specificity so it wins over the rules above. */
+.app-nav-rail [data-sidebar='content'] svg.icon-flip path[opacity],
+.app-nav-rail [data-sidebar='footer'] svg.icon-flip path[opacity] {
+	fill: #1c1b1b;
+}
+.app-nav-rail [data-sidebar='content'] svg.icon-flip path:not([opacity]),
+.app-nav-rail [data-sidebar='footer'] svg.icon-flip path:not([opacity]) {
+	fill: #d99400;
+}
+.dark .app-nav-rail [data-sidebar='content'] svg.icon-flip path[opacity],
+.dark .app-nav-rail [data-sidebar='footer'] svg.icon-flip path[opacity] {
+	fill: oklch(0.985 0 0);
+}
+.dark .app-nav-rail [data-sidebar='content'] svg.icon-flip path:not([opacity]),
+.dark .app-nav-rail [data-sidebar='footer'] svg.icon-flip path:not([opacity]) {
+	fill: #d99400;
+}
+
+/* App-wide brand two-tone for Solar bold-duotone icons: gold base silhouette +
+   ink detail, matching the nav rail, so icons read as brand gold/ink rather than
+   flat gray. `:has(path[opacity])` restricts this to duotone icons; linear (stroke)
+   icons keep their currentColor. `.icon-mono` on an icon or an ancestor opts it
+   out (used for brand logos and semantic status glyphs that keep their own color). */
+svg:has(path[opacity]):not(.icon-mono, .icon-mono *) path {
+	opacity: 1;
+}
+svg:has(path[opacity]):not(.icon-mono, .icon-mono *) path[opacity] {
+	fill: #d99400;
+}
+svg:has(path[opacity]):not(.icon-mono, .icon-mono *) path:not([opacity]) {
+	fill: #1c1b1b;
+}
+.dark svg:has(path[opacity]):not(.icon-mono, .icon-mono *) path:not([opacity]) {
+	fill: oklch(0.985 0 0);
+}

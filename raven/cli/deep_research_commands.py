@@ -28,39 +28,11 @@ deep_research_app = typer.Typer(help="Configure the deep_research tool (MiroThin
 
 
 def _validate_key(api_key: str, api_base: str, *, transport: Any = None) -> dict[str, Any]:
-    """Free ``GET /v1/models`` key check. 200 = key valid; returns model ids.
-
-    Mirrors update_providers' models-test, including its ``/v1`` de-dup: the
-    MiroThinker default base already ends in ``/v1``, so appending ``/v1/models``
-    blindly would 404. ``transport`` is injectable for tests.
-    """
-    import httpx
-
+    """Free ``GET /v1/models`` key check against MiroThinker's base."""
     from raven.agent.tools.deep_research import DEFAULT_BASE_URL
+    from raven.cli._key_probe import probe_models
 
-    base = (api_base or DEFAULT_BASE_URL).rstrip("/")
-    url = base + "/models"
-    if "/v1" not in base:
-        url = base + "/v1/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    kwargs: dict[str, Any] = {"timeout": 10}
-    if transport is not None:
-        kwargs["transport"] = transport
-    try:
-        with httpx.Client(**kwargs) as client:
-            resp = client.get(url, headers=headers)
-    except httpx.HTTPError as exc:
-        return {"ok": False, "status": "network_error", "model_ids": None, "error": str(exc)}
-    if resp.status_code != 200:
-        return {"ok": False, "status": f"http_{resp.status_code}", "model_ids": None, "error": resp.text[:200]}
-    ids: list[str] = []
-    try:
-        for item in resp.json().get("data") or []:
-            if isinstance(item, dict) and item.get("id"):
-                ids.append(item["id"])
-    except Exception:
-        pass
-    return {"ok": True, "status": "ok", "model_ids": ids, "error": None}
+    return probe_models(api_key, api_base or DEFAULT_BASE_URL, transport=transport)
 
 
 def _pick_model(questionary: Any, style: Any, qmark: str, t: Any) -> str:

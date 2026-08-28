@@ -1,0 +1,10 @@
+{
+  "acp_schema_version": "1.20.0",
+  "released": "2026-07-21",
+  "source": "https://github.com/agentclientprotocol/agent-client-protocol",
+  "upstream_path": "schema/schema.json",
+  "sha256": {
+    "schema-v1.json": "7f1fba1561163729115247df75b67aeed02085115fbc7ef0131fb01d456c08f9",
+    "meta-v1.json": "061edb6efa8fb2aa2792459a86ec7268de5fe665bba48b2ffe7939df01481f88"
+  }
+}

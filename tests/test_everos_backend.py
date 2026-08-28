@@ -10,6 +10,8 @@ embedding services that the test environment doesn't have).
 from __future__ import annotations
 
 import asyncio
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +28,8 @@ from raven.plugin.memory.everos.backend import (
     ServiceState,
     _flatten_profile,
     _HttpEverosAdapter,
+    as_ms_epoch,
+    convert_messages,
     make_backend,
 )
 
@@ -151,6 +155,81 @@ class TestLifecycle:
         ) as mock_ensure:
             await b.start()
         mock_ensure.assert_called_once()
+
+
+class TestShutdownFlushesUnfinishedSessions:
+    """A session shorter than ``flush_every_turns`` crosses its flush
+    boundary never, and a restart resets ``_turn_counts`` to zero -- so
+    without a shutdown flush, a session's already-buffered content sits in
+    EverOS's server-side buffer with no extraction ever triggered.
+    """
+
+    async def test_stop_flushes_a_session_short_of_its_boundary(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+        await b.store("s", [{"role": "user", "content": "1"}])
+        await b.store("s", [{"role": "user", "content": "2"}])
+        assert all(call["is_final"] is False for call in adapter.memorize_calls)
+
+        await b.stop()
+
+        assert adapter.memorize_calls[-1]["session_id"] == "s"
+        assert adapter.memorize_calls[-1]["is_final"] is True
+
+    async def test_stop_does_not_reflush_a_session_already_on_the_boundary(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=2)
+        await b.store("s", [{"role": "user", "content": "1"}])
+        await b.store("s", [{"role": "user", "content": "2"}])
+        assert adapter.memorize_calls[-1]["is_final"] is True
+        calls_before_stop = len(adapter.memorize_calls)
+
+        await b.stop()
+
+        assert len(adapter.memorize_calls) == calls_before_stop
+
+    async def test_a_session_that_never_wrote_is_left_alone(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+
+        await b.stop()
+
+        assert adapter.memorize_calls == []
+
+    async def test_a_failed_final_flush_does_not_block_other_sessions(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+        adapter.memorize_raises = None
+        await b.store("s1", [{"role": "user", "content": "1"}])
+        await b.store("s2", [{"role": "user", "content": "1"}])
+
+        adapter.memorize_raises = RuntimeError("everos down")
+        await b.stop()
+
+        flushed = {c["session_id"] for c in adapter.memorize_calls if c["is_final"]}
+        assert flushed == {"s1", "s2"}
+
+    async def test_the_sweep_is_bounded_when_a_flush_hangs(self, tmp_path: Path, monkeypatch) -> None:
+        import time
+
+        from raven.plugin.memory.everos import backend as mod
+
+        monkeypatch.setattr(mod, "_SHUTDOWN_FLUSH_BUDGET_S", 0.05)
+
+        class _Hangs:
+            async def memorize(self, session_id, payload_messages, *, is_final=False, app_id=None, project_id=None):
+                await asyncio.sleep(30)
+
+        b = _backend(tmp_path, adapter=_Hangs(), flush_every_turns=4)
+        # Set the turn count directly rather than through a real store() call --
+        # the hanging adapter would make that call itself hang for the full
+        # _STORE_TIMEOUT_S, which is not what this test is bounding.
+        b._turn_counts["s"] = 1
+
+        t0 = time.monotonic()
+        await b.stop()
+
+        assert time.monotonic() - t0 < 1.0
 
 
 class TestColdStartSpeaksUp:
@@ -918,13 +997,14 @@ class TestStoreConversion:
         assert adapter.memorize_calls[0]["payload_messages"][0]["sender_id"] == "alice-123"
 
     async def test_memorize_failure_is_absorbed_and_accounted(self, tmp_path: Path) -> None:
-        """A failed write is recorded here, not raised.
+        """A failed write is reported here, not raised.
 
         store runs as a detached task now, so there is no caller left to catch
         anything it throws -- an exception would surface only as asyncio's
-        "Task exception was never retrieved". The backend is the last place that
-        can both classify the failure (demoting the service state) and remember
-        that a turn went unindexed, so it does both instead.
+        "Task exception was never retrieved". The backend classifies the
+        failure (demoting the service state) and reports it through the
+        return value; remembering that a turn went unindexed is the caller's
+        job (the AgentLoop's own retry-aware count), not the backend's.
         """
         from raven.plugin.memory.everos.backend import ServiceState
 
@@ -932,9 +1012,7 @@ class TestStoreConversion:
         adapter.memorize_raises = RuntimeError("everos down")
         b = _backend(tmp_path, adapter=adapter)
 
-        await b.store("s", [{"role": "user", "content": "x"}])
-
-        assert b._dropped_writes == 1
+        assert await b.store("s", [{"role": "user", "content": "x"}]) is False
         assert b._state is not ServiceState.READY
 
 
@@ -1064,8 +1142,9 @@ class TestIdentityFromServices:
     async def test_illegal_identity_does_not_report_a_service_outage(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
     ) -> None:
-        """The service is fine; the config is not. Counting the turn as a dropped
-        write sends the user to look at a server that never broke."""
+        """The service is fine; the config is not, and the backend itself no
+        longer prints a shutdown summary at all -- that moved to the caller's
+        own honest count -- so this only pins that ``stop()`` stays silent."""
         ctx = PluginContext(
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default"),
@@ -1075,7 +1154,6 @@ class TestIdentityFromServices:
         capsys.readouterr()
 
         assert await backend.store("s1", [{"role": "user", "content": "hi"}]) is False
-        assert backend._dropped_writes == 0
         await backend.stop()
         assert "unavailable" not in capsys.readouterr().err
 
@@ -1307,12 +1385,11 @@ class TestStoreIsDiscardedWhenTheServiceIsNotReady:
         b._state = state
         return b
 
-    async def test_dropped_and_counted(self) -> None:
+    async def test_dropped(self) -> None:
         from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend(ServiceState.FAILED)
-        await b.store("s1", [{"role": "user", "content": "hi"}])
-        assert b._dropped_writes == 1
+        assert await b.store("s1", [{"role": "user", "content": "hi"}]) is False
 
 
 @pytest.mark.asyncio
@@ -1453,12 +1530,12 @@ class TestWriteBudgetFollowsTheCaller:
         assert b._state is ServiceState.READY
 
 
-class TestDroppedWritesCountOnlyRealLosses:
-    """A fresh install has nothing to lose, and should not be told it lost it.
-
-    The counter fires on any not-ready state, so an install that has never
-    configured a memory LLM ends every session with "N turns were not written
-    to long-term memory" -- about memory it never had.
+class TestNotReadyStoresAllReportFalseTheSameWay:
+    """The backend no longer keeps its own dropped-write count (that
+    distinction -- "never configured" vs. "really failed" -- only ever
+    mattered for the plugin's own shutdown message, which is now the
+    AgentLoop's job, driven by its own retry-aware count instead). What the
+    backend still owes every caller is a truthful, uniform return value.
     """
 
     @staticmethod
@@ -1475,22 +1552,207 @@ class TestDroppedWritesCountOnlyRealLosses:
         return b
 
     @pytest.mark.asyncio
-    async def test_never_configured_is_not_a_loss(self) -> None:
+    async def test_a_write_that_really_was_lost_reports_false(self) -> None:
+        """BAD_IDENTITY belongs here, not with the never-configured states: the
+        service works, the config is wrong, and the turn it refuses is gone."""
         from raven.plugin.memory.everos.backend import ServiceState
 
-        for state in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY):
+        retryable = (
+            ServiceState.BAD_IDENTITY,
+            ServiceState.FAILED,
+            ServiceState.UNRESPONSIVE,
+            ServiceState.STARTING,
+        )
+        for state in retryable:
             b = self._backend(state)
-            await b.store("s", [{"role": "user", "content": "x"}])
-            assert b._dropped_writes == 0, state
+            assert await b.store("s", [{"role": "user", "content": "x"}]) is False, state
 
-    @pytest.mark.asyncio
-    async def test_a_service_that_should_have_been_there_is(self) -> None:
+    async def test_a_service_that_was_never_configured_reports_no_failure(self) -> None:
+        """There is no memory service to fail, so nothing was lost.
+
+        Reporting False here would make the AgentLoop retry for a minute per
+        turn and then announce lost turns to an install that never had any.
+        """
         from raven.plugin.memory.everos.backend import ServiceState
 
-        for state in (ServiceState.FAILED, ServiceState.UNRESPONSIVE, ServiceState.STARTING):
+        never_had = (
+            ServiceState.UNCONFIGURED,
+            ServiceState.NO_BINARY,
+        )
+        for state in never_had:
             b = self._backend(state)
-            await b.store("s", [{"role": "user", "content": "x"}])
-            assert b._dropped_writes == 1, state
+            assert await b.store("s", [{"role": "user", "content": "x"}]) is True, state
+
+
+class _SchemaStrictAdapter:
+    """A fake that refuses what production refuses.
+
+    everos 1.2.3 declares ``MemorizeAddRequest.messages`` with
+    ``min_length=1``, so an add carrying an empty list is a 422 and the flush
+    behind it never goes out. A fake that accepts the empty add hides exactly
+    that, which is how a shutdown flush that never reached the server passed
+    its tests.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def search(self, **kw):
+        return None
+
+    async def memorize(self, session_id, payload_messages, *, is_final=False, app_id=None, project_id=None):
+        if payload_messages:
+            self.calls.append("add")
+        elif not is_final:
+            return
+        else:
+            # No add is issued for a flush-only call; issuing one would 422.
+            pass
+        if is_final:
+            self.calls.append("flush")
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+class TestShutdownFlushReachesTheServer:
+    """A session that ends short of its flush boundary still gets extracted.
+
+    Only a flush makes everos extract. The default fires one per turn, so this
+    exercises the batched configuration, where a conversation can end before
+    ever reaching a boundary.
+    """
+
+    async def test_a_short_session_is_flushed_at_stop(self, tmp_path: Path) -> None:
+        adapter = _SchemaStrictAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+        b._state = ServiceState.READY
+        assert await b.store("s", [{"role": "user", "content": "hi"}]) is True
+        assert adapter.calls == ["add"]
+
+        await b.stop()
+        assert "flush" in adapter.calls, adapter.calls
+
+    async def test_the_flush_only_call_sends_no_empty_add(self, tmp_path: Path) -> None:
+        adapter = _SchemaStrictAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+        b._state = ServiceState.READY
+        await b.store("s", [{"role": "user", "content": "hi"}])
+        adapter.calls.clear()
+
+        await b.stop()
+        assert adapter.calls == ["flush"], adapter.calls
+
+    async def test_a_session_already_on_the_boundary_is_not_reflushed(self, tmp_path: Path) -> None:
+        adapter = _SchemaStrictAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=1)
+        b._state = ServiceState.READY
+        await b.store("s", [{"role": "user", "content": "hi"}])
+        assert adapter.calls == ["add", "flush"]
+        adapter.calls.clear()
+
+        await b.stop()
+        assert adapter.calls == [], adapter.calls
+
+
+@pytest.mark.asyncio
+class TestTheHttpAdapterSkipsAnEmptyAdd:
+    """The unit under test is the real HTTP client, not a fake of it."""
+
+    async def test_a_flush_only_memorize_posts_only_the_flush(self) -> None:
+        posted: list[str] = []
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self):
+                return {}
+
+        class _Client:
+            async def post(self, url, **kw):
+                posted.append(url)
+                return _Resp()
+
+        adapter = _HttpEverosAdapter(base_url="http://x", api_key=None)
+        adapter._client = _Client()
+        await adapter.memorize("s", [], is_final=True)
+        assert posted == ["http://x/api/v2/memory/flush"], posted
+
+    async def test_an_empty_non_final_memorize_posts_nothing(self) -> None:
+        posted: list[str] = []
+
+        class _Client:
+            async def post(self, url, **kw):
+                posted.append(url)
+                raise AssertionError("should not be reached")
+
+        adapter = _HttpEverosAdapter(base_url="http://x", api_key=None)
+        adapter._client = _Client()
+        await adapter.memorize("s", [], is_final=False)
+        assert posted == []
+
+
+@pytest.mark.asyncio
+class TestACancelledFlushIsStillOwed:
+    """A boundary the code intended is not a flush the server confirmed.
+
+    With a flush on every turn, turn one already sits on the modulo boundary,
+    so a sweep that reads the turn counter concludes there is nothing owed --
+    even when that turn's flush was cancelled mid-flight, which is what a
+    two-second teardown budget does to a seven-second flush. The add landed,
+    so the content is buffered on the server and only a flush will extract it.
+    """
+
+    async def test_a_flush_cancelled_mid_flight_is_retried_at_stop(self, tmp_path: Path) -> None:
+        import asyncio
+
+        class _FlushHangs:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+                self.block = True
+
+            async def search(self, **kw):
+                return None
+
+            async def memorize(self, session_id, payload_messages, *, is_final=False, app_id=None, project_id=None):
+                if payload_messages:
+                    self.calls.append("add")
+                if is_final:
+                    if self.block:
+                        self.calls.append("flush-started")
+                        await asyncio.sleep(30)
+                    self.calls.append("flush")
+
+            async def aclose(self) -> None:
+                pass
+
+        adapter = _FlushHangs()
+        b = _backend(tmp_path, adapter=adapter)
+        b._state = ServiceState.READY
+
+        task = asyncio.create_task(b.store("s", [{"role": "user", "content": "hi"}]))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert adapter.calls == ["add", "flush-started"], adapter.calls
+
+        adapter.block = False
+        await b.stop()
+        assert "flush" in adapter.calls, adapter.calls
+
+    async def test_a_confirmed_flush_is_not_repeated_at_stop(self, tmp_path: Path) -> None:
+        adapter = _SchemaStrictAdapter()
+        b = _backend(tmp_path, adapter=adapter)
+        b._state = ServiceState.READY
+        await b.store("s", [{"role": "user", "content": "hi"}])
+        assert adapter.calls == ["add", "flush"]
+        adapter.calls.clear()
+
+        await b.stop()
+        assert adapter.calls == [], adapter.calls
 
 
 @pytest.mark.asyncio
@@ -1674,3 +1936,208 @@ class TestTheDegradationWarningOnASelfManagedServer:
         await self._start_unowned(monkeypatch, caps={})
 
         assert "embedding is unavailable" not in capsys.readouterr().err
+
+
+class TestConvertMessagesTimestamps:
+    """everos's DTO wants ms epoch, so the conversion must produce one."""
+
+    def test_iso_string_becomes_ms_epoch(self) -> None:
+        # instance_log.build_turn stamps rows with datetime.now().isoformat(),
+        # so this is the shape a trace payload actually arrives in.
+        out = convert_messages(
+            [{"role": "user", "content": "hi", "timestamp": "2026-08-20T09:53:46.693637"}],
+            agent_id="coder",
+            user_id="liv",
+        )
+        assert isinstance(out[0]["timestamp"], int)
+        assert out[0]["timestamp"] == int(datetime(2026, 8, 20, 9, 53, 46, 693637).timestamp() * 1000)
+
+    def test_ms_epoch_int_passes_through(self) -> None:
+        out = convert_messages(
+            [{"role": "user", "content": "hi", "timestamp": 1755683626693}],
+            agent_id="coder",
+            user_id="liv",
+        )
+        assert out[0]["timestamp"] == 1755683626693
+
+    def test_seconds_epoch_is_scaled_to_ms(self) -> None:
+        out = convert_messages(
+            [{"role": "user", "content": "hi", "timestamp": 1755683626}],
+            agent_id="coder",
+            user_id="liv",
+        )
+        assert out[0]["timestamp"] == 1755683626000
+
+    def test_unparseable_timestamp_falls_back_to_now(self) -> None:
+        before = int(time.time() * 1000)
+        out = convert_messages(
+            [{"role": "user", "content": "hi", "timestamp": "not a date"}],
+            agent_id="coder",
+            user_id="liv",
+        )
+        assert isinstance(out[0]["timestamp"], int)
+        assert out[0]["timestamp"] >= before
+
+    def test_missing_timestamp_still_falls_back_to_now(self) -> None:
+        before = int(time.time() * 1000)
+        out = convert_messages([{"role": "user", "content": "hi"}], agent_id="coder", user_id="liv")
+        assert out[0]["timestamp"] >= before
+
+    def test_nan_returns_none(self) -> None:
+        assert as_ms_epoch(float("nan")) is None
+
+    def test_positive_infinity_returns_none(self) -> None:
+        assert as_ms_epoch(float("inf")) is None
+
+    def test_negative_infinity_returns_none(self) -> None:
+        assert as_ms_epoch(float("-inf")) is None
+
+    def test_bool_is_not_a_timestamp(self) -> None:
+        assert as_ms_epoch(True) is None
+        assert as_ms_epoch(False) is None
+
+    def test_zero_and_negative_number_return_none(self) -> None:
+        assert as_ms_epoch(0) is None
+        assert as_ms_epoch(-5) is None
+
+    def test_seconds_epoch_float_is_scaled_to_ms(self) -> None:
+        assert as_ms_epoch(1755683626.5) == 1755683626500
+
+    def test_iso_string_without_microseconds(self) -> None:
+        assert as_ms_epoch("2026-08-20T09:53:46") == int(datetime(2026, 8, 20, 9, 53, 46).timestamp() * 1000)
+
+    def test_iso_string_with_utc_offset(self) -> None:
+        expected = int(datetime(2026, 8, 20, 9, 53, 46, tzinfo=timezone.utc).timestamp() * 1000)
+        assert as_ms_epoch("2026-08-20T09:53:46+00:00") == expected
+
+    def test_iso_string_with_z_suffix(self) -> None:
+        expected = int(datetime(2026, 8, 20, 9, 53, 46, tzinfo=timezone.utc).timestamp() * 1000)
+        assert as_ms_epoch("2026-08-20T09:53:46Z") == expected
+
+    def test_pre_epoch_iso_string_returns_none(self) -> None:
+        # A negative ms value would survive a caller's `as_ms_epoch(...) or
+        # now_ms` fallback -- a negative int is truthy -- and silently keep a
+        # bogus pre-1970 stamp instead of falling back to now.
+        assert as_ms_epoch("1969-12-31T00:00:00Z") is None
+
+
+class TestConvertMessagesIsReusable:
+    """The conversion is callable without an EverosBackend instance."""
+
+    def test_owner_routing_honours_the_given_ids(self) -> None:
+        out = convert_messages(
+            [
+                {"role": "user", "content": "read it"},
+                {"role": "assistant", "content": "reading"},
+                {"role": "tool", "content": "result", "tool_call_id": "c1"},
+            ],
+            agent_id="coder",
+            user_id="liv",
+        )
+        assert [row["sender_id"] for row in out] == ["liv", "coder", "coder"]
+
+    def test_method_delegates_to_the_function(self) -> None:
+        messages = [{"role": "user", "content": "hi"}]
+        assert EverosBackend._convert_messages(messages, agent_id="coder", user_id="liv") == convert_messages(
+            messages, agent_id="coder", user_id="liv"
+        )
+
+
+class TestEveryTurnIsExtracted:
+    """A flush is what makes EverOS extract, and only a flush does.
+
+    Batching it every N turns leaves a session that ends before the boundary
+    unextracted, and the turn counter is per-process, so that includes every
+    short run. Firing one per turn is affordable again now that the write is
+    off the turn's critical path.
+    """
+
+    def test_flush_defaults_to_every_turn(self, tmp_path: Path) -> None:
+        assert _backend(tmp_path)._flush_every_turns == 1
+
+    def test_an_explicit_config_value_still_wins(self, tmp_path: Path) -> None:
+        assert _backend(tmp_path, flush_every_turns=4)._flush_every_turns == 4
+
+
+@pytest.mark.asyncio
+class TestRetriesShareOneFlushDecision:
+    """A retry is not a new turn: it is the same turn, tried again.
+
+    Before this, every attempt at a record -- retry or not -- advanced
+    ``_turn_counts`` and recomputed ``is_final`` from scratch. A record that
+    needed all five AgentLoop attempts therefore looked like five turns to
+    the flush cadence, and whichever attempt happened to land on the flush
+    boundary got promoted to the 360s extraction budget even though the
+    record's first attempt was not final.
+    """
+
+    async def test_five_attempts_advance_the_counter_once(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+
+        for attempt in range(5):
+            await b.store("s", [{"role": "user", "content": "x"}], metadata={"attempt": attempt})
+
+        assert b._turn_counts["s"] == 1
+
+    async def test_no_attempt_gets_the_final_budget_the_first_did_not(self, tmp_path: Path) -> None:
+        """Session "s" starts at turn 1 of a flush-every-4 cadence: the first
+        attempt is not final, so none of its retries may become final either --
+        even the fourth retry, which lands on what would be turn 4."""
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+
+        for attempt in range(5):
+            await b.store("s", [{"role": "user", "content": "x"}], metadata={"attempt": attempt})
+
+        assert [call["is_final"] for call in adapter.memorize_calls] == [False] * 5
+
+    async def test_a_final_attempt_stays_final_on_retry(self, tmp_path: Path) -> None:
+        """The reverse must also hold: if the first attempt lands on the flush
+        boundary, a retry of that same record must not silently downgrade it
+        back to a plain append."""
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=1)
+
+        for attempt in range(3):
+            await b.store("s", [{"role": "user", "content": "x"}], metadata={"attempt": attempt})
+
+        assert [call["is_final"] for call in adapter.memorize_calls] == [True] * 3
+        assert b._turn_counts["s"] == 1
+
+    async def test_an_explicit_is_final_still_overrides_attempt_tracking(self, tmp_path: Path) -> None:
+        """A bulk-import caller supplying ``is_final`` directly (the other,
+        pre-existing override) must not be reinterpreted as an attempt-0 turn."""
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter, flush_every_turns=4)
+
+        await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": True, "attempt": 0})
+
+        assert adapter.memorize_calls[0]["is_final"] is True
+        assert "s" not in b._turn_counts
+
+
+@pytest.mark.asyncio
+async def test_a_write_failed_by_our_own_stop_does_not_demote_the_service(tmp_path: Path) -> None:
+    """`stop` closes the transport under writes that are still on the wire.
+
+    Classifying that as a service fault blames EverOS for this process's exit,
+    and leaves the next session opening against a state this one invented. The
+    The loss is still reported: `False` is what StorePipeline counts.
+    """
+
+    class _ClosedAdapter:
+        async def memorize(self, *_a: Any, **_kw: Any) -> None:
+            raise RuntimeError("client has been closed")
+
+        async def aclose(self) -> None:
+            return None
+
+    b = _backend(tmp_path, adapter=_ClosedAdapter())
+    b._state = ServiceState.READY
+    messages = [{"role": "user", "content": "hi"}]
+
+    await b.stop()
+    assert await b.store("s1", messages) is False
+
+    assert b._state is ServiceState.READY

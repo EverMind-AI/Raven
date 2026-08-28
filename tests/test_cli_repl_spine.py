@@ -15,6 +15,8 @@ from raven.spine import (
     Origin,
     Source,
     Text,
+    ToolEvent,
+    ToolPhase,
     TurnEnded,
     TurnFailed,
     TurnOutcome,
@@ -86,11 +88,11 @@ async def test_runner_stream_flag_is_forwarded():
     runner = AgentTurnRunner(loop, stream=True)
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
-    assert loop.calls[0]["stream"] is True  # build_tui would pass True; build_repl False
+    assert loop.calls[0]["stream"] is True  # build_rpc_spine would pass True; build_repl False
 
 
 async def test_runner_forwards_inline_tool_stream():
-    # build_repl / build_tui wire inline_tool_stream=True so deep_research streams
+    # build_repl / build_rpc_spine wire inline_tool_stream=True so deep_research streams
     # its answer inline; the gateway leaves it False.
     loop = FakeAgentLoop()
     runner = AgentTurnRunner(loop, stream=False, inline_tool_stream=True)
@@ -116,6 +118,24 @@ async def test_cli_outlet_eats_non_text():
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS))
     await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT))
     assert rendered == []  # eaten, not rendered
+
+
+async def test_cli_outlet_renders_completed_file_delivery():
+    rendered: list[str] = []
+    outlet = CliOutlet("cli", rendered.append)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="deliver-1",
+            metadata={
+                "raven_delivery": {
+                    "message": "Final outputs",
+                    "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+                }
+            },
+        )
+    )
+    assert rendered == ["Final outputs\nDelivered files:\n- report.pdf: /tmp/report.pdf"]
 
 
 # --- CliOutlet progress rendering (-m path): the two-gate parity ---

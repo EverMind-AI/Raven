@@ -1,0 +1,423 @@
+"""`ppt_build`: run the author's program, then show it every page it made.
+
+The tool is thin on purpose -- schema, argument adaptation, the reply -- because
+everything it does is somewhere else: the backend runs the program, the gates
+measure the file, publication delivers it or refuses. What lives here is the one
+thing a tool owns, which is what the model sees coming back -- and on this route
+that reply *is* the review: the renders come back to whoever wrote the program,
+which is the only actor that can act on all of what they show.
+
+That turns out to matter more than it sounds. The predecessor returned twelve
+unlabelled page renders and a JSON blob, and the model could not reliably say
+which page it was talking about; it voiced one problem when two stood, and a run
+spent seven rebuilds re-checking numbers because the fact ask was the only
+instruction it got while seventeen colour bars stood untouched.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from raven.agent.tools.base import Tool, ToolResult
+from raven.ppt.contracts import (
+    Finding,
+    PlannedTable,
+    Profile,
+    Project,
+    Severity,
+    brief_path,
+    intake_path,
+    load_brief,
+    load_outline,
+    load_plan,
+    outline_path,
+)
+from raven.ppt.stages.build import BuildStage
+from raven.ppt.tools import _return
+from raven.ppt.tools._args import ArgumentError, as_ints
+from raven.utils.helpers import image_block, text_block
+
+# The most pages one call may name in `slides`. One render comes back either way:
+# `execute` passes `slides=[page_from]` when none is named, so omitting `slides` walks
+# the deck a page at a time rather than a batch at a time. The stage's own BATCH_VIEWS
+# (raven/ppt/stages/build.py) bounds what it would show and is where the unseen-page
+# record is kept.
+BATCH_VIEWS = 1
+
+
+class PptBuildTool(Tool):
+    name = "ppt_build"
+    description = (
+        "Build the deck by running the python-pptx program you write, then look at every page it made. "
+        "Write the program to deck/build/build.py with write_file -- that whole path, "
+        "relative to the workspace -- revise it with edit_file, then call this with just the project. "
+        "It returns one rendered page, whatever the script printed to stdout, and everything measured on "
+        "the deck. "
+        "It refuses until ppt_prepare has read the task, ppt_brief holds what the user decides and "
+        "ppt_outline has recorded what each page argues; and it refuses to publish a deck holding a page "
+        "whose current code has never been rendered back to you, which is answered by building again and "
+        "looking rather than by editing. "
+        "Iterate: read the render, edit the file, run again."
+    )
+    timeout_seconds = 900.0
+
+    def __init__(self, workspace: Path, stage: BuildStage, views: Any, profile: Profile) -> None:
+        self.workspace = workspace
+        self.stage = stage
+        self.views = views
+        self.profile = profile
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
+                "script": {
+                    "type": "string",
+                    "description": (
+                        "Optional: a complete python-pptx program, written to the deck's build.py before it "
+                        "runs. Omit it -- or leave it empty -- to run the build.py you wrote with the file "
+                        "tools, which is the better path for a deck-sized script, since inlining one means "
+                        "regenerating every line to change any line."
+                    ),
+                },
+                "slides": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "maxItems": BATCH_VIEWS,
+                    "description": (
+                        "one page to render back, when you want that page rather than the one page_from "
+                        "names. One page comes back either way -- look at every page before deciding it is "
+                        "done, and name a page again after editing it"
+                    ),
+                },
+                "page_from": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "which page comes back as a render; omit to start at page 1 and pass the "
+                        "number the previous reply named to see the next"
+                    ),
+                },
+                "draft": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "true while the program is still being written: it builds what exists, measures it "
+                        "and hands back the render, without holding a part-written deck to the agreed length "
+                        "or to having shown you every page, and without publishing. Omit it once the requested "
+                        "pages are written -- only a finished build runs every gate and delivers the deck"
+                    ),
+                },
+            },
+            "required": ["project"],
+        }
+
+    async def execute(
+        self,
+        project: str,
+        script: str | None = None,
+        slides: list[int] | None = None,
+        page_from: int = 1,
+        draft: bool = False,
+        **kwargs: Any,
+    ) -> str | ToolResult:
+        try:
+            deck = Project(workspace=self.workspace, slug=project)
+        except ValueError as exc:
+            return _return.failed(str(exc))
+
+        # Refused rather than defaulted. Three things about this deck are the
+        # user's to decide -- its language, its audience, its length -- and all
+        # three are checked against the finished file, so guessing them here would
+        # mean measuring the deck against a brief nobody agreed to.
+        agreed = load_brief(brief_path(deck))
+        if agreed is None:
+            return _return.failed(
+                "no brief recorded for this deck, so there is nothing to build it against",
+                hint=(
+                    "record the language, the audience and the page budget with ppt_brief -- ask the user "
+                    "with ask_user when there is a user to ask, and read them out of the task when there "
+                    "is not"
+                ),
+            )
+
+        if load_plan(intake_path(deck)) is None:
+            return _return.failed(
+                "this deck's task has not been read, so nothing knows what it is for or what it stands on",
+                hint=(
+                    "call ppt_prepare with the user's request first -- it locates and ingests the materials, "
+                    "binds a template and records what the request already states"
+                ),
+            )
+
+        if load_outline(outline_path(deck)) is None:
+            return _return.failed(
+                "no outline recorded, so nothing has decided what this deck argues or what each page says",
+                hint=(
+                    "plan it with ppt_outline first -- it checks the figures against the catalogue and the "
+                    "length against the brief, which is a cheap edit there and an expensive one here"
+                ),
+            )
+
+        try:
+            wanted = as_ints(slides, "slides") or None
+        except ArgumentError as exc:
+            return _return.failed(str(exc), hint="slides: [7] -- one page at a time")
+
+        result = await self.stage.run(
+            deck,
+            script,
+            slides=wanted or [page_from],
+            page_from=page_from,
+            draft=draft,
+        )
+        outcome = result.data.get("outcome")
+
+        if outcome is None or not getattr(outcome, "ok", False):
+            return _return.failed(
+                "the build script did not produce a deck",
+                stderr=getattr(outcome, "stderr", "") or None,
+                stdout=getattr(outcome, "stdout", "") or None,
+                hint="fix the script and run ppt_build again",
+            )
+
+        findings = list(result.findings)
+        payload: dict[str, Any] = {"project": project, "slides": outcome.pages}
+        if outcome.note:
+            payload["note"] = outcome.note
+        # Two notes reach here and only one used to be read. `outcome.note` is the
+        # script's; `result.note` is the stage's, and the stage puts a publish refusal
+        # there -- an empty deck, a staged file that vanished, a deck that changed
+        # after it was checked. None of those is a blocking finding, so the reply came
+        # back `"ok": true` with no pptx_path and told the author the deck was
+        # delivered "at the export path above" and that nothing refused it. Nothing
+        # had been written at all.
+        refused = None if result.ok else (result.note or "the deck was not published")
+        if refused:
+            payload["not_delivered"] = refused
+        if outcome.stdout:
+            payload["stdout"] = outcome.stdout
+        if findings:
+            shown_findings, folded = _folded(findings)
+            payload["measured"] = _return.grouped(shown_findings)
+            if folded:
+                payload["consequences_folded"] = folded
+        if "pptx_path" in result.data:
+            payload["pptx_path"] = result.data["pptx_path"]
+
+        shown = list(result.data.get("showing") or [])
+        outline = load_outline(outline_path(deck))
+        if outline is not None:
+            payload["planned_pages"] = [page.as_dict() for page in outline.pages if page.page in set(shown)]
+        remaining = (
+            max(outcome.pages - len(set(shown)), 0) if wanted else max(outcome.pages - (shown[-1] if shown else 0), 0)
+        )
+        # Blocking is decided on everything measured, before any folding: what refuses
+        # publication cannot depend on how the reply is arranged.
+        blocking = _return.blocking_of(findings, self.profile.blocking_kinds)
+        asks = _asks(findings, blocking)
+        # Every build, not once at the brief. What the user ruled out was formatted
+        # into each design call and nowhere else, so with those calls gone this is the
+        # only place it can reach the model that draws the pages -- and a prohibition
+        # recorded thirty turns ago, before a line of the program was written, is one
+        # nothing is holding.
+        if agreed is not None and agreed.forbidden:
+            payload["forbidden"] = list(agreed.forbidden)
+            asks.append(
+                "nothing in this deck uses " + "; ".join(agreed.forbidden) + " -- the user ruled these out, "
+                "and smaller, once, or as decoration is still using one. A page that brings one back makes "
+                "its point another way"
+            )
+        if remaining:
+            payload["pages_shown"] = ", ".join(str(number) for number in shown) if shown else "none"
+            payload["pages_not_shown"] = remaining
+            more = (
+                f"name it in slides, or omit slides and pass page_from={shown[-1] + 1}"
+                if wanted
+                else f"call ppt_build again with page_from={shown[-1] + 1}"
+            )
+            asks.insert(
+                0,
+                f"look at the {len(shown)} page(s) below; {remaining} of this deck's {outcome.pages} are not "
+                f"here -- {more} -- because a page you have not looked at is a page you have not checked",
+            )
+        elif not blocking:
+            asks.insert(0, "look at every page below")
+        if refused:
+            # A refusal here is not a finding to weigh: nothing was written, so there is
+            # nothing to look at and nothing to accept. Say what stopped it and stop.
+            asks.insert(0, f"nothing was published: {refused}. Fix that and build again")
+        elif not blocking and "pptx_path" in payload:
+            # The reply used to end at "look at every page", which is not a next step for a
+            # model that has already looked: one run rebuilt the same finished deck eight
+            # times, each reply identical, chasing a warning it had already decided to
+            # accept. What refuses publication and what merely reports are different
+            # questions, and only the first one has to be answered before publishing.
+            asks.insert(
+                0,
+                # Naming the wrong call is worse than naming none: there is no publish
+                # tool on this route -- a finished build *is* the delivery -- and a model
+                # told to publish went looking for one, said it was not in the toolset,
+                # and built again.
+                f"this deck is delivered at {payload['pptx_path']} and nothing "
+                "refuses it: the findings below are reports, and the renders are the judge. Look at the "
+                "pages first and trust what you see -- a finding you look at and disagree with is a finding "
+                "to leave alone, and a page that reads wrong is worth fixing whether or not anything "
+                "measured it. Answer the ones you agree with by editing the program and building again, "
+                "or stop here"
+                if not draft
+                else "nothing refuses this draft. The findings are reports and the renders are the judge: "
+                "read the pages, fix what looks wrong to you whether or not it was measured, and leave a "
+                "finding you disagree with alone. When the pages read right, build again without `draft` -- "
+                "that is the call that runs every gate and delivers the deck",
+            )
+        body = _return.done(blocking=blocking, asks=asks, **payload)
+        return await self._with_views(deck, outcome, body, findings, shown)
+
+    async def _with_views(
+        self, deck: Project, outcome: Any, body: str, findings: list[Finding], wanted: list[int]
+    ) -> str | ToolResult:
+        """Every page render, each preceded by the line that identifies it.
+
+        The label is a separate text part rather than a caption inside the JSON:
+        only that way does it stay next to its picture when a transport cannot
+        carry an image in a tool result and the images follow in a user message.
+        """
+        renders = await self.views.pages(outcome.pptx_path, deck.review_dir, wanted)
+        if not renders:
+            return body
+        by_page: dict[int, list[Finding]] = {}
+        for finding in findings:
+            if finding.page is not None:
+                by_page.setdefault(finding.page, []).append(finding)
+        outline = load_outline(outline_path(deck))
+        planned = {page.page: page for page in outline.pages} if outline is not None else {}
+        blocks: list[Any] = []
+        for number in sorted(renders):
+            said = [f"Page {number} of {outcome.pages}"]
+            plan = planned.get(number)
+            if plan is not None:
+                said.append(f"Planned claim: {plan.claim}")
+                if plan.carries:
+                    said.append(f"Planned visual/layout: {plan.carries}")
+                # As a grid, not as the dict it is stored in: the author was handed
+                # `{'columns': ('指标', '自研'), 'rows': ((...),)}` -- tuples, quotes and
+                # all -- two lines above the planned points, which are a list. A row
+                # short of the header shows as a gap, because after `PlannedTable` a
+                # short row is the only way a plan can still be missing a cell.
+                if plan.table_plan:
+                    said.append(
+                        "Planned table information shape:\n" + "\n".join(PlannedTable.of(plan.table_plan).lines())
+                    )
+                if plan.says:
+                    said.append("Planned supporting points:\n" + "\n".join(f"  - {point}" for point in plan.says))
+                if plan.figures:
+                    said.append("Planned figures: " + ", ".join(plan.figures))
+                if plan.needs:
+                    said.append(f"Planned needs: {plan.needs}")
+            said += [f"  - {f.message}" for f in by_page.get(number, [])]
+            blocks.append(text_block("\n".join(said)))
+            blocks.append(image_block(self.views.data_uri(renders[number])))
+        return _return.with_images(body, blocks)
+
+
+def _asks(findings: list[Finding], blocking: list[Finding]) -> list[str]:
+    """Every applicable instruction, in the order they have to be answered.
+
+    All of them, not the first: voicing one problem while two stand reads as the
+    only thing wrong with the deck. Blocking first, because nothing publishes
+    until those clear, then the warnings -- every one of which is the author's,
+    since the author owns the program and there is nobody else to hand one to.
+    """
+    asks: list[str] = []
+    for kind, count in sorted(_counts(blocking).items()):
+        asks.append(_ASK.get(kind, f"resolve {count} {kind} finding(s)").format(count=count))
+    reports = [f for f in findings if f.severity is Severity.WARNING]
+    for kind, count in sorted(_counts(reports).items()):
+        asks.append(_ASK.get(kind, f"consider {count} {kind} finding(s)").format(count=count))
+    return asks
+
+
+_ASK = {
+    "citation": "fix {count} page(s) citing one figure while showing another",
+    "band": "consider {count} filled colour bar(s), which carry nothing",
+    "unmapped_page": "give each slide its own block in build.py",
+    "unseen_page": "look at the {count} page(s) you have not been shown, by running the build again",
+    "evidence": "put something on the pages that are all prose: a figure, a table, a diagram",
+    "wide_table": "narrow {count} table(s) or split them",
+    "unplaced_table": "draw the table {count} page(s) planned, or call ppt_outline again without one",
+    "table_grid": "put back the cells {count} table(s) dropped from their plan, or replan those pages",
+    "table_room": "drop a column or split {count} planned table(s) the page has no room for",
+}
+
+
+def _counts(findings: list[Finding]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.kind] = counts.get(finding.kind, 0) + 1
+    return counts
+
+
+# A page that did not come from the prototype it named, or that was cloned and
+# overlaid, is wrong at the root. Everything below is what that looks like once it is
+# rendered.
+# A page can be wrong at the root, and then its geometry findings are symptoms of that
+# one thing. `spilled_copy` joined the list from a delivered deck: two page titles set
+# in a `wrap=False` box painted off the canvas, and each of them also collided with the
+# corner mark it ran into -- one defect, reported twice, with the collision reading as
+# the more concrete of the two and sending the author to move the corner mark.
+_ROOT_CAUSES = frozenset({"template_underlay", "prototype_kept", "spilled_copy"})
+_CONSEQUENCES = frozenset(
+    {
+        "word_collision",
+        "card_overflow",
+        "crowded_panel",
+        "overset_copy",
+        "wrapped_label",
+        "orphan_line",
+        "off_page",
+        "over_layout_art",
+    }
+)
+
+
+def _folded(findings: list[Finding]) -> tuple[list[Finding], dict[str, Any]]:
+    """Geometry findings folded into a count on pages that are wrong at the root.
+
+    A live deck came back with 55 blocking findings: 29 unreplaced placeholders, 25
+    pairs of overlapping words, and one saying the pages had been cloned for their
+    background with new text boxes laid over them. The model read the 25 and moved
+    boxes around, three `edit_file` calls at a time, because 25 concrete coordinate
+    problems look far more actionable than one architectural one. They were all the
+    same problem: the copy was on a second layer over the template's own.
+
+    So a page whose root cause is named keeps that finding and reports its geometry as
+    a count. The count is not a dismissal -- the numbers are real, and they go when the
+    page is built the way it said it would be. Nothing is dropped from the blocking
+    decision, which is taken before this runs.
+    """
+    roots = {finding.page for finding in findings if finding.kind in _ROOT_CAUSES and finding.page}
+    if not roots:
+        return findings, {}
+    kept: list[Finding] = []
+    counted: dict[int, dict[str, int]] = {}
+    for finding in findings:
+        if finding.page in roots and finding.kind in _CONSEQUENCES:
+            counted.setdefault(finding.page, {})
+            counted[finding.page][finding.kind] = counted[finding.page].get(finding.kind, 0) + 1
+            continue
+        kept.append(finding)
+    if not counted:
+        return findings, {}
+    return kept, {
+        "note": (
+            "these pages are wrong at the root -- they did not come from the prototype they named -- and the "
+            "geometry below is what that looks like rendered. Build the page from its prototype and they go. "
+            "They are counted rather than listed so the root cause is not buried under its own symptoms"
+        ),
+        "pages": {str(page): kinds for page, kinds in sorted(counted.items())},
+    }

@@ -1,5 +1,17 @@
 const state = {
+  // The session list, without any session's traces. A session's traces arrive
+  // from /api/sessions/<id> when it is selected and are kept in sessionDetails,
+  // so opening the panel no longer costs the whole retained history.
   data: null,
+  sessionDetails: new Map(),
+  loadingSessions: new Set(),
+  apiCallsByWindow: new Map(),
+  loadingApiWindows: new Set(),
+  // Failures have to be remembered, not just not-cached: render() re-enters the
+  // loaders, so an unrecorded failure retries immediately and forever.
+  failedSessions: new Set(),
+  failedApiWindows: new Set(),
+  traceOwnerHint: null,
   descriptors: {},
   appView: 'trace',
   selectedSessionId: null,
@@ -320,6 +332,16 @@ function formatDuration(ms) {
   return `${mins}m ${secs}s`;
 }
 
+function sessionOrigin(session) {
+  /* Which front end produced the session, then the channel it shares -- the
+     terminal and the served page both run on `tui`, so the channel alone reads
+     the same for either. Collapsed to one label wherever they agree, which is
+     every gateway channel. */
+  const channel = session.channelId || 'local';
+  const surface = session.surface || channel;
+  return surface === channel ? channel : `${surface} · ${channel}`;
+}
+
 function shortId(value, len = 12) {
   if (!value) return '-';
   const text = String(value);
@@ -436,13 +458,12 @@ function filteredSessions() {
   return allSessions().filter((session) => {
     if (state.agent !== 'all' && session.agentId !== state.agent) return false;
     if (!query) return true;
-    const haystack = [
-      session.agentId,
-      session.sessionId,
-      session.sessionKey,
-      session.workspaceDir,
-      ...session.traces.map((trace) => `${trace.traceId} ${trace.traceKey || ''}`)
-    ]
+    // A trace id typed in here is resolved by the index instead of by scanning,
+    // which is both exact and instant; traceOwnerHint carries that answer.
+    if (state.traceOwnerHint?.query === query && state.traceOwnerHint.sessionId === session.sessionId) {
+      return true;
+    }
+    const haystack = [session.agentId, session.sessionId, session.sessionKey, session.workspaceDir]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
@@ -450,29 +471,40 @@ function filteredSessions() {
   });
 }
 
+// A quarter of every span in the store is an llm.call, so this view is the one
+// that wants the whole corpus. The server windows it; ask for the window on
+// screen and nothing more.
+async function ensureApiCallsLoaded(windowKey) {
+  if (
+    state.apiCallsByWindow.has(windowKey) ||
+    state.loadingApiWindows.has(windowKey) ||
+    state.failedApiWindows.has(windowKey)
+  ) {
+    return;
+  }
+  state.loadingApiWindows.add(windowKey);
+  render();
+  try {
+    const response = await fetch(`/api/llm-calls?window=${encodeURIComponent(windowKey)}&ts=${Date.now()}`, {
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`llm calls request failed with status ${response.status}`);
+    const payload = await response.json();
+    state.apiCallsByWindow.set(windowKey, payload.calls || []);
+    state.failedApiWindows.delete(windowKey);
+  } catch (error) {
+    // Same loop as above, same reason for recording it.
+    state.failedApiWindows.add(windowKey);
+    state.connectionStatus = 'disconnected';
+  } finally {
+    state.loadingApiWindows.delete(windowKey);
+    state.detailsRenderSignature = null;
+    render();
+  }
+}
+
 function allApiCalls() {
-  return allSessions()
-    .flatMap((session) =>
-      (session.traces || []).flatMap((trace) =>
-        (trace.spans || [])
-          .filter((span) => span.name === 'llm.call')
-          .map((span) => ({
-            sessionId: session.sessionId,
-            sessionKey: session.sessionKey,
-            sessionAgentId: session.agentId,
-            traceKey: trace.traceKey,
-            traceId: trace.traceId,
-            traceStartTime: trace.startTime,
-            traceEndTime: trace.endTime,
-            span
-          }))
-      )
-    )
-    .sort(
-      (a, b) =>
-        new Date(b.span.startTime || b.traceStartTime || 0).getTime() -
-        new Date(a.span.startTime || a.traceStartTime || 0).getTime()
-    );
+  return state.apiCallsByWindow.get(state.apiWindow) || [];
 }
 
 function filteredApiCalls() {
@@ -612,8 +644,114 @@ function groupApiByProviderModel(calls) {
   return [...groups.values()].sort((a, b) => b.total - a.total);
 }
 
+function sessionListRow(sessionId) {
+  return allSessions().find((session) => session.sessionId === sessionId) || null;
+}
+
+// The loaded session when there is one, otherwise the list row, which carries
+// every field except `traces`. Returning the row rather than null keeps the
+// header and the session card rendered while the traces are still in flight.
 function currentSession() {
-  return allSessions().find((session) => session.sessionId === state.selectedSessionId) || null;
+  if (!state.selectedSessionId) return null;
+  return state.sessionDetails.get(state.selectedSessionId) || sessionListRow(state.selectedSessionId);
+}
+
+function isSessionLoading(sessionId) {
+  return state.loadingSessions.has(sessionId);
+}
+
+// How many sessions' traces a tab keeps. The open one is never evicted.
+const MAX_CACHED_SESSIONS = 8;
+
+function rememberSession(sessionId, session) {
+  // Re-inserted so Map iteration order is least-recently-used first.
+  state.sessionDetails.delete(sessionId);
+  state.sessionDetails.set(sessionId, session);
+  for (const key of [...state.sessionDetails.keys()]) {
+    if (state.sessionDetails.size <= MAX_CACHED_SESSIONS) break;
+    if (key === state.selectedSessionId) continue;
+    state.sessionDetails.delete(key);
+  }
+}
+
+async function fetchSession(sessionId) {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}?ts=${Date.now()}`, {
+    cache: 'no-store'
+  });
+  if (!response.ok) throw new Error(`session request failed with status ${response.status}`);
+  return (await response.json()).session;
+}
+
+// Refresh a session already on screen without ever marking it loading, and
+// without touching the DOM when the answer has not changed. A poll that redrew
+// unconditionally is a poll the reader sees.
+async function revalidateSession(sessionId) {
+  if (!sessionId || state.loadingSessions.has(sessionId)) return;
+  const current = state.sessionDetails.get(sessionId);
+  if (!current) {
+    ensureSessionLoaded(sessionId);
+    return;
+  }
+  try {
+    const session = await fetchSession(sessionId);
+    if (JSON.stringify(session) === JSON.stringify(current)) return;
+    rememberSession(sessionId, session);
+    state.detailsRenderSignature = null;
+    render();
+  } catch (error) {
+    // Keep showing what is on screen; the next poll tries again. The pill still
+    // has to move: loadData does not await this, and it paints "connected" for
+    // the list request before this catch runs -- so without a repaint the panel
+    // reports itself healthy while serving detail it failed to refresh.
+    state.connectionStatus = 'disconnected';
+    paintConnectionStatus();
+  }
+}
+
+async function revalidateApiCalls(windowKey) {
+  if (!state.apiCallsByWindow.has(windowKey) || state.loadingApiWindows.has(windowKey)) return;
+  try {
+    const response = await fetch(`/api/llm-calls?window=${encodeURIComponent(windowKey)}&ts=${Date.now()}`, {
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`llm calls request failed with status ${response.status}`);
+    const calls = (await response.json()).calls || [];
+    const current = state.apiCallsByWindow.get(windowKey) || [];
+    if (calls.length === current.length && JSON.stringify(calls) === JSON.stringify(current)) return;
+    state.apiCallsByWindow.set(windowKey, calls);
+    state.detailsRenderSignature = null;
+    render();
+  } catch (error) {
+    state.connectionStatus = 'disconnected';
+    paintConnectionStatus();
+  }
+}
+
+async function ensureSessionLoaded(sessionId) {
+  if (!sessionId) return;
+  if (
+    state.sessionDetails.has(sessionId) ||
+    state.loadingSessions.has(sessionId) ||
+    state.failedSessions.has(sessionId)
+  ) {
+    return;
+  }
+  state.loadingSessions.add(sessionId);
+  render();
+  try {
+    rememberSession(sessionId, await fetchSession(sessionId));
+    state.failedSessions.delete(sessionId);
+  } catch (error) {
+    // Recorded, not merely absent. The render below re-enters this loader, so an
+    // unrecorded failure becomes a fetch-render-fetch loop that only a
+    // deselection ends. A refresh clears the record and tries again.
+    state.failedSessions.add(sessionId);
+    state.connectionStatus = 'disconnected';
+  } finally {
+    state.loadingSessions.delete(sessionId);
+    state.detailsRenderSignature = null;
+    render();
+  }
 }
 
 function sortedTraces(session) {
@@ -630,12 +768,12 @@ function currentTrace() {
 }
 
 function jumpToTraceByTraceId(traceId, spanId) {
-  // Navigate to another trace (subagent run ↔ parent turn) by its traceId.
+  // Navigate to another trace (subagent run <-> parent turn) by its traceId.
   // The subagent trace lives in the same session, so search current session first.
   if (!traceId) return false;
-  const ordered = currentSession()
-    ? [currentSession(), ...allSessions().filter((s) => s !== currentSession())]
-    : allSessions();
+  const ordered = [...state.sessionDetails.values()];
+  const current = currentSession();
+  if (current?.traces) ordered.sort((a, b) => (a === current ? -1 : b === current ? 1 : 0));
   for (const session of ordered) {
     const trace = (session.traces || []).find((t) => t.traceId === traceId);
     if (!trace) continue;
@@ -646,7 +784,62 @@ function jumpToTraceByTraceId(traceId, spanId) {
     render();
     return true;
   }
-  return false;
+  // Not in a session that is loaded. Only the server knows which session holds
+  // this trace now that the page does not carry every session's traces.
+  resolveTraceOwner(traceId, spanId);
+  return true;
+}
+
+// A trace id in the sidebar box surfaces its session. Answered from the index,
+// so it costs one lookup rather than the corpus scan a content search would do
+// for a term this rare.
+async function resolveTraceOwnerHint(query) {
+  const traceId = String(query || '').trim();
+  // Stored lowercased because filteredSessions compares against a lowercased
+  // query; an upper-case trace id otherwise resolved and then failed to surface.
+  const key = traceId.toLowerCase();
+  if (!traceId || /\s/.test(traceId)) {
+    if (state.traceOwnerHint) {
+      state.traceOwnerHint = null;
+      render();
+    }
+    return;
+  }
+  try {
+    const response = await fetch(`/api/trace-owner?traceId=${encodeURIComponent(traceId)}`, { cache: 'no-store' });
+    const sessionId = response.ok ? (await response.json()).sessionId : null;
+    const next = sessionId ? { query: key, sessionId } : null;
+    if (JSON.stringify(next) === JSON.stringify(state.traceOwnerHint)) return;
+    state.traceOwnerHint = next;
+    render();
+  } catch {
+    // No hint is the same as no match.
+  }
+}
+
+async function resolveTraceOwner(traceId, spanId) {
+  try {
+    const response = await fetch(`/api/trace-owner?traceId=${encodeURIComponent(traceId)}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const { sessionId } = await response.json();
+    if (!sessionId) return;
+    state.selectedSessionId = sessionId;
+    state.selectedTraceKey = null;
+    state.pendingTraceJump = { traceId, spanId };
+    state.detailsRenderSignature = null;
+    await ensureSessionLoaded(sessionId);
+    const session = state.sessionDetails.get(sessionId);
+    const trace = (session?.traces || []).find((item) => item.traceId === traceId);
+    if (trace) {
+      state.selectedTraceKey = trace.traceKey;
+      state.selectedSpanId = spanId || trace.tree?.[0]?.spanId || trace.spans?.[0]?.spanId || null;
+    }
+    state.pendingTraceJump = null;
+    state.detailsRenderSignature = null;
+    render();
+  } catch {
+    // A failed lookup leaves the current view alone.
+  }
 }
 
 // ── Content search (fuzzy locate across node inputs/outputs) ────────────────
@@ -770,12 +963,22 @@ function currentApiCall() {
   );
 }
 
+// Callers here want a session's traces -- the dispatch card reads the child's
+// last output off them -- so a list row is not enough. Return the loaded detail
+// when there is one, and ask for it when there is not, which fills the card in
+// on the render that follows.
 function findSessionByIdentity(sessionId, sessionKey) {
-  return allSessions().find((session) => {
-    if (sessionId && session.sessionId === sessionId) return true;
-    if (sessionKey && session.sessionKey === sessionKey) return true;
-    return false;
-  }) || null;
+  const row =
+    allSessions().find((session) => {
+      if (sessionId && session.sessionId === sessionId) return true;
+      if (sessionKey && session.sessionKey === sessionKey) return true;
+      return false;
+    }) || null;
+  if (!row) return null;
+  const loaded = state.sessionDetails.get(row.sessionId);
+  if (loaded) return loaded;
+  ensureSessionLoaded(row.sessionId);
+  return row;
 }
 
 function currentSpan() {
@@ -943,6 +1146,30 @@ function traceSummary(trace) {
   };
 }
 
+// The payload's tree carries spanId and nesting only; the spans arrive once, in
+// trace.spans. Rehydrate so the render path below keeps seeing whole spans.
+// Keyed on the trace object, which is replaced wholesale by each poll, so an
+// entry lives exactly as long as the payload it belongs to.
+const hydratedTrees = new WeakMap();
+
+function traceTree(trace) {
+  if (!trace) return [];
+  const cached = hydratedTrees.get(trace);
+  if (cached) return cached;
+  const spanById = new Map((trace.spans || []).map((span) => [span.spanId, span]));
+  const hydrate = (nodes) =>
+    (nodes || [])
+      .map((node) => {
+        const span = spanById.get(node.spanId);
+        if (!span) return null;
+        return { ...span, depth: node.depth || 0, children: hydrate(node.children) };
+      })
+      .filter(Boolean);
+  const tree = hydrate(trace.tree);
+  hydratedTrees.set(trace, tree);
+  return tree;
+}
+
 function buildDepthMap(nodes, depthMap = new Map()) {
   for (const node of nodes || []) {
     depthMap.set(node.spanId, node.depth || 0);
@@ -952,6 +1179,8 @@ function buildDepthMap(nodes, depthMap = new Map()) {
 }
 
 function orderedVisibleSpans(trace) {
+  // Reads spanId and depth only, which the payload's tree already carries -- no
+  // need to resolve the spans behind it here.
   const depthMap = buildDepthMap(trace?.tree || []);
   return (trace?.spans || [])
     .filter((span) => !['skills.scan', 'skills.catalog_read', 'skills.cataloged'].includes(span.name))
@@ -1576,8 +1805,11 @@ function syncSelection() {
     return;
   }
 
-  const session = sessions.find((item) => item.sessionId === state.selectedSessionId) || sessions[0];
-  state.selectedSessionId = session.sessionId;
+  const listed = sessions.find((item) => item.sessionId === state.selectedSessionId) || sessions[0];
+  state.selectedSessionId = listed.sessionId;
+  // May still be the list row: traces resolve to [] until the detail lands, and
+  // this runs again when it does.
+  const session = state.sessionDetails.get(listed.sessionId) || listed;
   const traces = sortedTraces(session);
   const trace = traces.find((item) => item.traceKey === state.selectedTraceKey) || traces[0];
   state.selectedTraceKey = trace?.traceKey || null;
@@ -1606,11 +1838,11 @@ function renderSessionList() {
     card.innerHTML = `
       <div class="session-card-head">
         <span class="session-pill">${escapeHtml(session.agentId || 'agent')}</span>
-        <span class="session-badge">${session.traceCount} traces</span>
+        <span class="session-badge">${session.traceCount ?? session.spanCount} ${session.traceCount === undefined ? 'spans' : 'traces'}</span>
       </div>
       <div class="session-title-row">
         <div class="session-id">${escapeHtml(shortId(session.sessionId, 18))}</div>
-        <div class="session-channel">${escapeHtml(session.channelId || 'local')}</div>
+        <div class="session-channel">${escapeHtml(sessionOrigin(session))}</div>
       </div>
       <div class="session-meta">
         <div>${escapeHtml(t('session.startedAt', { time: formatTime(session.startedAt) }))}</div>
@@ -1642,14 +1874,29 @@ function renderTraceList() {
   elements.traceTitle.textContent = `${session.agentId || 'agent'} / ${shortId(session.sessionId, 18)}`;
   elements.traceMeta.innerHTML = `
     ${session.workspaceDir ? `<div>${escapeHtml(session.workspaceDir)}</div>` : ''}
-    <div>${session.traceCount} traces</div>
+    <div>${session.traceCount !== undefined ? `${session.traceCount} traces` : `${session.spanCount} spans`}</div>
     ${sessionChainLabel(session) ? `<div>${escapeHtml(sessionChainLabel(session))}</div>` : ''}
   `;
+
+  // Traces arrive separately now. Show the shape of what is coming, sized by the
+  // count the list row already knows, rather than an empty state that reads as
+  // "this session has nothing in it".
+  if (!session.traces && isSessionLoading(session.sessionId)) {
+    // Sized from the span count, the only figure the list row has.
+    const placeholders = Math.max(1, Math.min(Math.ceil((session.spanCount || 1) / 8), 6));
+    for (let index = 0; index < placeholders; index += 1) {
+      const skeleton = document.createElement('section');
+      skeleton.className = 'trace-group is-loading';
+      skeleton.innerHTML = '<div class="trace-skeleton-line"></div><div class="trace-skeleton-line is-short"></div>';
+      elements.traceList.appendChild(skeleton);
+    }
+    return;
+  }
 
   sortedTraces(session).forEach((trace, index) => {
     const summary = traceSummary(trace);
     const visibleSpans = orderedVisibleSpans(trace);
-    const visibleTree = visibleTraceTree(trace.tree || []);
+    const visibleTree = visibleTraceTree(traceTree(trace));
     const group = document.createElement('section');
     group.className = `trace-group${trace.traceKey === state.selectedTraceKey ? ' is-active' : ''}`;
     group.title = trace.traceKey || trace.traceId;
@@ -2748,19 +2995,36 @@ function currentDetailsSignature() {
   return [state.appView, state.selectedTab, state.selectedSessionId, state.selectedTraceKey, state.selectedSpanId].join('::');
 }
 
-function render() {
-  captureScrollState();
-  syncSelection();
-  renderAgentFilter();
-  renderApiFilters();
+// Fire-and-forget: each loader returns immediately when its data is present or
+// already in flight, and calls render again when it lands. Placed after
+// syncSelection so it acts on the selection actually about to be drawn.
+function requestVisibleData() {
+  if (state.appView === 'api') {
+    ensureApiCallsLoaded(state.apiWindow);
+    return;
+  }
+  if (state.selectedSessionId) ensureSessionLoaded(state.selectedSessionId);
+}
+
+function paintConnectionStatus() {
   if (elements.connectionStatus) {
-    elements.connectionStatus.textContent = state.connectionStatus === 'connected' ? t('status.connected') : t('status.disconnected');
+    elements.connectionStatus.textContent =
+      state.connectionStatus === 'connected' ? t('status.connected') : t('status.disconnected');
     elements.connectionStatus.classList.toggle('is-connected', state.connectionStatus === 'connected');
     elements.connectionStatus.classList.toggle('is-disconnected', state.connectionStatus !== 'connected');
   }
   if (elements.lastUpdated) {
     elements.lastUpdated.textContent = formatTimeOnly(state.lastUpdated);
   }
+}
+
+function render() {
+  captureScrollState();
+  syncSelection();
+  requestVisibleData();
+  renderAgentFilter();
+  renderApiFilters();
+  paintConnectionStatus();
   document.body.classList.toggle('app-view-api', state.appView === 'api');
   if (state.appView === 'api') {
     elements.apiScene.innerHTML = renderApiDashboard();
@@ -2852,12 +3116,32 @@ async function loadData(options = {}) {
     elements.refreshButton.disabled = true;
   }
   try {
-    const response = await fetch(`/api/data?ts=${Date.now()}`, { cache: 'no-store' });
+    const response = await fetch(`/api/sessions?ts=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`API failed with status ${response.status}`);
+    const previous = state.data ? JSON.stringify(state.data.sessions) : null;
     state.data = await response.json();
+    const listChanged = previous !== JSON.stringify(state.data.sessions);
+    // Revalidate what is on screen in place, and keep the rest of the cache.
+    // Clearing it here and re-entering ensureSessionLoaded is what made the
+    // panel flicker: that marks the session loading, loading is what draws the
+    // skeleton, so every poll tore the trace pane down and rebuilt it even when
+    // nothing had changed. Bounded below instead, so a long-lived tab still does
+    // not hold every session it ever opened.
+    state.failedSessions = new Set();
+    state.failedApiWindows = new Set();
+    if (state.selectedSessionId) revalidateSession(state.selectedSessionId);
+    if (state.appView === 'api') revalidateApiCalls(state.apiWindow);
     state.connectionStatus = 'connected';
     state.lastUpdated = new Date().toISOString();
-    render();
+    // Only redraw when the list actually moved. renderTraceList clears and
+    // rebuilds its container on every render, so an unconditional render here is
+    // a visible teardown every few seconds for a panel that has not changed;
+    // the revalidations above render themselves when their own answer differs.
+    if (listChanged) {
+      render();
+    } else {
+      paintConnectionStatus();
+    }
   } catch (error) {
     state.connectionStatus = 'disconnected';
     if (!silent) {
@@ -2899,7 +3183,13 @@ elements.searchInput.addEventListener('input', (event) => {
     renderContentSearchResults();
     return;
   }
-  contentSearchTimer = setTimeout(() => runContentSearch(query), 250);
+  contentSearchTimer = setTimeout(() => {
+    // Index lookup first, deliberately. A content search holds the server for as
+    // long as it scans -- minutes, for a term too rare to trip its result cap --
+    // and a request issued behind it waits that out.
+    resolveTraceOwnerHint(query);
+    runContentSearch(query);
+  }, 250);
 });
 
 elements.contentSearchResults.addEventListener('click', (event) => {

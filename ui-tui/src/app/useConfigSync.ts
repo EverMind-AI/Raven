@@ -3,12 +3,14 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { forceRedraw } from '@hermes/ink'
 import { useEffect } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { ConfigFullResponse } from '../gatewayTypes.js'
 
 import { resolveDetailsMode, resolveSections } from '../domain/details.js'
+import { getLocale, isLocale, setLocale } from '../i18n/index.js'
 import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
@@ -114,6 +116,22 @@ export async function hydrateFullConfig(
   return cfg
 }
 
+/** Pull `config.language` and switch the UI catalogue when it changed.
+ *
+ * Runs alongside the display hydration, so a language set from the GUI (or
+ * another raven) is the one an opening TUI comes up in. */
+export async function hydrateLocale(gw: GatewayClient): Promise<void> {
+  const r = await quietRpc<{ config?: Record<string, unknown> }>(gw, 'config.get', { keys: ['language'] })
+  const value = r?.config?.language
+
+  if (!isLocale(value) || value === getLocale()) {
+    return
+  }
+
+  setLocale(value)
+  forceRedraw()
+}
+
 export const applyDisplay = (
   cfg: ConfigFullResponse | null,
   setBell: (v: boolean) => void,
@@ -176,6 +194,7 @@ export function useConfigSync({
     // check still runs when the user opens /voice.
     setVoiceEnabled(process.env.RAVEN_VOICE === '1')
     void hydrateFullConfig(gw, setBellOnComplete, setVoiceRecordKey)
+    void hydrateLocale(gw)
   }, [gw, setBellOnComplete, setVoiceEnabled, setVoiceRecordKey, sid])
 }
 

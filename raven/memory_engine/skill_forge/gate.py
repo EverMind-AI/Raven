@@ -6,8 +6,10 @@ Ported from the pre-integrate-everos
 
 The gate runs after :class:`SkillForgeRouter` fan-out + RRF: it sees
 the candidate name + description + a short body excerpt and asks an LLM
-to plan, filter against the agent's available tools, and pick at most
-``max_select`` skills. Empty result is a valid "inject nothing"
+to plan, filter against the agent's available tools and against the
+sub-agents it can delegate to, and pick at most ``max_select`` skills.
+Both filters are supplied per call and each renders its own block only
+when it was given one. Empty result is a valid "inject nothing"
 decision. Infra failures (parse error, timeout, provider error) fall
 back to ``candidates[:legacy_top_k]`` rather than [] so a broken gate
 never silently empties the ``# Skills`` block.
@@ -113,11 +115,12 @@ class LLMGateFilter:
         task: str,
         candidates: list[RouterHit],
         available_tools: list[str] | None = None,
+        available_subagents: str | None = None,
     ) -> list[RouterHit]:
         if not candidates:
             return []
         catalog, by_id = self._build_catalog(candidates)
-        prompt = self._build_prompt(task, catalog, available_tools)
+        prompt = self._build_prompt(task, catalog, available_tools, available_subagents)
         gate_provider, gate_model = self._binding()
 
         try:
@@ -190,6 +193,7 @@ class LLMGateFilter:
         task: str,
         catalog: str,
         available_tools: list[str] | None,
+        available_subagents: str | None = None,
     ) -> str:
         # Verbatim port of the pre-integrate-everos
         # ``SkillService._llm_gate_filter`` prompt. The ONLY semantic
@@ -228,24 +232,60 @@ class LLMGateFilter:
                 "strategies, verification workflows, "
                 "search-result interpretation).\n\n"
             )
+        subagents_block = ""
+        delegate_step = ""
+        plan_delegation = ""
+        if available_subagents:
+            subagents_block = (
+                "# Delegable Sub-Agents\n\n"
+                f"The agent can hand a task to one of these specialist "
+                f"sub-agents, or split it across several of them as a graph: "
+                f"{available_subagents}.\n\n"
+                "**Hard rule**: a skill is NOT relevant if what it does is "
+                "already covered by a listed sub-agent. That work gets "
+                "delegated rather than performed inline, so such a skill "
+                "spends context on a procedure nobody will run and invites "
+                "the agent to do the sub-agent's job worse. Drop it however "
+                "topically on point it is.\n\n"
+                "**Only include** a skill that no listed sub-agent covers, or "
+                "one that shapes how the agent runs its own turn (planning, "
+                "verification, output conventions) rather than carrying out "
+                "the delegable task itself. Producing, structuring or "
+                "formatting a delegable task's deliverable is part of that "
+                "task, not a separate turn-shaping concern: a skill kept only "
+                "to organise such output is still covered, and keeping it "
+                '"in case it adds value" is the mistake this rule exists to '
+                "prevent.\n\n"
+            )
+            delegate_step = (
+                ' Then ask "is this skill already covered by one of the sub-agents above?" If yes, drop it too.'
+            )
+            # Step 1 decided the plan before the overlap check in step 2 ever
+            # ran, and its only prompt was which tools to call -- so the gate
+            # planned the work inline and the skill was then relevant to that
+            # plan. Delegation has to be a candidate while the plan is still
+            # being formed. Conditional for the same reason the block is: with
+            # no roster, "the sub-agents above" names nothing.
+            plan_delegation = " -- including whether one or several of the sub-agents above should carry it --"
         return (
             "You are a skill selector for an autonomous agent.\n\n"
             f"# Task\n\n{task}\n\n"
             f"{tools_block}"
+            f"{subagents_block}"
             f"# Candidate Skills\n\n{catalog}\n\n"
             "# Instructions\n\n"
-            "1. **Plan**: briefly think about what the task requires "
+            f"1. **Plan**: briefly think about what the task requires{plan_delegation} "
             "and which sequence of available-tool calls would achieve it.\n"
             "2. **Filter**: for EACH candidate skill, ask "
             "\"can the agent execute this skill's workflow using only the "
             'available tools above?" If no, drop it — no matter how '
-            "topically relevant.\n"
+            f"topically relevant.{delegate_step}\n"
             "3. **Match**: among the survivors, a skill is relevant ONLY "
             "if it provides a procedure or strategy directly useful for "
             "a core part of your plan. Vague topical overlap is not enough.\n"
             f"4. **Decide**: select AT MOST {self._max_select} skill(s). "
-            "If no skill survives both the tool check and the relevance "
-            "check, you MUST return an empty list. Selecting an "
+            "If no skill survives every check above, you MUST return an "
+            "empty list. Selecting an "
             "irrelevant or unexecutable skill is strictly worse than "
             "selecting none.\n\n"
             "Return ONLY a JSON object on a single line:\n"

@@ -1,8 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
-
-<p align="center"><strong>Coming next:</strong> The Harness of Harnesses is Raven's next-version direction, not a capability of the current public release.</p>
+![Raven banner](https://github.com/user-attachments/assets/6c6f585a-21b6-4e7b-9187-acffe59d0c10)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -19,35 +17,25 @@
 
 # Raven
 
-The current public release of Raven is the open-source, **self-improving Agent Harness** you can run today. It brings terminal-first execution, local tracing, long-term memory, skills, evaluation, and reusable workflows into one system for long-running AI work.
+Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.com/EverMind-AI/EverOS), with opt-in Deep Research for multi-source investigation.
 
-## Coming Next: The Harness of Harnesses
+Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
 
-As AI agents move from narrow tasks toward long-running, cross-domain work, manually designing a single, ever-larger harness stops scaling. A harness optimized for one model or domain also cannot provide every capability needed for general intelligence.
-
-Raven's next version will move toward **The Harness of Harnesses**: a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. It is designed to build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network**.
-
-| **Trusted** | **Persistent** | **Evolving** |
-| --- | --- | --- |
-| Harness capabilities will be scored based on verified performance, not self-declared labels. | The network is designed to carry verified results, task state, and long-term memory across executors. | Each verified run will feed experience back into capability profiles, skills, routing, and the wider network. |
-
-This next-version architecture is designed to move beyond fixed model-harness pairs. Through a continuous **evaluation -> execution -> verification -> memory -> feedback** loop, it will discover, compose, and improve the right capabilities for each task. Validated work will become reusable experience, allowing both individual agents and the wider capability network to evolve.
-
-The internal research prototype behind this direction has been evaluated across **22 Agent benchmark tasks** covering task performance, cost, and key mechanism gains. The reported results show comprehensive performance and efficiency improvements over existing agent systems while advancing the **quality-cost Pareto frontier**.
-
-> The current public Raven release does not yet implement The Harness of Harnesses. Raven today is the runnable self-improving Agent Harness described in this repository; the section above describes the next version we are building toward.
+**Update:** Raven added Deep Research. Enable it with `raven deep-research enable`
+to give the agent access to MiroThinker-backed, multi-source research when a
+task needs deeper investigation.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
-## Next-Version Research Benchmarks
+## Benchmarks
 
-| Benchmark | Research Prototype Result | Comparison |
+| Benchmark | Raven Result | Comparison |
 | --- | --- | --- |
 | Efficiency | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
 | Self-evolution | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
 | Proactivity | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
 
-These results come from the internal research prototype. They do not mean that the current public release already supports the Harness of Harnesses network. Model, task set, and evaluation protocol all affect outcomes.
+Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
@@ -73,6 +61,14 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+Run `./install.sh` from a clone and it also builds the sub-agents in
+`subagents/` - one venv each. Setup then asks about each of them and registers
+the ones you take up, on the model it is tuned for or on this raven's LLM. All
+three are tuned for models served through OpenRouter, so if you configured an
+OpenRouter key in step 1 there is no key to type again. The published installer
+cannot build them: the release artifacts carry `raven/` only. See
+[`subagents/README.md`](subagents/README.md).
+
 ### Onboard and run
 
 ```bash
@@ -81,14 +77,19 @@ raven
 
 That is the whole first run: with nothing configured yet, `raven` walks you through setup and then opens the TUI in the same session. To reconfigure later, run `raven onboard` explicitly.
 
-The bilingual onboarding wizard configures six areas without requiring manual edits to `~/.raven/config.json`:
+The bilingual onboarding wizard configures seven areas without requiring manual edits to `~/.raven/config.json`:
 
 1. LLM provider and model
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Deep Research
-6. Cold-start import from other AI tools
+5. Web tool keys (Serper for `web_search`, Jina for `web_fetch`)
+6. Sub-agents shipped in this checkout
+7. Cold-start import from other AI tools
+
+Step 5 also mirrors the two keys into `~/.raven/env` (owner-only) and offers to add one
+guarded `source` line to your shell rc, so new shells and the `cli` / `acp` sub-agents --
+whose environment is captured from a login shell -- inherit them.
 
 Provider setup includes an in-step connectivity check. Optional steps can be skipped and configured later. If setup is incomplete, run:
 
@@ -183,10 +184,11 @@ raven gateway
 | --- | --- |
 | `raven` or `raven tui` | Launch the terminal UI |
 | `raven agent -m "..."` | Run a one-shot task |
-| `raven onboard` | Configure providers, sandboxing, channels, memory, research, and import |
+| `raven onboard` | Configure providers, sandboxing, channels, memory, web tool keys, sub-agents, and import |
 | `raven status` | Show configuration and runtime status |
 | `raven doctor` | Diagnose provider and environment problems |
 | `raven tracing` | Open the local trace dashboard |
+| `raven tracing compact` | Fold duplicate trace artifacts to reclaim disk space |
 | `raven sessions list` | Browse, resume, fork, export, or delete sessions |
 | `raven skill list` | Inspect the local SkillForge catalog |
 | `raven sentinel status` | Inspect proactive memory and scheduled nudges |
@@ -241,16 +243,27 @@ The Python runtime and React/Ink TUI communicate only through typed TUI-RPC. The
 Key directories:
 
 ```text
-raven/agent/             agent loop, tools, and subagents
-raven/channels/          messaging adapters
-raven/context_engine/    context assembly and token budgeting
-raven/memory_engine/     EverOS integration and local skill memory
-raven/proactive_engine/  sentinel, scheduling, and nudges
-raven/providers/         model providers and routing
-raven/skill_hub/         external skill retrieval
-raven/tracing/           instrumentation, storage, and viewer
-raven/tui_rpc/           typed runtime-to-TUI boundary
-ui-tui/                  React/Ink terminal interface
+raven/
+├── spine/              # Per-turn backbone: submit -> lanes -> emit
+├── agent/              # Agent loop, tools, hooks, subagents, context builder
+├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
+├── rpc/                # Python side of the native TUI protocol
+├── providers/          # LLM provider adapters
+├── context_engine/     # Context assembly and Curator path
+├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
+├── memory_engine/      # EverOS memory, local skills, SkillForge
+├── playbook/           # Stored orchestrations: library, match funnel, executor
+├── token_wise/         # Usage tracking, cache placement, routing
+├── tracing/            # Span capture and local tracing dashboard
+├── evolver/            # Benchmark-driven harness self-evolution
+├── sandbox/            # Isolated command execution
+├── security/           # Trust boundaries and network checks
+├── cli/                # `raven` command line entry point
+└── config/             # Config schema and update helpers
+
+ui-tui/                 # React/Ink native terminal UI
+bridge/                 # WhatsApp TypeScript bridge
+benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
 ```
 
 <br>
@@ -262,76 +275,14 @@ ui-tui/                  React/Ink terminal interface
 
 ## EverMind Ecosystem
 
-EverMind connects memory research, production-ready products, and practical
-integrations into one open-source ecosystem.
+Raven is part of the [EverMind](https://evermind.ai/) open-source ecosystem. Explore [EverOS](https://github.com/EverMind-AI/EverOS), [EverAlgo](https://github.com/EverMind-AI/EverAlgo), [HyperMem](https://github.com/EverMind-AI/HyperMem), [EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench), [EverMemBench](https://github.com/EverMind-AI/EverMemBench), and [EverMe](https://github.com/EverMind-AI/EverMe).
 
-<table>
-<tr>
-<th colspan="2">Products</th>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/EverOS">EverOS</a></strong></td>
-<td>A local-first, Markdown-native long-term memory runtime for agents and users.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>A memory-first, self-improving agent harness with proactivity, context control, and skill evolution.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
-<td>A CLI and agent plugin suite for cross-device, cross-agent personal memory.</td>
-</tr>
-<tr>
-<th colspan="2">Research &amp; Evaluation</th>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/SkillCorpus">SkillCorpus</a></strong></td>
-<td>Curated, retrieval-ready agent skill corpora with retrieval and evaluation tooling.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a></strong></td>
-<td>Stateless extraction, ranking, parsing, and memory operators that power EverOS.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a></strong></td>
-<td>Hypergraph-based hierarchical memory for coarse-to-fine long-term conversation retrieval.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/MSA">MSA</a></strong></td>
-<td>Memory Sparse Attention for scalable latent memory and 100M-token contexts.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a></strong></td>
-<td>Evaluation of factual recall, applied reasoning, and personalized generalization in memory systems.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a></strong></td>
-<td>Longitudinal evaluation of agent self-evolution, transfer efficiency, error avoidance, and skill use.</td>
-</tr>
-<tr>
-<th colspan="2"><a href="https://github.com/EverMind-AI/plugins">Integrations</a></th>
-</tr>
-<tr>
-<td><strong><a href="https://docs.openclaw.ai">OpenClaw</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw plugin</a> for automatic recall, capture, and session-memory lifecycle management.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/hermes">Hermes plugin</a> for persistent memory across Hermes sessions.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dsh">DSH plugin</a> for memory-aware DeepSeek Harness agents.</td>
-</tr>
-<tr>
-<td><strong><a href="https://dify.ai">Dify</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dify">Self-hosted</a> and <a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">cloud</a> tools for explicit memory search and storage in workflows and agents.</td>
-</tr>
-</table>
+<br>
+<div align="right">
 
-Together, these projects form EverMind's research-to-runtime stack: methods
-and benchmarks become reusable memory infrastructure, products, and agent
-integrations.
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## Contributing
 

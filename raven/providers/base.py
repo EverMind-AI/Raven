@@ -282,6 +282,11 @@ class LLMResponse:
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
+    # How long this call spent thinking: the first reasoning delta to the first
+    # non-reasoning output. Only a streamed call can know it -- a single-shot
+    # chat() sees one arrival time for the whole response -- so None means
+    # "not measured", never "instant".
+    reasoning_ms: int | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -856,6 +861,21 @@ class LLMProvider(ABC):
         Only an inference server run without its reasoning parser produces the
         orphan-closing-tag shape; everyone else's `</think>` in content is just
         text. Default False: normalization is opt-in per provider shape.
+        """
+        return False
+
+    def supports_prompt_caching(self, model: str) -> bool:
+        """Whether a request this provider sends for ``model`` may carry
+        ``cache_control`` breakpoints.
+
+        The public form of the question ``providers.prompt_cache`` answers, so a
+        token strategy can put it to the object that will actually send the
+        request instead of guessing from the id -- an id names a vendor, not the
+        wire it travels on, and only the provider knows the second.
+
+        Default False: the base class knows no dialect, and a provider that can
+        carry the field says so. Answering from the model id here would put the
+        guess back into the one place that has the wire in hand.
         """
         return False
 

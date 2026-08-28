@@ -79,6 +79,30 @@ class PerModelProvider(LLMProvider):
         one whose wire decides the id -- the same routing that ``chat`` uses."""
         return self._pick(model).wire_model_id(model)
 
+    def supports_prompt_caching(self, model: str) -> bool:
+        """Asked of the endpoint that would serve this model, for the same reason
+        as ``wire_model_id``: the field rides on that endpoint's wire, and the
+        routed endpoint is not always the fallback's."""
+        return self._pick(model).supports_prompt_caching(model)
+
+    @property
+    def disable_auto_cache_control(self) -> bool:
+        return getattr(self, "_disable_auto_cache_control", False)
+
+    @disable_auto_cache_control.setter
+    def disable_auto_cache_control(self, value: bool) -> None:
+        """Fan out to every routed endpoint and the fallback, like the
+        ``generation`` and ``model_overrides`` push-down in ``__init__``.
+
+        Assigned after construction by the caller that installed CacheOptimizer.
+        Held here alone it would leave each sub-provider marking its own system
+        block on top of the ones the strategy placed.
+        """
+        self._disable_auto_cache_control = value
+        for sub_provider in self._by_model.values():
+            sub_provider.disable_auto_cache_control = value
+        self._fallback.disable_auto_cache_control = value
+
     async def chat(
         self,
         messages: list[dict[str, Any]],

@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose an improvement or new capability.
+title: "feat: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or user need does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Raven do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI / TUI
+        - Providers
+        - Channels / gateway
+        - Memory / skills
+        - Proactivity / scheduling
+        - Sandbox / security
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add links, examples, screenshots, or prior art if useful.
+    validations:
+      required: false

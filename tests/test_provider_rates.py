@@ -7,10 +7,12 @@ arithmetic on top of it stays with the module that does the arithmetic.
 
 from __future__ import annotations
 
+import importlib.machinery
 import json
 import os
 import sys
 import time
+import types
 
 import httpx
 import pytest
@@ -666,6 +668,45 @@ def test_try_litellm_context_window_allow_import_false_skips_the_import_when_abs
 
     assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
     assert called["n"] == 0
+
+
+def test_try_litellm_context_window_allow_import_false_skips_a_half_imported_litellm(monkeypatch):
+    """Presence in ``sys.modules`` is not readiness.
+
+    CPython publishes the key when the import starts, so during the seconds
+    ``LazyProvider``'s prewarm thread spends inside ``litellm/__init__`` a
+    membership test says yes. Importing on the back of that answer blocks on
+    the module import lock until prewarm is done -- the whole stall the flag
+    refuses, taken anyway and invisibly.
+    """
+    half_imported = types.ModuleType("litellm")
+    half_imported.__spec__ = importlib.machinery.ModuleSpec("litellm", loader=None)
+    half_imported.__spec__._initializing = True
+    monkeypatch.setitem(sys.modules, "litellm", half_imported)
+    called = {"n": 0}
+
+    def _spy():
+        called["n"] += 1
+        raise AssertionError("import_litellm called for a half-imported litellm")
+
+    monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", _spy)
+
+    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert rates._try_litellm_max_output("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert called["n"] == 0
+
+
+def test_litellm_ready_is_false_while_the_module_body_is_still_running(monkeypatch):
+    half_imported = types.ModuleType("litellm")
+    half_imported.__spec__ = importlib.machinery.ModuleSpec("litellm", loader=None)
+    half_imported.__spec__._initializing = True
+    monkeypatch.setitem(sys.modules, "litellm", half_imported)
+
+    assert rates._litellm_ready() is False
+
+    half_imported.__spec__._initializing = False
+
+    assert rates._litellm_ready() is True
 
 
 def test_try_litellm_context_window_allow_import_false_still_answers_once_imported():

@@ -9,8 +9,15 @@ import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } 
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
+import type {
+  DagNodeResult,
+  InstanceRow,
+  SubagentContextResult,
+  SubagentsInstanceSteerResult,
+  TranscriptMessage
+} from '../rpc/generated.js'
 import type { Theme } from '../theme.js'
-import type { SubagentNode, SubagentProgress } from '../types.js'
+import type { SubagentLiveRef, SubagentNode, SubagentProgress } from '../types.js'
 
 import {
   $delegationState,
@@ -18,9 +25,25 @@ import {
   applyDelegationStatus,
   toggleOverlaySection
 } from '../app/delegationStore.js'
+import {
+  $directChat,
+  appendDirectMessage,
+  directKey,
+  type DirectTargetRef,
+  getDirectChat,
+  isTargetWorking,
+  rowsOf
+} from '../app/directChatStore.js'
+import { fetchDirectHistory, scheduleInstanceRefresh } from '../app/directChatSync.js'
+import { sendDirect } from '../app/directSend.js'
+import { $liveAgents, toSubagentProgress } from '../app/liveAgentsStore.js'
+import { scheduleLiveAgentsRefresh } from '../app/liveAgentsSync.js'
 import { patchOverlayState } from '../app/overlayStore.js'
 import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '../app/spawnHistoryStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
+import { getUiState } from '../app/uiStore.js'
+import { useDirectStepPoll } from '../app/useDirectStepPoll.js'
+import { toTranscriptMessages } from '../domain/messages.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
   buildSubagentTree,
@@ -38,6 +61,8 @@ import {
   widthByDepth
 } from '../lib/subagentTree.js'
 import { compactPreview } from '../lib/text.js'
+import { MessageLine } from './messageLine.js'
+import { TextInput } from './textInput.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 
@@ -354,25 +379,37 @@ function GanttStrip({
   )
 }
 
-function OverlaySection({
+/** One collapsible section of a node's detail pane.
+ *
+ * `scope` is what the section belongs to (the run) and `id` is which section it
+ * is; together they are the state key. The title is display only, so a title
+ * that changes while the run finishes does not take the reader's fold with it.
+ *
+ * Exported for the test that pins that key down; nothing else renders one. */
+export function OverlaySection({
   children,
   count,
   defaultOpen = false,
+  id,
+  scope,
   title,
   t
 }: {
   children: ReactNode
   count?: number
   defaultOpen?: boolean
+  id: string
+  scope: string
   title: string
   t: Theme
 }) {
   const openMap = useStore($overlaySectionsOpen)
-  const open = title in openMap ? openMap[title]! : defaultOpen
+  const key = `${scope}:${id}`
+  const open = key in openMap ? openMap[key]! : defaultOpen
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box onClick={() => toggleOverlaySection(title, defaultOpen)}>
+      <Box onClick={() => toggleOverlaySection(key, defaultOpen)}>
         <Text color={t.color.label}>
           <Text color={t.color.accent}>{open ? '▾ ' : '▸ '}</Text>
           {title}
@@ -394,7 +431,296 @@ function Field({ name, t, value }: { name: string; t: Theme; value: ReactNode })
   )
 }
 
-function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) {
+const TRANSCRIPT_TAIL_MSGS = 6
+const TRANSCRIPT_POLL_MS = 600
+const CONSOLE_TAIL_CHARS = 1200
+// A conversation row is a whole folded turn, so the window is wider than the
+// per-step transcript's.
+const CONVERSATION_TAIL_ROWS = 12
+
+/** Structurally `GatewayRpc`, restated so the overlay can build one off its gateway. */
+type Rpc = <T extends object>(
+  method: string,
+  params?: Record<string, unknown>,
+  opts?: { quiet?: boolean }
+) => Promise<null | T>
+
+const readSid = () => getUiState().sid
+
+/** The Direct Chat a run's detail pane can open: which instance, and whether it takes a prompt. */
+export interface InstanceConversationRef {
+  resumable: boolean
+  target: DirectTargetRef
+}
+
+/**
+ * The conversation behind one run, or null when it has none.
+ *
+ * A run has one when the manager bound it to an instance -- a stateful
+ * sub-agent's spawn. Whether that instance can be *talked to* is the registry
+ * row's `resumable`, answered by the server; an instance the strip has not
+ * listed yet reads as not resumable rather than guessed at, and the composer
+ * appears once the refresh lands.
+ */
+export const conversationOf = (item: SubagentProgress, instances: InstanceRow[]): InstanceConversationRef | null => {
+  const instance = item.instance
+
+  if (instance === undefined) {
+    return null
+  }
+
+  const row = instances.find(r => r.agent === instance.agent && r.handle === instance.handle)
+
+  return { resumable: row?.resumable === true, target: instance }
+}
+
+/**
+ * One instance's Direct Chat, drawn inside the detail pane.
+ *
+ * Reads the same store rows the chat view would show for this instance --
+ * `fetchDirectHistory` on entry, `useDirectStepPoll` while it works, and the
+ * deltas `chatStream` routes by the event's own target -- so what is seen here
+ * and what Direct Chat shows are one transcript, not two readings of it.
+ */
+export function InstanceConversation({
+  cols,
+  live,
+  rpc,
+  scope,
+  t,
+  target
+}: {
+  cols: number
+  live: boolean
+  rpc: Rpc
+  scope: string
+  t: Theme
+  target: DirectTargetRef
+}) {
+  const direct = useStore($directChat)
+  const { agent, handle } = target
+  // Stable per instance: the poll arms its interval on the target's identity,
+  // and the tree hands out a fresh object every time the live rows move.
+  const stable = useMemo(() => ({ agent, handle }), [agent, handle])
+  const working = live || isTargetWorking(direct, stable)
+  const workingRef = useRef(working)
+  workingRef.current = working
+
+  // An idle instance is read as settled, not entered: the store may still hold
+  // the last live snapshot of a run that ended while this pane was closed, and
+  // the entering read keeps whatever it finds. The turn that ran in between is
+  // on disk and nowhere else.
+  useEffect(() => {
+    void fetchDirectHistory(rpc, readSid(), stable, workingRef.current ? 'enter' : 'settled')
+  }, [rpc, stable])
+
+  useDirectStepPoll(rpc, readSid, stable, working)
+
+  const rows = rowsOf(direct, stable)
+  const tail = rows.slice(-CONVERSATION_TAIL_ROWS)
+  const dropped = rows.length - tail.length
+
+  return (
+    <OverlaySection
+      count={rows.length}
+      defaultOpen
+      id="transcript"
+      scope={scope}
+      t={t}
+      title={working ? `Conversation · ${agent}/${handle} · live` : `Conversation · ${agent}/${handle}`}
+    >
+      {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
+
+      {tail.map((m, i) => (
+        <MessageLine
+          cols={Math.max(40, cols - 6)}
+          isStreaming={working && i === tail.length - 1 && m.role === 'assistant'}
+          key={dropped + i}
+          msg={m}
+          t={t}
+        />
+      ))}
+    </OverlaySection>
+  )
+}
+
+/**
+ * The run's own transcript, read back while it runs.
+ *
+ * Polls rather than subscribes: there is no per-subagent event stream, but the
+ * server keeps a live activity index that `subagent.context` and `dag.node`
+ * both serve mid-flight (they return the same message shape by design). A
+ * finished run is fetched once — the record on disk no longer changes.
+ *
+ * Rendered through `toTranscriptMessages` + `MessageLine` — the exact pipeline
+ * a resumed main session draws with — so a delegated run reads like the main
+ * agent, not like a second renderer that drifts. That pipeline and nothing
+ * beside it: a tail of tool results past the last narrated row is claimed by
+ * the mapper itself, and the fallback that used to append them as generic trail
+ * lines drew every one of them a second time, under a renderer this view had
+ * otherwise retired. The console tail (a cli lane's raw output) has no
+ * main-agent equivalent and stays a dim block.
+ */
+function LiveTranscript({
+  cols,
+  gw,
+  live,
+  refInfo,
+  scope,
+  t
+}: {
+  cols: number
+  gw: GatewayClient
+  live: boolean
+  refInfo: SubagentLiveRef
+  scope: string
+  t: Theme
+}) {
+  const [msgs, setMsgs] = useState<null | TranscriptMessage[]>(null)
+
+  const callId = refInfo.kind === 'spawn' ? refInfo.callId : undefined
+  const runId = refInfo.kind === 'dag' ? refInfo.runId : undefined
+  const nodeId = refInfo.kind === 'dag' ? refInfo.nodeId : undefined
+
+  useEffect(() => {
+    let alive = true
+
+    const load = () => {
+      const sid = getUiState().sid
+
+      if (!sid) {
+        return
+      }
+
+      if (callId) {
+        gw.request<SubagentContextResult>('subagent.context', { id: callId, session_id: sid })
+          .then(raw => {
+            const r = asRpcResult<SubagentContextResult>(raw)
+
+            if (alive && r?.messages) {
+              setMsgs(r.messages)
+            }
+          })
+          .catch(() => {})
+      } else if (runId && nodeId) {
+        gw.request<DagNodeResult>('dag.node', { node: nodeId, run_id: runId, session_key: sid })
+          .then(raw => {
+            const r = asRpcResult<DagNodeResult>(raw)
+
+            if (alive && r?.node?.messages) {
+              setMsgs(r.node.messages)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
+    load()
+
+    if (!live) {
+      return () => {
+        alive = false
+      }
+    }
+
+    const timer = setInterval(load, TRANSCRIPT_POLL_MS)
+
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [callId, gw, live, nodeId, runId])
+
+  if (refInfo.kind === 'spawn' && !callId) {
+    return (
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
+        <Text color={t.color.muted}>queued — nothing has run yet</Text>
+      </OverlaySection>
+    )
+  }
+
+  if (!msgs || msgs.length === 0) {
+    return (
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
+        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+      </OverlaySection>
+    )
+  }
+
+  const rows = msgs.filter(m => m.role !== 'console')
+  const consoleTail = msgs
+    .filter(m => m.role === 'console')
+    .map(m => m.text ?? '')
+    .join('')
+    .slice(-CONSOLE_TAIL_CHARS)
+
+  // `openTurn` while the run is in flight: its last rows are provisional -- the
+  // transport republishes a synthesized trailing row for what the agent has said
+  // since its last step, and the next step absorbs it -- so a shelf drawn off
+  // them would name a turn that has not closed.
+  const items = toTranscriptMessages(rows, { openTurn: live })
+  const tail = items.slice(-TRANSCRIPT_TAIL_MSGS)
+  const dropped = items.length - tail.length
+
+  return (
+    <OverlaySection
+      count={rows.length}
+      defaultOpen
+      id="transcript"
+      scope={scope}
+      t={t}
+      title={live ? 'Transcript · live' : 'Transcript'}
+    >
+      {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
+
+      {/* Keyed by the row's place in the whole transcript, not in the window:
+          this window slides, so a window-relative key hands the instance that
+          held row N to row N+1 as the tail moves -- and with it any state that
+          lives in the row (an artifact shelf's show-more, a long system
+          message's expansion). */}
+      {tail.map((m, i) => (
+        <MessageLine
+          cols={Math.max(40, cols - 6)}
+          isStreaming={live && i === tail.length - 1 && m.role === 'assistant'}
+          key={dropped + i}
+          msg={m}
+          t={t}
+        />
+      ))}
+
+      {tail.length === 0 && !consoleTail ? (
+        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+      ) : null}
+
+      {consoleTail ? (
+        <Box flexDirection="column" marginTop={tail.length > 0 ? 1 : 0}>
+          <Text color={t.color.label}>console</Text>
+          <Text color={t.color.muted} wrap="wrap">
+            {consoleTail}
+          </Text>
+        </Box>
+      ) : null}
+    </OverlaySection>
+  )
+}
+
+function Detail({
+  cols,
+  conversation,
+  gw,
+  id,
+  node,
+  rpc,
+  t
+}: {
+  cols: number
+  conversation: InstanceConversationRef | null
+  gw: GatewayClient
+  id?: string
+  node: SubagentNode
+  rpc: Rpc
+  t: Theme
+}) {
   const { aggregate: agg, item } = node
   const { color, glyph } = statusGlyph(item, t)
 
@@ -437,8 +763,28 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
         {item.apiCalls ? <Field name="api calls" t={t} value={String(item.apiCalls)} /> : null}
       </Box>
 
+      {conversation ? (
+        <InstanceConversation
+          cols={cols}
+          live={item.status === 'running' || item.status === 'queued'}
+          rpc={rpc}
+          scope={item.id}
+          t={t}
+          target={conversation.target}
+        />
+      ) : item.liveRef ? (
+        <LiveTranscript
+          cols={cols}
+          gw={gw}
+          live={item.status === 'running' || item.status === 'queued'}
+          refInfo={item.liveRef}
+          scope={item.id}
+          t={t}
+        />
+      ) : null}
+
       {localTokens > 0 || localCost > 0 ? (
-        <OverlaySection defaultOpen t={t} title="Budget">
+        <OverlaySection defaultOpen id="budget" scope={item.id} t={t} title="Budget">
           {localTokens > 0 ? (
             <Field
               name="tokens"
@@ -470,7 +816,7 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
       ) : null}
 
       {filesRead.length > 0 || filesWritten.length > 0 ? (
-        <OverlaySection count={filesRead.length + filesWritten.length} t={t} title="Files">
+        <OverlaySection count={filesRead.length + filesWritten.length} id="files" scope={item.id} t={t} title="Files">
           {filesWritten.slice(0, 8).map((p, i) => (
             <Text color={t.color.statusGood} key={`w-${i}`} wrap="truncate-end">
               +{p}
@@ -488,7 +834,7 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
       ) : null}
 
       {toolLines.length > 0 ? (
-        <OverlaySection count={toolLines.length} defaultOpen t={t} title="Tool calls">
+        <OverlaySection count={toolLines.length} defaultOpen id="tools" scope={item.id} t={t} title="Tool calls">
           {toolLines.map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.muted}>·</Text> {line}
@@ -498,7 +844,7 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
       ) : null}
 
       {outputTail.length > 0 ? (
-        <OverlaySection count={outputTail.length} defaultOpen t={t} title="Output">
+        <OverlaySection count={outputTail.length} defaultOpen id="output" scope={item.id} t={t} title="Output">
           {outputTail.map((entry, i) => (
             <Text color={entry.isError ? t.color.error : t.color.text} key={i} wrap="wrap">
               <Text bold color={entry.isError ? t.color.error : t.color.accent}>
@@ -511,7 +857,7 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
       ) : null}
 
       {item.notes.length ? (
-        <OverlaySection count={item.notes.length} t={t} title="Progress">
+        <OverlaySection count={item.notes.length} id="progress" scope={item.id} t={t} title="Progress">
           {item.notes.slice(-6).map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.label}>·</Text> {line}
@@ -521,7 +867,7 @@ function Detail({ id, node, t }: { id?: string; node: SubagentNode; t: Theme }) 
       ) : null}
 
       {item.summary ? (
-        <OverlaySection defaultOpen t={t} title="Summary">
+        <OverlaySection defaultOpen id="summary" scope={item.id} t={t} title="Summary">
           <Text color={t.color.text} wrap="wrap">
             {item.summary}
           </Text>
@@ -686,12 +1032,39 @@ function DiffView({
 
 // ── Main overlay ─────────────────────────────────────────────────────
 
-export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: AgentsOverlayProps) {
-  const liveSubagents = useTurnSelector(state => state.subagents)
+export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onClose, t }: AgentsOverlayProps) {
+  const turnSubagents = useTurnSelector(state => state.subagents)
+  const liveAgentRows = useStore($liveAgents)
   const delegation = useStore($delegationState)
   const history = useStore($spawnHistory)
   const diffPair = useStore($spawnDiff)
   const { stdout } = useStdout()
+
+  // The turn-scoped tree (legacy gateway bus) and the cross-turn live rows
+  // (`subagent.status` + `dag.*`) describe the same runs from different
+  // sources; the richer turn rows win when both name an id.
+  // The turn rows carry no record id or instance of their own, so those two
+  // are borrowed from the live row of the same run.
+  const liveSubagents = useMemo(() => {
+    const live = new Map(liveAgentRows.map(r => [r.id, toSubagentProgress(r)]))
+    const merged = turnSubagents.map(s => {
+      const row = live.get(s.id)
+
+      return row ? { ...s, instance: s.instance ?? row.instance, liveRef: s.liveRef ?? row.liveRef } : s
+    })
+    const seen = new Set(turnSubagents.map(s => s.id))
+
+    return [...merged, ...liveAgentRows.filter(r => !seen.has(r.id)).map(r => live.get(r.id)!)]
+  }, [liveAgentRows, turnSubagents])
+
+  const direct = useStore($directChat)
+  const instances = direct.instances
+  const rpc: Rpc = useMemo(
+    () =>
+      async <T extends object>(method: string, params: Record<string, unknown> = {}) =>
+        asRpcResult<T>(await gw.request<T>(method, params)),
+    [gw]
+  )
 
   // historyIndex === 0: live turn.  1..N pulls the Nth-most-recent archived
   // snapshot.  /replay passes N on open.
@@ -707,6 +1080,10 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
   // cc-style view switching: list = full-width row picker, detail = full-width
   // scrollable pane.  Two panes side-by-side in Ink fought Yoga flex.
   const [mode, setMode] = useState<'detail' | 'list'>('list')
+  // The conversation composer: what is typed, and whether keys go to it or to
+  // the pane. Typing wins by default when the run can be talked to.
+  const [draft, setDraft] = useState('')
+  const [composing, setComposing] = useState(true)
 
   const detailScrollRef = useRef<null | ScrollBoxHandle>(null)
   const prevLiveCountRef = useRef(liveSubagents.length)
@@ -729,6 +1106,16 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
   const rows = useMemo(() => prepareRows(tree, sort, filter), [tree, sort, filter])
 
   const selected = rows[cursor] ?? null
+  const conversation = selected ? conversationOf(selected.item, instances) : null
+  const composerOn = mode === 'detail' && conversation?.resumable === true
+  // Whether the instance is mid-turn, from either signal (see `isTargetWorking`)
+  // plus the run's own status, which the strip knows before the registry does.
+  const conversationWorking =
+    conversation !== null &&
+    selected !== null &&
+    (isTargetWorking(direct, conversation.target) ||
+      selected.item.status === 'running' ||
+      selected.item.status === 'queued')
 
   const cols = stdout?.columns ?? 80
   const rowsH = Math.max(8, (stdout?.rows ?? 24) - 10)
@@ -769,13 +1156,20 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
   useEffect(() => {
     // Reset detail scroll on navigation so the top of the new node shows.
     detailScrollRef.current?.scrollTo(0)
+    setDraft('')
+    setComposing(true)
   }, [cursor, historyIndex, mode])
 
+
   useEffect(() => {
-    // Warm caps + paused flag on open.
+    // Warm caps + paused flag on open, and settle the live rows against disk.
     gw.request<DelegationStatusResponse>('delegation.status', {})
       .then(r => applyDelegationStatus(asRpcResult<DelegationStatusResponse>(r)))
       .catch(() => {})
+    scheduleLiveAgentsRefresh()
+    // The registry rows answer `resumable`, which decides whether a detail
+    // pane gets a composer.
+    scheduleInstanceRefresh()
   }, [gw])
 
   useEffect(() => {
@@ -783,6 +1177,25 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
       setCursor(Math.max(0, rows.length - 1))
     }
   }, [cursor, rows.length])
+
+  useEffect(() => {
+    // A strip click asked for one row's detail. Consumed exactly once — the
+    // id is cleared even when the row is gone by the time the overlay opens,
+    // so reopening later does not replay a stale jump.
+    if (!focusId) {
+      return
+    }
+
+    const idx = rows.findIndex(r => r.item.id === focusId)
+
+    if (idx >= 0) {
+      setHistoryIndex(0)
+      setCursor(idx)
+      setMode('detail')
+    }
+
+    patchOverlayState({ agentsFocusId: null })
+  }, [focusId, rows])
 
   // ── Actions ────────────────────────────────────────────────────────
 
@@ -841,6 +1254,66 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
     onClose()
   }
 
+  const sendToInstance = (text: string) => {
+    const content = text.trim()
+
+    if (!conversation || !selected || content.length === 0) {
+      return
+    }
+
+    const { target } = conversation
+    const key = directKey(target.agent, target.handle)
+    const item = selected.item
+    const name = `${target.agent}/${target.handle}`
+
+    const deliver = (text: string) => {
+      appendDirectMessage(key, { role: 'user', text })
+      sendDirect(target, text).catch((e: Error) => {
+        appendDirectMessage(key, { role: 'system', text: `error: ${e.message}` })
+      })
+      detailScrollRef.current?.scrollToBottom?.()
+    }
+
+    setDraft('')
+
+    // Mid-turn the words are merged into the run rather than queued behind it:
+    // a second prompt would serialise on the instance's handle behind a wait
+    // with no bound. The run announces the merged words itself (a user row on
+    // its live transcript), so nothing is echoed here; a refusal hands the
+    // text back to the draft rather than losing it.
+    const working =
+      isTargetWorking(getDirectChat(), target) || item.status === 'running' || item.status === 'queued'
+
+    if (!working) {
+      return deliver(content)
+    }
+
+    setFlash(`steering ${name}…`)
+    rpc<SubagentsInstanceSteerResult>('subagents.instance.steer', {
+      agent: target.agent,
+      handle: target.handle,
+      session_key: readSid() ?? '',
+      text: content
+    })
+      .then(r => {
+        if (r?.status === 'injected') {
+          setFlash(`steer landed — ${name} reads it before its next step`)
+          detailScrollRef.current?.scrollToBottom?.()
+        } else if (r?.status === 'unsupported') {
+          setDraft(content)
+          setFlash(`${name} cannot take a message mid-turn; send it once the run lands`)
+        } else {
+          // The run ended between the keystroke and the call: nothing to
+          // merge into, so the words go as the next turn.
+          deliver(content)
+        }
+      })
+      .catch((e: Error) => {
+        setDraft(content)
+        setFlash(`steer failed: ${e.message}`)
+      })
+  }
+
   // ── Input ──────────────────────────────────────────────────────────
 
   const detailPageSize = Math.max(4, rowsH - 2)
@@ -848,6 +1321,33 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
   const scrollDetail = (dy: number) => detailScrollRef.current?.scrollBy(dy)
 
   useInput((ch, key) => {
+    // Composer focused: letters are the prompt's. Esc clears a draft before it
+    // leaves, so a half-typed message is never lost to a reflex; Tab hands the
+    // keys to the pane; paging and the wheel still scroll the conversation.
+    if (composerOn && composing) {
+      if (key.escape) {
+        return draft.length > 0 ? setDraft('') : setMode('list')
+      }
+
+      if (key.tab) {
+        return setComposing(false)
+      }
+
+      if (key.pageUp || key.wheelUp) {
+        return scrollDetail(key.pageUp ? -detailPageSize : -wheelDetailDy)
+      }
+
+      if (key.pageDown || key.wheelDown) {
+        return scrollDetail(key.pageDown ? detailPageSize : wheelDetailDy)
+      }
+
+      return
+    }
+
+    if (composerOn && key.tab) {
+      return setComposing(true)
+    }
+
     if (ch === 'q') {
       return closeWithCleanup()
     }
@@ -870,10 +1370,19 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
     }
 
     if (ch === 'x' && selected) {
+      // subagent.interrupt reaches spawns only; a graph node stops with its run.
+      if (selected.item.liveRef?.kind === 'dag') {
+        return setFlash('graph nodes stop with their run — no per-node kill')
+      }
+
       return killOne(selected.item.id)
     }
 
     if (ch === 'X' && selected) {
+      if (selected.item.liveRef?.kind === 'dag') {
+        return setFlash('graph nodes stop with their run — no per-node kill')
+      }
+
       return killSubtree(selected)
     }
 
@@ -1003,7 +1512,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
 
       {rows.length === 0 ? (
         <Box flexDirection="column" flexGrow={1}>
-          <Text color={t.color.muted}>No subagents this turn. Trigger delegate_task to populate the tree.</Text>
+          <Text color={t.color.muted}>No delegated runs. spawn and run_subagent_dag populate this view live.</Text>
         </Box>
       ) : mode === 'list' ? (
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0}>
@@ -1024,10 +1533,26 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
           </Box>
         </Box>
       ) : (
-        <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
+        /* flexBasis 0 is load-bearing. With an auto basis, yoga sizes this row
+           by measuring its content with no height bound, and a later pass that
+           hits the row's layout cache leaves the ScrollBox at that content
+           height for one frame -- the pane then shows its top and snaps back.
+           It fired on exactly the composer keystrokes that re-measure a
+           sibling (a draft ending in a space); a fixed basis needs no measure. */
+        <Box flexBasis={0} flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
           <ScrollBox flexDirection="column" flexGrow={1} flexShrink={1} ref={detailScrollRef}>
             <Box flexDirection="column" paddingBottom={4} paddingRight={1}>
-              {selected ? <Detail id={formatRowId(cursor).trim()} node={selected} t={t} /> : null}
+              {selected ? (
+                <Detail
+                  cols={cols}
+                  conversation={conversation}
+                  gw={gw}
+                  id={formatRowId(cursor).trim()}
+                  node={selected}
+                  rpc={rpc}
+                  t={t}
+                />
+              ) : null}
             </Box>
           </ScrollBox>
 
@@ -1037,19 +1562,58 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
         </Box>
       )}
 
-      <Box flexDirection="column" marginTop={1}>
-        {flash ? <Text color={t.color.accent}>{flash}</Text> : null}
+      {/* Pinned height, like the footer: this sits under the flexGrow pane, and
+          a row that changes height resizes the pane above it and repaints the
+          screen. A draft longer than the row is clipped rather than wrapped. */}
+      {composerOn && conversation ? (
+        <Box flexDirection="row" flexShrink={0} height={1} marginTop={1} overflow="hidden">
+          <Text bold color={composing ? t.color.accent : t.color.muted}>
+            {'› '}
+          </Text>
+          <Box flexGrow={1} height={1} overflow="hidden">
+            <TextInput
+              columns={Math.max(20, cols - 4)}
+              focus={composing}
+              onChange={setDraft}
+              onSubmit={sendToInstance}
+              placeholder={
+                composing
+                  ? `message ${conversation.target.agent}/${conversation.target.handle} · Enter to ${
+                      conversationWorking ? 'steer the running turn' : 'send'
+                    }`
+                  : 'Tab to type'
+              }
+              value={draft}
+            />
+          </Box>
+        </Box>
+      ) : null}
+
+      {/* Two rows, always: the flash line is drawn empty rather than omitted,
+          and no hint names state that changes on a keystroke -- the footer
+          that said what Esc would do to the draft changed length on exactly
+          the keys that empty or fill it, and flickered the pane on each. */}
+      <Box flexDirection="column" flexShrink={0} height={2} marginTop={1}>
+        <Text color={t.color.accent} wrap="truncate-end">
+          {flash || ' '}
+        </Text>
 
         {mode === 'list' ? (
-          <Text color={t.color.muted}>
+          <Text color={t.color.muted} wrap="truncate-end">
             ↑↓/jk move · g/G top/bottom · Enter/→ open detail{controlsHint} · s sort:{SORT_LABEL[sort]} · f filter:
             {FILTER_LABEL[filter]}
             {history.length > 0 ? ` · [ / ] history ${historyIndex}/${history.length}` : ''}
             {' · q close'}
           </Text>
+        ) : composerOn && composing ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            Enter {conversationWorking ? 'steer' : 'send'} · Tab pane keys · PgUp/PgDn page · Esc clear draft / back
+            to list
+          </Text>
         ) : (
-          <Text color={t.color.muted}>
-            ↑↓/jk scroll · PgUp/PgDn page · g/G top/bottom · Esc/← back to list{controlsHint} · q close
+          <Text color={t.color.muted} wrap="truncate-end">
+            ↑↓/jk scroll · PgUp/PgDn page · g/G top/bottom{composerOn ? ' · Tab type' : ''} · Esc/← back to list
+            {controlsHint} · q close
           </Text>
         )}
       </Box>
@@ -1058,6 +1622,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
 }
 
 interface AgentsOverlayProps {
+  focusId?: null | string
   gw: GatewayClient
   initialHistoryIndex?: number
   onClose: () => void
@@ -1066,3 +1631,5 @@ interface AgentsOverlayProps {
 
 export const closeAgentsOverlay = () => patchOverlayState({ agents: false })
 export const openAgentsOverlay = () => patchOverlayState({ agents: true })
+/** Open straight into one row's detail — what a Live Agents Strip row click does. */
+export const openAgentsOverlayAt = (id: string) => patchOverlayState({ agents: true, agentsFocusId: id })

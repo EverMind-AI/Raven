@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.tools.base import Tool
 from raven.utils.helpers import image_block
 
@@ -141,7 +142,7 @@ class _OpenRouterMediaTool(Tool):
         return override or cfg_model or self.default_model
 
     def _output_path(self, ext: str) -> Path:
-        out_dir = self._workspace / self._output_subdir
+        out_dir = (workdir.current() or self._workspace) / self._output_subdir
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
 

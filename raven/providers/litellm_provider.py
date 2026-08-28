@@ -16,6 +16,7 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
+    ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
@@ -33,6 +34,13 @@ from raven.providers.registry import (
     find_by_model,
     find_by_name,
     find_gateway,
+)
+from raven.providers.tool_names import normalized_tool_name
+from raven.providers.transport_failure import (
+    flag_transport_failure,
+    native_finish_reason,
+    prompt_chars,
+    transport_failure_message,
 )
 from raven.providers.wire import wire_model
 
@@ -277,6 +285,10 @@ class LiteLLMProvider(LLMProvider):
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
         return spec is not None and (spec.is_local or spec.name == "custom")
 
+    def supports_prompt_caching(self, model: str) -> bool:
+        """See ``LLMProvider.supports_prompt_caching``."""
+        return self._supports_cache_control(model)
+
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
 
@@ -480,7 +492,7 @@ class LiteLLMProvider(LLMProvider):
 
         try:
             response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
-            return self._parse_response(response)
+            return self._parse_response(response, sent_chars=prompt_chars(messages))
         except Exception as e:
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
@@ -725,8 +737,13 @@ class LiteLLMProvider(LLMProvider):
         except (AttributeError, IndexError):
             return None
 
-    def _parse_response(self, response: Any) -> LLMResponse:
-        """Parse LiteLLM response into our standard format."""
+    def _parse_response(self, response: Any, *, sent_chars: int | None = None) -> LLMResponse:
+        """Parse LiteLLM response into our standard format.
+
+        ``sent_chars`` is how much prompt went up, passed so the transport
+        verdict below has something to compare the accounting against. Optional
+        because the verdict's decisive evidence does not need it.
+        """
         choice = response.choices[0]
         message = choice.message
         content = message.content
@@ -772,7 +789,7 @@ class LiteLLMProvider(LLMProvider):
             tool_calls.append(
                 ToolCallRequest(
                     id=_short_tool_id(),
-                    name=tc.function.name,
+                    name=normalized_tool_name(tc.function.name),
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
@@ -818,6 +835,42 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
+
+        # Asked here rather than by the caller: this is the response exit, and
+        # by the time the ladder in `base.py` reads `finish_reason` the only
+        # thing standing between an upstream-reported failure and being
+        # delivered as an answer is this verdict. Both gates there
+        # (`!= "error"`) then work unchanged.
+        evidence = flag_transport_failure(
+            # The upstream's own word, not the `or "stop"` default below: a
+            # provider that sent no finish reason never said this call ended
+            # normally, so there is nothing here to disbelieve.
+            finish_reason=finish_reason,
+            content=content,
+            reasoning=reasoning_content,
+            tool_calls=tool_calls,
+            # Read off the first choice even though the merge above can adopt a
+            # later choice's reason: it only does so for a choice that carried
+            # tool calls, and a delivered call already stops this verdict.
+            native_finish_reason=native_finish_reason(choice),
+            usage=usage,
+            sent_chars=sent_chars,
+        )
+        if evidence:
+            logger.warning("upstream reported a failed call as a normal end: {}", evidence)
+            return LLMResponse(
+                content=transport_failure_message(evidence),
+                finish_reason="error",
+                usage=usage,
+                error_classification=ErrorClassification(
+                    category="upstream_transport_failure",
+                    # Retried before anything else is tried: the control
+                    # experiment healed on a retry that landed on another
+                    # backend, and there is no partial work to repeat.
+                    retryable=True,
+                    should_fallback=True,
+                ),
+            )
 
         return LLMResponse(
             content=content,

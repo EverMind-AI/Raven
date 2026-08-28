@@ -55,6 +55,17 @@ EXTENSION_KEYS = (
     "runtime",
     # In-tree observability tracing (raven.tracing).
     "tracing",
+    # Model-generated session titles (raven.session.title). Absent from this
+    # tuple the block is not merely ignored: the base loader forbids extras, so
+    # a config file carrying it fails validation and takes the whole config
+    # down with it -- including the documented way to turn the feature off.
+    "sessionTitle",
+    "session_title",
+    # DAG node judging: verdict model/timeout, evidence budget, adjudication
+    # (raven.agent.subagent). Same consequence as sessionTitle above if
+    # omitted: the block fails base Config validation instead of being read.
+    "subagentDag",
+    "subagent_dag",
 )
 
 # Global variable to store current config path (for multi-instance support)
@@ -79,11 +90,24 @@ def set_config_path(path: Path) -> None:
     _current_config_path = path
 
 
+def raven_home() -> Path:
+    """The directory raven keeps everything in.
+
+    ``RAVEN_HOME`` was already honoured by the installer, the node runtime
+    lookup, the tracing directory, the serve state file and the file server --
+    and ignored here, which is the one that decides where config.json, the cron
+    store and every runtime subdirectory live. Setting it used to give you a
+    split installation: the runtime in one place, the configuration in another.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip()
+    return Path(home).expanduser() if home else Path.home() / ".raven"
+
+
 def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
-    return Path.home() / ".raven" / "config.json"
+    return raven_home() / "config.json"
 
 
 class ConfigReadError(Exception):
@@ -519,6 +543,27 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
 
     # skills_dir → local_dirs migration now handled by
     # SkillForgeConfig._migrate_skills_dir model_validator (R5).
+
+    # Same for the session-title gate, which changed both name and unit:
+    # ``min_input_chars`` counted code points, ``min_input_width`` counts
+    # display columns. The old key is not carried over -- 8 of one is not 8 of
+    # the other -- it is dropped so the new default applies. Worth the six
+    # lines because ``SessionTitleConfig`` forbids extras and this model is
+    # loaded by the gateway, the TUI and doctor: a stale key left in a
+    # hand-edited config stops those from starting at all, rather than merely
+    # skipping a title.
+    for block_key in ("sessionTitle", "session_title"):
+        session_title = data.get(block_key) if isinstance(data, dict) else None
+        if not isinstance(session_title, dict):
+            continue
+        for legacy_key in ("min_input_chars", "minInputChars"):
+            if legacy_key in session_title:
+                session_title.pop(legacy_key)
+                _log.info(
+                    "Migrated: dropped %s.%s (renamed to minInputWidth, and the unit changed)",
+                    block_key,
+                    legacy_key,
+                )
 
     # Strip retired sentinel keys that ``SentinelConfig(extra='forbid')``
     # would otherwise reject. Listed in both snake_case and camelCase

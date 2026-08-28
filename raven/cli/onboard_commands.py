@@ -1,4 +1,4 @@
-"""Six-step onboarding wizard: LLM provider → sandbox → channel → memory → deep research → import.
+"""Seven-step onboarding wizard: provider → sandbox → channel → memory → web → sub-agents → import.
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
@@ -11,9 +11,12 @@ Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   3. Chat channel (optional, stackable)
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
-  5. deep_research tool (optional; MiroThinker key + model)
-  6. Cold-start import from other AI tools (optional)
-  7. Done
+  5. Web tool keys (optional; Serper enables web_search, Jina raises web_fetch's
+     rate limit; mirrored to ~/.raven/env so sub-agents inherit them)
+  6. Sub-agents shipped in this checkout (optional; per folder, own key or
+     this raven's LLM)
+  7. Cold-start import from other AI tools (optional)
+  8. Done
 
 All writes go through the ``update_providers`` / ``update_channels`` /
 ``update`` / ``update_everos`` ops libraries — this module owns the UX layer,
@@ -22,7 +25,7 @@ not config-schema knowledge.
 Navigation: questionary 2.1.1 has no first-class cross-screen "back", so the
 wizard is a screen state machine and back is expressed as a ``0) back``
 sentinel choice on the screens that support it (Step 1 <-> language pick,
-Step 2 -> Step 1); Steps 3, 4 and 5 are optional and forward-only (re-run
+Step 2 -> Step 1); Steps 3 to 7 are optional and forward-only (re-run
 ``onboard`` to change them). Ctrl+C exits at any point, keeping whatever was
 already written.
 """
@@ -36,7 +39,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from raven.cli import onboard_channels, onboard_everos
+from raven.cli import onboard_channels, onboard_everos, onboard_web
 from raven.cli._helpers import (
     DEFAULT_PROBE_MESSAGE,
     print_probe_troubleshooting,
@@ -75,7 +78,7 @@ class _ThemedConsole(Console):
 
 console = _ThemedConsole()
 
-_TOTAL_STEPS = 6
+_TOTAL_STEPS = 7
 
 # Sentinel returned by a screen function to ask the runner to go back one
 # screen; ``None`` from a picker means Ctrl+C (exit).
@@ -2279,7 +2282,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — cold-start import
+# Step 7 — cold-start import
 # ---------------------------------------------------------------------------
 
 
@@ -2302,9 +2305,9 @@ def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
     return f"{name}{' ' * (width - _cell_len(name))} · {contents} · {cost}"
 
 
-def _step6_import(*, skip: bool, non_interactive: bool) -> object:
-    """Step 5 — optionally import conversation history from other AI tools."""
-    _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+def _step7_import(*, skip: bool, non_interactive: bool) -> object:
+    """Step 7 — optionally import conversation history from other AI tools."""
+    _step_header(7, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
 
     if skip:
         console.print(
@@ -2364,7 +2367,7 @@ def _step6_import(*, skip: bool, non_interactive: bool) -> object:
     log_path = redirect_loguru_to_file("import.log", terminal_level=None)
     _restore_logger.enable("raven")
     try:
-        return _step5_import_body(
+        return _step7_import_body(
             questionary=questionary,
             log_path=log_path,
         )
@@ -2374,12 +2377,12 @@ def _step6_import(*, skip: bool, non_interactive: bool) -> object:
         _restore_logger.disable("raven")
 
 
-def _step5_import_body(
+def _step7_import_body(
     *,
     questionary: Any,
     log_path: Any,
 ) -> object:
-    """Inner body of step 5, runs with file logging active."""
+    """Inner body of step 7, runs with file logging active."""
     import asyncio
 
     from raven.cli._styles import RAVEN_STYLE
@@ -2589,7 +2592,7 @@ def _step5_import_body(
             if selected_tier is None:
                 raise typer.Exit(1)
             if selected_tier == back_value:
-                _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+                _step_header(7, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
                 break
 
             # -- Filter --
@@ -2777,8 +2780,11 @@ def run_wizard(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
-    skip_deep_research: bool = False,
+    skip_web: bool = False,
+    skip_subagents: bool = False,
     skip_import: bool = False,
+    serper_api_key: Optional[str] = None,
+    jina_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -2808,8 +2814,11 @@ def run_wizard(
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
-            skip_deep_research=skip_deep_research,
+            skip_web=skip_web,
+            skip_subagents=skip_subagents,
             skip_import=skip_import,
+            serper_api_key=serper_api_key,
+            jina_api_key=jina_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
@@ -2820,26 +2829,26 @@ def run_wizard(
         _logger.enable("raven")
 
 
-def _step5_deep_research(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
-    """Step 5 — deep_research (MiroThinker) tool, optional, forward-only.
+def _step6_subagents(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
+    """Step 6 — the sub-agents in this checkout, optional, forward-only.
 
-    Delegates to the shared configure flow (also reachable via
-    ``raven deep-research enable``). Skipped on --skip-deep-research or
-    non-interactive; leaving it unconfigured just means the opt-in tool stays
-    unregistered.
+    Registration is a wizard step rather than an installer step because it needs
+    a configured host raven, and ``subagents/install.sh`` runs before one exists.
+    Skipped on --skip-subagents or non-interactive; leaving it undone just means
+    an empty third-party roster, and re-running ``onboard`` fills it in.
     """
-    _step_header(5, _t("Deep research tool", "深度研究工具"))
+    _step_header(6, _t("Sub-agents", "子代理"))
     if skip or non_interactive:
         console.print(
             _t(
-                "  [dim]Skipping deep_research (configure later: raven deep-research enable).[/dim]",
-                "  [dim]跳过 deep_research(以后可用 raven deep-research enable 配置)。[/dim]",
+                "  [dim]Skipping the sub-agents (set them up later: raven onboard).[/dim]",
+                "  [dim]跳过子代理(以后可用 raven onboard 设置)。[/dim]",
             )
         )
         return None
-    from raven.cli.deep_research_commands import configure_deep_research
+    from raven.cli.subagent_setup import configure_subagents
 
-    configure_deep_research(non_interactive=non_interactive, warnings=warnings)
+    configure_subagents(non_interactive=non_interactive, warnings=warnings)
     return None
 
 
@@ -2853,8 +2862,11 @@ def _run_wizard_body(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
-    skip_deep_research: bool = False,
+    skip_web: bool = False,
+    skip_subagents: bool = False,
     skip_import: bool = False,
+    serper_api_key: Optional[str] = None,
+    jina_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -2880,14 +2892,16 @@ def _run_wizard_body(
                 "[bold][accent]✨ Welcome to the Raven setup wizard[/accent][/bold]\n\n"
                 "[dim]We'll configure, in order:[/dim]\n"
                 "  [accent]①[/accent] LLM      [accent]②[/accent] Run location      "
-                "[accent]③[/accent] Chat channel      [accent]④[/accent] Long-term memory      "
-                "[accent]⑤[/accent] Deep research      [accent]⑥[/accent] Import history\n\n"
+                "[accent]③[/accent] Chat channel      [accent]④[/accent] Long-term memory\n"
+                "  [accent]⑤[/accent] Web access      [accent]⑥[/accent] Sub-agents         "
+                "[accent]⑦[/accent] Import history\n\n"
                 "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
                 "[bold][accent]✨ 欢迎使用 Raven 配置向导[/accent][/bold]\n\n"
                 "[dim]我们将依次配置:[/dim]\n"
                 "  [accent]①[/accent] LLM      [accent]②[/accent] 运行位置      "
-                "[accent]③[/accent] 聊天渠道      [accent]④[/accent] 长期记忆      "
-                "[accent]⑤[/accent] 深度研究      [accent]⑥[/accent] 历史导入\n\n"
+                "[accent]③[/accent] 聊天渠道      [accent]④[/accent] 长期记忆\n"
+                "  [accent]⑤[/accent] 联网能力      [accent]⑥[/accent] 子代理      "
+                "[accent]⑦[/accent] 历史导入\n\n"
                 "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
             border_style="border",
@@ -2919,12 +2933,22 @@ def _run_wizard_body(
             warnings=warnings,
             skip_test=skip_test,
         ),
-        lambda: _step5_deep_research(
-            skip=skip_deep_research,
+        # Ahead of the sub-agents screen on purpose: the folders it sets up fall
+        # back to the host's config for exactly these two keys, so writing them
+        # first is what lets a folder inherit rather than be asked again.
+        lambda: onboard_web._step5_web(
+            skip=skip_web,
+            non_interactive=non_interactive,
+            yes=yes,
+            serper_api_key=serper_api_key,
+            jina_api_key=jina_api_key,
+        ),
+        lambda: _step6_subagents(
+            skip=skip_subagents,
             non_interactive=non_interactive,
             warnings=warnings,
         ),
-        lambda: _step6_import(skip=skip_import, non_interactive=non_interactive),
+        lambda: _step7_import(skip=skip_import, non_interactive=non_interactive),
     ]
 
     index = 0
@@ -2953,7 +2977,7 @@ def _run_wizard_body(
 
 # ---------------------------------------------------------------------------
 # Startup gate — invoked by bare `raven` and `raven tui` (the same callback).
-# One-shot `raven agent` deliberately stays out: launching a six-step wizard
+# One-shot `raven agent` deliberately stays out: launching a seven-step wizard
 # from a scriptable command would be a surprise, so it reports the missing
 # credentials through `check_provider_credentials` instead.
 # ---------------------------------------------------------------------------
@@ -3017,11 +3041,22 @@ def register(app: typer.Typer) -> None:
         ),
         model: Optional[str] = typer.Option(None, "--model", help="Default model id (e.g. 'openai/gpt-4o-mini')"),
         channel: Optional[str] = typer.Option(None, "--channel", help="Channel to enable in Step 3"),
+        serper_api_key: Optional[str] = typer.Option(
+            None,
+            "--serper-api-key",
+            help="Serper key for web_search (honoured even under --non-interactive, which skips Step 5)",
+        ),
+        jina_api_key: Optional[str] = typer.Option(
+            None,
+            "--jina-api-key",
+            help="Jina key for web_fetch (honoured even under --non-interactive, which skips Step 5)",
+        ),
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
-        skip_deep_research: bool = typer.Option(False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"),
-        skip_import: bool = typer.Option(False, "--skip-import", help="Skip Step 6 (history import)"),
+        skip_web: bool = typer.Option(False, "--skip-web", help="Skip Step 5 (web tool keys)"),
+        skip_subagents: bool = typer.Option(False, "--skip-subagents", help="Skip Step 6 (sub-agent setup)"),
+        skip_import: bool = typer.Option(False, "--skip-import", help="Skip Step 7 (history import)"),
         non_interactive: bool = typer.Option(
             False,
             "--non-interactive",
@@ -3039,7 +3074,7 @@ def register(app: typer.Typer) -> None:
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
         ),
     ) -> None:
-        """Six-step setup wizard: LLM provider → sandbox → channel → memory → deep research → import."""
+        """Seven-step setup wizard: provider → sandbox → channel → memory → web → sub-agents → import."""
         run_wizard(
             provider=provider,
             api_key=api_key,
@@ -3049,8 +3084,11 @@ def register(app: typer.Typer) -> None:
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
-            skip_deep_research=skip_deep_research,
+            skip_web=skip_web,
+            skip_subagents=skip_subagents,
             skip_import=skip_import,
+            serper_api_key=serper_api_key,
+            jina_api_key=jina_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,

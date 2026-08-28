@@ -7,12 +7,13 @@ import { Ansi, Box, NoSelect, Text } from '@hermes/ink'
 import { memo, useState } from 'react'
 
 import type { Theme } from '../theme.js'
-import type { ActiveTool, DetailsMode, Msg, SectionVisibility } from '../types.js'
+import type { ActiveTool, DetailsMode, Msg, SectionVisibility, TurnArtifactFile } from '../types.js'
 
 import { LONG_MSG } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
 import { userDisplay } from '../domain/messages.js'
 import { ROLE } from '../domain/roles.js'
+import { t as tr } from '../i18n/index.js'
 import { transcriptBodyWidth, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import {
   boundedHistoryRenderText,
@@ -31,10 +32,49 @@ import { TodoPanel } from './todoPanel.js'
 
 // Collapse threshold for long system messages (system prompt etc.)
 const SYSTEM_COLLAPSE_CHARS = 400
+const ARTIFACT_CAP = 4
+
+const artifactSize = (bytes?: number): string => {
+  if (!bytes) {return ''}
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1 }
+  return `${unit ? value.toFixed(value < 10 ? 1 : 0) : Math.round(value)} ${units[unit]}`
+}
+
+function ArtifactSection({ files, label, t, changes = false }: {
+  files: TurnArtifactFile[]; label: string; t: Theme; changes?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const shown = open ? files : files.slice(0, ARTIFACT_CAP)
+  const rest = files.length - shown.length
+  if (!files.length) {return null}
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text bold color={t.color.muted}>{label} <Text dimColor>{files.length}</Text></Text>
+      {shown.map((file, index) => {
+        const mark = changes ? (file.change === 'new' ? '+' : '~') : '◆'
+        const meta = file.missing
+          ? tr('gui.arts.missing', '[missing]')
+          : [file.ext, artifactSize(file.size)].filter(Boolean).join(' · ')
+        return <Text key={`${file.name}:${index}`} color={t.color.muted}>{mark} {file.title || file.name}  {meta}</Text>
+      })}
+      {rest > 0 || open ? (
+        <Box onClick={() => setOpen(value => !value)}>
+          <Text color={t.color.muted} dimColor>
+            {open ? tr('gui.arts.less', 'show less') : tr('gui.arts.more', '{n} more', { n: String(rest) })}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
 
 export const MessageLine = memo(function MessageLine({
   cols,
   compact,
+  dense = false,
   detailsMode = 'collapsed',
   detailsModeCommandOverride = false,
   isStreaming = false,
@@ -61,7 +101,16 @@ export const MessageLine = memo(function MessageLine({
   const [systemOpen, setSystemOpen] = useState(false)
 
   if (msg.kind === 'episodes') {
-    return <EpisodeMessage cols={cols} compact={compact} msg={msg} t={t} />
+    return <EpisodeMessage cols={cols} compact={compact} dense={dense} msg={msg} t={t} />
+  }
+
+  if (msg.kind === 'artifacts' && msg.artifacts) {
+    return (
+      <Box flexDirection="column" marginLeft={3} marginTop={1}>
+        <ArtifactSection files={msg.artifacts.deliveries} label={tr('gui.arts.delivered', 'Delivered this turn')} t={t} />
+        <ArtifactSection changes files={msg.artifacts.changes} label={tr('gui.arts.changed', 'Files changed this turn')} t={t} />
+      </Box>
+    )
   }
 
   if (msg.kind === 'trail' && msg.todos?.length) {
@@ -240,6 +289,10 @@ export const MessageLine = memo(function MessageLine({
 interface MessageLineProps {
   cols: number
   compact?: boolean
+  /** Trace-box rendering: no breathing rows between segments. The margins that
+   *  read as pacing in the main transcript are blank lines a fixed-height box
+   *  cannot afford (see `fitTraceTail`, whose estimate must agree). */
+  dense?: boolean
   detailsMode?: DetailsMode
   detailsModeCommandOverride?: boolean
   isStreaming?: boolean

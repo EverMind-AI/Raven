@@ -1,0 +1,82 @@
+id: parent-01
+role: 双职工妈妈（2 个孩子：7 岁 + 3 岁）
+persona_name: Joy
+timezone: Asia/Shanghai
+language: zh-CN
+anchor_date: "2026-05-01"
+wake_hours: [6, 23]
+communication_style: |
+  短句 + 实用，无暇寒暄。
+  打字经常手滑，偶尔半句话发出去再补。
+  关心孩子时句子会长；工作话题像报备。
+
+weekly_rhythm:
+  mon_fri: |
+    6:00 起床。6:30 给两娃做早餐 + 送大宝小学。
+    7:30 上班路上 / 地铁上处理消息。8:30 到公司。
+    12:00 和同事午饭（偶尔加班吃外卖）。
+    17:30 下班 → 17:45 接小宝。18:30 回家做饭。
+    19:30 家庭晚餐。20:00-21:30 陪娃 / 检查作业 / 讲故事。
+    22:00 娃睡。22:00-23:00 自己时间（刷手机 / 发呆）。
+  weekend: |
+    周六早 7:00 还是起床（娃闹钟）。
+    上午带娃去兴趣班（大宝 9:00 画画，小宝 10:00 亲子英语）。
+    下午公园 / 超市。晚饭全家一起做。
+  sun: |
+    上午懒床到 8:00。下班周日综合焦虑上升，晚上整理下周 meal plan。
+
+goals:
+  - "大宝 5/15 学校亲子运动会 — 准备服装 + 请假半天"
+  - "小宝 5/20 体检 — 疫苗单 + 复印户口本"
+  - "每月 20 号交一次保姆阿姨工资（5000）"
+  - "5/10 结婚纪念日 — 提前一周订餐厅"
+  - "5/28 公司季度 OKR review — 自评写完"
+
+quirks:
+  - "孩子生病时整宿不睡，第二天和 AI 说'救命'"
+  - "职场压力大会简短发'今天工作好累' 但不深聊"
+  - "对'推娃焦虑'有自觉，偶尔让 AI 帮 push back 一下她自己的完美主义"
+  - "忙忘了孩子作业签字 / 家长群消息，需要 AI 帮兜底"
+  - "长假前一周计划各种出行安排，会连续发一堆'提醒我'"
+
+# Per-persona DND windows beyond global quiet_hours (23-7).
+# Derived from observed dismiss patterns in v4 longrun trajectory:
+# - 5/4 17:40 (pickup), 5/13/20/28 12:00-12:30 (lunch), 5/10 22:15 (kids' bedtime).
+# Each window includes a 30-minute trailing buffer to dampen the "Planner
+# fires the moment DND lifts" edge effect we observed in v5.
+policy_overrides:
+  do_not_disturb_windows:
+    - {start_hour: 12, end_hour: 13, start_minute: 0, end_minute: 30, weekdays: [0,1,2,3,4], why: "weekday lunch + buffer"}
+    - {start_hour: 17, end_hour: 19, start_minute: 0, end_minute: 30, weekdays: [0,1,2,3,4], why: "kid pickup + dinner + buffer"}
+    - {start_hour: 20, end_hour: 22, start_minute: 0, end_minute: 30, why: "kid bedtime + buffer"}
+
+initial_memory_md: |
+  # Long-term Memory
+
+  ## User Information
+  - 姓名: Joy
+  - 身份: 某公司市场部运营总监，双职工家庭
+  - 孩子: 大宝 Leo（7 岁，一年级）、小宝 Mia（3 岁，幼儿园小班）
+  - 先生: Tom（金融业，有时加班）
+  - 保姆: 王阿姨（周一到周五白班，负责小宝）
+
+  ## Preferences
+  - 中文短句
+  - 提醒要具体时间 + 动作（"周一 8:30 前交作业"，不要"记得作业"）
+  - 不要鸡汤
+
+  ## Project Context
+  - 大宝学校每周二亲子作业；5/15 运动会
+  - 小宝 5/20 三岁体检
+  - 保姆工资每月 20 号付 5000
+  - 5/10 结婚 8 周年纪念
+
+  ## Proactivity Preferences
+  - quiet_hours: 22:30-06:00
+  - 上午 8:30-9:00 通勤期间可以 nudge
+  - 孩子睡前时段（20:00-22:00）尽量别打扰
+
+  ## Important Notes
+  - 5/28 季度 OKR review
+  - 2 个孩子对花生过敏（大宝）/ 坚果类过敏（小宝）— 外出吃饭前提醒
+  - 先生 Tom 生日 9/12（遥远，暂不优先）

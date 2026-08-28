@@ -57,7 +57,15 @@ const viewportIsMounted = (
   return top >= span.top && bottom <= span.bottom
 }
 
-function Harness({ expose, items }: { expose: React.MutableRefObject<Exposed | null>; items: readonly Item[] }) {
+function Harness({
+  expose,
+  items,
+  viewportHeight = 10
+}: {
+  expose: React.MutableRefObject<Exposed | null>
+  items: readonly Item[]
+  viewportHeight?: number
+}) {
   const scrollRef = useRef<ScrollBoxHandle | null>(null)
 
   const virtualHistory = useVirtualHistory(scrollRef, items, 80, {
@@ -73,7 +81,7 @@ function Harness({ expose, items }: { expose: React.MutableRefObject<Exposed | n
 
   return React.createElement(
     ScrollBox,
-    { flexDirection: 'column', height: 10, ref: scrollRef, stickyScroll: true },
+    { flexDirection: 'column', height: viewportHeight, ref: scrollRef, stickyScroll: true },
     React.createElement(
       Box,
       { flexDirection: 'column', width: '100%' },
@@ -155,6 +163,38 @@ describe('useVirtualHistory offset cache reuse', () => {
 
       expect(scroll.getPendingDelta()).toBe(0)
       expect(viewportIsMounted(afterShrink, expose.current!.virtualHistory, scroll)).toBe(true)
+    } finally {
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
+
+  it('remounts enough rows when a scrolled-up viewport grows without moving scrollTop', async () => {
+    const items = Array.from({ length: 200 }, (_, index) => ({ height: 1, key: `row${index}` }))
+    const expose = { current: null as Exposed | null }
+    const streams = makeStreams()
+
+    const instance = renderSync(React.createElement(Harness, { expose, items, viewportHeight: 4 }), {
+      patchConsole: false,
+      stderr: streams.stderr as NodeJS.WriteStream,
+      stdin: streams.stdin as NodeJS.ReadStream,
+      stdout: streams.stdout as NodeJS.WriteStream
+    })
+
+    try {
+      await delay(30)
+      const scroll = expose.current!.scroll!
+
+      scroll.scrollTo(50)
+      await delay(80)
+      expect(scroll.getViewportHeight()).toBe(4)
+
+      instance.rerender(React.createElement(Harness, { expose, items, viewportHeight: 14 }))
+      await delay(80)
+
+      expect(scroll.getViewportHeight()).toBe(14)
+      expect(scroll.getScrollTop()).toBe(50)
+      expect(viewportIsMounted(items, expose.current!.virtualHistory, scroll)).toBe(true)
     } finally {
       instance.unmount()
       instance.cleanup()

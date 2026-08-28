@@ -51,7 +51,7 @@ describe('DEFAULT_THEME', () => {
     expect(DEFAULT_THEME.brand.name).toBe('Raven Agent')
     expect(DEFAULT_THEME.brand.icon).toBe('🐦‍⬛')
     expect(DEFAULT_THEME.brand.prompt).toBe('❯')
-    expect(DEFAULT_THEME.brand.tool).toBe('┊')
+    expect(DEFAULT_THEME.brand.tool).toBe('●')
   })
 
   it('has color palette', async () => {

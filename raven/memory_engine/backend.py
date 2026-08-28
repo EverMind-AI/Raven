@@ -144,16 +144,17 @@ class MemoryBackend(Protocol):
         Backends that do not consume metadata ignore it silently.
 
         Does not raise on transport / auth errors; it reports them.
-        The two callers want opposite things from a failed write. A
-        turn loses one turn's memory and gets a fresh chance on the
-        next, so it discards the answer and never blocks on indexing.
-        A bulk import marks a source done in its resume state, so a
-        write silently treated as landed erases the only record that
-        the source is still pending -- it must check.
+        Both known callers act on the return value: the AgentLoop
+        retries a turn's write with backoff and gives up after a fixed
+        number of attempts, still counting the turn as unindexed if
+        every attempt fails; a bulk import marks a source done in its
+        resume state, so a write silently treated as landed would erase
+        the only record that the source is still pending.
 
-        Discarding the return value therefore stays valid; what is no
-        longer valid is *assuming* a write landed because nothing was
-        raised.
+        Only an explicit ``False`` means the write failed. A backend
+        that returns ``None`` (or anything else falsy-but-not-``False``)
+        has not claimed the write was lost, so callers treat it as
+        landed.
         """
         ...
 
