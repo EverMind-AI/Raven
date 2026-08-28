@@ -1692,6 +1692,23 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "mcps",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "allow_mcp_secrets",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -1752,6 +1769,23 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "mcps",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "allow_mcp_secrets",
+          "required": false,
+          "schema": {
+            "type": "boolean"
           }
         }
       ],
@@ -4689,7 +4723,11 @@
           }
         }
       ],
-      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
       "result": {
         "name": "PlaybooksGetResult",
         "schema": {
@@ -7785,6 +7823,8 @@
           "probe_status",
           "probe_detail",
           "has_api_key",
+          "mcps",
+          "allow_mcp_secrets",
           "test_running"
         ],
         "properties": {
@@ -7853,6 +7893,15 @@
             "type": "string"
           },
           "has_api_key": {
+            "type": "boolean"
+          },
+          "mcps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allow_mcp_secrets": {
             "type": "boolean"
           },
           "last_test_ok": {
@@ -9855,6 +9904,12 @@
           },
           "prompts": {
             "type": "string"
+          },
+          "mcp_servers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlaybookMcpServer"
+            },
+            "type": "object"
           }
         },
         "required": [
@@ -9874,6 +9929,62 @@
         ],
         "type": "object",
         "description": "One whole playbook: its identity, its runtime inputs, and either the graph\n(``mode: dag``) or the assembly guidance a model turns into one\n(``mode: prompt``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
+      },
+      "PlaybookMcpServer": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": [
+              "stdio",
+              "sse",
+              "streamableHttp"
+            ],
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "url": {
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "tool_timeout": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "auth": {
+            "enum": [
+              "none",
+              "apikey",
+              "oauth"
+            ],
+            "type": "string"
+          },
+          "has_oauth_config": {
+            "type": "boolean"
+          }
+        },
+        "type": "object",
+        "description": "One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are."
       }
     },
     "errors": {

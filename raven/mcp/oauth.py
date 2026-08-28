@@ -89,6 +89,7 @@ class _Pending(NamedTuple):
     server: str
     future: asyncio.Future
     url: str
+    can_park: bool = True
 
 
 _PENDING: dict[str, _Pending] = {}
@@ -433,10 +434,12 @@ class _Flow:
         notify: Callable[[str, dict], None] | None,
         *,
         interactive: bool = False,
+        can_park: bool = True,
     ) -> None:
         self._server = server
         self._notify = notify
         self._interactive = interactive
+        self._can_park = can_park
         self._state: str | None = None
 
     def _emit(self, event: str, payload: dict) -> None:
@@ -453,7 +456,7 @@ class _Flow:
             raise OAuthUnavailableError("authorization URL carries no state parameter")
         # Register before the browser opens: the user can be faster than us.
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        _PENDING[state] = _Pending(self._server, fut, auth_url)
+        _PENDING[state] = _Pending(self._server, fut, auth_url, self._can_park)
         self._state = state
         # The deadline travels with the invitation. A page that knows only "an
         # authorization is pending" cannot tell a flow still worth finishing
@@ -485,6 +488,18 @@ class _Flow:
         state = self._state
         if state is None or state not in _PENDING:
             raise OAuthUnavailableError("no pending authorization for this flow")
+        if not self._can_park:
+            # Not the same question as `interactive`. A background flow is
+            # normally still worth waiting on -- the URL went out on
+            # `oauth.pending`, an agent or a settings panel relays it, and the
+            # click lands minutes later. `can_park` is False only where the
+            # caller itself cannot outlive that: a batch pre-flight holding a
+            # short-lived command. It used to wait the full flow timeout there,
+            # stalling a playbook run 15 minutes per unauthorized server and
+            # then degrading anyway, which is worse than degrading at once.
+            _PENDING.pop(state, None)
+            self._emit("oauth.done", {"server": self._server, "ok": False, "error": "auth_required"})
+            raise OAuthWaitTimeoutError(f"'{self._server}' needs authorization, and this connect cannot wait for it")
         fut = _PENDING[state].future
         try:
             code, got_state = await asyncio.wait_for(fut, timeout=OAUTH_FLOW_TIMEOUT)
@@ -501,7 +516,7 @@ class _Flow:
         return code, got_state
 
 
-def cancel_pending(server: str) -> None:
+def cancel_pending(server: str, *, reason: str = "superseded by a newer authorization attempt") -> None:
     """Invalidate any pending authorization for ``server``.
 
     Called when a new connect attempt supersedes a parked one (an explicit
@@ -511,21 +526,31 @@ def cancel_pending(server: str) -> None:
     first tab's success page completes an attempt whose epoch is already dead,
     its tokens land but its commit is dropped, and the newer attempt stays
     blocked on a callback that will never come.
+
+    ``reason`` is what the parked waiter is told, and the two callers owe
+    different answers. A short-lived host that never opened a browser -- a
+    playbook pre-flight, one `raven agent -m` turn -- ends by detaching the
+    server, and reporting that as a newer attempt sends the reader looking for
+    a second flow that never existed.
     """
     for state in [s for s, entry in _PENDING.items() if entry.server == server]:
         fut = _PENDING.pop(state).future
         if not fut.done():
-            fut.set_exception(OAuthWaitTimeoutError("superseded by a newer authorization attempt"))
+            fut.set_exception(OAuthWaitTimeoutError(reason))
 
 
-def auth_wait_servers() -> set[str]:
+def auth_wait_servers(*, parkable_only: bool = False) -> set[str]:
     """Names of servers currently parked at the browser-authorization step.
 
     Lets callers that kick a connect (plug.install) stop waiting as soon as
     the flow reaches the browser: from that point the connect blocks on the
     user, not on the network.
+
+    ``parkable_only`` is for the one caller that grants a *waiting exemption* on
+    the strength of this answer. "A flow is parked" and "this flow is allowed to
+    be waited on" are different facts, and only the second earns extra time.
     """
-    return {entry.server for entry in _PENDING.values()}
+    return {entry.server for entry in _PENDING.values() if entry.can_park or not parkable_only}
 
 
 def pending_url(server: str) -> str | None:
@@ -641,18 +666,34 @@ class _CatalogSeed:
         return bool(self._token) and url == self._token and response.status_code in _ENDPOINT_ABSENT
 
 
+def declares_own_endpoints(cfg: Any) -> bool:
+    """Whether ``cfg.oauth`` is a document this build would use as written.
+
+    All three of issuer, authorization and token endpoint, because a partial
+    document is not a document: the SDK's metadata model requires them, and
+    guessing the rest is what discovery is for. :func:`_seed_for` is the caller
+    that acts on it; anything that merely *reports* what a config declares has to
+    ask the same question the same way, or it says "carries its own endpoints"
+    about a server this build will run discovery for.
+    """
+    oauth = getattr(cfg, "oauth", None)
+    return bool(
+        str(getattr(oauth, "issuer", "") or "")
+        and str(getattr(oauth, "authorization_endpoint", "") or "")
+        and str(getattr(oauth, "token_endpoint", "") or "")
+    )
+
+
 def _seed_for(server: str, cfg: Any, uri: str, storage: FileTokenStorage) -> _CatalogSeed | None:
     """Read ``cfg.oauth`` into a seed, or return ``None`` to discover as usual."""
     if os.environ.get(NO_SEED_ENV, "").strip():
         return None
-    oauth = getattr(cfg, "oauth", None)
-    issuer = str(getattr(oauth, "issuer", "") or "")
-    authorize = str(getattr(oauth, "authorization_endpoint", "") or "")
-    token = str(getattr(oauth, "token_endpoint", "") or "")
-    if not (issuer and authorize and token):
-        # A partial document is not a document: the SDK's metadata model requires
-        # all three, and guessing the rest is what discovery is for.
+    if not declares_own_endpoints(cfg):
         return None
+    oauth = cfg.oauth
+    issuer = str(oauth.issuer or "")
+    authorize = str(oauth.authorization_endpoint or "")
+    token = str(oauth.token_endpoint or "")
 
     register = str(oauth.registration_endpoint or "")
     scopes = [str(s) for s in (oauth.scopes or [])]
@@ -821,6 +862,7 @@ async def provider_for(
     notify: Callable[[str, dict], None] | None = None,
     *,
     interactive: bool = False,
+    can_park: bool = True,
 ):
     """Build the SDK's OAuth provider for one server (an ``httpx.Auth``).
 
@@ -836,7 +878,7 @@ async def provider_for(
     from mcp.shared.auth import OAuthClientMetadata
 
     uri = redirect_uri() or await _ensure_callback_endpoint()
-    flow = _Flow(server, notify, interactive=interactive)
+    flow = _Flow(server, notify, interactive=interactive, can_park=can_park)
     storage = FileTokenStorage(server, uri)
     seed = _seed_for(server, cfg, uri, storage)
     kwargs: dict[str, Any] = {}

@@ -216,6 +216,8 @@ class SubagentBackend(Protocol):
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        mcps: list[str] | None = None,
+        mcp_grant: Any = None,
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str: ...

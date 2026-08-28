@@ -11,6 +11,8 @@ config (``playbooks.disabled``), never file content.
 Package layout:
 
 - ``types``      — the pydantic contract (:class:`PlaybookSpec` et al.)
+- ``params``     — parameter values and ``${params.x}`` / ``{{ params.x }}`` refs
+- ``mcp``        — the servers a run may reach, and the MCP pre-flight
 - ``triggers``   — offline vocabulary expansion + guards (L1 material)
 - ``matcher``    — the trigger vocabulary index (a retrieval hint)
 - ``router``     — which playbooks this turn describes in full

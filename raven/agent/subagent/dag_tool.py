@@ -30,7 +30,7 @@ CustomEvent the web UI's DAG graph already renders.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
@@ -48,6 +48,7 @@ from raven.agent.subagent.dag_machines import refusal as machines_refusal
 from raven.agent.subagent.dag_machines import unnamed_machine
 from raven.agent.subagent.dag_machines import verdict_for_async as machines_verdict_async
 from raven.agent.subagent.dag_machines import with_facts as with_machine_facts
+from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
 from raven.agent.subagent.dag_runner import ExceptionAnnouncer, ProgressPublisher, run_dag
@@ -60,6 +61,7 @@ from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
 from raven.agent.tools.base import Tool, ToolResult
 from raven.config.raven import SubagentDagConfig
+from raven.config.schema import MCPServerConfig
 
 if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry
@@ -152,13 +154,31 @@ class _RunDirs:
 class _NodeBuild:
     """One node's narrowing, in the shape the registry's factory reads.
 
-    Only ``skills`` reaches here: ``mcps`` has nothing to attach to yet (the
-    graph is told so by a downgrade notice), and ``tools`` is not a node field --
-    a node narrows what its agent may consult, not what it may do.
+    Only ``skills`` reaches here. MCP selection stays on the node and is resolved
+    per dispatch by the backend.
     """
 
     skills_allow: list[str] | None
     tools_allow: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class _DispatchBackend:
+    """One node backend with its cross-process MCP decision already frozen."""
+
+    backend: Any
+    mcp_grant: Any = None
+    drop_mcps: bool = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.backend, name)
+
+    async def run(self, *args: Any, **kwargs: Any) -> str:
+        if self.drop_mcps:
+            kwargs.pop("mcps", None)
+        if self.mcp_grant is not None:
+            kwargs["mcp_grant"] = self.mcp_grant
+        return await self.backend.run(*args, **kwargs)
 
 
 # How long a terminal event may take when a run ends without a manifest. It is
@@ -780,8 +800,23 @@ class SubAgentDagTool(Tool):
         return spec.model_copy(update={"nodes": nodes}), frozenset(minted)
 
     async def execute(
-        self, nodes: list[dict], task_summary: str = "", background: bool = True, confirm: bool = False, **kwargs: Any
+        self,
+        nodes: list[dict],
+        task_summary: str = "",
+        background: bool = True,
+        confirm: bool = False,
+        mcp_servers: "Mapping[str, MCPServerConfig] | None" = None,
+        **kwargs: Any,
     ) -> str:
+        """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
+
+        Not a model-facing argument: it is absent from :meth:`parameters`, and
+        ``run_mcp_scope`` accepts only already-validated ``MCPServerConfig``
+        objects, so the only caller that can fill it is one holding a parsed
+        config -- today the playbook engine, handing over the ``mcpServers``
+        section its spec shipped. See :mod:`raven.agent.subagent.dag_mcp_scope`
+        for why the definitions are scoped rather than merged into the host's.
+        """
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
         # failure is a refusal rather than a silent recursive fan-out.
@@ -790,7 +825,13 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
-        return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
+        # Wraps the whole call, not just the grant loop: a backgrounded run keeps
+        # the context this task held when ``create_task`` copied it, so an
+        # in-process node re-resolving its grant mid-run still finds the run's own
+        # definitions. Reset on the way out, so the turn that dispatched a
+        # background run does not carry them into whatever it does next.
+        with run_mcp_scope(mcp_servers):
+            return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
 
     async def _execute(
         self,
@@ -817,6 +858,7 @@ class SubAgentDagTool(Tool):
             spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
             notices = validate_capabilities(spec, capabilities)
+            dispatch_backends: dict[str, Any] = {}
             # ``run_dag`` checks the table too, but it does so inside the run --
             # which a backgrounded call has already returned from. Checked here
             # as well so a misspelled name is still a refusal the model can fix
@@ -829,6 +871,29 @@ class SubAgentDagTool(Tool):
                         f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
                         f"machine -- enable it in the agents settings, or point the node at another agent"
                     )
+                row = self._registry.get(node.subagent)
+                backend = self._resolve_node(node)
+                resolver = getattr(backend, "resolve_mcp_grant", None)
+                if row is not None and row.injectable.mcps and resolver is not None:
+                    # The async form when there is one: see
+                    # SubagentManager._preflight_mcp for why the acp backend must
+                    # not capture the adapter's login shell on this thread.
+                    async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
+                    grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
+                    # A notice, never a refusal, whichever backend it is. MCP is a
+                    # capability a node asked for on top of the work, so a server
+                    # that could not be resolved costs the node its tools and must
+                    # not cost the graph its run: refusing here throws away every
+                    # other node too, over an optional attachment. The caller is
+                    # told which node lost what, and the node's own reply carries
+                    # the same sentence.
+                    if note := grant.note_text():
+                        notices.append(f"node '{node.id}': {note}")
+                    if getattr(backend, "kind", None) != "raven-loop":
+                        backend = _DispatchBackend(backend, mcp_grant=grant)
+                elif node.mcps is not None:
+                    backend = _DispatchBackend(backend, drop_mcps=True)
+                dispatch_backends[node.id] = backend
             # Last of the pre-dispatch checks because it is the only one that
             # leaves this process: an agent that runs work on the owner's
             # machines is asked whether it has one, and a graph whose work has
@@ -874,10 +939,14 @@ class SubAgentDagTool(Tool):
         self._cancels[run_id] = cancel
 
         if not background:
-            result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, foreground=True)
+            result = await self._run(
+                spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, foreground=True
+            )
             return _with_notices(result, notices)
 
-        task = asyncio.create_task(self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances))
+        task = asyncio.create_task(
+            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
+        )
         self._runs[run_id] = task
         task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
         if self._adopt is not None:
@@ -963,9 +1032,10 @@ class SubAgentDagTool(Tool):
         dirs: _RunDirs,
         call_id: str | None,
         auto_instances: frozenset[str],
+        dispatch_backends: dict[str, Any],
     ) -> None:
         """Run a backgrounded graph, then send its summary back as a turn."""
-        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances)
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
             # with a running node recorded ``cancelled`` and a pending one
@@ -1086,6 +1156,7 @@ class SubAgentDagTool(Tool):
         dirs: _RunDirs,
         call_id: str | None,
         auto_instances: frozenset[str],
+        dispatch_backends: dict[str, Any],
         foreground: bool = False,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
@@ -1095,7 +1166,7 @@ class SubAgentDagTool(Tool):
         try:
             result = await run_dag(
                 spec,
-                resolve=self._resolve_node,
+                resolve=lambda node: dispatch_backends.get(node.id),
                 backend=self._backend,
                 workdir=dirs.workdir,
                 run_root=dirs.run_root,

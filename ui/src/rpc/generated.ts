@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 147 methods, 88 component schemas.
+// 147 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -681,6 +681,8 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  mcps: string[];
+  allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
   last_test_detail?: string;
   last_test_at_ms?: number;
@@ -1408,6 +1410,28 @@ export interface PlaybookDetail {
   };
   nodes: PlaybookNode[];
   prompts: string;
+  mcp_servers?: {
+    [k: string]: PlaybookMcpServer;
+  };
+}
+/**
+ * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
+ */
+export interface PlaybookMcpServer {
+  type?: 'stdio' | 'sse' | 'streamableHttp';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: {
+    [k: string]: string;
+  };
+  headers?: {
+    [k: string]: string;
+  };
+  tool_timeout?: number;
+  enabled?: boolean;
+  auth?: 'none' | 'apikey' | 'oauth';
+  has_oauth_config?: boolean;
 }
 export interface SessionListParams {
   /**
@@ -1830,6 +1854,8 @@ export interface SubagentsAddParams {
   name?: string;
   description?: string;
   api_key?: string;
+  mcps?: string[];
+  allow_mcp_secrets?: boolean;
 }
 export interface SubagentsAddResult {
   added: boolean;
@@ -1840,6 +1866,8 @@ export interface SubagentsUpdateParams {
   new_name?: string;
   description?: string;
   api_key?: string;
+  mcps?: string[];
+  allow_mcp_secrets?: boolean;
 }
 export interface SubagentsUpdateResult {
   updated: boolean;

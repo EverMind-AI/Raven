@@ -13,10 +13,12 @@ Three things the page depends on and nothing else asserts:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from raven.config.schema import MCPServerConfig
 from raven.playbook import NodeSpec, ParamSpec, PlaybookSpec, PlaybookStore, Triggers
 from raven.rpc.errors import RpcError
 from raven.rpc.methods import playbooks as mod
@@ -105,6 +107,169 @@ async def test_get_answers_one_whole_spec(library: PlaybookStore) -> None:
     # spells it and what the typed client expects. Told apart from `[]`.
     assert "mcps" not in merge
     assert got["path"].endswith("competitor-scan/playbook.md")
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_answers_the_servers_the_playbook_carries(library: PlaybookStore) -> None:
+    """A node's ``mcps`` entry is only a name, and the same name may be a server
+    the machine configures -- a different process, reached differently. Without
+    the definitions a reader of the library cannot tell which one a step reaches,
+    which is what the handler's "one whole spec" contract promises.
+
+    Reported as the file declares them: a carried server references a credential
+    through ``{{ params.X }}`` and the run supplies it, so what goes out is the
+    reference. Nothing here is ever a secret's value -- there is none to resolve
+    at this point, and there must never be one.
+    """
+    spec = _spec()
+    spec.params["PG_PASSWORD"] = ParamSpec(type="secret", description="the database password")
+    spec.mcp_servers = {
+        "local-pg": MCPServerConfig(
+            command="pg-mcp",
+            args=["--db", "analytics"],
+            env={"PGPASSWORD": "{{ params.PG_PASSWORD }}"},
+        )
+    }
+    spec.nodes[0].mcps = ["local-pg"]
+    library.save(spec, overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    carried = got["mcp_servers"]["local-pg"]
+    assert carried["command"] == "pg-mcp"
+    assert carried["args"] == ["--db", "analytics"]
+    assert carried["env"] == {"PGPASSWORD": "{{ params.PG_PASSWORD }}"}
+    assert carried["url"] == ""
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_carries_every_field_the_runtime_reads(library: PlaybookStore) -> None:
+    """A partial projection is worse than none: it reads as a complete answer.
+
+    ``resolve_transport`` consumes ``type``, grant resolution consumes ``enabled``
+    and ``auth``, and a tool call consumes ``tool_timeout``. Dropping them showed
+    a disabled SSE server carrying OAuth as a launchable generic http one -- every
+    field a reader would use to decide whether to trust the step, wrong.
+
+    ``oauth`` is the one thing reported as a boolean rather than passed through:
+    the endpoints and any client id are the deployment's business, and a reader
+    only needs to know the file carries its own.
+    """
+    spec = _spec()
+    spec.mcp_servers = {
+        "quiet": MCPServerConfig(
+            type="sse",
+            url="https://svc.test/sse",
+            enabled=False,
+            auth="oauth",
+            tool_timeout=7,
+        )
+    }
+    library.save(spec, overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    carried = got["mcp_servers"]["quiet"]
+    assert carried["type"] == "sse", "an sse server presented as http is a different protocol"
+    assert carried["enabled"] is False
+    assert carried["auth"] == "oauth"
+    assert carried["tool_timeout"] == 7
+    assert carried["has_oauth_config"] is False, "this one declares none of its own"
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_reports_a_self_declared_oauth_server_without_its_endpoints(library: PlaybookStore) -> None:
+    """Whether one is declared, never what it is."""
+    from raven.config.schema import MCPOAuthConfig
+
+    spec = _spec()
+    spec.mcp_servers = {
+        # All three, because that is what the OAuth path requires before it will
+        # use a declaration as written.
+        "own": MCPServerConfig(
+            url="https://svc.test/mcp",
+            auth="oauth",
+            oauth=MCPOAuthConfig(
+                issuer="https://svc.test",
+                authorization_endpoint="https://svc.test/authorize",
+                token_endpoint="https://svc.test/token",
+            ),
+        ),
+        # Two of the three. `_seed_for` ignores a partial document and runs
+        # discovery, so calling this one self-carried would describe a server
+        # that does not exist.
+        "partial": MCPServerConfig(
+            url="https://part.test/mcp",
+            auth="oauth",
+            oauth=MCPOAuthConfig(issuer="https://part.test", authorization_endpoint="https://part.test/authorize"),
+        ),
+    }
+    library.save(spec, overwrite=True)
+
+    carried = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]["mcp_servers"]
+
+    assert carried["own"]["has_oauth_config"] is True
+    assert carried["partial"]["has_oauth_config"] is False, "a partial document is not a document"
+    assert "svc.test/authorize" not in json.dumps(carried), "the endpoints are not the reader's business"
+
+
+async def test_get_reports_the_transport_the_runtime_will_pick(library: PlaybookStore) -> None:
+    """Not the raw field, and never ``null``.
+
+    ``type`` is optional in the file and the runtime derives it -- a url ending
+    ``/sse`` resolves to ``sse``, not to streamable http. Emitting the unwritten
+    field verbatim put ``null`` on the wire, which the contract does not allow
+    (three strings or an absent key), and left the reader to redo a guess this
+    already knows the answer to. Two readers guessing separately is how the page
+    came to label an sse server as http.
+    """
+    spec = _spec()
+    spec.mcp_servers = {
+        "sse-by-url": MCPServerConfig(url="https://svc.test/sse"),
+        "http-by-url": MCPServerConfig(url="https://svc.test/mcp"),
+        "stdio-by-command": MCPServerConfig(command="pg-mcp"),
+        "declared": MCPServerConfig(type="streamableHttp", url="https://svc.test/sse"),
+    }
+    library.save(spec, overwrite=True)
+
+    carried = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]["mcp_servers"]
+
+    assert carried["sse-by-url"]["type"] == "sse"
+    assert carried["http-by-url"]["type"] == "streamableHttp"
+    assert carried["stdio-by-command"]["type"] == "stdio"
+    # A declared value is the author's answer and is not re-derived.
+    assert carried["declared"]["type"] == "streamableHttp"
+    for entry in carried.values():
+        assert entry["type"] is not None, "null is not one of the shapes the contract allows"
+    METHOD_MODELS["playbooks.get"][1].model_validate(
+        {"playbook": {**(await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]}}
+    )
+
+
+async def test_a_definition_with_neither_command_nor_url_never_reaches_the_detail(
+    library: PlaybookStore,
+) -> None:
+    """Which is why the detail has no transport-less shape to report.
+
+    ``load_playbook`` drops a definition it cannot honour and logs it, so a
+    server with no command and no url is gone before this handler sees it. The
+    key would be absent if one ever arrived -- ``null`` is not one of the shapes
+    the contract allows -- but the load path is what makes that unreachable.
+    """
+    spec = _spec()
+    spec.mcp_servers = {"empty": MCPServerConfig(), "real": MCPServerConfig(url="https://svc.test/mcp")}
+    library.save(spec, overwrite=True)
+
+    carried = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]["mcp_servers"]
+    assert "empty" not in carried, "an unusable definition is dropped at load, not reported"
+    assert carried["real"]["type"] == "streamableHttp"
+
+
+async def test_get_reports_no_carried_servers_as_an_empty_mapping(library: PlaybookStore) -> None:
+    """Which is most playbooks: every ``mcps`` name resolves against the machine."""
+    library.save(_spec())
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+    assert got["mcp_servers"] == {}
     METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
 
 

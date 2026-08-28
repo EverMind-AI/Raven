@@ -3400,6 +3400,13 @@ details[open] summary { margin-bottom: 8px; }
   border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px;
 }
 .tag.warn { border-color: var(--gold); color: var(--gold); }
+/* A server the playbook ships, told apart from one this machine configures
+   under the same name -- they are different processes, and the name alone
+   cannot say which a step will reach. */
+.tag.own {
+  border-color: var(--moss); color: var(--moss);
+  background: color-mix(in oklab, var(--moss) 10%, transparent);
+}
 .probe { font-family: var(--mono); font-size: 11.5px; margin-top: 9px; }
 .probe.ok { color: var(--moss); }
 .probe.bad { color: var(--clay); }
