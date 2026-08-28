@@ -24,10 +24,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.prompt_cache import CACHE_CONTROL
+from raven.providers.prompt_cache import cache_control
 from raven.token_wise.base import TokenStrategy
-
-_CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
@@ -49,17 +47,17 @@ def _apply_cache_marker(msg: dict[str, Any]) -> None:
     content = msg.get("content")
 
     if content is None or content == "":
-        msg["cache_control"] = _CACHE_CONTROL
+        msg["cache_control"] = cache_control()
         return
 
     if isinstance(content, str):
-        msg["content"] = [{"type": "text", "text": content, "cache_control": _CACHE_CONTROL}]
+        msg["content"] = [{"type": "text", "text": content, "cache_control": cache_control()}]
         return
 
     if isinstance(content, list) and content:
         last = content[-1]
         if isinstance(last, dict):
-            last["cache_control"] = _CACHE_CONTROL
+            last["cache_control"] = cache_control()
 
 
 class SystemAndTailCacheStrategy(TokenStrategy):

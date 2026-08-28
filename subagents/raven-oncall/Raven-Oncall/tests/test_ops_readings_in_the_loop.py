@@ -249,3 +249,52 @@ async def test_the_starting_value_is_shown_beside_the_series(home) -> None:
     out = await OpsTuneStatusTool().execute(campaign="watch", ledger=str(cdir / "ledger.json"))
 
     assert "at declare 248.42" in out
+
+
+@pytest.mark.asyncio
+async def test_a_concluded_watch_reads_back_as_concluded_and_spends_nothing(home) -> None:
+    """A zero-trial campaign never grows a ledger, so the no-ledger branch is the
+    only status it ever renders. Before this said CONCLUDED, a campaign that had
+    finished read back as live -- "round 0 has not been submitted" -- and every
+    such look took a reading and spent the closed campaign's budget."""
+    await _declare(readings=[{"name": "volt", "command": "echo 248.42", "when": "each_wake"}])
+    cdir = home / "watch"
+    rows_before = len(r.read(cdir))
+    (cdir / "concluded.json").write_text(
+        json.dumps({"concluded_at": "2026-08-28T14:28:11", "outcome": "stopped"}))
+
+    out = await OpsTuneStatusTool().execute(campaign="watch", ledger=str(cdir / "ledger.json"))
+
+    assert "CONCLUDED" in out
+    assert len(r.read(cdir)) == rows_before
+
+
+@pytest.mark.asyncio
+async def test_check_later_refuses_a_concluded_campaign(home) -> None:
+    """ops_finish stands down the pending wakes, not the right to arrange new
+    ones: a look-then-re-arm after conclusion scheduled a fresh wake, and the
+    wake shell adopted and ran it (measured 2026-08-28). The cron re-arm guard
+    covers only the wake the machinery adds by itself."""
+    from raven.agent.tools.ops import OpsCheckLaterTool
+
+    await _declare(readings=[{"name": "volt", "command": "echo 248.42", "when": "each_wake"}])
+    cdir = home / "watch"
+    await OpsTuneStatusTool().execute(campaign="watch", ledger=str(cdir / "ledger.json"))
+    (cdir / "concluded.json").write_text(
+        json.dumps({"concluded_at": "2026-08-28T14:28:11", "outcome": "stopped"}))
+
+    scheduled = []
+
+    class _Cron:
+        def add_job(self, **kw):
+            scheduled.append(kw)
+            raise AssertionError("a concluded campaign must not reach the scheduler")
+
+    tool = OpsCheckLaterTool(_Cron())
+    tool.set_context("tui", "default")
+    out = await tool.execute(campaign="watch", ledger=str(cdir / "ledger.json"),
+                             eta_seconds=60, basis="fresh look taken just now")
+
+    text = getattr(out, "model_text", None) or str(out)
+    assert "REFUSED" in text and "concluded" in text.lower()
+    assert scheduled == []

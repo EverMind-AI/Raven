@@ -703,3 +703,253 @@ def test_no_wrapper_swallows_the_auto_marking_switch():
     lazy = LazyProvider(inner, "m", inner().generation)
     lazy.disable_auto_cache_control = True
     assert lazy._built().disable_auto_cache_control is True, "set before the build, applied at it"
+
+
+# --- The stable prefix of the system message ---
+
+
+class TestStablePrefixSplit:
+    """A second breakpoint, for the part of the system message that outlives a turn.
+
+    The system message is rebuilt every turn and its tail is derived from what
+    the user just said, so a breakpoint at its end keys on text that changes and
+    re-bills the identity and bootstrap in front of it. The split gives that head
+    a key of its own; what the model reads must not change by one byte.
+    """
+
+    def test_the_two_blocks_still_read_as_the_original_message(self):
+        text = "IDENTITY\n\n---\n\nBOOTSTRAP\n\n---\n\nRECALL for this turn"
+        blocks = prompt_cache.split_stable_prefix(text, len("IDENTITY\n\n---\n\nBOOTSTRAP\n\n---\n\n"))
+
+        assert blocks is not None
+        assert "".join(b["text"] for b in blocks) == text
+
+    def test_a_boundary_at_either_end_is_refused(self):
+        text = "only one segment"
+
+        assert prompt_cache.split_stable_prefix(text, 0) is None
+        assert prompt_cache.split_stable_prefix(text, len(text)) is None
+        assert prompt_cache.split_stable_prefix(text, len(text) + 5) is None
+
+    def test_content_that_is_already_blocks_is_refused(self):
+        assert prompt_cache.split_stable_prefix([{"type": "text", "text": "x"}], 1) is None
+
+
+class TestProviderPlacesBothSystemBreakpoints:
+    """What ``_apply_cache_control`` does with, and without, a declared boundary."""
+
+    @staticmethod
+    def _provider():
+        from raven.providers.litellm_provider import LiteLLMProvider
+
+        return LiteLLMProvider(
+            api_key="k",
+            api_base="https://openrouter.ai/api/v1",
+            provider_name="openrouter",
+            default_model="openrouter/anthropic/claude-fable-5",
+        )
+
+    @staticmethod
+    def _marks(content):
+        return [i for i, b in enumerate(content) if "cache_control" in b]
+
+    def test_a_declared_boundary_gets_a_breakpoint_of_its_own(self):
+        head = "IDENTITY\n\n---\n\nBOOTSTRAP\n\n---\n\n"
+        text = head + "RECALL for this turn"
+        msgs = [{"role": "system", "content": text, prompt_cache.STABLE_PREFIX_KEY: len(head)}]
+
+        out, _ = self._provider()._apply_cache_control(msgs, None)
+
+        content = out[0]["content"]
+        assert self._marks(content) == [0, 1], "the stable head and the end of the message"
+        assert content[0]["text"] == head
+        assert "".join(b["text"] for b in content) == text, "the model must read the same bytes"
+
+    def test_without_a_boundary_nothing_changes(self):
+        text = "one undivided system prompt"
+        msgs = [{"role": "system", "content": text}]
+
+        out, _ = self._provider()._apply_cache_control(msgs, None)
+
+        content = out[0]["content"]
+        assert self._marks(content) == [0]
+        assert content[0]["text"] == text
+
+    def test_a_boundary_the_message_cannot_honour_is_ignored(self):
+        """A stale or out-of-range offset falls back rather than reshaping.
+
+        The offset is measured by the assembler over the phase-A parts and the
+        message only grows after that, so it cannot run past the end today --
+        but a caller that builds its own system message may set anything, and
+        the wrong answer to that is a request split at a place nobody chose.
+        """
+        text = "short"
+        msgs = [{"role": "system", "content": text, prompt_cache.STABLE_PREFIX_KEY: 500}]
+
+        out, _ = self._provider()._apply_cache_control(msgs, None)
+
+        content = out[0]["content"]
+        assert self._marks(content) == [0]
+        assert content[0]["text"] == text
+
+    def test_the_boundary_key_never_reaches_the_wire(self):
+        """It is Raven's own bookkeeping; the sanitizer's allow-list drops it."""
+        from raven.providers.litellm_provider import LiteLLMProvider
+
+        msgs = [{"role": "system", "content": "a" * 40, prompt_cache.STABLE_PREFIX_KEY: 10}]
+
+        sent = LiteLLMProvider._sanitize_messages(msgs)
+
+        assert prompt_cache.STABLE_PREFIX_KEY not in sent[0]
+
+
+class TestTheLifetimeEveryMarkAsksFor:
+    """One lifetime, set once, carried by every module that writes the field.
+
+    Split lifetimes would be worse than a wrong one: two marks on the same
+    prefix asking for different lifetimes make the upstream cache it twice,
+    which is the doubling this module exists to prevent, arrived at from the
+    other direction.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore(self):
+        yield
+        prompt_cache.set_ttl(None)
+
+    def test_the_default_asks_for_nothing(self):
+        assert prompt_cache.cache_control() == {"type": "ephemeral"}
+
+    def test_an_hour_is_carried_on_the_field(self):
+        prompt_cache.set_ttl("1h")
+
+        assert prompt_cache.cache_control() == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_a_lifetime_nobody_defines_is_refused_here(self):
+        """Not forwarded and left to the upstream: an unrecognised `ttl` is
+        accepted, billed, and silently behaves as though none was asked for."""
+        with pytest.raises(ValueError, match="cache ttl"):
+            prompt_cache.set_ttl("2h")
+
+        assert prompt_cache.cache_control() == {"type": "ephemeral"}
+
+    def test_each_call_hands_back_its_own_dict(self):
+        """These land in request payloads that callers copy and mutate."""
+        first = prompt_cache.cache_control()
+        first["type"] = "tampered"
+
+        assert prompt_cache.cache_control() == {"type": "ephemeral"}
+
+    def test_every_writer_goes_through_it(self):
+        """The strategies and the provider, not just whichever was changed."""
+        import re
+
+        for path in _production_files():
+            body = path.read_text(encoding="utf-8")
+            if path.name == "prompt_cache.py" or '"cache_control"' not in body:
+                continue
+            assert not re.search(r'"cache_control":\s*CACHE_CONTROL\b', body), (
+                f"{path} writes the constant directly, so it cannot carry a configured lifetime"
+            )
+
+
+class TestStreamedCacheTokensReachTheAccounting:
+    """The streamed shape used to arrive under names nothing downstream read."""
+
+    @staticmethod
+    def _provider():
+        from raven.providers.litellm_provider import LiteLLMProvider
+
+        return LiteLLMProvider(
+            api_key="k",
+            api_base="https://openrouter.ai/api/v1",
+            provider_name="openrouter",
+            default_model="openrouter/anthropic/claude-fable-5",
+        )
+
+    @staticmethod
+    def _openrouter_streamed_usage(cached: int, written: int):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            prompt_tokens=8479,
+            completion_tokens=4,
+            total_tokens=8483,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=cached, cache_write_tokens=written),
+        )
+
+    def test_the_openrouter_streamed_shape_is_understood(self):
+        from raven.providers.litellm_provider import _cache_tokens
+
+        read, write = _cache_tokens(self._openrouter_streamed_usage(7383, 1079))
+
+        assert (read, write) == (7383, 1079)
+
+    def test_the_anthropic_shape_still_is(self):
+        from types import SimpleNamespace
+
+        from raven.providers.litellm_provider import _cache_tokens
+
+        usage = SimpleNamespace(cache_read_input_tokens=11, cache_creation_input_tokens=22)
+
+        assert _cache_tokens(usage) == (11, 22)
+
+    def test_a_response_with_no_cache_activity_counts_none(self):
+        from types import SimpleNamespace
+
+        from raven.providers.litellm_provider import _cache_tokens
+
+        assert _cache_tokens(SimpleNamespace(prompt_tokens=5)) == (0, 0)
+
+    def test_a_warm_streamed_turn_is_no_longer_priced_as_fresh(self):
+        """It was billed at 4x: 8,479 fresh instead of 7,383 read + 1,079 written."""
+        from raven.agent.loop.main import AgentLoop
+        from raven.providers.base import LLMResponse
+        from raven.providers.litellm_provider import _cache_tokens
+
+        read, write = _cache_tokens(self._openrouter_streamed_usage(7383, 1079))
+        usage = {"prompt_tokens": 8479, "completion_tokens": 4, "total_tokens": 8483}
+        usage["cache_read_input_tokens"] = read
+        usage["cache_creation_input_tokens"] = write
+
+        snapshot = AgentLoop._build_usage_snapshot(
+            LLMResponse(content="ok", usage=usage), "anthropic/claude-haiku-4.5", "k"
+        )
+
+        assert snapshot.cache_read_tokens == 7383
+        assert snapshot.cache_write_tokens == 1079
+        assert snapshot.input_tokens == 8479 - 7383 - 1079
+
+    def test_the_terminal_stream_chunk_carries_the_normalised_names(self):
+        """The seam itself: what `_normalize_stream_chunk` hands the loop.
+
+        Covers the integration the two tests above stop short of -- they drive
+        the extractor and the snapshot, and the bug lived between them.
+        """
+        from types import SimpleNamespace
+
+        chunk = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=None), finish_reason="stop")],
+            usage=self._openrouter_streamed_usage(7383, 1079),
+        )
+
+        delta = self._provider()._normalize_stream_chunk(chunk)
+
+        assert delta is not None
+        assert delta.usage["cache_read_input_tokens"] == 7383
+        assert delta.usage["cache_creation_input_tokens"] == 1079
+
+    def test_a_stream_chunk_with_no_cache_activity_adds_no_names(self):
+        """Absent, not zero: the accounting above distinguishes them."""
+        from types import SimpleNamespace
+
+        chunk = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=None), finish_reason="stop")],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+        )
+
+        delta = self._provider()._normalize_stream_chunk(chunk)
+
+        assert delta is not None
+        assert "cache_read_input_tokens" not in delta.usage
+        assert "cache_creation_input_tokens" not in delta.usage
