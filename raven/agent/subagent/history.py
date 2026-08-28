@@ -192,6 +192,7 @@ class SpawnRecord:
         # conversation to everos. Empty until `finish` runs, and stays empty if
         # it returns early -- there is nothing to prime with in that case either.
         self.turn: list[dict[str, Any]] = []
+        self._finished = False
 
     @classmethod
     def open(
@@ -231,6 +232,12 @@ class SpawnRecord:
         by the RPC layer, and neither should have to import the other's module to
         pass a bag of counters through.
         """
+        # First outcome wins: a cancel racing a completion ran finish twice,
+        # appending a duplicate turn to the instance log and clobbering the
+        # recorded status.
+        if self._finished:
+            return
+        self._finished = True
         try:
             if not self.dir.is_dir():
                 return

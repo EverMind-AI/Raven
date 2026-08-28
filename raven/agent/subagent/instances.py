@@ -394,7 +394,10 @@ def reconcile_instance_rows(
             if row.get("runId") not in runs:
                 out.append({**row, "status": "interrupted"})
                 continue
-        elif kind == "cli" and row.get("status") in ("pending", "running"):
+        elif kind in ("cli", "acp") and row.get("status") in ("pending", "running"):
+            # An acp row answers to the same in-flight index as a cli spawn:
+            # a bound server whose process died leaves no live handle, and
+            # without this branch such a row read "running" forever.
             session_key = row.get("sessionKey", "")
             if session_key not in live_by_session:
                 live_by_session[session_key] = live_handles(session_key)

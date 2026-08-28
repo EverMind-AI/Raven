@@ -48,7 +48,7 @@ async def test_deliver_text_calls_channel_send():
 
 
 async def test_deliver_media_out_sends_local_paths():
-    ch = _FakeChannel()
+    ch = _FakeChannel(file_attachments=True)
     adapter = ChannelOutletAdapter(ch)
     media = (
         Media(path="/tmp/a.png", mime="image/png", kind="image"),
@@ -58,6 +58,19 @@ async def test_deliver_media_out_sends_local_paths():
     assert len(ch.sent) == 1
     # media carries the local file paths (channels handle them, the hub does not).
     assert ch.sent[0][2] == ["/tmp/a.png", "/tmp/b.png"]
+
+
+async def test_deliver_media_out_falls_back_without_attachments():
+    ch = _FakeChannel(file_attachments=False)
+    adapter = ChannelOutletAdapter(ch)
+    media = (Media(path="/tmp/a.png", mime="image/png", kind="image"),)
+    await adapter.deliver(MediaOut(media=media, source=_src()))
+    assert len(ch.sent) == 1
+    chat_id, content, sent_media = ch.sent[0]
+    # A channel that ignores ``media`` in send must not get an empty body --
+    # the message would silently evaporate. It gets the file list note instead.
+    assert sent_media is None
+    assert "a.png" in content and content.strip()
 
 
 async def test_deliver_eats_streaming_and_in_turn_events():

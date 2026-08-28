@@ -39,7 +39,15 @@ class ChannelOutletAdapter:
         if isinstance(out, Text):
             await self._channel.send(out.source.chat_id, out.content)
         elif isinstance(out, MediaOut):
-            await self._channel.send(out.source.chat_id, "", media=[m.path for m in out.media])
+            # Same capability gate as the file-delivery path below: a channel
+            # that cannot attach files ignores ``media`` in send, and with an
+            # empty body the whole message silently evaporates (qq did).
+            if self.capabilities.file_attachments:
+                await self._channel.send(out.source.chat_id, "", media=[m.path for m in out.media])
+            else:
+                names = ", ".join(m.path.rsplit("/", 1)[-1] for m in out.media)
+                note = f"Files ready: {names}. This channel cannot attach files; open the same session in Raven UI or TUI."
+                await self._channel.send(out.source.chat_id, note)
         elif isinstance(out, ToolEvent) and out.phase is ToolPhase.COMPLETE:
             delivery = (out.metadata or {}).get("raven_delivery")
             if not isinstance(delivery, dict):

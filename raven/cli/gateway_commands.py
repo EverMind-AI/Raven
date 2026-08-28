@@ -10,7 +10,9 @@ this command body.
 from __future__ import annotations
 
 import asyncio
+import signal
 import time
+from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -555,6 +557,7 @@ def register(app: typer.Typer) -> None:
                     user_pool=config.gateway.user_pool,
                     system_pool=config.gateway.system_pool,
                     send_max_retries=config.gateway.send_max_retries,
+                    shutdown_grace=config.gateway.shutdown_grace,
                 )
 
                 # A channel enabled while the gateway runs gets its outlet too:
@@ -976,6 +979,16 @@ def register(app: typer.Typer) -> None:
                         _logger.exception(
                             "memory backend stop failed; continuing shutdown",
                         )
+
+        # `raven web --stop` reaches this process with SIGTERM. Route it onto
+        # the same path as Ctrl-C so run()'s teardown chain executes; the
+        # default action kills the process with zero teardown. suppress: only
+        # the main thread may set signal handlers.
+        def _on_term(_signum: int, _frame: object) -> None:
+            raise KeyboardInterrupt
+
+        with suppress(ValueError):
+            signal.signal(signal.SIGTERM, _on_term)
 
         bounded_asyncio.run(run())
 
