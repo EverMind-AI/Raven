@@ -393,6 +393,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [selection]
   )
 
+  // Re-pins the transcript to its bottom and restores the stickiness a manual
+  // scroll broke, so what arrives next follows on screen instead of below it.
+  const revealLatest = useCallback(() => scrollRef.current?.scrollToBottom(), [])
+
   const appendMessage = useCallback(
     (msg: Msg) => setHistoryItems(prev => capHistory(appendTranscriptMessage(prev, msg))),
     []
@@ -833,6 +837,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     composerState,
     gw,
     maybeGoodVibes,
+    revealLatest,
     setLastUserMsg,
     slashRef,
     submitRef,

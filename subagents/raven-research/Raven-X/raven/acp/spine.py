@@ -305,6 +305,11 @@ class AcpOutlet:
             "kind": tool_kind(ev.name or None),
             "status": "in_progress",
         }
+        # The name itself, which neither of the two fields above carries:
+        # ``kind`` is ten values wide and a tool this build never filed lands on
+        # ``other``, while the title is written for a person to read.
+        if ev.name:
+            update["_meta"] = {"raven.toolName": ev.name}
         found = locations(ev.arguments, self._cwd_for(session_id) if self._cwd_for else None)
         if found:
             update["locations"] = found

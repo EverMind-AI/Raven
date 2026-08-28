@@ -143,6 +143,22 @@ class TestTranslatedFrames:
 
         assert result.updates[0]["locations"] == [{"path": "/work/a.py"}]
 
+    def test_a_tool_start_states_its_own_name_in_meta(self):
+        """``kind`` is ten values wide, and a tool this build never filed lands
+        on ``other`` -- which names nothing. A raven client reads the name here
+        instead of parsing it back out of the title."""
+        result = translate(
+            {
+                "type": "tool.start",
+                "payload": {"tool_call_id": "t", "name": "glob", "arguments": {"pattern": "src/**/*.ts"}},
+            }
+        )
+        update = result.updates[0]
+
+        assert update["_meta"]["raven.toolName"] == "glob"
+        assert update["kind"] == "other"
+        validate_def("SessionUpdate", update)
+
     def test_a_blocking_tool_is_marked_in_meta(self):
         """There is no standard field for it, and a client that clocks the stream
         needs to stop the clock: a blocking call may emit nothing for minutes."""

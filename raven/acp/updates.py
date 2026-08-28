@@ -388,6 +388,13 @@ def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | 
     if found:
         update["locations"] = found
     extra = dict(meta or {})
+    # The tool's own name. ``kind`` is ten values wide and a tool this build
+    # added but never filed lands on ``other``, which names nothing; the title
+    # carries the name only as a prefix a reader has to parse back out. There is
+    # no standard field for it either, so it rides _meta the way
+    # claude-agent-acp's ``_meta.claudeCode.toolName`` does.
+    if isinstance(name, str) and name:
+        extra["raven.toolName"] = name
     # ``blocking`` says the call has no deadline and may emit nothing for as long
     # as it runs. A client that clocks the stream needs it, and there is no
     # standard field for it, so it rides _meta.

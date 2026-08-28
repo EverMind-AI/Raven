@@ -262,6 +262,13 @@ class AcpOutlet:
             # arguments verbatim, and for exec that is the whole command line --
             # published into a transcript the client persists. The title carries
             # what a client needs to draw the row.
+            #
+            # The name itself rides _meta, because neither of the other two
+            # carries it: ``kind`` is ten values wide and a tool this build
+            # never filed lands on ``other``, while the title is whatever
+            # ``display`` chose to show a person.
+            if out.name:
+                update["_meta"] = {"raven.toolName": out.name}
             found = locations(out.arguments, cwd)
             if found:
                 update["locations"] = found

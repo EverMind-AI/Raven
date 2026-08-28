@@ -25,12 +25,28 @@ this class rather than guessed at per adapter.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from raven.agent.subagent.tool_vocabulary import SUBJECT_KEYS
 
 _FALLBACK_TOOL = "tool_call"
+
+# The kind an adapter sends for a call none of the other nine describe. It is
+# the one value that names nothing, so a call badged with it is the only one
+# worth looking elsewhere for a name for.
+_UNSPECIFIC_KIND = "other"
+
+# Where a raven-family adapter puts the tool's real name, on the terms
+# claude-agent-acp puts its own in ``_meta.claudeCode.toolName``.
+_RAVEN_TOOL_NAME = "raven.toolName"
+
+# A leading identifier in a title, alone or ahead of ``": <subject>"`` -- the
+# shape :func:`raven.acp.tool_kinds.title_for` builds. Anchored and bounded so
+# prose cannot match: a title of "Ran the tests" has a space where this wants a
+# colon or the end of the string.
+_TITLE_NAME = re.compile(r"\A([A-Za-z_][A-Za-z0-9_.]*)(?::\s|\Z)")
 
 # How much of a call fits in one label before it stops being one.
 _LABEL_CHARS = 120
@@ -129,6 +145,21 @@ def content_texts(content: Any) -> list[str]:
     return []
 
 
+def _named_by_title(update: dict[str, Any]) -> str | None:
+    """The tool name a title states outright, if it states one.
+
+    Last resort, and only for a call badged ``other``: a title is written for a
+    person and most adapters spend it on prose. A raven-family adapter does not
+    -- ``title_for`` writes ``"<name>: <subject>"`` -- so the one adapter whose
+    ``kind`` table has fallen behind its tool list is still readable.
+    """
+    title = update.get("title")
+    if not isinstance(title, str):
+        return None
+    match = _TITLE_NAME.match(title.strip())
+    return match.group(1) if match else None
+
+
 def _first_location(update: dict[str, Any]) -> str:
     locations = update.get("locations")
     if not isinstance(locations, list):
@@ -156,9 +187,23 @@ class AcpDialect:
         read boundary's job (:mod:`raven.agent.subagent.tool_vocabulary`),
         because a record that renamed it could never be read back for what the
         agent actually ran.
+
+        ``other`` is the exception, because it is the one kind that names
+        nothing: a tool absent from the adapter's own kind table is badged with
+        it, and the row then reads "other" for what was a ``glob``. A
+        raven-family adapter states the real name on ``_meta`` and, on a build
+        predating that, in its title -- both finer than the kind, and both
+        still the transport's own vocabulary rather than a rename.
         """
+        named = _dict(update.get("_meta")).get(_RAVEN_TOOL_NAME)
+        if isinstance(named, str) and named:
+            return named
         kind = update.get("kind")
-        return kind if isinstance(kind, str) and kind else _FALLBACK_TOOL
+        if not isinstance(kind, str) or not kind:
+            return _FALLBACK_TOOL
+        if kind != _UNSPECIFIC_KIND:
+            return kind
+        return _named_by_title(update) or kind
 
     def argument(self, update: dict[str, Any]) -> str:
         """The call's subject: what a reader needs beside the verb.

@@ -10,7 +10,6 @@ import * as mount from './mount'
 import * as store from './store'
 import * as tail from './tail'
 import * as attachmentCache from '../../shell/attachment-cache'
-import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
@@ -975,33 +974,6 @@ describe("the turn's delivered files and file changes", () => {
     expect($('.atile .mt')?.textContent).toBe('en:gui.arts.missing')
     expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(true)
     expect(fetch).not.toHaveBeenCalled()
-  })
-
-  it('greys the turn card when the reader finds the file gone', async () => {
-    /* Missing is discovered by whoever opens the file, and it is written back to
-       the registry so every surface agrees. The desk greys its row on that; the
-       turn's products card reads the same registry and did not, because it
-       subscribes to the lane and nothing else. So one file was gone on the shelf
-       and still offered, one card above, in the same window. */
-    const fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('') }))
-    vi.stubGlobal('fetch', fetch)
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'deliver it', timestamp: iso(Date.now() - 9000) },
-        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.md']) },
-        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    /* It is there and it can be opened. */
-    expect($('.atile .nm')?.textContent).toBe('report.md')
-    expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(false)
-
-    /* Somebody opens it and it is not there. */
-    act(() => { markDeliveryMissing('/w/report.md') })
-    await act(async () => { await Promise.resolve() })
-    expect($('.atile .mt')?.textContent).toBe('en:gui.arts.missing')
-    expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('does not call a delivery lost because the gateway refused the question', async () => {

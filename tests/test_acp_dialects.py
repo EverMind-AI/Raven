@@ -285,6 +285,50 @@ def test_a_kindless_update_is_the_no_name_case() -> None:
     assert AcpDialect().tool_name({}) == "tool_call"
 
 
+def test_a_raven_adapter_states_the_tool_name_on_its_meta() -> None:
+    """The finest grain there is, and the one that survives a stale kind table.
+
+    ``glob`` is filed under no kind by a raven build that renamed ``find``, so
+    the kind alone reads "other" for a call the adapter can name exactly.
+    """
+    update = {"kind": "other", "title": "glob: src/**/*.ts", "_meta": {"raven.toolName": "glob"}}
+
+    assert AcpDialect().tool_name(update) == "glob"
+
+
+def test_a_kind_that_names_nothing_falls_back_to_the_title() -> None:
+    """The measured raven-code build: ``glob`` is absent from its kind table.
+
+    ``other`` is the one kind worth going behind, because it is the one that
+    says nothing. Its title is ``"<name>: <subject>"``, so the name is there.
+    """
+    spec = AcpDialect()
+
+    assert spec.tool_name({"kind": "other", "title": "glob: src/**/*.ts"}) == "glob"
+    assert spec.tool_name({"kind": "other", "title": "todowrite"}) == "todowrite"
+
+
+def test_a_specific_kind_is_never_second_guessed_by_a_title() -> None:
+    """Nine of the ten kinds say something; only ``other`` does not."""
+    spec = AcpDialect()
+
+    assert spec.tool_name({"kind": "execute", "title": "Terminal"}) == "execute"
+    assert spec.tool_name({"kind": "read", "title": "Read: /tmp/a"}) == "read"
+
+
+def test_a_prose_title_leaves_an_unspecific_call_unspecific() -> None:
+    """A title is written for a person, and most adapters spend it on prose.
+
+    Guessing a tool name out of a sentence is worse than the generic kind: the
+    row would name a tool nothing ever ran.
+    """
+    spec = AcpDialect()
+
+    assert spec.tool_name({"kind": "other", "title": "Ran the tests"}) == "other"
+    assert spec.tool_name({"kind": "other", "title": "Generating image (1024x1024)"}) == "other"
+    assert spec.tool_name({"kind": "other"}) == "other"
+
+
 def test_the_claude_dialect_reports_claudes_own_tool_name() -> None:
     update = {"kind": "search", "_meta": {"claudeCode": {"toolName": "Glob"}}}
 

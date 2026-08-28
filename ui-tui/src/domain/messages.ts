@@ -3,7 +3,13 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { DagGetResult, SubagentCall, SubagentListResult, TranscriptDelegated } from '../rpc/index.js'
+import type {
+  DagGetResult,
+  SubagentCall,
+  SubagentListResult,
+  TranscriptDelegated,
+  TranscriptNotice
+} from '../rpc/index.js'
 import type { Msg, SessionInfo } from '../types.js'
 import type { DagRunState } from './dagRun.js'
 import type { FoldRow } from './episodeFold.js'
@@ -88,6 +94,29 @@ export const deliveredMessageKey = (status: TranscriptDelegated['status']): stri
 }
 
 /**
+ * The line a runtime notice draws, live or replayed -- the one place that maps
+ * a notice to wording, for the same reason `deliveredMessageKey` is one: the
+ * live stream and a resumed transcript must not word the same event
+ * differently. The kind picks the sentence, so it follows the reader's locale;
+ * the detail is the blocking tool's own first line, shown verbatim under it.
+ *
+ * Empty for a notice with no kind, which is what a caller checks to decide
+ * there is no line to draw at all.
+ */
+export const noticeLine = (notice?: null | TranscriptNotice): string => {
+  const kind = typeof notice?.kind === 'string' ? notice.kind.trim() : ''
+
+  if (!kind) {
+    return ''
+  }
+
+  const said = t(`gui.notice.${kind}`, kind)
+  const detail = typeof notice?.detail === 'string' ? notice.detail.trim() : ''
+
+  return detail ? `${said}\n${detail}` : said
+}
+
+/**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
  *
@@ -132,6 +161,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       duration_ms: durationMs,
       metadata,
       name,
+      notice,
       origin,
       reasoning_content: reasoning,
       reasoning_ms: reasoningMs,
@@ -203,6 +233,30 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
           addUnique(artifacts.changes, change)
         }
       }
+    }
+
+    // An assistant entry that carries a notice had its text written by the
+    // runtime, not the model -- `_save_turn` renames the stored key for exactly
+    // that reason. So the notice is drawn in the text's place and in the
+    // reader's language, as a system row: that closes the turn it belongs to
+    // (see `foldRowsIntoEpisodes`), which lands it where the live path commits
+    // it too -- after the turn's steps, before the artifact shelf.
+    const runtimeNotice = role === 'assistant' ? noticeLine(notice) : ''
+
+    if (runtimeNotice) {
+      if (calls.length || reasoning) {
+        folded.push({
+          role,
+          text: '',
+          ...(calls.length ? { calls } : {}),
+          ...(reasoning ? { reasoning } : {}),
+          ...(reasoningMs != null ? { reasoningMs } : {})
+        })
+      }
+
+      folded.push({ role: 'system', text: runtimeNotice })
+
+      continue
     }
 
     // The backend joins only `type=="text"` blocks, so an image-only message
@@ -395,6 +449,9 @@ interface TranscriptRow {
   duration_ms?: number
   name?: string
   metadata?: Record<string, unknown>
+  /** See `TranscriptMessage.notice`: runtime prose on an assistant entry, which
+   *  replaces the entry's own text rather than accompanying it. */
+  notice?: TranscriptNotice
   /** See `GatewayTranscriptMessage.origin`: set when the runtime opened the turn. */
   origin?: string
   reasoning_content?: string
