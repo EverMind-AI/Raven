@@ -18,6 +18,12 @@ class ActiveSkillsSegmentBuilder:
     name = "active_skills"
     order = 4
     needs_prefix = False
+    # The always-on skills do not depend on the message -- but this segment
+    # sits behind `memory`, so the stable run has already ended by the time the
+    # assembler reaches it and the flag buys nothing until the two are
+    # reordered. Declared honestly anyway: the flag describes the segment, and
+    # a reorder should not also have to discover what this one is.
+    stable = True
 
     def __init__(
         self,

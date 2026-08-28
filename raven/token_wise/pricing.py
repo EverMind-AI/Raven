@@ -13,12 +13,17 @@ than a rate:
 
 Non-Anthropic providers (no cache support) pass ``cache_read_tokens=0``,
 ``cache_write_tokens=0`` and the function collapses to the standard formula.
+
+The write multiplier is asked of ``providers.prompt_cache`` rather than fixed
+here, because ``tokenWise.cacheTtl`` chooses it: an hour-long write costs 2.0x
+the uncached prompt rate where the default five-minute one costs 1.25x.
 """
 
 from __future__ import annotations
 
 from loguru import logger
 
+from raven.providers.prompt_cache import write_rate_multiplier
 from raven.providers.rates import is_plan_billed, token_rates
 
 # Track which unknown models we've already warned about so we log once each.
@@ -61,7 +66,7 @@ def estimate_cost_usd(
         input_tokens * prompt_rate
         + output_tokens * completion_rate
         + cache_read_tokens * prompt_rate * 0.1
-        + cache_write_tokens * prompt_rate * 1.25
+        + cache_write_tokens * prompt_rate * write_rate_multiplier()
     )
 
 
