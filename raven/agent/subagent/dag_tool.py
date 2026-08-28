@@ -41,6 +41,7 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+from raven.agent.subagent.dag_adjudication import AdjudicationDesk
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_machines import refusal as machines_refusal
@@ -49,14 +50,16 @@ from raven.agent.subagent.dag_machines import verdict_for_async as machines_verd
 from raven.agent.subagent.dag_machines import with_facts as with_machine_facts
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
-from raven.agent.subagent.dag_runner import ProgressPublisher, run_dag
+from raven.agent.subagent.dag_runner import ExceptionAnnouncer, ProgressPublisher, run_dag
 from raven.agent.subagent.dag_store import SessionNodes, index_guard, make_run_id, read_index, read_session_nodes
+from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
 from raven.agent.subagent.history import dag_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
 from raven.agent.tools.base import Tool, ToolResult
+from raven.config.raven import SubagentDagConfig
 
 if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry
@@ -83,6 +86,14 @@ QuotaCharger = Callable[[str | None], "str | None"]
 # ``confirm`` gate's only route to a human; hosts that have no way to ask leave it
 # unwired, and see ``_confirmed`` for what happens then.
 Ask = Callable[[str, str], Awaitable[bool]]
+
+# (conversation_id, report, timeout_s) -> the message to continue the node with,
+# "abandon" or "" to give up on it, or None when there is no route to a human at
+# all. `timeout_s` is the runner's remaining budget for the whole adjudication
+# round, not this one question's: see ``_adjudicate_open_nodes`` for why the
+# questions are asked in series and why that makes the budget shared. Only a
+# foreground run is handed one; a backgrounded run answers through the desk.
+Adjudicate = Callable[[str, str, float | None], Awaitable[str | None]]
 
 
 def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | ToolResult":
@@ -114,6 +125,10 @@ class _DagOrigin:
     channel: str
     chat_id: str
     conversation: str
+
+    def as_dict(self) -> dict[str, str]:
+        """The shape the announcers take: channel, chat, and session key."""
+        return {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
 
 
 @dataclass(frozen=True)
@@ -262,12 +277,16 @@ class SubAgentDagTool(Tool):
         is_paused: "Callable[[], bool] | None" = None,
         gate: asyncio.Semaphore | None = None,
         announce: DagAnnouncer | None = None,
+        announce_exception: ExceptionAnnouncer | None = None,
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
         everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
+        provider_for: "Callable[[], Any] | None" = None,
+        adjudicate: "Adjudicate | None" = None,
+        verdict_config: "SubagentDagConfig | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -284,6 +303,7 @@ class SubAgentDagTool(Tool):
         # host passes the sub-agent manager's, so spawns count against it too.
         self._gate = gate if gate is not None else asyncio.Semaphore(max_concurrency)
         self._announce = announce
+        self._announce_exception = announce_exception
         # The manager's instance-state derivation, so a node that names an
         # `instance` continues that conversation on the same terms `spawn` and a
         # direct chat do. Injected rather than imported: this tool is built from
@@ -307,7 +327,16 @@ class SubAgentDagTool(Tool):
         # the loop (the controller's predicate); unwired hosts advertise, which
         # is the old contract a test or an offline entry point expects.
         self._control_reachable = control_reachable
+        # The judge's model call. Injected rather than imported: this tool is built
+        # from the same config as the loop but holds no provider of its own, and an
+        # unwired host (tests, offline entry points) simply skips the judgement.
+        self._provider_for = provider_for
+        # Only handed to a foreground run: a backgrounded one answers through
+        # `resolve_dag_node`, which a foreground call's own turn cannot reach.
+        self._adjudicate = adjudicate
+        self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
+        self._desks: dict[str, AdjudicationDesk] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
         # garbage-collected mid-graph.
@@ -434,6 +463,11 @@ class SubAgentDagTool(Tool):
             return False
         event.set()
         return True
+
+    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+        """Answer one suspended node. False when nothing was waiting on it."""
+        desk = self._desks.get(run_id)
+        return False if desk is None else desk.resolve(node_id, decision, message)
 
     def active_run_ids(self) -> list[str]:
         """Ids of runs currently accepting a cancel request."""
@@ -834,7 +868,7 @@ class SubAgentDagTool(Tool):
         self._cancels[run_id] = cancel
 
         if not background:
-            result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances)
+            result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, foreground=True)
             return _with_notices(result, notices)
 
         task = asyncio.create_task(self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances))
@@ -844,7 +878,11 @@ class SubAgentDagTool(Tool):
             self._adopt(run_id, task, origin.conversation)
         controls = ""
         if self._control_reachable is None:
-            controls = f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+            controls = (
+                f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+                "If a node reports it could not accomplish its task, you will be told, and you answer "
+                "with resolve_dag_node. "
+            )
         else:
             # Fail closed: the predicate runs after the background task is
             # already created, so a failure here must mute the hint rather
@@ -854,7 +892,11 @@ class SubAgentDagTool(Tool):
             except Exception:  # noqa: BLE001
                 reachable = False
             if reachable:
-                controls = f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+                controls = (
+                    f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+                    "If a node reports it could not accomplish its task, you will be told, and you answer "
+                    "with resolve_dag_node. "
+                )
         return _with_notices(
             ToolResult(
                 model_text=(
@@ -933,7 +975,7 @@ class SubAgentDagTool(Tool):
             await self._announce(
                 run_id,
                 str(getattr(result, "model_text", result)),
-                {"channel": origin.channel, "chat_id": origin.chat_id, "session_key": origin.conversation},
+                origin.as_dict(),
             )
         except Exception as exc:  # noqa: BLE001 - a failed announce must not also lose the log line
             logger.error("DAG run {} finished but its result could not be announced: {}", run_id, exc)
@@ -966,6 +1008,69 @@ class SubAgentDagTool(Tool):
         except Exception as emit_exc:  # noqa: BLE001
             logger.error("DAG run {} ended but its graph could not be closed: {}", run_id, emit_exc)
 
+    def _judge_node(self) -> "Callable[..., Awaitable[Verdict]] | None":
+        """The verdict call, or None when this host cannot make one.
+
+        None rather than a no-op: the runner reads it as "do not judge", which is
+        the previous behaviour, and an unwired host (a test, an offline entry
+        point) gets that behaviour without configuring anything.
+        """
+        cfg = self._verdict_config
+        if self._provider_for is None or not cfg.verdict_enabled:
+            return None
+
+        async def _judge(*, node: Any, store: Any, output: str, error: str, crashed: bool) -> Verdict:
+            # Resolved here, not when this tool was built: the loop's provider is
+            # a property over the running turn's binding, so a session that
+            # switched model must reach the judge.
+            provider = self._provider_for()
+            if provider is None:
+                return Verdict(accomplished=True)
+            evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
+            prompt = await self._node_prompt(store, node.id)
+            if crashed:
+                return await describe_failure(
+                    provider,
+                    prompt=prompt,
+                    error=error,
+                    evidence=evidence,
+                    evidence_complete=complete,
+                    model=cfg.verdict_model,
+                    timeout_s=cfg.verdict_timeout_seconds,
+                )
+            return await judge(
+                provider,
+                prompt=prompt,
+                output=output,
+                evidence=evidence,
+                evidence_complete=complete,
+                model=cfg.verdict_model,
+                timeout_s=cfg.verdict_timeout_seconds,
+            )
+
+        return _judge
+
+    async def _node_prompt(self, store: Any, node_id: str) -> str:
+        try:
+            return await store.read_text(store.prompt_path(node_id))
+        except Exception:  # noqa: BLE001 - the judge can work from output alone
+            return ""
+
+    async def _node_evidence(self, store: Any, node_id: str, budget: int) -> tuple[str, bool]:
+        """The transcript tail and whether there was a transcript at all.
+
+        The cli lane publishes only a live console and writes no transcript file,
+        so its nodes are judged on task and output alone -- and say so, rather
+        than letting a thin judgement pass for a well-evidenced one.
+        """
+        try:
+            text = await store.read_text(store.transcript_path(node_id))
+        except Exception:  # noqa: BLE001 - no transcript is a fact about the lane, not an error
+            return "", False
+        if not text.strip():
+            return "", False
+        return tail(text, budget), True
+
     async def _run(
         self,
         spec: SubAgentDagSpec,
@@ -975,9 +1080,12 @@ class SubAgentDagTool(Tool):
         dirs: _RunDirs,
         call_id: str | None,
         auto_instances: frozenset[str],
+        foreground: bool = False,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
         emit = self._emitter(origin.conversation, call_id)
+        desk = AdjudicationDesk()
+        self._desks[run_id] = desk
         try:
             result = await run_dag(
                 spec,
@@ -995,6 +1103,13 @@ class SubAgentDagTool(Tool):
                 run_id=run_id,
                 cancel=cancel,
                 auto_instances=auto_instances,
+                desk=desk,
+                judge_node=self._judge_node(),
+                announce_exception=self._announce_exception,
+                origin=origin.as_dict(),
+                max_continuations=self._verdict_config.max_continuations,
+                adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
+                adjudicate=self._adjudicate if foreground else None,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -1022,6 +1137,7 @@ class SubAgentDagTool(Tool):
             raise
         finally:
             self._cancels.pop(run_id, None)
+            self._desks.pop(run_id, None)
 
         # A terminal event carrying the authoritative manifest, so the web UI can
         # rebuild / finalize the graph (and survive a reload).

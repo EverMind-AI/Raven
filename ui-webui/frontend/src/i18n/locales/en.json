@@ -549,6 +549,7 @@
 			"failed": "failed",
 			"skipped": "skipped",
 			"cancelled": "cancelled",
+			"exception": "exception",
 			"interrupted": "interrupted",
 			"reused": "reused"
 		},

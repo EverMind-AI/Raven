@@ -24,7 +24,7 @@ import { atom } from 'nanostores'
 import type { DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunStartedEvent, SubagentCall } from '../rpc/generated.js'
 import type { SubagentProgress } from '../types.js'
 
-export type LiveAgentStatus = 'cancelled' | 'completed' | 'failed' | 'pending' | 'running' | 'skipped'
+export type LiveAgentStatus = 'cancelled' | 'completed' | 'exception' | 'failed' | 'pending' | 'running' | 'skipped'
 
 export interface LiveAgentRow {
   agent?: string
@@ -228,6 +228,7 @@ type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunStartedEvent
 const DAG_TO_LIVE: Record<string, LiveAgentStatus> = {
   cancelled: 'cancelled',
   completed: 'completed',
+  exception: 'exception',
   failed: 'failed',
   pending: 'pending',
   running: 'running',
@@ -417,12 +418,19 @@ export const applyDagEvent = (event: DagEvent): void => {
   $liveAgents.set(prune(rows, now))
 }
 
+// `subagent.list`'s wire vocabulary has no "waiting" value: the server folds
+// a suspended dag node's status to "error" alongside genuine failures (see
+// raven/rpc/methods/subagent.py's _DAG_WIRE_STATUS), so this table can't
+// disambiguate exception from failed on the wire string alone. The entry
+// below exists for the day that vocabulary grows a literal "exception";
+// today the guard in reconcileFromList is what actually protects the row.
 const WIRE_TO_LIVE: Record<string, LiveAgentStatus> = {
   cancelled: 'cancelled',
   error: 'failed',
   // Server-inferred for a non-terminal row of a run that died with its
   // gateway; never on the event wire, only in `subagent.list` snapshots.
   interrupted: 'cancelled',
+  exception: 'exception',
   ok: 'completed',
   queued: 'pending',
   run: 'running',
@@ -549,7 +557,12 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
     const existing = rows.find(r => (isDag ? r.id === item.id : r.id === item.id || r.callId === item.id))
 
     if (existing) {
-      if (isTerminal(status) && !isTerminal(existing.status)) {
+      // A row already known to be `exception` came from the dag event stream,
+      // the only channel that can say so -- the list's own "error" for that
+      // same node is the lossy wire folding failed/interrupted/exception
+      // together, not a fresher answer. Let a real resolution arrive the way
+      // it always does, as a dag event; don't let this poll manufacture one.
+      if (isTerminal(status) && !isTerminal(existing.status) && existing.status !== 'exception') {
         rows = rows.map(r =>
           r.id === existing.id ? { ...r, endedAtMs: isoToMs(item.ended_at) ?? now, settledAtMs: now, status } : r
         )
@@ -598,6 +611,7 @@ export const liveAgentCounts = (rows: LiveAgentRow[]): { pending: number; runnin
 const LIVE_TO_PROGRESS: Record<LiveAgentStatus, SubagentProgress['status']> = {
   cancelled: 'interrupted',
   completed: 'completed',
+  exception: 'interrupted',
   failed: 'failed',
   pending: 'queued',
   running: 'running',

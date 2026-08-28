@@ -37,6 +37,7 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
+import { deliveredMessageKey } from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -333,7 +334,7 @@ const dispatch = (
       // The seam where a delegated run's result re-entered the turn; without
       // it the retelling that follows reads as the model speaking unprompted.
       if (sys) {
-        const key = event.payload.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered'
+        const key = deliveredMessageKey(event.payload.status)
         sys(`↩ ${event.payload.label} — ${t(key, key)}`)
       }
       // Settle the live rows against disk: the terminal `subagent.status`

@@ -668,6 +668,22 @@ describe('a delegated result coming back', () => {
     expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_err')
   })
 
+  it('shows a suspended delivery as waiting on a decision, not as failed', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'try it', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'user', text: fenced('stalled after step 2'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'spawn', label: 'lookup', status: 'exception' },
+        },
+      ])
+    })
+    const row = $('.sdlv')!
+    expect(row.classList.contains('err')).toBe(false)
+    expect(row.classList.contains('warn')).toBe(true)
+    expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_exception')
+  })
+
   it('gives a delivery that carried nothing no fold to open', () => {
     act(() => {
       mount.history([
@@ -729,7 +745,7 @@ describe('a delegated result coming back', () => {
     /* Live: the event, then the model's retelling. */
     act(() => {
       mount.delivered({
-        label: 'run-7', isDag: true, err: false, body: injected,
+        label: 'run-7', isDag: true, status: 'ok', body: injected,
         open: () => (window.DS as { transcript?: TranscriptSource }).transcript?.openDagRun?.('run-7'),
       })
     })

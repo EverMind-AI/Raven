@@ -18,14 +18,14 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
- * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagNodeStatus".
  */
-export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
+export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
 /**
- * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagSnapshotNodeStatus".
@@ -37,7 +37,8 @@ export type DagSnapshotNodeStatus =
   | 'failed'
   | 'skipped'
   | 'cancelled'
-  | 'interrupted';
+  | 'interrupted'
+  | 'exception';
 /**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  *
@@ -279,11 +280,15 @@ export interface TranscriptNotice {
 export interface TranscriptDelegated {
   kind: 'spawn' | 'dag';
   label: string;
-  status: 'ok' | 'error';
+  status: 'ok' | 'error' | 'exception';
   /**
    * Set for kind=dag, so a client can open the run.
    */
   run_id?: string;
+  /**
+   * Set for a dag node's own message, so a client can place it against that row.
+   */
+  node_id?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1395,7 +1400,7 @@ export interface SubagentDeliveredEvent {
      * The spawn's display label, or the dag's run_id.
      */
     label: string;
-    status: 'ok' | 'error';
+    status: 'ok' | 'error' | 'exception';
     /**
      * Set for kind=dag, so a client can open the run.
      */
@@ -1404,6 +1409,10 @@ export interface SubagentDeliveredEvent {
      * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
+    /**
+     * Set for a dag node's own message, so a client can place it against that row.
+     */
+    node_id?: string;
   };
 }
 /**
@@ -1508,9 +1517,9 @@ export interface DagNodeDetail {
   output_chars: number;
   output_truncated: boolean;
   /**
-   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
    */
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */

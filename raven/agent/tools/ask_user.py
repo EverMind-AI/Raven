@@ -212,7 +212,9 @@ class AskUserTool(Tool):
         """Set the current turn's conversation_id (the broker key, turn-local)."""
         self._cid.set(conversation_id)
 
-    async def ask_direct(self, prompt: str, choices: list[str] | None, conversation_id: str) -> str | None:
+    async def ask_direct(
+        self, prompt: str, choices: list[str] | None, conversation_id: str, timeout_s: float | None = None
+    ) -> str | None:
         """One host-side question outside a model tool call.
 
         For host machinery that must confirm with the user before the model
@@ -228,7 +230,9 @@ class AskUserTool(Tool):
         """
         if not self._broker or not conversation_id:
             return None
-        return await self._broker.await_question(conversation_id, prompt=prompt, choices=_normalize_options(choices))
+        return await self._broker.await_question(
+            conversation_id, prompt=prompt, choices=_normalize_options(choices), timeout_s=timeout_s
+        )
 
     @property
     def name(self) -> str:

@@ -87,7 +87,7 @@ function onEvent(ev) {
       RavenIslands.transcript.delivered({
         label: d.label || '',
         isDag,
-        err: d.status === 'error',
+        status: d.status,
         body: d.content || '',
         open: () => {
           if (isDag) { DS.transcript.openDagRun(d.run_id || d.label || ''); return; }

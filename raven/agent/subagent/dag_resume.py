@@ -68,14 +68,14 @@ async def read_run_reconciled(
         row = rows.get(entry["node"])
         if row is not None:
             status = row.get("status") or entry["status"]
-            if status in ("pending", "running") and not live:
+            if status in ("pending", "running", "exception") and not live:
                 status = "interrupted"
             entry["status"] = status
             # A node's first registry write is its "running" transition, so
             # createdAtMs doubles as the start time a client needs to resume its
             # live duration counter.
             entry["started_at"] = entry["started_at"] or row.get("createdAtMs")
-            if status not in ("pending", "running"):
+            if status not in ("pending", "running", "exception"):
                 entry["ended_at"] = entry["ended_at"] or row.get("updatedAtMs")
         statuses.append(entry["status"])
     run["summary"] = {

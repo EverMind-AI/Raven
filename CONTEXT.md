@@ -141,7 +141,7 @@ or setting `"enabled": false` in its own `subagent.json`.
 _Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
 "builtin" — that is the in-process row, which has no subprocess and no venv.
 
-**Machine** (`raven/agent/subagent_dag/_machines.py`):
+**Machine** (`raven/agent/subagent/dag_machines.py`):
 A compute host the owner registered with a vendored agent's own Raven install
 via `raven ops connection add`, reported by that agent's
 `raven ops connection doctor --json` as a `{name, usable}` row. A vendored
@@ -1436,6 +1436,24 @@ ones as `skipped` on the way out, so "still-running" means what it says rather t
 outliving the run that claimed it. Distinct from an
 `instance` handle, which shares a sub-agent *session* rather than naming an output.
 _Avoid_: "node name" — the id is an address, not a label.
+
+**verdict** -- the judgement on whether a finished DAG node accomplished the task
+its prompt set. Made by one constrained model call over the node's prompt, its
+output, and the tail of its transcript (`raven/agent/subagent/dag_verdict.py`). A node whose
+backend returned without raising is not thereby successful; the verdict is what
+decides.
+_Avoid_: confusing with JudgeVerdict or Trajectory Verdict -- both name a different
+judgement (a turn's completion, an Attempt's pass/fail) made by a different
+subsystem; this one judges a single DAG node's output against its own prompt.
+
+**exception** (node status) -- a DAG node that did not accomplish its task and is
+waiting for the main agent to decide whether to continue or abandon it. Reached by
+two routes: the backend raised, or the backend returned and the verdict said the
+task was not accomplished. Non-terminal: its dependents stay `pending` rather than
+cascading to `skipped`.
+_Avoid_: it is not a synonym for a Python exception. A raised exception is only one
+of the two routes into this status, and `status[node.id] = "exception"` sits next to
+`except Exception as exc` in `_run_node` for that reason.
 
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`

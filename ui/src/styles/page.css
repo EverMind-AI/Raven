@@ -955,6 +955,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .daggraph .nd .workv { color: var(--amber); }
 .daggraph .nd[data-st="pending"] .id { color: var(--muted); }
 .daggraph .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
+.daggraph .nd[data-st="exception"] rect { stroke: var(--gold); stroke-width: 1.5; }
 .daggraph .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
 .daggraph .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
 /* Stopped, not failed and not skipped: the failure colour says it did not
@@ -974,6 +975,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    glyph is a square rather than a cross -- stopped is not gone wrong. */
 .daggraph .mk.stop { stroke: var(--clay); }
 .daggraph .mk.skip { stroke: var(--faint); }
+.daggraph .mk.warn { stroke: var(--gold); }
 /* An edge out of a node that has not finished is drawn faint: what has actually
    flowed through the graph is what a reader is looking for. */
 .daggraph .edge { stroke: var(--line-soft); stroke-width: 1.2; fill: none; }
@@ -1065,6 +1067,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sdlv.err .ic { stroke: var(--clay); }
 .sdlv.err .tx { color: var(--clay); }
+.sdlv.warn .ic { stroke: var(--gold); }
+.sdlv.warn .tx { color: var(--gold); }
 /* What came back, folded. It is the sub-agent's words, not Raven's, so it is
    set apart from the answer below it by a rule rather than a card: a card would
    compete with the retelling the reader is meant to read first. */

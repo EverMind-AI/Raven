@@ -666,6 +666,29 @@ async def test_a_cancelled_node_keeps_its_row(workspace: Path) -> None:
     assert by_node["survey"]["status"] == "cancelled"
 
 
+async def test_an_exception_node_is_reported_as_error(workspace: Path) -> None:
+    """A node with exception status (waiting for the caller to decide) is
+    reported as 'error' over the wire: lossy but honest that this one needs
+    the caller's attention."""
+    _write_run(
+        workspace,
+        "20260812T120000Z-deadbeef",
+        manifest={
+            "survey": {
+                "status": "exception",
+                "subagent": "Researcher",
+                "started_at": 1_700_000_000_000,
+                "ended_at": 1_700_000_004_000,
+            },
+        },
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert by_node["survey"]["status"] == "error"
+
+
 async def test_a_dag_row_is_addressed_by_run_and_node(workspace: Path) -> None:
     """A node id is unique inside its run and nowhere else, so the pair travels
     and the id is only ever a label."""

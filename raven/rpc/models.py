@@ -552,8 +552,12 @@ class CronDeliveredEvent(_Strict):
 class SubagentDeliveredPayload(_Strict):
     kind: Literal["spawn", "dag"]
     label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error"]
+    status: Literal["ok", "error", "exception"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
+    node_id: str | None = Field(
+        default=None,
+        description="Set for a dag node's own message, so a client can place it against that row.",
+    )
     content: str = Field(
         default="",
         description=(
@@ -628,7 +632,7 @@ class SubagentStatusEvent(_Strict):
     payload: SubagentStatusPayload
 
 
-DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
+DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
 
 
 class DagRunStartedNode(_Strict):
@@ -705,9 +709,10 @@ class DagRunCompletedEvent(_Strict):
 
 # Wider than DagNodeStatus: a snapshot can report ``interrupted``, which the
 # server infers for a node the registry still calls running on a run nothing is
-# executing. Nothing on the event wire may claim that. ``cancelled`` is the
-# opposite kind of fact -- the runner recorded it -- so both surfaces carry it.
-DagSnapshotNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted"]
+# executing. Nothing on the event wire may claim that.
+DagSnapshotNodeStatus = Literal[
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception"
+]
 
 
 class DagSnapshotNode(_Strict):
@@ -2284,8 +2289,12 @@ class TranscriptDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error"]
+    status: Literal["ok", "error", "exception"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
+    node_id: str | None = Field(
+        default=None,
+        description="Set for a dag node's own message, so a client can place it against that row.",
+    )
 
 
 class TranscriptMessage(_Strict):

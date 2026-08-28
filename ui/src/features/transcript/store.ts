@@ -451,12 +451,18 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
    No markers at all means nothing was fenced (wrap_untrusted returns blank
    content unchanged): fall back to every line that is not a marker, which is
    what the tool-preview cleaner does with the same input. */
+/* `status` is loosely typed and normalised here rather than by the caller,
+   because one caller is the live path's plain-JS turn handler, which has no
+   import statements and only ever hands this function a raw wire string. */
+const deliveredStatus = (v: unknown): DeliveredData['status'] =>
+  v === 'error' ? 'error' : v === 'exception' ? 'exception' : 'ok'
+
 export function delivered(lane: Lane, p: {
-  label: string; isDag: boolean; err: boolean; open: () => void; body?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string
 }): void {
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv',
-    label: p.label, isDag: p.isDag, err: p.err, open: p.open,
+    label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
     body: defence(p.body || ''), shown: false,
   } satisfies DeliveredData)
 }
@@ -1595,7 +1601,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         delivered(lane, {
           label: String(d.label || ''),
           isDag,
-          err: d.status === 'error',
+          status: d.status,
           body: m.text || '',
           open: () => {
             const src = source()
@@ -1613,7 +1619,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            measured from here. `turnNo` stays put: the workspace-turn
            bookkeeping belongs to the delegated shape, as the note above says. */
         turnAt = msOf(m.timestamp)
-        delivered(lane, { label: String(m.origin || ''), isDag: false, err: false, open: () => {} })
+        delivered(lane, { label: String(m.origin || ''), isDag: false, status: 'ok', open: () => {} })
       }
       return
     }

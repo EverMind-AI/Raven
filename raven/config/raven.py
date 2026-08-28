@@ -1422,6 +1422,46 @@ class SessionTitleConfig(_Base):
     once instead of holding a placeholder until its grace period runs out."""
 
 
+class SubagentDagConfig(_Base):
+    """Judging a finished DAG node, and adjudicating the ones that did not succeed.
+
+    A node is otherwise `completed` the moment its backend returns without raising,
+    which is a claim about the transport rather than about the work. Every field
+    here bounds a cost that judgement introduces: one extra model call per node,
+    and a graph that can now pause waiting for the main agent to decide.
+    """
+
+    verdict_enabled: bool = True
+    """On by default. Off restores the previous behaviour exactly: a node that
+    returns is completed, whatever it returned."""
+
+    verdict_model: str | None = None
+    """Model for the judge call. None inherits the agent's own. Set a cheaper tier
+    here: the task is one enum plus a sentence, not the reasoning the conversation
+    needs."""
+
+    verdict_timeout_seconds: float = 30.0
+    """Wall clock for one judge call. Past this the node is treated as having
+    accomplished its task, which is what the previous behaviour was."""
+
+    evidence_budget_chars: int = 8000
+    """Characters of the node's transcript, taken from the end, shown to the judge.
+    A bound rather than a preference: a node with dozens of tool rounds would
+    otherwise cost more to judge than it did to run. The end is where a failure's
+    evidence sits -- the last failing tool call, then the closing statement."""
+
+    adjudication_timeout_seconds: float = Field(default=600.0, le=3600.0)
+    """How long a suspended node waits for the main agent's decision before falling
+    back to the ordinary failure path. Long, and capped at an hour, because the
+    decision may require asking the user something only the user knows -- a missing
+    credential, a missing piece of the request."""
+
+    max_continuations: int = 2
+    """Continuations allowed per node, so three attempts in all. Past this the node
+    fails and its dependents are skipped. Deliberately per node and not per graph: a
+    wide graph may suspend many times, each waiting out its own timeout."""
+
+
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1436,6 +1476,7 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)

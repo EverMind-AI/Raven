@@ -226,6 +226,24 @@ describe('toTranscriptMessages: resumed tool calls', () => {
     expect(msgs[0]!.text).toBe('↩ raven-research — failed; the error just joined this conversation')
   })
 
+  it('draws the waiting variant of the delivered-arrow line for a suspended node, not the finished one', () => {
+    // A replayed transcript reaches this the same way the live line does:
+    // announce_dag_exception's stored user entry carries delegated.status
+    // "exception" for a node still open for adjudication, not a completed run.
+    const msgs = toTranscriptMessages([
+      {
+        delegated: { kind: 'dag', label: 'stuck-node', status: 'exception' },
+        origin: 'subagent',
+        role: 'user',
+        text: 'internal'
+      }
+    ])
+
+    expect(msgs[0]!.text).toBe(
+      '↩ stuck-node — hit an exception and is waiting on a decision; its report just joined this conversation'
+    )
+  })
+
   it('restores delivered and changed files after a restart', () => {
     const rows = [
       { role: 'user', text: 'build it' },

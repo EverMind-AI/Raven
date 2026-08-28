@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { DagNodeDetail } from '../rpc/index.js'
+import type { Theme } from '../theme.js'
 
 import {
   DAG_STATUS_GLYPH,
@@ -53,6 +54,17 @@ describe('DAG_STATUS_GLYPH', () => {
     // conflating them hides which node actually broke.
     expect(DAG_STATUS_GLYPH.failed.glyph).not.toBe(DAG_STATUS_GLYPH.skipped.glyph)
   })
+
+  it('gives a suspended node the warning colour, distinct from failed and pending', () => {
+    // 'exception' means the node is waiting on a decision, not that it or a
+    // dependency broke -- reusing either colour would misreport which nodes
+    // still need attention.
+    const theme = { color: { error: 'error', muted: 'muted', warn: 'warn' } } as Theme
+
+    expect(DAG_STATUS_GLYPH.exception.color(theme)).toBe('warn')
+    expect(DAG_STATUS_GLYPH.exception.glyph).not.toBe(DAG_STATUS_GLYPH.failed.glyph)
+    expect(DAG_STATUS_GLYPH.exception.glyph).not.toBe(DAG_STATUS_GLYPH.pending.glyph)
+  })
 })
 
 describe('dagRunHeadline', () => {
@@ -60,6 +72,12 @@ describe('dagRunHeadline', () => {
     const line = dagRunHeadline(run({ nodes: [node('a', 'completed'), node('b', 'running'), node('c', 'pending')] }))
 
     expect(line).toBe('3 nodes · 1 done · 1 running')
+  })
+
+  it('surfaces a suspended node in the live headline', () => {
+    const line = dagRunHeadline(run({ nodes: [node('a', 'completed'), node('b', 'exception'), node('c', 'pending')] }))
+
+    expect(line).toBe('3 nodes · 1 done · 1 exception')
   })
 
   it('reports the tally from the manifest once the run is done', () => {

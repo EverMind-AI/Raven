@@ -72,6 +72,22 @@ export const userDisplay = (text: string) => {
 }
 
 /**
+ * The i18n key for a delegated run's re-entry line, live or replayed -- the
+ * one place that maps `TranscriptDelegated.status` to wording, so a status
+ * this union grows lands the right sentence in both `chatStream` and here
+ * instead of falling through to a two-way ternary's leftover branch.
+ */
+export const deliveredMessageKey = (status: TranscriptDelegated['status']): string => {
+  if (status === 'error') {
+    return 'gui.deleg.delivered_err'
+  }
+  if (status === 'exception') {
+    return 'gui.deleg.delivered_exception'
+  }
+  return 'gui.deleg.delivered'
+}
+
+/**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
  *
@@ -135,7 +151,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
          `delegated`; a cron/sentinel/heartbeat-opened turn falls back to the
          older, label-less line rather than fabricating one. */
       if (delegated) {
-        const key = delegated.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered'
+        const key = deliveredMessageKey(delegated.status)
 
         folded.push({ role: 'system', text: `↩ ${delegated.label} — ${t(key, key)}` })
       } else {

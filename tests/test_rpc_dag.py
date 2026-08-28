@@ -132,6 +132,19 @@ async def test_dag_get_reports_a_dead_runs_live_looking_node_as_interrupted() ->
     assert by_node["node-a"]["status"] == "interrupted"
 
 
+async def test_a_suspended_node_of_a_dead_run_reads_back_interrupted() -> None:
+    """A gateway restart drops the desk, so nothing can ever answer this node."""
+    await instances_mod.get_registry().upsert_dag_node("tui:s1", RUN_ID, "node-a", "claude_code", "exception")
+
+    result = await dag_get(
+        {"run_id": RUN_ID, "session_key": "tui:s1"},
+        agent_loop_factory=_factory(_FakeDagTool(finalized=False, live=False)),
+    )
+
+    by_node = {f["node"]: f for f in result["run"]["files"]}
+    assert by_node["node-a"]["status"] == "interrupted"
+
+
 async def test_dag_node_returns_the_rendered_prompt_and_output() -> None:
     tool = _FakeDagTool(finalized=True)
 

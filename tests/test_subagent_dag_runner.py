@@ -8,6 +8,7 @@ import json
 import os
 import posixpath
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +22,7 @@ from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_graph import DagNodeSpec, parse_dag_spec
 from raven.agent.subagent.dag_runner import DagRunResult, run_dag
-from raven.agent.subagent.dag_store import read_session_nodes
+from raven.agent.subagent.dag_store import DagRunStore, read_session_nodes
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
@@ -275,7 +276,7 @@ class _FakeExec:
         session_key: str | None = None,
         instance: str | None = None,
     ) -> str:
-        self.calls.append({"task_id": task_id, "session_key": session_key, "instance": instance})
+        self.calls.append({"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task})
         if task_id in self.fail_ids:
             raise RuntimeError(f"boom {task_id}")
         if self.reply is not None:
@@ -4409,3 +4410,1206 @@ async def test_a_capped_node_reply_still_lands_whole_in_its_output_file() -> Non
     manifest = json.loads(backend.files[posixpath.join(posixpath.dirname(entry["output_file"]), "manifest.json")])
     assert manifest["a"]["output_truncated"] is True
     assert manifest["a"]["output_chars_total"] == 400
+
+
+from raven.agent.subagent.dag_runner import _cascade_failures, _mark_stopped, _tally
+
+
+def test_cascade_leaves_an_exception_nodes_dependents_pending():
+    deps = {"a": [], "b": ["a"], "c": ["b"]}
+    status = {"a": "exception", "b": "pending", "c": "pending"}
+    _cascade_failures(deps, status)
+    assert status == {"a": "exception", "b": "pending", "c": "pending"}
+
+
+def test_cascade_still_skips_behind_a_failed_node():
+    deps = {"a": [], "b": ["a"]}
+    status = {"a": "failed", "b": "pending"}
+    _cascade_failures(deps, status)
+    assert status["b"] == "skipped"
+
+
+def test_cascade_skips_dependents_once_an_exception_becomes_failed():
+    deps = {"a": [], "b": ["a"]}
+    status = {"a": "exception", "b": "pending"}
+    _cascade_failures(deps, status)
+    status["a"] = "failed"
+    _cascade_failures(deps, status)
+    assert status["b"] == "skipped"
+
+
+def test_mark_stopped_cancels_a_suspended_node():
+    status = {"a": "exception", "b": "running", "c": "pending"}
+    _mark_stopped(status)
+    assert status == {"a": "cancelled", "b": "cancelled", "c": "skipped"}
+
+
+def test_tally_does_not_count_exception_as_a_terminal_state():
+    counts = _tally({"a": "completed", "b": "exception"})
+    assert counts == {"total": 2, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0}
+
+
+# --- adjudication desk: node decision and waiter coordination ---------
+
+
+async def test_desk_resolve_wakes_the_waiter():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    event = desk.open("a")
+    assert desk.is_open("a") is True
+    assert desk.resolve("a", "continue", "try the staging token") is True
+    await asyncio.wait_for(event.wait(), timeout=1)
+    answer = desk.take("a")
+    assert answer.decision == "continue"
+    assert answer.message == "try the staging token"
+
+
+def test_desk_refuses_a_node_it_is_not_waiting_on():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    assert desk.resolve("nope", "abandon", None) is False
+
+
+def test_desk_take_is_once_only():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.resolve("a", "abandon", None)
+    assert desk.take("a").decision == "abandon"
+    assert desk.take("a") is None
+
+
+def test_desk_close_stops_it_being_open():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.close("a")
+    assert desk.is_open("a") is False
+    assert desk.open_nodes() == set()
+    assert desk.resolve("a", "continue", "x") is False
+
+
+def test_desk_lists_every_open_node():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.open("b")
+    assert desk.open_nodes() == {"a", "b"}
+
+
+async def test_await_adjudications_continues_a_node():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+
+    async def _answer():
+        await asyncio.sleep(0)
+        desk.resolve("a", "continue", "use the staging token")
+
+    await asyncio.gather(
+        _await_adjudications(desk, status, errors, continuations, timeout_s=5, cancel=None),
+        _answer(),
+    )
+    assert status["a"] == "pending"
+    assert continuations["a"] == "use the staging token"
+
+
+async def test_await_adjudications_abandons_a_node():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+
+    async def _answer():
+        await asyncio.sleep(0)
+        desk.resolve("a", "abandon", None)
+
+    await asyncio.gather(
+        _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None),
+        _answer(),
+    )
+    assert status["a"] == "failed"
+    assert "abandoned" in errors["a"]
+
+
+async def test_await_adjudications_fails_the_node_on_timeout():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    await _await_adjudications(desk, status, errors, {}, timeout_s=0.01, cancel=None)
+    assert status["a"] == "failed"
+    assert "timed out" in errors["a"]
+
+
+async def test_await_adjudications_gives_up_when_the_run_is_cancelled():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    cancel = asyncio.Event()
+    cancel.set()
+    status = {"a": "exception"}
+    await _await_adjudications(desk, status, {}, {}, timeout_s=60, cancel=cancel)
+    assert status["a"] == "exception"
+    assert desk.open_nodes() == set()
+
+
+async def test_await_adjudications_closes_every_open_node_when_cancelled():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.open("b")
+    cancel = asyncio.Event()
+    cancel.set()
+    status = {"a": "exception", "b": "exception"}
+    await _await_adjudications(desk, status, {}, {}, timeout_s=60, cancel=cancel)
+    assert status == {"a": "exception", "b": "exception"}
+    assert desk.open_nodes() == set()
+
+
+async def test_await_adjudications_hard_cancel_leaves_no_stranded_task_or_open_desk():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.open("b")
+    status = {"a": "exception", "b": "exception"}
+    baseline = asyncio.all_tasks()
+
+    async def _wait():
+        await _await_adjudications(desk, status, {}, {}, timeout_s=60, cancel=None)
+
+    task = asyncio.create_task(_wait())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Task.cancel() only schedules delivery for a later tick, so the node's
+    # own wait task may still show up as "not done" right after `await task`
+    # returns; give it a bounded number of ticks to actually finish.
+    stray: set[asyncio.Task] = set()
+    for _ in range(10):
+        stray = asyncio.all_tasks() - baseline
+        if not stray:
+            break
+        await asyncio.sleep(0)
+    assert not stray
+    assert desk.open_nodes() == set()
+
+
+async def test_await_adjudications_fails_a_node_the_desk_never_opened():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    # `status` and the desk disagreeing used to return immediately with
+    # nothing changed, which spins run_dag's caller forever with no `await`
+    # in the cycle; wrap in wait_for so a regression fails this test instead
+    # of hanging the whole suite (pytest-timeout is not installed here).
+    await asyncio.wait_for(
+        _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None),
+        timeout=5,
+    )
+    assert status["a"] == "failed"
+    assert "no adjudication" in errors["a"].lower()
+
+
+async def test_await_adjudications_fails_a_contentless_continue():
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+
+    async def _answer():
+        await asyncio.sleep(0)
+        desk.resolve("a", "continue", None)
+
+    await asyncio.gather(
+        _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None),
+        _answer(),
+    )
+    assert status["a"] == "failed"
+    assert "abandoned" not in errors["a"]
+    assert "continue" in errors["a"].lower()
+
+
+# --- node verdicts: judge the node, suspend it, report it, continue it ---
+
+_TEST_ORIGIN = {"channel": "t", "chat_id": "t", "session_key": "t"}
+
+
+async def _run_two_node_dag(
+    tmp_path,
+    *,
+    desk,
+    judge_node,
+    announce_exception,
+    max_continuations=2,
+    exec_backend=None,
+    instance_a=None,
+    origin=_TEST_ORIGIN,
+    adjudication_timeout_s=5,
+    adjudicate=None,
+    semaphore=None,
+):
+    """A two-node chain a->b, run through one shared fake backend.
+
+    Both nodes resolve to the same backend instance (unless ``exec_backend``
+    is given) so a test can inspect every prompt either node actually
+    received via its ``.calls`` list, including across a node's own
+    continuations -- the four pre-existing tests below never look at
+    ``.calls`` so sharing changes nothing for them. ``origin`` defaults to a
+    real dict rather than ``None`` so tests exercise the guarded
+    ``announce_exception`` path the only real caller always takes; a test can
+    still pass ``origin=None`` explicitly to exercise the guard itself.
+    """
+    backend = exec_backend if exec_backend is not None else _FakeExec()
+    node_a: dict[str, Any] = {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}
+    if instance_a:
+        node_a["instance"] = instance_a
+    spec = parse_dag_spec(
+        {
+            "task_summary": "two nodes",
+            "nodes": [
+                node_a,
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "second",
+                    "prompt_template": "do b",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    return await run_dag(
+        spec,
+        resolve=lambda node: backend,
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        desk=desk,
+        judge_node=judge_node,
+        announce_exception=announce_exception,
+        max_continuations=max_continuations,
+        origin=origin,
+        adjudication_timeout_s=adjudication_timeout_s,
+        adjudicate=adjudicate,
+        semaphore=semaphore,
+    )
+
+
+async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
+    """The node does not complete, its dependent does not start, and a report fires."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    reports = []
+
+    async def _announce(run_id, node_id, report, origin):
+        reports.append((node_id, report))
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    assert reports[0][0] == "a"
+    assert "missing_credential" in reports[0][1]
+
+
+async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+    assert result.summary["completed"] == 2
+    assert len(seen) == 3
+
+
+async def test_the_continuation_limit_fails_the_node(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    reports = []
+
+    async def _announce(run_id, node_id, report, origin):
+        reports.append(report)
+        desk.resolve(node_id, "continue", "try again")
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="the tool keeps dying")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, max_continuations=2
+    )
+    assert result.summary["failed"] == 1
+    assert len(reports) == 3
+    assert "no adjudication is being awaited" in reports[-1]
+
+
+async def test_the_verdict_is_skipped_when_no_judge_is_wired(tmp_path):
+    result = await _run_two_node_dag(tmp_path, desk=None, judge_node=None, announce_exception=None)
+    assert result.summary["completed"] == 2
+
+
+async def test_a_bad_verdict_with_no_origin_does_not_crash_and_still_fails(tmp_path):
+    """The 'origin is not None' guard must survive: SubagentManager._inject
+
+    subscripts ``origin["channel"]`` and raises on ``None``. Nothing routes a
+    real run through ``origin=None`` today, but ``run_dag``'s own signature
+    allows it, so the guard is what stands between that and a TypeError deep
+    inside the announce callback instead of a clean fail.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    announced = []
+
+    async def _announce(run_id, node_id, report, origin):
+        announced.append((node_id, report, origin))
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=None,
+        adjudication_timeout_s=0.3,
+    )
+    assert announced == []
+    assert result.summary["failed"] == 1
+
+
+async def test_a_bad_verdict_blocks_the_dependent_and_clears_the_manifest_output(tmp_path):
+    """Both halves of the invariant: b never dispatches, and a's manifest
+
+    entry reports no output file -- neither is provable by the other, since
+    the ready-set gate (not the pop) is what stops b's dispatch.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    fake = _FakeExec()
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=fake
+    )
+    assert {call["task_id"] for call in fake.calls} == {"a"}
+    files_by_node = {f["node"]: f for f in result.files}
+    assert files_by_node["a"]["output_file"] is None
+
+
+async def test_a_bad_verdict_records_the_reason_as_the_nodes_error(tmp_path):
+    """A verdict that fails a node outright (no desk to suspend it on) must
+
+    still leave its reason somewhere a caller can read -- the manifest's
+    ``error`` field, populated from the same dict a crash would have used.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_two_node_dag(tmp_path, desk=None, judge_node=_judge, announce_exception=None)
+    files_by_node = {f["node"]: f for f in result.files}
+    assert files_by_node["a"]["error"] == "a token"
+
+
+async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_its_task_pinned(tmp_path):
+    """A stateful node's continuation is the bare follow-up on the wire, but
+
+    the task the judge (and dag_status/read_node) sees for it never moves off
+    attempt 1's original render.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    fake = _FakeExec()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        exec_backend=fake,
+        instance_a="researcher",
+    )
+    assert result.summary["completed"] == 2
+    a_calls = [call for call in fake.calls if call["task_id"] == "a"]
+    assert len(a_calls) == 2
+    assert a_calls[1]["prompt"] == "use the staging token"
+
+    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    task_prompt = await store.read_text(store.prompt_path("a"))
+    assert "use the staging token" not in task_prompt
+    attempt_1 = await store.read_text(store.attempt_prompt_path("a", 1))
+    attempt_2 = await store.read_text(store.attempt_prompt_path("a", 2))
+    assert attempt_1 == task_prompt
+    assert attempt_2 == "use the staging token"
+
+
+async def test_a_continued_stateless_node_sends_task_plus_previous_output_plus_message(tmp_path):
+    """A node with no instance has no conversation history on the other end,
+
+    so the whole task has to travel with the follow-up, along with what the
+    previous attempt returned, or the retry starts from nothing.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    fake = _FakeExec()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=fake
+    )
+    assert result.summary["completed"] == 2
+    a_calls = [call for call in fake.calls if call["task_id"] == "a"]
+    assert len(a_calls) == 2
+    first_prompt = a_calls[0]["prompt"]
+    second_prompt = a_calls[1]["prompt"]
+    assert second_prompt.startswith(first_prompt)
+    assert "Your previous attempt returned:" in second_prompt
+    assert f"OUT[a]:{first_prompt}" in second_prompt
+    assert second_prompt.endswith("Now: use the staging token")
+
+
+async def test_a_crashed_node_judge_call_is_told_it_crashed(tmp_path):
+    """describe_failure's whole branch is dead unless a crashed (not just a
+
+    completed-but-wrong) node also reaches the judge, with crashed=True and
+    its error text.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    fake = _FakeExec(fail_ids={"a"})
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="it crashed")
+
+    await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=fake)
+    assert len(seen) == 1
+    assert seen[0]["crashed"] is True
+    assert seen[0]["error"] == "boom a"
+
+
+async def test_every_attempt_is_archived_including_the_first(tmp_path):
+    """Attempt 1 must not be overwritten by attempt 2: each attempt gets its
+
+    own output and prompt archive, not just the final one.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    out_1 = await store.read_text(store.attempt_output_path("a", 1))
+    out_2 = await store.read_text(store.attempt_output_path("a", 2))
+    prompt_1 = await store.read_text(store.attempt_prompt_path("a", 1))
+    prompt_2 = await store.read_text(store.attempt_prompt_path("a", 2))
+    assert out_1 != out_2
+    assert prompt_1 != prompt_2
+
+
+async def test_a_raising_judge_fails_open_instead_of_crashing_the_node(tmp_path):
+    """A judge callback is host code the same way announce_exception is --
+
+    matches _verdict.judge's own documented fail-open contract instead of
+    taking the node (and, in production, the whole gather) down with it.
+    """
+
+    async def _judge(**kwargs):
+        raise RuntimeError("the judge provider is down")
+
+    result = await _run_two_node_dag(tmp_path, desk=None, judge_node=_judge, announce_exception=None)
+    assert result.summary["completed"] == 2
+
+
+async def test_a_raising_announce_fails_the_node_instead_of_stranding_it(tmp_path):
+    """An undeliverable report must not leave the desk open for the full
+
+    adjudication timeout blaming the agent for silence -- it fails the node
+    right away, naming the real cause.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin):
+        raise RuntimeError("delivery channel is down")
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudication_timeout_s=0.3
+    )
+    assert result.summary["failed"] == 1
+    files_by_node = {f["node"]: f for f in result.files}
+    assert "delivery channel is down" in files_by_node["a"]["error"]
+    assert not desk.is_open("a")
+
+
+async def test_a_node_does_not_suspend_on_a_report_it_cannot_deliver(tmp_path) -> None:
+    """No origin means the announce cannot land, so the node must fail rather than wait.
+
+    Suspending on an undeliverable report parks the graph for the whole adjudication
+    timeout and then fails the node saying nobody answered, which blames the agent for
+    a question it never received.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin):
+        raise AssertionError("the announce must not be attempted without an origin")
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a token")
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, origin=None)
+
+    # The summary alone does not discriminate: without the fix the node still ends
+    # `failed`, just one whole adjudication timeout later and blaming the agent. The
+    # error text is what says which of the two happened.
+    assert result.summary["failed"] == 1
+    by_node = {f["node"]: f for f in result.files}
+    assert by_node["a"]["error"] == "a token"
+    assert "timed out" not in (by_node["a"]["error"] or "")
+    assert desk.open_nodes() == set()
+
+
+class _AttemptTaggingExec(_FakeExec):
+    """Publishes a transcript naming this node's own call count, so a test can
+
+    tell whether the judge read the attempt that just ran or one an earlier
+    attempt left behind.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._calls_by_node: dict[str, int] = {}
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+
+        task_id = kw["task_id"]
+        call_n = self._calls_by_node.get(task_id, 0) + 1
+        self._calls_by_node[task_id] = call_n
+        activity.note_transcript([{"role": "tool", "name": "read", "content": f"node {task_id} attempt {call_n}"}])
+        return await super().run(task, **kw)
+
+
+async def test_the_judge_sees_the_current_attempts_transcript(tmp_path):
+    """The judge must read what this attempt published, not an empty file on
+
+    the first attempt or a previous attempt's leftovers on a continuation --
+    both symptoms of calling it before the transcript for this attempt was
+    written.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(*, node, store, output, error, crashed):
+        try:
+            text = await store.read_text(store.transcript_path(node.id))
+        except Exception:
+            text = ""
+        evidence_complete = bool(text.strip())
+        seen.append({"node": node.id, "evidence": text, "evidence_complete": evidence_complete})
+        a_calls = [c for c in seen if c["node"] == "a"]
+        if node.id == "a" and len(a_calls) == 1:
+            return Verdict(accomplished=False, what_is_missing="needs another pass")
+        return Verdict(accomplished=True)
+
+    exec_backend = _AttemptTaggingExec()
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=exec_backend
+    )
+
+    assert result.summary["completed"] == 2
+    a_calls = [c for c in seen if c["node"] == "a"]
+    assert len(a_calls) == 2
+
+    first, second = a_calls
+    assert first["evidence_complete"] is True
+    assert "attempt 1" in first["evidence"]
+    assert second["evidence_complete"] is True
+    assert "attempt 2" in second["evidence"]
+    assert "attempt 1" not in second["evidence"]
+
+
+async def test_each_attempts_transcript_survives_the_next_attempt(tmp_path):
+    """The evidence a verdict rested on must stay readable after the retry.
+
+    `transcript_path` is overwritten by design -- it is what the judge reads, and
+    the judge judges the attempt in front of it. Without a per-attempt archive
+    beside it, attempt 1's evidence is gone the moment attempt 2 runs, while that
+    same attempt's prompt and output both remain: the design versions all three
+    the same way.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    exec_backend = _AttemptTaggingExec()
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=exec_backend
+    )
+    assert result.summary["completed"] == 2
+
+    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    first = await store.read_text(store.attempt_transcript_path("a", 1))
+    second = await store.read_text(store.attempt_transcript_path("a", 2))
+    latest = await store.read_text(store.transcript_path("a"))
+
+    assert "attempt 1" in first, "the retried attempt's own evidence is no longer retrievable"
+    assert "attempt 2" in second
+    assert "attempt 1" not in second
+    # The overwrite-in-place file still holds the latest, which is what the judge
+    # reads: the archive is beside it, not instead of it.
+    assert latest == second
+
+
+async def test_a_successful_continuation_clears_the_earlier_attempts_error(tmp_path):
+    """A node whose first attempt is judged short and whose second attempt passes
+    must not still carry the first attempt's reason once it reads `completed`.
+
+    The manifest is what a poller actually reads, so a stale error surviving
+    there -- not merely in the in-memory `errors` dict -- is the bug's real
+    user-visible symptom.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "use the staging token")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+    assert result.summary["completed"] == 2
+
+    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    manifest = json.loads(await store.read_text(posixpath.join(store.run_dir, "manifest.json")))
+    assert manifest["a"]["status"] == "completed"
+    assert manifest["a"]["error"] is None
+
+
+async def test_suspended_nodes_share_one_deadline_rather_than_queueing(tmp_path) -> None:
+    """Four nodes waiting on a decision must cost one timeout, not four.
+
+    Awaited in series they cost N times the window, which contradicts both the
+    per-node deadline the report promises the agent and the configured cap.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    status = {}
+    for i in range(4):
+        nid = f"n{i}"
+        desk.open(nid)
+        status[nid] = "exception"
+
+    started = time.perf_counter()
+    await _await_adjudications(desk, status, {}, {}, timeout_s=0.2, cancel=None)
+    elapsed = time.perf_counter() - started
+
+    assert all(st == "failed" for st in status.values())
+    # Generous against a loaded box, but far under the 0.8s four serial windows
+    # would cost, so the ordering is what this measures rather than the machine.
+    assert elapsed < 0.5, f"four nodes took {elapsed:.3f}s, which looks serial"
+
+
+# --- a foreground graph is adjudicated from the wave loop, by asking a person ---
+
+
+async def test_a_foreground_run_asks_a_person_and_continues_the_node(tmp_path):
+    """A blocking call cannot wait for `resolve_dag_node`: the turn that would send
+    it cannot start until this one ends. The node suspends the same way either
+    lane does, and the wave loop asks the person watching the call instead."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    announced = []
+    asked = []
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        announced.append(node_id)
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append((conversation_id, report, timeout_s))
+        return "use the staging token"
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudicate=_adjudicate
+    )
+
+    assert result.summary["completed"] == 2
+    assert len(seen) == 3, "a was judged twice -- once short, once after the continuation -- and b once"
+    assert [c for c, _, _ in asked] == ["t"], "the question goes to the run's own conversation"
+    assert "did not accomplish its task" in asked[0][1]
+    assert announced == [], "a foreground node must not also wake the agent a turn later"
+    assert list(desk.open_nodes()) == [], "every desk entry is consumed by the answer"
+
+
+async def test_a_foreground_node_holds_no_dispatch_slot_while_the_person_thinks(tmp_path):
+    """The whole point of asking from the wave loop rather than inside the node.
+
+    A person can take the full timeout to answer. If the node were still inside
+    `_run_node`'s `async with semaphore` it would hold a slot of the manager's
+    shared dispatch gate for that entire time, blocking every unrelated spawn and
+    every other graph -- and with a capacity of one, blocking all of them.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    gate = asyncio.Semaphore(1)
+    free_while_asking = []
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        free_while_asking.append(not gate.locked())
+        return "abandon"
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    await _run_two_node_dag(
+        tmp_path,
+        desk=AdjudicationDesk(),
+        judge_node=_judge,
+        announce_exception=None,
+        adjudicate=_adjudicate,
+        semaphore=gate,
+    )
+
+    assert free_while_asking == [True], "the dispatch slot must be back before the question is put"
+
+
+async def test_foreground_nodes_are_asked_one_at_a_time(tmp_path):
+    """`QuestionBroker` allows one pending question per conversation.
+
+    A second overlapping question displaces the first and resolves it to its
+    default, which reads here as an abandon nobody asked for. Two independent
+    nodes suspending in the same wave must therefore be asked in series.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    depth = 0
+    overlaps = []
+    order = []
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        nonlocal depth
+        depth += 1
+        overlaps.append(depth)
+        order.append(timeout_s)
+        # Long enough that a second question handed a fresh window would be
+        # measurably larger than one handed what is left of a shared one.
+        await asyncio.sleep(0.05)
+        depth -= 1
+        return "abandon"
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "two independent nodes",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {"id": "b", "subagent": "x", "node_summary": "second", "prompt_template": "do b"},
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _FakeExec(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        desk=AdjudicationDesk(),
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        adjudicate=_adjudicate,
+    )
+
+    assert result.summary["failed"] == 2, "both were abandoned"
+    assert len(overlaps) == 2, "both independent nodes were asked about"
+    assert max(overlaps) == 1, f"two questions were outstanding at once: {overlaps}"
+    # One budget for the round, spent down: the second question cannot be handed
+    # a fresh window, or N nodes would cost N timeouts.
+    assert order[1] < order[0] - 0.04, f"the second question got a fresh window: {order}"
+
+
+@pytest.mark.parametrize("answer", [None, "", "   ", "abandon", "Abandon"])
+async def test_a_foreground_node_without_a_continuation_fails(tmp_path, answer):
+    """No broker, no conversation, a timed-out question and an explicit abandon
+    all read the same: a continuation with nothing to say is already a failure
+    everywhere else, so there is nothing else for these to mean."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    asked = []
+    announced = []
+
+    async def _announce(run_id, node_id, report, origin):
+        announced.append(node_id)
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append(report)
+        return answer
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudicate=_adjudicate
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    # An ordinary failure ends the same way, so the tally alone proves nothing
+    # about which path took it there: what does is that the person was asked and
+    # the agent was not.
+    assert len(asked) == 1
+    assert announced == []
+    assert list(desk.open_nodes()) == []
+
+
+async def test_a_foreground_adjudicator_that_raises_fails_the_node_not_the_run(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    asked = []
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append(report)
+        raise RuntimeError("the broker is gone")
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=None, adjudicate=_adjudicate
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    assert len(asked) == 1
+    assert list(desk.open_nodes()) == [], "a raising adjudicator must not leave the desk entry behind"
+
+
+def test_the_in_turn_report_drops_the_deadline_and_the_tool_instruction():
+    """Both closing lines are addressed at the main agent and wrong for a person."""
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
+        }
+    )
+    shared = {
+        "run_id": "r1",
+        "node": spec.nodes[0],
+        "verdict": Verdict(accomplished=False, category="missing_credential", what_is_missing="a token"),
+        "attempt": 1,
+        "remaining": 2,
+        "blocked": ["b"],
+        "timeout_s": 600.0,
+    }
+
+    to_agent = _exception_report(**shared)
+    to_person = _exception_report(**shared, answered_in_turn=True)
+
+    assert "deciding within 600s" in to_agent
+    assert "resolve_dag_node" in to_agent
+
+    assert "600" not in to_person, "a question asked synchronously has no deadline to promise"
+    assert "resolve_dag_node" not in to_person, "the person answering a blocking call cannot call a tool"
+    assert "abandon" in to_person, "they still need to be told how to give up on the node"
+    # Everything the decision actually turns on survives the swap.
+    for kept in ("missing_credential", "a token", "2 continuation(s) left", "blocked while this waits: b"):
+        assert kept in to_person
+
+
+async def test_only_the_foreground_lane_is_handed_the_adjudicator(tmp_path, monkeypatch):
+    """A backgrounded run answers through `resolve_dag_node` and must keep doing so."""
+    from raven.agent.subagent import dag_tool as tool_mod
+
+    lanes = []
+
+    async def _fake_run_dag(spec, **kwargs):
+        lanes.append(kwargs.get("adjudicate"))
+        raise RuntimeError("far enough")
+
+    monkeypatch.setattr(tool_mod, "run_dag", _fake_run_dag)
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        return None
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        adjudicate=_adjudicate,
+    )
+    tool.set_context("web", "default", "web:sess1")
+    node = {"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}
+
+    await tool.execute(task_summary="blocking", nodes=[node], background=False)
+    await tool.execute(task_summary="backgrounded", nodes=[node])
+    await asyncio.gather(*list(tool._runs.values()), return_exceptions=True)
+
+    assert lanes[0] is _adjudicate, "a blocking call has no other route to a decision"
+    assert lanes[1] is None, "a backgrounded run's turn has already returned, so the desk works"
+
+
+@pytest.mark.parametrize(
+    ("answer", "waits_out_the_budget", "expected"),
+    [
+        ("", True, "timed out"),
+        ("abandon", False, "abandoned"),
+        ("", False, "No decision was given"),
+    ],
+)
+async def test_a_foreground_timeout_is_not_reported_as_an_abandonment(answer, waits_out_the_budget, expected):
+    """The broker answers with its default -- an empty string -- when the budget it
+
+    was handed runs out, which is indistinguishable here from a person saying
+    nothing. Deciding on a budget read before the await makes every timeout look
+    like a decision the user made, which is the one thing the reason must never
+    claim falsely. The explicit-abandon row is the control: it must still say so.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _adjudicate_open_nodes
+
+    desk = AdjudicationDesk()
+    desk.open("a", "node 'a' did not accomplish its task")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+
+    async def _adjudicate(conversation_id, report, budget):
+        if waits_out_the_budget:
+            await asyncio.sleep(budget)
+        return answer
+
+    await _adjudicate_open_nodes(
+        desk, status, errors, {}, adjudicate=_adjudicate, origin=_TEST_ORIGIN, timeout_s=0.02, cancel=None
+    )
+
+    assert status["a"] == "failed"
+    assert expected in errors["a"], errors["a"]
+    if expected != "abandoned":
+        assert "abandoned" not in errors["a"], "a decision the user never made must not be attributed to them"
+
+
+async def test_a_foreground_node_with_nobody_to_ask_says_so(tmp_path):
+    """An origin carrying no conversation cannot be asked at all, which is not a
+    timeout and not an abandonment."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _adjudicate_open_nodes
+
+    desk = AdjudicationDesk()
+    desk.open("a", "report")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    asked = []
+
+    async def _adjudicate(conversation_id, report, budget):
+        asked.append(report)
+        return "use the staging token"
+
+    await _adjudicate_open_nodes(
+        desk, status, errors, {}, adjudicate=_adjudicate, origin={"channel": "web"}, timeout_s=5, cancel=None
+    )
+
+    assert asked == [], "there was no conversation to put the question to"
+    assert status["a"] == "failed"
+    assert "nobody to ask" in errors["a"]
+
+
+class _StepsThenSilentExec(_FakeExec):
+    """Publishes steps on a node's first attempt and nothing on the next.
+
+    The OpenAI backend's own shape: an answer given directly, with no
+    reasoning steps, publishes an empty transcript rather than no transcript.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._calls_by_node: dict[str, int] = {}
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+
+        task_id = kw["task_id"]
+        call_n = self._calls_by_node.get(task_id, 0) + 1
+        self._calls_by_node[task_id] = call_n
+        activity.note_transcript(
+            [{"role": "tool", "name": "read", "content": f"node {task_id} attempt {call_n}"}] if call_n == 1 else []
+        )
+        return await super().run(task, **kw)
+
+
+async def test_an_empty_attempt_does_not_inherit_the_previous_transcript(tmp_path):
+    """An attempt that published nothing must not be judged on the last one's evidence.
+
+    Skipping the write for an empty list leaves the previous attempt's file in
+    place, and `_node_evidence` reads that file: the attempt-2 judge is handed
+    attempt 1's steps and told the evidence is complete. The attempt-2 archive
+    the design promises is missing for the same reason.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin):
+        desk.resolve(node_id, "continue", "answer it directly this time")
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
+
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        exec_backend=_StepsThenSilentExec(),
+    )
+    assert result.summary["completed"] == 2
+
+    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    latest = await store.read_text(store.transcript_path("a"))
+    assert latest.strip() == "", "attempt 2 published nothing, so the file the judge reads must say nothing"
+    assert "attempt 1" not in latest
+
+    first = await store.read_text(store.attempt_transcript_path("a", 1))
+    second = await store.read_text(store.attempt_transcript_path("a", 2))
+    assert "attempt 1" in first, "the earlier attempt's own evidence stays readable"
+    assert second.strip() == "", "the promised attempt-2 archive exists and is honestly empty"

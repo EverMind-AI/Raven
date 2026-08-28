@@ -250,6 +250,57 @@ class TestSessionTitleSection:
         assert st.model is None
 
 
+class TestSubagentDagSection:
+    """Same failure class as TestSessionTitleSection above: a block declared on
+    RavenConfig but left out of EXTENSION_KEYS is worse than ignored -- the
+    base loader forbids extras, so a config file carrying it fails validation
+    and takes the whole config down with it.
+    """
+
+    def test_subagent_dag_is_an_extension_key_in_both_spellings(self) -> None:
+        assert "subagentDag" in EXTENSION_KEYS
+        assert "subagent_dag" in EXTENSION_KEYS
+
+    def test_camel_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(
+            tmp_path,
+            {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier", "maxContinuations": 5}},
+        )
+
+        sd = load_raven_config(path).subagent_dag
+
+        assert sd.verdict_enabled is False
+        assert sd.verdict_model == "cheap/tier"
+        assert sd.max_continuations == 5
+
+    def test_snake_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(tmp_path, {"subagent_dag": {"verdict_enabled": False}})
+
+        assert load_raven_config(path).subagent_dag.verdict_enabled is False
+
+    def test_a_config_carrying_the_block_still_loads_as_a_base_config(self, tmp_path: Path) -> None:
+        """The failure that would have mattered: the block would have bricked load_config."""
+        from raven.config import load_config
+
+        path = _write_config(tmp_path, {"subagentDag": {"verdictEnabled": False}})
+
+        base = load_config(path)
+
+        assert base is not None
+
+    def test_an_absent_block_leaves_the_defaults(self, tmp_path: Path) -> None:
+        path = _write_config(tmp_path, {})
+
+        sd = load_raven_config(path).subagent_dag
+
+        assert sd.verdict_enabled is True
+        assert sd.verdict_model is None
+        assert sd.verdict_timeout_seconds == 30.0
+        assert sd.evidence_budget_chars == 8000
+        assert sd.adjudication_timeout_seconds == 600.0
+        assert sd.max_continuations == 2
+
+
 class TestLoaderIntegration:
     def test_loads_new_sections_from_file(self, tmp_path: Path) -> None:
         path = _write_config(

@@ -22,7 +22,7 @@ an exception here would surface from a branch most callers never reach.
 
 from typing import Any
 
-__all__ = ["cancel_run", "live_run_ids"]
+__all__ = ["cancel_run", "live_run_ids", "resolve_node"]
 
 
 def _registered_tool(loop: Any) -> Any:
@@ -63,4 +63,18 @@ def cancel_run(loop: Any, run_id: str) -> bool:
     try:
         return bool(fn(run_id))
     except Exception:  # noqa: BLE001 - a failed stop is reported, not raised
+        return False
+
+
+def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+    """Answer one suspended node, whichever graph tool owns its run."""
+    fn = getattr(loop, "resolve_dag_node", None)
+    if fn is None:
+        tool = _registered_tool(loop)
+        fn = getattr(tool, "resolve_node", None) if tool is not None else None
+        if fn is None:
+            return False
+    try:
+        return bool(fn(run_id, node_id, decision, message))
+    except Exception:  # noqa: BLE001 - a failed answer is reported, not raised
         return False
