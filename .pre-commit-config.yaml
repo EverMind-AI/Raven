@@ -59,3 +59,17 @@ repos:
         language: system
         pass_filenames: false
         files: '^bridge/src/.*\.(ts|tsx)$'
+
+      - id: eslint-vscode-ext
+        name: eslint (vscode-ext)
+        entry: bash -c '[ -d vscode-ext/node_modules ] || exit 0; cd vscode-ext && npm run lint'
+        language: system
+        pass_filenames: false
+        files: '^vscode-ext/src/.*\.(ts|tsx)$'
+
+      - id: prettier-vscode-ext
+        name: prettier (vscode-ext)
+        entry: bash -c '[ -d vscode-ext/node_modules ] || exit 0; cd vscode-ext && npx prettier --check "src/**/*.{ts,tsx}"'
+        language: system
+        pass_filenames: false
+        files: '^vscode-ext/src/.*\.(ts|tsx)$'
