@@ -53,6 +53,7 @@ from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
+from raven.memory_engine.store_pipeline import StorePipeline
 from raven.providers.base import (
     LLMProvider,
     LLMResponse,
@@ -67,16 +68,10 @@ from raven.spine.turn import Origin, session_of
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
-# How long a turn is willing to wait on plugin-side indexing before letting the
-# write finish on its own. A budget, not a deadline: the task keeps running.
-_STORE_TURN_BUDGET_S: float = 5.0
-# Outstanding detached writes past which a turn waits for one to land, so a slow
-# memory service cannot grow an unbounded queue behind a fast typist.
-_STORE_MAX_INFLIGHT: int = 4
-# Teardown's total budget for letting those writes finish.
-_STORE_DRAIN_BUDGET_S: float = 15.0
-
-
+# Teardown's budget for letting outstanding writes finish. See
+# ``drain_backend_stores``: the pipeline cuts retries short first, so this only
+# ever covers a request already on the wire, not a worker asleep in backoff.
+_STORE_DRAIN_BUDGET_S: float = 2.0
 # Runtime prose, not the model's: written here and shown to the model so it
 # stops, and carried to the client as a notice rather than as an answer. It
 # reads as the assistant speaking, which is exactly why it must never be
@@ -586,13 +581,13 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
-        # Writes that outran their turn budget and are still running. Held so
-        # teardown can drain them instead of dropping whatever was slowest.
-        self._store_inflight: set[asyncio.Task] = set()
-        # Writes refused because indexing never caught up. Reported at teardown:
-        # a dropped write is a turn the user will not be able to recall.
-        self._store_dropped = 0
-
+        # A turn enqueues and returns; the pipeline owns ordering, retry and
+        # what teardown does with whatever is left.
+        self._store_pipeline = StorePipeline(
+            lambda: self.backend,
+            on_ok=self._note_memory_ok,
+            on_failure=self._note_memory_failure,
+        )
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
         self.plugin_tools: "list[Tool]" = list(plugin_tools or [])
@@ -2015,92 +2010,39 @@ class AgentLoop:
                 session_key,
             )
 
-    @trace.instrument("memory.store", extract=semconv.memory_store)
-    async def _dispatch_backend_store(
+    @trace.instrument("memory.enqueue")
+    def _dispatch_backend_store(
         self,
         session_key: str,
         messages_slice: list[dict],
     ) -> None:
-        """AG-1: forward a turn's messages to the plugin :class:`MemoryBackend`.
+        """AG-1: hand a turn's messages to the plugin :class:`MemoryBackend`.
 
         Third peer step in the after-turn pipeline alongside
         ``context_engine.after_turn`` (engine-side bookkeeping) and
-        ``memory.maybe_consolidate`` (raven-core compaction). When no
-        backend was wired (``self.backend is None``), this is a no-op so
-        legacy callsites that never registered a plugin behave
-        identically to pre-AG-1.
+        ``memory.maybe_consolidate`` (raven-core compaction). When no backend
+        was wired, this is a no-op.
 
-        Exceptions raised by the backend are logged and swallowed —
-        the AgentLoop's main pipeline must never abort because the
-        plugin-side index failed; the turn is already saved to the
-        session log and the host's MEMORY.md compaction will still run.
+        Synchronous by contract: the turn hands the slice over and returns.
+        What happens to it after that is :class:`StorePipeline`'s.
         """
-        if self.backend is None:
-            return
-        if not messages_slice:
-            return
-
-        async def _store() -> None:
-            try:
-                await self.backend.store(session_key, messages_slice)  # type: ignore[union-attr]
-            except Exception as e:  # noqa: BLE001 - the turn must survive a failed index
-                logger.exception(
-                    "backend.store failed for session {}; turn data preserved in session log, "
-                    "plugin-side indexing skipped",
-                    session_key,
-                )
-                self._note_memory_failure(str(e))
-            else:
-                self._note_memory_ok()
-
-        task = asyncio.create_task(_store())
-        self._store_inflight.add(task)
-        task.add_done_callback(self._store_inflight.discard)
-        # Deliberately not cancelled on timeout: the point is to stop *waiting*,
-        # not to abandon the write. A turn that indexes quickly still does so
-        # inline, which keeps ordering intact in the common case.
-        await asyncio.wait({task}, timeout=_STORE_TURN_BUDGET_S)
-
-        if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
-            # Backpressure rather than unbounded growth: a service slow enough
-            # to accumulate this many outstanding writes is one whose queue
-            # should stop growing, not one to keep feeding.
-            #
-            # Bounded by the turn's own budget, and that bound is the whole
-            # point. Unbounded, this waited on the slowest outstanding write
-            # instead -- and since flush_every_turns defaults to 1, every
-            # interactive turn is a final flush carrying the six-minute
-            # extraction budget, so reaching the cap stalled a turn for
-            # minutes. That is the stall this method exists to remove.
-            await asyncio.wait(set(self._store_inflight), timeout=_STORE_TURN_BUDGET_S)
-            if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
-                # Still saturated. The queue is what gives, not the turn: this
-                # write is dropped and said out loud at teardown, rather than
-                # held open behind writes that are already over their time.
-                task.cancel()
-                self._store_inflight.discard(task)
-                self._store_dropped += 1
-                logger.warning(
-                    "backend.store dropped for session {}: {} writes still in flight after {}s",
-                    session_key,
-                    len(self._store_inflight),
-                    _STORE_TURN_BUDGET_S,
-                )
+        self._store_pipeline.enqueue(session_key, messages_slice)
 
     async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> None:
-        """Let detached writes finish before the process goes away.
-
-        Writes that outran their turn budget are still in flight. Exiting on top
-        of them loses exactly the turns that were slowest to index, which is a
-        silent and biased kind of data loss.
-        """
-        pending = {t for t in self._store_inflight if not t.done()}
-        if pending:
-            await asyncio.wait(pending, timeout=timeout)
-        if self._store_dropped:
+        """Let queued writes finish before the process goes away, then say what
+        was lost. The counting is the pipeline's; telling the user is the
+        host's, and this is the last moment it is still actionable."""
+        dropped = await self._store_pipeline.drain(timeout)
+        if dropped:
             logger.warning(
                 "{} turn(s) were not indexed: the memory service never caught up",
-                self._store_dropped,
+                dropped,
+            )
+            from rich.console import Console
+
+            Console(stderr=True).print(
+                f"[yellow]{dropped} turn(s) were not written to long-term memory "
+                "because the memory service was unavailable.[/yellow]"
             )
 
     _MEMORY_FAILURES_BEFORE_ALARM = 3
@@ -4096,6 +4038,7 @@ class AgentLoop:
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
 
+        prev_len = len(session.messages)
         self._save_turn(session, all_msgs, turn_start_idx, received_at=turn_received_at)
         self.sessions.save(session)
         await self.context_engine.after_turn(
@@ -4106,10 +4049,7 @@ class AgentLoop:
             },
         )
         # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
-        await self._dispatch_backend_store(
-            key,
-            all_msgs[turn_start_idx:],
-        )
+        self._dispatch_backend_store(key, session.messages[prev_len:])
         # FB-1: forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.
@@ -4511,9 +4451,10 @@ class AgentLoop:
         if req.deliver_text is not None:
             session = self.sessions.get_or_create(cid)
             msg = {"role": "assistant", "content": req.deliver_text}
+            prev_len = len(session.messages)
             self._save_turn(session, [msg], 0)
             self.sessions.save(session)
-            await self._dispatch_backend_store(cid, [msg])
+            self._dispatch_backend_store(cid, session.messages[prev_len:])
             await emit(Text(content=req.deliver_text))
             return TurnOutcome(
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),

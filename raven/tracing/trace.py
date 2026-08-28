@@ -465,6 +465,18 @@ def current() -> Any | None:
     return _ctx.current()
 
 
+def use_context(ctx: Any | None) -> Any:
+    """Re-establish a context captured earlier with :func:`current`.
+
+    Context manager. Needed wherever a span is opened outside the turn that
+    scheduled the work: a long-lived task keeps the contextvars snapshot it
+    was forked with, so its spans would otherwise all land in the first turn
+    it ever served. Capture ``trace.current()`` where the work is scheduled,
+    re-enter it here around the span.
+    """
+    return _ctx.use(ctx)
+
+
 def begin_attempt(session_key: str, attempt_id: str | None = None) -> str:
     """Open a multi-turn attempt for ``session_key``.
 

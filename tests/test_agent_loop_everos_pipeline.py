@@ -156,6 +156,8 @@ async def test_full_turn_recalls_injects_stores_and_feeds_back(tmp_path: Path) -
     assert _AGENT_SKILL_BODY in prompt
 
     # 3) AG-1: the turn slice was forwarded to the backend exactly once.
+    # Dispatch only enqueues; the worker drains it off the turn path.
+    await agent.drain_backend_stores(timeout=5.0)
     assert len(backend.store_calls) == 1
     call = backend.store_calls[0]
     assert call["session_id"] == "mock:c1"
@@ -181,14 +183,23 @@ async def test_no_backend_turn_completes_silently(tmp_path: Path) -> None:
     assert out is not None  # legacy mode: pipeline runs, no backend seams
 
 
-async def test_store_failure_does_not_break_turn(tmp_path: Path) -> None:
+async def test_store_failure_does_not_break_turn(tmp_path: Path, monkeypatch) -> None:
+    from raven.memory_engine import store_pipeline
+
+    monkeypatch.setattr(store_pipeline, "BACKOFF_S", (0.01, 0.01, 0.01, 0.01))
     backend = _FakeBackend()
     backend.store_raises = RuntimeError("everos down")
     agent = _make_agent(tmp_path, backend=backend)
 
     out = await agent._process_message(_msg())
     assert out is not None  # exception swallowed; turn already saved
-    assert len(backend.store_calls) == 1  # store was attempted
+    # Await the worker directly, not drain_backend_stores(): drain signals an
+    # immediate shutdown that cuts retries short, which is exactly what would
+    # collapse the 5-attempt sequence this test means to observe.
+    for task in list(agent._store_pipeline._workers.values()):
+        await task
+    assert len(backend.store_calls) == 5  # 1 attempt + 4 retries, then dropped
+    assert agent._store_pipeline.dropped == 1
 
 
 async def test_feedback_failure_does_not_break_turn(tmp_path: Path) -> None:

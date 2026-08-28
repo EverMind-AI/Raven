@@ -265,6 +265,10 @@ async def build_rpc_stack(
             return
         if agent_loop is not None and agent_loop.backend is not None:
             try:
+                # Drain before stop, the same order the CLI hosts follow:
+                # stopping the backend closes the HTTP client the queued
+                # writes still need, and this stack owns turns too.
+                await agent_loop.drain_backend_stores()
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
