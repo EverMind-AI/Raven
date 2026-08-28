@@ -323,6 +323,111 @@ def test_a_chinese_answer_can_still_be_caught_fabricating():
     assert t.counters()["citation_grounding_rate"] == 0.0
 
 
+# ── decoded CJK paths, and the prose they drag in ──────────────────────
+#
+# A page is fetched percent-encoded and cited decoded. The extractor used to end
+# a URL at the first ideograph, so every such citation was reported as never
+# opened - and two different wiki pages truncated to the SAME prefix, multiplying
+# the accusation. Observed on every Chinese-subject turn of the first product
+# sessions that cited zh.wikipedia paths.
+
+CJK_LEDGER = [
+    {"op": "search", "query": "李彦宏", "replay": False, "zero_hit": False},
+    {
+        "op": "fetch",
+        "url": "https://zh.wikipedia.org/wiki/%E6%9D%8E%E5%BD%A6%E5%AE%8F",
+        "chars": 1711,
+        "ok": True,
+    },
+]
+
+
+def test_a_decoded_cjk_citation_matches_its_percent_encoded_fetch():
+    t = build_trail(CJK_LEDGER, "见 https://zh.wikipedia.org/wiki/李彦宏 ；另见维基")
+    assert t.cited == ["https://zh.wikipedia.org/wiki/李彦宏"]
+    assert t.cited_not_opened == []
+    assert t.counters()["citation_grounding_rate"] == 1.0
+
+
+def test_prose_glued_onto_a_cjk_path_resolves_to_the_fetched_page():
+    """Keeping ideographs in the extractor swallows glued prose into the match;
+    whether the tail is path or prose is decidable only against the fetch record,
+    so the trimmed form wins exactly when a record exists for it."""
+    t = build_trail(CJK_LEDGER, "详见 https://zh.wikipedia.org/wiki/李彦宏词条中的说明")
+    assert t.cited == ["https://zh.wikipedia.org/wiki/李彦宏"]
+    assert t.cited_not_opened == []
+
+
+def test_a_fabricated_cjk_path_is_still_caught():
+    """Trimming never invents a match: a CJK path with no fetch record behind any
+    trailing-ideograph form stays an accusation, reported as written."""
+    t = build_trail(CJK_LEDGER, "见 https://zh.wikipedia.org/zh-hans/文心一言 。")
+    assert t.cited_not_opened == ["https://zh.wikipedia.org/zh-hans/文心一言"]
+    assert t.counters()["citation_grounding_rate"] == 0.0
+
+
+def test_memo_pages_nobody_cited_do_not_inflate_the_scope_count():
+    """The live defect: a warning listed one link while the scope line said
+    "(2 of those...)" - the 2 was every memo page, cited or not, so the sentence
+    named a number with no relation to the links beside it."""
+    t = build_trail(
+        LEDGER,
+        "see https://never.example/x",
+        ["https://memo.example/a", "https://memo.example/b"],
+    )
+    assert t.opened_earlier == 0
+    assert t.cited_not_opened == ["https://never.example/x"]
+    assert "earlier turn" not in t.render()
+
+
+def test_the_scope_sentence_counts_cited_links_and_reads_coherently():
+    answer = "per https://earlier.example/p2 and https://never.example/x"
+    t = build_trail(
+        LEDGER, answer, ["https://earlier.example/p2", "https://memo.example/unused"]
+    )
+    assert t.opened_earlier == 1
+    assert "1 of the cited links was opened on an earlier turn" in t.render()
+
+
+# ── the salvage seam ships unreviewed, and the trail must say so ───────
+
+
+def test_a_salvaged_answer_cannot_wear_a_reviewed_trail():
+    """A salvaged answer never reaches the reviewer (observer order, ``dr.py``),
+    and its trail used to simply omit the reviewer segment - silence a reader
+    cannot tell apart from "not configured". The ledger row renders as an
+    explicit skip, and the counter makes the salvage share of an arm measurable
+    next to ``verify`` outcomes."""
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [
+        {"op": "force_finalize", "event": "salvage", "seam": "iteration"}
+    ]
+    t = build_trail(rows, "x")
+    assert t.salvaged is True
+    assert t.counters()["salvaged"] is True
+    assert "reviewer: skipped (salvaged answer)" in t.render()
+
+
+def test_a_reviewed_turn_does_not_say_skipped():
+    t = build_trail(LEDGER, "x")
+    assert t.counters()["salvaged"] is False
+    assert "skipped" not in t.render()
+
+
+def test_a_salvage_after_a_rejection_does_not_hide_behind_the_verdict():
+    """The common salvage path runs THROUGH a verdict: reject -> revision ->
+    empty visible answer -> salvage. The verdict was about a draft that never
+    shipped, so rendered alone it dresses the salvage as a reviewed turn - the
+    exact trail this seam's visibility fix exists to prevent."""
+    rows = list(LEDGER) + [
+        {"op": "verify", "outcome": "rejected", "unsupported_claims": ["c1"]},
+        {"op": "force_finalize", "event": "salvage", "seam": "terminal"},
+    ]
+    t = build_trail(rows, "x")
+    rendered = t.render()
+    assert "reviewer: rejected (1 open point)" in rendered
+    assert "shipped answer: salvaged (not reviewed)" in rendered
+
+
 # ── dr@3.3: the grounding line is rendered in every direction ─────────
 #
 # Before dr@3.3 only the failing direction reached the page. A check that is
@@ -369,3 +474,78 @@ def test_scope_note_is_absent_when_nothing_was_cited():
     t = build_trail(LEDGER, "no links")
     t.opened_earlier = 3
     assert "earlier turn" not in t.render()
+
+
+# ── citation-tail and truncated-citation recoveries (both set-aware) ──────
+
+
+DATE_TAIL_LEDGER = [
+    {"op": "fetch", "url": "https://finance.sina.com.cn/roll/doc-abc.shtml", "chars": 900, "ok": True},
+    {"op": "fetch", "url": "https://news.qq.com/rain/a/20260109A024R500", "chars": 900, "ok": True},
+]
+
+
+def test_a_comma_date_citation_tail_resolves_to_the_fetched_page():
+    """Observed live: the model cites ``(url,2026-01-09)`` and the extractor
+    swallows the comma and date into the URL. The tail comes off only because a
+    fetch record exists for the clipped form."""
+    t = build_trail(DATE_TAIL_LEDGER, "来源：https://finance.sina.com.cn/roll/doc-abc.shtml,2026-01-09 报道")
+    assert t.cited == ["https://finance.sina.com.cn/roll/doc-abc.shtml"]
+    assert t.cited_not_opened == []
+
+
+def test_two_citations_glued_by_a_semicolon_recover_the_first():
+    """The extractor hands back one string; clipping at the first separator
+    recovers the first citation. The second is lost to the glue, which
+    understates ``cited`` rather than accusing anything - the safe direction."""
+    t = build_trail(
+        DATE_TAIL_LEDGER,
+        "见 https://finance.sina.com.cn/roll/doc-abc.shtml,2026-01-09;https://news.qq.com/rain/a/20260109A024R500,2026-01-09 两处",
+    )
+    assert t.cited == ["https://finance.sina.com.cn/roll/doc-abc.shtml"]
+    assert t.cited_not_opened == []
+
+
+def test_a_comma_tail_with_no_fetch_record_stays_an_accusation():
+    """Reported AS WRITTEN, tail included - clipping is set-aware, so a miss
+    rewrites nothing, same as the fabricated-CJK-path precedent."""
+    t = build_trail(DATE_TAIL_LEDGER, "见 https://finance.sina.com.cn/roll/doc-xyz.shtml,2026-01-09 。")
+    assert t.cited_not_opened == ["https://finance.sina.com.cn/roll/doc-xyz.shtml,2026-01-09"]
+
+
+PREFIX_LEDGER = [
+    {
+        "op": "fetch",
+        "url": "https://www.idc.com/resource-center/blog/%E6%99%BA%E8%83%BD%E4%BD%93token%E6%B6%88%E8%80%97%E5%B9%B4%E5%9D%87%E5%A2%9E%E8%B6%8530%E5%80%8D%E4%B8%AD%E5%9B%BD/",
+        "chars": 5000,
+        "ok": True,
+    },
+]
+
+
+def test_a_truncated_citation_that_prefixes_one_opened_page_matches_it():
+    """Observed live: the model truncated a long ideograph path when citing. The
+    cited form is a strict prefix of exactly one opened page, so it matches -
+    the SHALLOWER direction, which invents nothing deeper than what was read."""
+    t = build_trail(PREFIX_LEDGER, "来源：https://www.idc.com/resource-center/blog/智能体token消耗年均增超30倍 一文")
+    assert t.cited_not_opened == []
+    assert t.counters()["citation_grounding_rate"] == 1.0
+
+
+def test_a_short_prefix_does_not_absolve_itself_against_a_deeper_page():
+    """A string prefix is not a path prefix: ``/a`` must not match ``/about``.
+    The path floor keeps short-segment citations in accusation territory."""
+    rows = [{"op": "fetch", "url": "https://ex.example/about-the-project", "chars": 10, "ok": True}]
+    t = build_trail(rows, "见 https://ex.example/a 页面")
+    assert t.cited_not_opened == ["https://ex.example/a"]
+
+
+def test_an_ambiguous_prefix_stays_an_accusation():
+    """Two opened pages share the cited prefix: the citation is ambiguous, and
+    the check accuses rather than guesses."""
+    rows = [
+        {"op": "fetch", "url": "https://ex.example/reports/2026-industry-alpha", "chars": 10, "ok": True},
+        {"op": "fetch", "url": "https://ex.example/reports/2026-industry-beta", "chars": 10, "ok": True},
+    ]
+    t = build_trail(rows, "见 https://ex.example/reports/2026-industry 报告")
+    assert t.cited_not_opened == ["https://ex.example/reports/2026-industry"]

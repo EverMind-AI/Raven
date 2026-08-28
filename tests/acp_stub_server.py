@@ -627,8 +627,24 @@ def main() -> None:
                                 {"name": "no-id-so-skipped"},
                             ]
                         },
+                        "modes": {
+                            "currentModeId": "fast",
+                            "availableModes": [
+                                {"id": "fast", "name": "Fast", "description": "converges early"},
+                                {"id": "deep", "name": "Deep", "description": "searches longer"},
+                                {"name": "no-id-so-skipped"},
+                            ],
+                        },
                     },
                 )
+        elif method == "session/set_mode":
+            if MODE == "no_modes":
+                err(request_id, -32601, "session/set_mode is not implemented")
+            elif params.get("modeId") not in ("fast", "deep"):
+                err(request_id, -32602, f"unknown mode {params.get('modeId')!r}")
+            else:
+                print(f"stub: session/set_mode {params.get('modeId')}", file=sys.stderr, flush=True)
+                ok(request_id, {})
         elif method == "session/load":
             if params.get("sessionId") == "pruned-session":
                 err(request_id, -32001, "Session not found")

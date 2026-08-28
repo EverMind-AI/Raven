@@ -14,7 +14,7 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
-import type { SubagentsInstanceCreateResult } from '../../../rpc/generated.js'
+import type { SubagentsInstanceCreateResult, SubagentsInstanceSetModeResult } from '../../../rpc/generated.js'
 import type { Msg, PanelSection } from '../../../types.js'
 import type { StatusBarMode } from '../../interfaces.js'
 import type { SlashCommand } from '../types.js'
@@ -256,6 +256,78 @@ export const coreCommands: SlashCommand[] = [
 
       enterDirect(row.agent, row.handle)
       ctx.transcript.sys(`talking to ${row.agent}/${row.handle} directly -- Esc returns to Raven`)
+    }
+  },
+
+  {
+    help: 'show or change the effort level of the sub-agent you are chatting with',
+    name: 'mode',
+    usage: '/mode [<id> | default]   -- default/reset/clear drop the override',
+    run: (arg, ctx) => {
+      const { active } = getDirectChat()
+
+      // Only meaningful inside a direct chat: a mode belongs to one instance's
+      // conversation, and the main agent picks per call with the spawn tool's
+      // own `mode` instead.
+      if (!active) {
+        return ctx.transcript.sys('/mode applies to a sub-agent chat -- /instance to enter one')
+      }
+
+      if (!ctx.sid) {
+        return ctx.transcript.sys('no active session')
+      }
+
+      const want = arg.trim()
+      // `default` / `reset` / `clear` are spent on dropping the override, so an
+      // agent that names one of its own modes after one of them cannot be put
+      // in it from here. Resolving that would need the mode list before the
+      // call, and the list arrives in the reply -- so the word is reserved and
+      // `usage` says so, rather than being resolved wrongly half the time.
+      const clearing = RESET_WORDS.has(want.toLowerCase())
+      const params: Record<string, unknown> = {
+        agent: active.agent,
+        handle: active.handle,
+        session_key: ctx.sid
+      }
+
+      if (clearing) {
+        params.clear = true
+      } else if (want) {
+        params.mode = want
+      }
+
+      ctx.gateway
+        .rpc<SubagentsInstanceSetModeResult>('subagents.instance.set_mode', params, { quiet: true })
+        .then(
+          ctx.guarded<SubagentsInstanceSetModeResult>(r => {
+            const offered = r.availableModes ?? []
+
+            if (offered.length === 0) {
+              return ctx.transcript.sys(`${active.agent} has no modes to choose from`)
+            }
+
+            const current = r.mode ?? null
+            // The menu whichever call this was: after a change it confirms what
+            // landed, and with no argument it is the listing.
+            const lines = offered.map(m => {
+              const head = `  ${m.id === current ? '*' : ' '} ${m.id}`
+              return m.description ? `${head} -- ${m.description}` : head
+            })
+            // Three sentences rather than one template with a hole: a read and a
+            // write say different things, and "is now on" over a read claims a
+            // change nobody asked for. The no-override case says so in words
+            // because there is no `*` for it to be read off.
+            const changed = Boolean(want)
+            const first = changed
+              ? `${active.agent}/${active.handle} is now on ${current ?? 'its own default'}`
+              : current
+                ? `${active.agent}/${active.handle} is on ${current}`
+                : `${active.agent} modes -- no override set, so its own default is in force`
+
+            ctx.transcript.sys([first, ...lines, ...(changed ? ['takes effect on the next message'] : [])].join('\n'))
+          })
+        )
+        .catch(ctx.guardedErr)
     }
   },
 

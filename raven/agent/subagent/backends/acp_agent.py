@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.acp.ask_user import AskUserResponder, clarify_responder
-from raven.agent.acp.capabilities import CapabilitySnapshot, steer_offered
+from raven.agent.acp.capabilities import CapabilitySnapshot, relearn_session_modes, steer_offered
 from raven.agent.acp.elicitor import Elicitor
 from raven.agent.acp.permissions import PERMISSION_METHOD
 from raven.agent.acp.pool import get_pool
@@ -534,6 +534,7 @@ class AcpAgentBackend:
         # built lazily rather than in this constructor.
         self._session_dir_for: Any = None
         self._event_sink: Any = None
+        self._caps_listener: Any = None
 
     def _ensure_unprompted_recorder(self, connection: Any) -> None:
         """Give this connection a resident sink, once.
@@ -577,6 +578,36 @@ class AcpAgentBackend:
         """
         self._event_sink = sink
 
+    def bind_caps_listener(self, listener: Any) -> None:
+        """Take the dispatching manager's "re-derive the agent table" call.
+
+        Same last-writer-wins shape as the two binders around it, and safe for a
+        stronger reason: every manager wants the same rebuild, so which one is
+        held makes no difference to what happens.
+        """
+        self._caps_listener = listener
+
+    def _relearn_modes(self, result: Any) -> None:
+        """Take the modes a session response advertises over the cached ones.
+
+        Best-effort at every step. The menu is a description the NEXT dispatch
+        reads, never something this turn depends on, so neither the write nor
+        the table rebuild may cost the turn that happened to carry the evidence.
+        """
+        try:
+            updated = relearn_session_modes(self._snapshot, result)
+        except Exception as exc:  # noqa: BLE001 - a cache refresh must not sink a turn
+            logger.warning("acp agent {!r}: refreshing modes from the session failed: {}", self.name, exc)
+            return
+        if updated is None:
+            return
+        self._snapshot = updated
+        if callable(self._caps_listener):
+            try:
+                self._caps_listener()
+            except Exception:
+                logger.exception("acp agent {!r}: rebuilding the agent table failed", self.name)
+
     def bind_session_dir(self, resolver: Any) -> None:
         """Take the dispatching manager's session-directory rule.
 
@@ -610,6 +641,7 @@ class AcpAgentBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         # The parent's provider/model are accepted and ignored, as the cli
@@ -657,7 +689,13 @@ class AcpAgentBackend:
             frames_start = journal.offset if journal is not None else None
 
             session_id, resumed = await self._open_session(
-                client, cwd=session_cwd, skey=skey, handle=handle, budget=budget, router=connection.router
+                client,
+                cwd=session_cwd,
+                skey=skey,
+                handle=handle,
+                budget=budget,
+                router=connection.router,
+                mode=mode,
             )
             if journal is not None:
                 # Inside the marked range on purpose, so the per-call copy of the
@@ -876,7 +914,15 @@ class AcpAgentBackend:
         return await clamp_output(text, self.max_output_chars, agent=self.name, reserved=notice, sink=sink)
 
     async def _open_session(
-        self, client: Any, *, cwd: str, skey: str, handle: str, budget: float, router: Any = None
+        self,
+        client: Any,
+        *,
+        cwd: str,
+        skey: str,
+        handle: str,
+        budget: float,
+        router: Any = None,
+        mode: str | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
         if self.is_stateful:
@@ -894,9 +940,11 @@ class AcpAgentBackend:
                     # the length of the call; the turn's collector takes it over
                     # immediately after.
                     async with _replay_dropped(router, known):
-                        await client.request(
+                        loaded = await client.request(
                             "session/load", {"sessionId": known, "cwd": cwd, "mcpServers": []}, timeout=budget
                         )
+                    self._relearn_modes(loaded)
+                    await self._set_mode(client, known, mode, budget=budget)
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the
@@ -918,10 +966,48 @@ class AcpAgentBackend:
                     raise
 
         result = await client.request("session/new", {"cwd": cwd, "mcpServers": []}, timeout=budget)
+        self._relearn_modes(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
+        await self._set_mode(client, session_id, mode, budget=budget)
         return session_id, False
+
+    async def _set_mode(self, client: Any, session_id: str, mode: str | None, *, budget: float) -> None:
+        """Put this session in ``mode`` before the prompt, if one was asked for.
+
+        On every route into a session, not only on creation. The agent holds the
+        mode in memory keyed by session id, so it survives an engine eviction but
+        NOT a restart of the agent process -- and the pool relaunches that process
+        whenever the launch key changes. A resumed session would then silently be
+        back on the agent's default, which is the failure this exists to prevent:
+        the caller asked for a budget and would be billed a different one with
+        nothing anywhere saying so.
+
+        Never fatal. An agent with no modes answers method-not-found and one that
+        does not know this id answers invalid-params; in both cases the task can
+        still run on the agent's default, and failing it would be a worse outcome
+        than running it slightly cheaper or dearer than asked.
+        """
+        if not mode:
+            return
+        try:
+            await client.request("session/set_mode", {"sessionId": session_id, "modeId": mode}, timeout=budget)
+        except AcpRemoteError as exc:
+            logger.warning(
+                "acp agent {!r}: session {} would not take mode {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                mode,
+                exc.message,
+            )
+        except AcpError as exc:
+            logger.warning(
+                "acp agent {!r}: setting mode {!r} failed ({}); running on its default",
+                self.name,
+                mode,
+                exc,
+            )
 
     @staticmethod
     def _frames(journal: Any, connection: Any, session_id: str, start: int | None) -> dict[str, Any]:

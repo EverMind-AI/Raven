@@ -1,0 +1,1197 @@
+diff --git a/ACP_INTEGRATION_PLAN.md b/ACP_INTEGRATION_PLAN.md
+index 2942c7b..38129de 100644
+--- a/ACP_INTEGRATION_PLAN.md
++++ b/ACP_INTEGRATION_PLAN.md
+@@ -169,12 +169,18 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   （`raven/rpc/spine.py:553`），而本仓 `OriginPools` 根本没有 direct 池。
+   但**不能靠调大池来解决**：`WebSearchTool` / `WebFetchTool` 的 per-turn 状态是共享实例
+   属性（`raven/agent/tools/web.py`，全文件无 ContextVar），并发 turn 会互相清 saturation /
+-  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B。
++  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B
++  —— 以及其后的“决策 B 的后续”，那里改成了一个 session 一套 loop。
+   另需审一遍其余进程级共享状态（`tui_rpc/methods/turn.py` 模块级 `_active_turns`、
+   memory、token_wise、tracing）。
+ - **`cwd` / workspace 语义**（更正第一稿的自相矛盾）：
+   一进程一 engine（主仓 `server.py` 明写 "one engine per process"），
+   AgentLoop 的 workspace 在构造期固定，**不可能**按 session id 派生。
++  （“决策 B 的后续”改了后半句：一 session 一 engine 之后，engine 是在
++  `session/new` 时才构造的，所以**文件工具的根**确实按 session id 派生了
++  —— `<workspace>/acp_workspaces/<chat_id>`。但 `workspace` 本身仍然共享且
++  仍在构造期固定，因为 system prompt 的记忆段和 skill 目录都从它读；
++  两者的区别见 `CONTEXT.md` 的 Session File Root。）
+   run.py 之所以要 workspace-per-session-id，前提是"每次调用都是一个新进程"
+   且 `get_data_dir()` 从 config 文件父目录推导、没有单独的 session 目录旋钮
+   （run.py:216-223）—— in-process 时这条教训不适用：`SessionManager` 本来就按
+@@ -184,6 +190,17 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   **Phase 0 要查的是：除 session JSONL 之外还有什么是 workspace 级的**
+   （报告产物、memory、tracing 落盘路径）—— 那些才是并发会话真会撞的东西，
+   查完再决定是否需要 per-session 子目录。
++  （盘点结果，评审补的一项：**Checkpoint 的 shadow repo**
++  `<workspace>/.raven/shadow.git` 也是 workspace 级的，而且是并发下最会撞的一个 ——
++  `interactive=True` 让每个 session engine 各建一个 `CheckpointService`，却都指向同一个
++  git-dir，并发 turn 收尾会同时 `git add -A` / `commit`：轻则一方报
++  `could not lock config file` 降级成 `(None, [])`，重则即使 git 串行化了，
++  每次快照 stage 的仍是整棵共享工作树，把别的 session 的改动算进本 turn 的
++  `edited_files`，进而写进下一 turn 的 recovery prompt。做法是让快照跟着
++  **写入根**走（`file_workspace`，即文件/exec/media 工具的根），而不是跟着共享
++  `workspace` 走 —— 其他入口 `file_workspace` 就是 `workspace`，行为不变。
++  memory backend 是进程内一份、按 session_id 分 key，写入闸门共享有界；
++  tracing 未在本期改动范围内。）
+ - **答案语义：ACP turn 跑非流式（`stream=False`），答案 = turn 最终提交的一条 `Text`**。
+   真 LLM e2e 实测：`stream=True` 下 token 流承载模型整个 turn 说出的一切——工具调用前的
+   叙述、DR verify/finalize 对答案的重述——报告在 message 流里出现了两次；而消费者把
+@@ -222,6 +239,7 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   **但 Phase 1 期间不把 `kind: "acp"` 注册进主仓**（决策 A 末条）：本期的验收全部走本仓
+   stub client，主仓的第一次探测留到 Phase 2 之后，从而绕开 config-digest 型 snapshot 缓存。
+ - 装配 Scheduler 时 `user_pool` 固定 1（§6 决策 B），并在构造处写明原因。
++  （已被“决策 B 的后续”取代：现在是 `acp.userPool`，默认 2，非 per-session 注册表时启动即 fail loud。）
+ - `session/new`：铸 session id，映射 `Source(channel="acp", chat_id=<sessionId>)`。
+ - `session/prompt`：构造 `TurnRequest(Origin.USER)` 提交 Scheduler，per-session future 等 turn 终结。
+ - `session/cancel`。
+@@ -278,9 +296,12 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   `can_resume=True` 且 `can_load=True`。这条测试是防 A 类回归的唯一闸门。
+ - **dialect 断言**：`dialect_for(<我们的 initialize 响应>)` 返回 spec 基类。
+ - **stdout 纯净度**：子进程拉起 `raven acp`，跑完一轮，断言 stdout 全部字节被 framing 消费完。
+-- **并发闸门**：断言 `user_pool` 只接受 1（>1 时启动 fail loud），并断言同一连接上两个
+-  session 并发 prompt 时第二个排队而非并行进入 `run_turn`（§6 决策 B 的回归闸门）。
+-  同时断言 `_active_turns` 等进程级状态不互相踩。
++- **并发闸门**（已按“决策 B 的后续”改口径）：断言 `user_pool > 1` 在**非** per-session
++  注册表上启动即 fail loud；断言两个**不同** session 并发 prompt 时确实并行（总墙钟约等于
++  最慢的一个，且各自跑在自己的 engine 上）；断言同一 session 上的第二个 prompt 仍被
++  `TurnAlreadyRunningError` 拒。同时断言进程级状态不互相踩 —— 现在具体是
++  `WebSearchTool` / `WebFetchTool` 的 per-turn 状态每 session 一份，
++  而 memory 写入闸门每进程一份。
+ - 冒烟：对照 `tests/integration/test_tui_rpc_production_smoke.py` 写 acp 版
+   （子进程拉起 `raven acp`，走 initialize → new → prompt → update 全链）。
+ - e2e：主仓 spawn Raven-X 跑完整"澄清 → 回答 → follow-up"一轮，验证 stateful 路径。
+@@ -295,6 +316,8 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+    清对方的 saturation / evidence round / seen 集合与预算。功能上不报错，只是分布被污染，
+    且 §0.2 意义上无从记录。闸门：不提供旋钮 + §4 并发测试断言 >1 时 fail loud。
+    代价（N 个 research task 串行）见 §6 决策 B 末段与 §7。
++   该串行化已由 per-session loop 解除，见“决策 B 的后续”；这条风险现在指的是
++   在**非** per-session 注册表上调大池子，闸门是启动时 fail loud。
+ 3. **stdout 污染**：一行日志就打碎 framing。Phase 0 完成前不接任何真实 turn。
+ 4. **`ok` 缺失导致转录说谎（双向）**：status 由 `_looks_failed` 启发式（结果预览以
+    `Error` / `{"error"` 开头）推断，两个方向都会错——不符合注册表约定的失败被标
+@@ -411,12 +434,29 @@ handle 绑定行为。为一个 agent 动所有 agent 的共用判据，收益
+   现在看这不是疏忽，是同一个约束。
+ 
+ **代价明写**：pool=1 意味着 N 个并发 research task 串行，相对今天 N 个 run.py 子进程
+-真并行是回退。见 §7 待确认。
++真并行是回退。
++
++#### 决策 B 的后续（已落地，见 `raven/acp/loops.py`）
++
++上面的论证仍然成立，但两点按实际改了：
++
++1. **§7 的待确认已有答案：会并发。** 所以决策 B 末段那一期已经做了 ——
++   `AcpLoops` 按 conversation id 一个 session 一套 `AgentLoop`（一套 tools + flow 对象），
++   provider / `SessionManager` / memory backend / token_wise 仍进程内一份。
++2. **"前置是搬 ContextVar"这句是错的。** per-session loop 之后每个 session 持**自己的**
++   tool 实例，跨 session 并发不共享任何对象；同 session 内并发被两道闸挡着
++   （`AcpSessions.begin_turn` 抛 `TurnAlreadyRunningError`，宿主侧 `session_lock` 更在前面）。
++   ContextVar 化只在"同一 session 内并发多 turn"时才需要，而协议层本来就禁止 ——
++   因此它可以独立排期，甚至永远不做。
++
++"数字旋钮"那条按原文的逃生阀形状实现：`acp.userPool`（默认 2）+ `acp.maxLoops`，
++且 `build_acp` 在 `user_pool > 1` 而注册表不是 per-session 时**启动即 fail loud**。
++`AcpLoops.single()` 就是那个非 per-session 形状。
+ 
+ ## 7. 待确认（不阻塞开工）
+ 
+-- **DR 场景会不会并发 spawn / DAG 并行发 research 任务？** 若会，决策 B 的串行化是硬吞吐
+-  上限，需要在 Phase 3 接入前决定是接受，还是先做 per-session AgentLoop 那一期。
+-  若 research 委派实际上是会话内串行的，则此回退无实际影响。
++- ~~**DR 场景会不会并发 spawn / DAG 并行发 research 任务？**~~ **会。** 已按决策 B 末段
++  做成 per-session AgentLoop，见上面"决策 B 的后续"。
+ - `idSource: provisioned` 在 acp kind 下是否仍被读取（不在 `_ACP_FIELDS` 内）—— Phase 3 确认。
+-- workspace 级资源盘点结果（§3 workspace 一条）—— Phase 0 产出。
++- ~~workspace 级资源盘点结果（§3 workspace 一条）~~ 见 §3 该条末段的盘点结果：
++  文件工具根与 Checkpoint 的 shadow repo 都已按 session 分开；tracing 落盘路径未改。
+diff --git a/raven/acp/spine.py b/raven/acp/spine.py
+index c076511..9085586 100644
+--- a/raven/acp/spine.py
++++ b/raven/acp/spine.py
+@@ -34,9 +34,9 @@ from dataclasses import dataclass
+ from typing import Any
+ 
+ from raven.acp import protocol
++from raven.acp.loops import AcpLoops
+ from raven.acp.redact import redact
+ from raven.acp.tool_kinds import locations, title_for, tool_kind
+-from raven.agent.spine_runner import AgentTurnRunner
+ from raven.spine import (
+     Deliverable,
+     MediaOut,
+@@ -58,17 +58,16 @@ from raven.spine.events import TurnEvent
+ from raven.spine.runner import Drain, Emit, TurnOutcome
+ from raven.spine.scheduler import TurnHandle
+ 
+-USER_POOL = 1
+-"""The ACP user pool is fixed at 1 and MUST NOT be made configurable.
+-
+-Not a conservative default -- the only correct value for the current AgentLoop
+-(plan §6 decision B): ``WebSearchTool`` / ``WebFetchTool`` keep their per-turn
+-state (saturation, evidence round, seen sets, retry budgets) as plain instance
+-attributes on shared tool objects, and ``run_turn`` resets them at every turn
+-start. Two concurrent turns on one loop would silently clear each other's
+-in-flight state -- no error, just a polluted generated distribution that
+-``arm_env.json`` cannot record (AGENTS.md §0.2). Restoring parallelism means
+-one AgentLoop per session, not a bigger semaphore.
++DEFAULT_USER_POOL = 1
++"""Concurrent user turns a connection runs when the caller names no size.
++
++One, because a caller that has not thought about it may still be serving every
++session from a single engine, and two concurrent turns on one engine silently
++clear each other's in-flight tool state (saturation, evidence round, seen sets,
++retry budgets are instance attributes that ``run_turn`` resets at turn start)
++-- no error, just a polluted generated distribution that ``arm_env.json``
++cannot record (AGENTS.md §0.2). Anything above one therefore requires a
++per-session registry, which :func:`build_acp` enforces rather than trusts.
+ """
+ 
+ MAX_RESULT_PREVIEW = 64 * 1024
+@@ -111,6 +110,15 @@ class AcpSessions:
+     def get(self, session_id: str) -> AcpSession | None:
+         return self._sessions.get(session_id)
+ 
++    def remove(self, session_id: str) -> None:
++        """Un-register a session whose opening failed.
++
++        Only for the rollback: a session left in the registry without an engine
++        is one whose next prompt fails mid-turn, which is the failure the
++        engine-on-open ordering exists to avoid.
++        """
++        self._sessions.pop(session_id, None)
++
+     def sessions(self) -> tuple[AcpSession, ...]:
+         return tuple(self._sessions.values())
+ 
+@@ -171,9 +179,14 @@ class AcpSessions:
+                 session.future.set_result("cancelled")
+ 
+ 
+-class AcpTurnRunner(AgentTurnRunner):
++class AcpTurnRunner:
+     """Runs the turn NON-streaming and captures the rich per-turn usage.
+ 
++    Not an ``AgentTurnRunner`` subclass any more: that base pins exactly one
++    engine for the runner's lifetime, and this one resolves the engine per turn
++    from the session registry. ``TurnRunner`` is a structural Protocol, so
++    ``run`` is the whole contract.
++
+     ``stream=False`` is the answer-semantics decision, not a simplification.
+     The consuming raven accumulates every ``agent_message_chunk`` as the
+     reply, and with ``stream=True`` the token stream carries everything the
+@@ -193,14 +206,15 @@ class AcpTurnRunner(AgentTurnRunner):
+     ``tool_call_update`` for a toolCallId no ``tool_call`` introduced.
+     """
+ 
+-    def __init__(self, agent_loop: Any, usages: dict[str, dict[str, Any]]) -> None:
+-        super().__init__(agent_loop, stream=False)
++    def __init__(self, loops: AcpLoops, usages: dict[str, dict[str, Any]]) -> None:
++        self._loops = loops
+         self._usages = usages
+ 
+     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
+         cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
++        agent_loop = await self._loops.get(cid)
+         usage_sink: dict[str, Any] = {}
+-        outcome = await self._loop.run_turn(req, emit, drain, stream=False, usage_sink=usage_sink)
++        outcome = await agent_loop.run_turn(req, emit, drain, stream=False, usage_sink=usage_sink)
+         self._usages[cid] = dict(usage_sink)
+         return outcome
+ 
+@@ -224,11 +238,20 @@ class AcpOutlet:
+     raven would read it as answer text), and MediaOut (named by path).
+     """
+ 
+-    def __init__(self, channel: str, emit: Callable[[dict[str, Any]], None], *, cwd: str | None = None) -> None:
++    def __init__(
++        self,
++        channel: str,
++        emit: Callable[[dict[str, Any]], None],
++        *,
++        cwd_for: Callable[[str], str | None] | None = None,
++    ) -> None:
+         self.name = channel
+         self.capabilities = Capabilities(streaming=True)
+         self._emit = emit
+-        self._cwd = cwd
++        # Resolved per session, not per connection: each session's file tools
++        # are rooted in its own subtree, so one anchor for the whole connection
++        # would report every path against the wrong directory.
++        self._cwd_for = cwd_for
+ 
+     def update(self, session_id: str, update: dict[str, Any]) -> None:
+         self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
+@@ -243,7 +266,7 @@ class AcpOutlet:
+                 self.update(cid, _text_chunk("agent_thought_chunk", out.content))
+         elif isinstance(out, ToolEvent):
+             if out.phase is ToolPhase.START:
+-                self.update(cid, self._tool_call(out))
++                self.update(cid, self._tool_call(out, cid))
+             else:
+                 self.update(cid, self._tool_call_update(out))
+         elif isinstance(out, Text):
+@@ -269,7 +292,7 @@ class AcpOutlet:
+             return
+         self.update(stream_id, _text_chunk("agent_message_chunk", delta))
+ 
+-    def _tool_call(self, ev: ToolEvent) -> dict[str, Any]:
++    def _tool_call(self, ev: ToolEvent, session_id: str) -> dict[str, Any]:
+         # status "in_progress", not "pending": by the time this event exists the
+         # call is running, and a pending row that never changes reads as a hang.
+         # rawInput is deliberately absent -- for exec it is the whole command
+@@ -282,7 +305,7 @@ class AcpOutlet:
+             "kind": tool_kind(ev.name or None),
+             "status": "in_progress",
+         }
+-        found = locations(ev.arguments, self._cwd)
++        found = locations(ev.arguments, self._cwd_for(session_id) if self._cwd_for else None)
+         if found:
+             update["locations"] = found
+         return update
+@@ -337,6 +360,7 @@ def _make_acp_sink(
+     sessions: AcpSessions,
+     usages: dict[str, dict[str, Any]],
+     channel: str,
++    loops: AcpLoops,
+ ) -> Callable[[TurnEvent], Awaitable[None]]:
+     """The scheduler's EventSink: deliverables route through the hub, and a
+     turn's ending settles its session's prompt after the render barrier, so
+@@ -346,6 +370,13 @@ def _make_acp_sink(
+         await hub.close_stream(conversation_id)
+         await hub.wait_idle(channel)
+ 
++    def _settle(conversation_id: str, stop: str) -> None:
++        sessions.settle(conversation_id, stop)
++        # A settled session is idle, and idle is the only state the engine cap
++        # can evict from. This is the one moment the registry can learn that a
++        # turn it had to keep an over-cap engine for is over.
++        loops.reclaim()
++
+     async def sink(event: TurnEvent) -> None:
+         if isinstance(event, TurnEnded):
+             cid = event.conversation_id or ""
+@@ -358,7 +389,7 @@ def _make_acp_sink(
+             update = _usage_update(usage)
+             if update is not None:
+                 outlet.update(cid, update)
+-            sessions.settle(cid, "end_turn")
++            _settle(cid, "end_turn")
+             return
+         if isinstance(event, TurnFailed):
+             cid = event.conversation_id or ""
+@@ -367,7 +398,7 @@ def _make_acp_sink(
+             if sessions.get(cid) is None:
+                 return
+             if event.cancelled:
+-                sessions.settle(cid, "cancelled")
++                _settle(cid, "cancelled")
+                 return
+             # The failure is content, never a JSON-RPC error: an error in reply
+             # to a turn-shaped request makes clients tear down the whole turn.
+@@ -377,7 +408,7 @@ def _make_acp_sink(
+             # answered it, this text would land on a turn that is over.
+             if sessions.pending(cid):
+                 outlet.say(cid, redact(f"The turn failed: {event.error or 'internal error'}"))
+-            sessions.settle(cid, "end_turn")
++            _settle(cid, "end_turn")
+             return
+         if isinstance(event, TurnStarted):
+             # The session/prompt request is itself the record that a turn began.
+@@ -388,39 +419,55 @@ def _make_acp_sink(
+ 
+ 
+ def build_acp(
+-    agent_loop: Any,
++    loops: AcpLoops,
+     emit: Callable[[dict[str, Any]], None],
+     *,
+     channel: str = "acp",
+-    workspace: str | None = None,
++    user_pool: int = DEFAULT_USER_POOL,
+ ) -> tuple[Scheduler, DeliveryHub, AcpSessions, Callable[[], Awaitable[None]]]:
+     """Wire the spine pieces an ACP turn flows through.
+ 
+     Returns the scheduler (``session/prompt`` submits to it), the hub, the
+     session registry, and a ``teardown`` the server awaits on exit. ``emit``
+-    writes one finished frame; ``workspace`` anchors relative tool-call paths
+-    for ``locations``.
++    writes one finished frame; ``loops`` resolves each turn's engine and anchors
++    that session's relative tool-call paths for ``locations``.
+     """
++    if user_pool > 1 and not loops.per_session:
++        # Fail at startup rather than serve turns that quietly corrupt each
++        # other: a pool above one on a single shared engine is the one
++        # misconfiguration that produces no error and no record of itself.
++        raise ValueError(
++            f"user_pool={user_pool} needs one engine per session; "
++            "this registry serves a single shared engine, on which concurrent "
++            "turns would clear each other's in-flight tool state"
++        )
+     hub = DeliveryHub()
+-    outlet = AcpOutlet(channel, emit, cwd=workspace)
++    outlet = AcpOutlet(channel, emit, cwd_for=loops.cwd_for)
+     hub.register(outlet)
+     sessions = AcpSessions()
++    # The cap may not evict an engine whose session is mid-turn; only the
++    # session registry knows which those are.
++    loops.set_busy(sessions.pending)
+     usages: dict[str, dict[str, Any]] = {}
+     scheduler = Scheduler(
+-        AcpTurnRunner(agent_loop, usages),
+-        OriginPools(user=USER_POOL, system=1),
+-        _make_acp_sink(hub, outlet, sessions, usages, channel),
++        AcpTurnRunner(loops, usages),
++        OriginPools(user=user_pool, system=1),
++        _make_acp_sink(hub, outlet, sessions, usages, channel, loops),
+     )
+ 
+     async def teardown() -> None:
+         await scheduler.shutdown(grace=0.0)
+         await hub.aclose()
++        # Last, and only after the scheduler has stopped: closing an engine
++        # drains its memory writes, and a turn still running would be adding to
++        # them.
++        await loops.aclose()
+ 
+     return scheduler, hub, sessions, teardown
+ 
+ 
+ __all__ = [
+-    "USER_POOL",
++    "DEFAULT_USER_POOL",
+     "AcpOutlet",
+     "AcpSession",
+     "AcpSessions",
+diff --git a/raven/config/raven.py b/raven/config/raven.py
+index abdb298..08864d1 100644
+--- a/raven/config/raven.py
++++ b/raven/config/raven.py
+@@ -1235,9 +1235,9 @@ SkillForgeConfig.model_rebuild()
+ 
+ 
+ class CheckpointConfig(_Base):
+-    """Per-turn shadow-git checkpoint of the workspace.
++    """Per-turn shadow-git checkpoint of the tree the agent's tools can write.
+ 
+-    When active, the agent loop commits the workspace to an out-of-band
++    When active, the agent loop commits that tree to an out-of-band
+     shadow git repo at the end of each turn (covering both normal and
+     max-iteration exits). This is the safety net behind Bug2: a truncated
+     multi-file edit leaves a recoverable snapshot, and the next turn gets a
+@@ -1266,8 +1266,12 @@ class CheckpointConfig(_Base):
+     docstring for the interaction with the AgentLoop ``interactive`` flag."""
+ 
+     shadow_dir: str = ".raven/shadow.git"
+-    """Shadow git-dir, relative to the workspace. The real workspace is the
+-    work-tree; the user's own ``.git`` is never touched."""
++    """Shadow git-dir, relative to the tree the agent's file tools are rooted
++    in, which is that same tree's work-tree; the user's own ``.git`` is never
++    touched. That root is the workspace on every surface but ACP, where each
++    session's tools are rooted in a subtree of their own and so is its
++    snapshot -- one shadow repo under a shared work-tree would have concurrent
++    sessions racing it and staging each other's edits."""
+ 
+ 
+ class RuntimeConfig(_Base):
+diff --git a/tests/test_acp_methods.py b/tests/test_acp_methods.py
+index 191e902..b117aba 100644
+--- a/tests/test_acp_methods.py
++++ b/tests/test_acp_methods.py
+@@ -28,11 +28,20 @@ class _StubHandle:
+ class _Harness:
+     """AcpMethods against a scripted submit."""
+ 
+-    def __init__(self, on_submit=None, session_manager=None, question_broker=None, arm_ask_user=None):
++    def __init__(
++        self,
++        on_submit=None,
++        session_manager=None,
++        question_broker=None,
++        arm_ask_user=None,
++        on_session_open=None,
++    ):
+         self.frames: list[dict] = []
+         self.sessions = AcpSessions()
+         self.submitted: list = []
++        self.opened: list[str] = []
+         self._on_submit = on_submit
++        self._on_session_open = on_session_open
+         self.methods = AcpMethods(
+             submit=self._submit,
+             sessions=self.sessions,
+@@ -40,8 +49,15 @@ class _Harness:
+             session_manager=session_manager,
+             question_broker=question_broker,
+             arm_ask_user=arm_ask_user,
++            on_session_open=self._open,
+         )
+ 
++    async def _open(self, session_id):
++        self.opened.append(session_id)
++        if self._on_session_open is not None:
++            return self._on_session_open(session_id)
++        return None
++
+     def _submit(self, req):
+         self.submitted.append(req)
+         if self._on_submit is not None:
+@@ -533,3 +549,38 @@ async def test_clarify_respond_is_gated_on_initialize():
+     h = _Harness()
+     response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": "r", "answer": "x"})
+     assert response["error"]["code"] == protocol.INVALID_REQUEST
++
++
++# -- opening a session builds its engine ----------------------------------------
++
++
++async def test_every_route_into_the_registry_opens_the_session(tmp_path):
++    """new / load / resume are three ways in; an engine built on only one of them
++    leaves the other two failing halfway through their first turn."""
++    from raven.session.manager import SessionManager
++
++    manager = SessionManager(tmp_path)
++    key = "acp:20260827_000000_stored"
++    stored = manager.get_or_create(key)
++    stored.add_message("user", "earlier")
++    manager.save(stored)
++
++    h = _Harness(session_manager=manager)
++    await h.start()
++    minted = await h.new_session()
++    await h.call("session/load", {"sessionId": key})
++    await h.call("session/resume", {"sessionId": key})
++
++    assert h.opened == [minted, key, key]
++
++
++async def test_a_session_whose_engine_cannot_be_built_is_not_left_registered():
++    def boom(_session_id):
++        raise RuntimeError("no provider key")
++
++    h = _Harness(on_session_open=boom)
++    await h.start()
++    response = await h.call("session/new", {"cwd": "/tmp"})
++
++    assert response["error"]["code"] == protocol.INTERNAL_ERROR
++    assert h.sessions.sessions() == ()
+diff --git a/tests/test_acp_server.py b/tests/test_acp_server.py
+index 2da92cf..e7074be 100644
+--- a/tests/test_acp_server.py
++++ b/tests/test_acp_server.py
+@@ -5,6 +5,7 @@ import io
+ import json
+ 
+ from raven.acp import protocol
++from raven.acp.loops import AcpLoops
+ from raven.acp.server import serve
+ from raven.spine import Text, TurnOutcome, Usage
+ 
+@@ -37,10 +38,11 @@ class _StubLoop:
+ class _Client:
+     """Drives serve() over an in-process reader, one request at a time."""
+ 
+-    def __init__(self, loop_factory):
++    def __init__(self, loops, *, user_pool=1):
+         self.reader = asyncio.StreamReader()
+         self.out = _WireOut()
+-        self.task = asyncio.ensure_future(serve(self.reader, self.out, agent_loop_factory=loop_factory))
++        self.loops = loops
++        self.task = asyncio.ensure_future(serve(self.reader, self.out, loops=loops, user_pool=user_pool))
+         self._next_id = 0
+ 
+     def send(self, method, params=None, *, notification=False):
+@@ -75,7 +77,7 @@ class _Client:
+ 
+ 
+ async def test_initialize_new_prompt_full_chain_and_wire_purity():
+-    client = _Client(lambda: _StubLoop())
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
+     try:
+         rid = client.send("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+         init = await client.response(rid)
+@@ -108,7 +110,7 @@ async def test_cancel_reaches_a_suspended_prompt():
+     # session/prompt suspends its handler task; the cancel notification must be
+     # read and acted on while it is suspended -- the reason every frame runs in
+     # its own task.
+-    client = _Client(lambda: _StubLoop(hang=True))
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop(hang=True)))
+     try:
+         rid = client.send("initialize", {"protocolVersion": 1})
+         await client.response(rid)
+@@ -125,7 +127,7 @@ async def test_cancel_reaches_a_suspended_prompt():
+ 
+ 
+ async def test_eof_settles_a_pending_prompt_as_cancelled():
+-    client = _Client(lambda: _StubLoop(hang=True))
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop(hang=True)))
+     rid = client.send("initialize", {"protocolVersion": 1})
+     await client.response(rid)
+     rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+@@ -140,7 +142,7 @@ async def test_eof_settles_a_pending_prompt_as_cancelled():
+ 
+ 
+ async def test_malformed_input_is_answered_and_the_session_survives():
+-    client = _Client(lambda: _StubLoop())
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
+     try:
+         client.reader.feed_data(b"this is not json\n")
+         rid = client.send("initialize", {"protocolVersion": 1})
+@@ -153,7 +155,7 @@ async def test_malformed_input_is_answered_and_the_session_survives():
+ 
+ 
+ async def test_wire_carries_no_raw_newlines_inside_frames():
+-    client = _Client(lambda: _StubLoop())
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
+     try:
+         rid = client.send("initialize", {"protocolVersion": 1})
+         await client.response(rid)
+@@ -182,7 +184,7 @@ async def test_load_replays_then_prompt_continues_the_stored_session(tmp_path):
+ 
+     loop = _StubLoop()
+     loop.sessions = manager
+-    client = _Client(lambda: loop)
++    client = _Client(AcpLoops.single(loop))
+     try:
+         rid = client.send("initialize", {"protocolVersion": 1})
+         await client.response(rid)
+@@ -211,6 +213,170 @@ async def test_load_replays_then_prompt_continues_the_stored_session(tmp_path):
+         await client.close()
+ 
+ 
++# -- concurrency across sessions ------------------------------------------------
++
++
++class _SlowLoop:
++    """One turn takes ``delay`` seconds and records the engine it ran on."""
++
++    workspace = None
++
++    def __init__(self, delay, ran):
++        self.delay = delay
++        self.ran = ran
++
++    async def run_turn(self, req, emit, drain, stream=False, usage_sink=None, **_kw):
++        self.ran.append(id(self))
++        await asyncio.sleep(self.delay)
++        await emit(Text(content="done"))
++        return TurnOutcome(usage=Usage(1, 2, 3), explicit_reply=True)
++
++
++async def test_three_sessions_run_at_once_on_three_engines():
++    """The throughput this change exists for: three concurrent research prompts
++    take about as long as the slowest, not the sum, and each runs on its own
++    engine."""
++    delay = 0.3
++    ran: list[int] = []
++    client = _Client(
++        AcpLoops(lambda _conversation: _SlowLoop(delay, ran)),
++        user_pool=3,
++    )
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++
++        sids = []
++        for _ in range(3):
++            rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++            sids.append((await client.response(rid))["result"]["sessionId"])
++        assert len(set(sids)) == 3
++
++        started = asyncio.get_running_loop().time()
++        prompt_ids = [
++            client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "go"}]})
++            for sid in sids
++        ]
++        for prompt_id in prompt_ids:
++            assert (await client.response(prompt_id))["result"] == {"stopReason": "end_turn"}
++        elapsed = asyncio.get_running_loop().time() - started
++
++        # Serial would be >= 3 * delay. The bound is generous because the
++        # assertion is "they overlapped", not a latency budget.
++        assert elapsed < delay * 2.5, f"turns did not overlap: {elapsed:.2f}s"
++        assert len(set(ran)) == 3, "concurrent sessions shared an engine"
++    finally:
++        await client.close()
++
++
++async def test_the_pool_is_what_makes_them_overlap():
++    """The teeth of the test above: same three sessions, same engines, a pool of
++    one -- and the turns serialise. Without this a pool bug would leave the
++    overlap assertion passing for the wrong reason."""
++    delay = 0.2
++    client = _Client(AcpLoops(lambda _conversation: _SlowLoop(delay, [])), user_pool=1)
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++        sids = []
++        for _ in range(3):
++            rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++            sids.append((await client.response(rid))["result"]["sessionId"])
++
++        started = asyncio.get_running_loop().time()
++        prompt_ids = [
++            client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "go"}]})
++            for sid in sids
++        ]
++        for prompt_id in prompt_ids:
++            await client.response(prompt_id, timeout=10)
++        assert asyncio.get_running_loop().time() - started >= delay * 3
++    finally:
++        await client.close()
++
++
++async def test_a_second_prompt_on_one_session_is_still_refused():
++    """Concurrency is across sessions only. ACP's session/update carries a
++    session id and nothing that identifies the request, so two prompts in
++    flight on one session produce one stream that cannot be split apart --
++    widening the pool must not have removed that gate."""
++    client = _Client(
++        AcpLoops(lambda _conversation: _SlowLoop(0.3, [])),
++        user_pool=3,
++    )
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++        sid = (await client.response(rid))["result"]["sessionId"]
++
++        first = client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "one"}]})
++        await asyncio.sleep(0.05)
++        second = client.send("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "two"}]})
++
++        refusal = await client.response(second)
++        assert refusal["error"]["code"] == protocol.INVALID_REQUEST
++        assert "in flight" in refusal["error"]["message"]
++        assert (await client.response(first))["result"] == {"stopReason": "end_turn"}
++    finally:
++        await client.close()
++
++
++async def test_an_engine_is_built_when_the_session_opens_not_at_the_first_turn():
++    """A construction failure has to land on session/new, where it can be
++    answered, rather than halfway through the first turn."""
++    client = _Client(AcpLoops(lambda _conversation: _StubLoop()))
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++        assert client.loops.resident() == ()
++
++        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++        sid = (await client.response(rid))["result"]["sessionId"]
++        assert client.loops.resident() == (sid,)
++    finally:
++        await client.close()
++
++
++async def test_a_failed_engine_build_fails_the_session_it_opened():
++    def boom(_conversation):
++        raise RuntimeError("no provider key")
++
++    client = _Client(AcpLoops(boom))
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++        response = await client.response(rid)
++        assert "error" in response
++        assert response["error"]["code"] == protocol.INTERNAL_ERROR
++    finally:
++        await client.close()
++
++
++async def test_a_prompt_for_a_session_that_never_opened_is_refused():
++    """The other half of the rollback: with no registry entry the prompt is a
++    clean 'unknown session', not a turn that dies on engine construction."""
++    def boom(_conversation):
++        raise RuntimeError("no provider key")
++
++    client = _Client(AcpLoops(boom))
++    try:
++        rid = client.send("initialize", {"protocolVersion": 1})
++        await client.response(rid)
++        rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
++        await client.response(rid)
++
++        rid = client.send(
++            "session/prompt",
++            {"sessionId": "acp:20260827_000000_ghost", "prompt": [{"type": "text", "text": "hi"}]},
++        )
++        response = await client.response(rid)
++        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
++    finally:
++        await client.close()
++
++
+ # -- ask_user round trip --------------------------------------------------------
+ 
+ 
+@@ -260,16 +426,19 @@ async def test_ask_user_round_trips_over_the_wire():
+     update mid-turn, ``_raven/clarify_respond`` answers it, and the SAME
+     prompt's reply carries the answer."""
+     loop = _AskingLoop()
+-    client = _Client(lambda: loop)
++    client = _Client(AcpLoops.single(loop))
+     rid = client.send(
+         "initialize",
+         {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},
+     )
+     await client.response(rid)
+-    assert loop.tool.broker is not None, "initialize did not arm the broker"
+ 
+     rid = client.send("session/new", {"cwd": "/tmp", "mcpServers": []})
+     sid = (await client.response(rid))["result"]["sessionId"]
++    # Armed as the session's engine is built, not at initialize: engines are
++    # per session and lazily created, so a declaration that only reached the
++    # engines alive when it arrived would reach none of them.
++    assert loop.tool.broker is not None, "opening the session did not arm the broker"
+     prompt_id = client.send(
+         "session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "research X"}]}
+     )
+@@ -291,7 +460,7 @@ async def test_an_undeclared_client_never_sees_a_question():
+     """No capability, no broker: the tool stays unarmed and the turn takes its
+     no-broker path — on the real loop that is the gate's handoff fallback."""
+     loop = _AskingLoop()
+-    client = _Client(lambda: loop)
++    client = _Client(AcpLoops.single(loop))
+     rid = client.send("initialize", {"protocolVersion": 1})
+     await client.response(rid)
+     assert loop.tool.broker is None
+@@ -309,7 +478,7 @@ async def test_eof_fail_safes_a_turn_blocked_on_a_question():
+     turn holding its prompt on an unanswered question unwinds through the
+     broker's default instead of spending the drain's grace."""
+     loop = _AskingLoop()
+-    client = _Client(lambda: loop)
++    client = _Client(AcpLoops.single(loop))
+     rid = client.send(
+         "initialize",
+         {"protocolVersion": 1, "clientCapabilities": {"_meta": {"raven": {"askUser": True}}}},
+diff --git a/tests/test_acp_spine.py b/tests/test_acp_spine.py
+index 7438eb6..f8fd04f 100644
+--- a/tests/test_acp_spine.py
++++ b/tests/test_acp_spine.py
+@@ -5,8 +5,9 @@ from typing import Any
+ 
+ import pytest
+ 
++from raven.acp.loops import AcpLoops
+ from raven.acp.spine import (
+-    USER_POOL,
++    DEFAULT_USER_POOL,
+     AcpOutlet,
+     AcpSession,
+     AcpSessions,
+@@ -36,7 +37,7 @@ SRC = Source(channel="acp", chat_id="20260825_000000_abc123", sender_id="acp-cli
+ 
+ 
+ def _outlet(frames: list[dict]) -> AcpOutlet:
+-    return AcpOutlet("acp", frames.append, cwd="/work")
++    return AcpOutlet("acp", frames.append, cwd_for=lambda _session_id: "/work")
+ 
+ 
+ def _update(frame: dict) -> dict:
+@@ -201,12 +202,21 @@ async def test_close_settles_every_pending_prompt_as_cancelled():
+     assert await fb == "cancelled"
+ 
+ 
+-def test_user_pool_is_pinned_to_one():
+-    # Plan §6 decision B: WebSearchTool/WebFetchTool keep per-turn state as
+-    # shared instance attributes; a second concurrent turn silently pollutes
+-    # the generated distribution. Widening this is a per-session-AgentLoop
+-    # change, never a knob.
+-    assert USER_POOL == 1
++def test_the_default_pool_is_one_and_a_shared_engine_refuses_more():
++    # WebSearchTool/WebFetchTool keep per-turn state as instance attributes, so
++    # two concurrent turns on ONE engine silently pollute the generated
++    # distribution. Widening the pool is legal only with an engine per session;
++    # on a shared engine it has to fail at startup, not at measurement time.
++    assert DEFAULT_USER_POOL == 1
++    loops = AcpLoops.single(_StubLoop())
++    with pytest.raises(ValueError, match="one engine per session"):
++        build_acp(loops, [].append, user_pool=2)
++
++
++async def test_a_per_session_registry_may_widen_the_pool():
++    loops = AcpLoops(lambda _conversation: _StubLoop())
++    _scheduler, _hub, _sessions, teardown = build_acp(loops, [].append, user_pool=4)
++    await teardown()
+ 
+ 
+ # -- end to end through the real scheduler ------------------------------------
+@@ -241,7 +251,7 @@ def _request() -> TurnRequest:
+ 
+ 
+ async def _run_one(loop: Any, frames: list[dict]) -> str:
+-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
++    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
+     try:
+         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
+         future = sessions.begin_turn(SID)
+@@ -285,7 +295,7 @@ async def test_failed_turn_lands_as_content_with_end_turn_and_no_secret():
+ async def test_cancelled_turn_settles_cancelled_and_stays_silent():
+     frames: list[dict] = []
+     loop = _StubLoop(hang=True)
+-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
++    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
+     try:
+         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
+         future = sessions.begin_turn(SID)
+@@ -336,7 +346,7 @@ async def test_a_cancelled_turns_late_ending_cannot_hijack_the_next_prompt():
+ 
+     frames: list[dict] = []
+     loop = _TwoTurnLoop()
+-    scheduler, _hub, sessions, teardown = build_acp(loop, frames.append)
++    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(loop), frames.append)
+     try:
+         methods = AcpMethods(submit=scheduler.submit, sessions=sessions, emit=frames.append, session_manager=None)
+         await methods.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}})
+@@ -377,7 +387,7 @@ async def test_turn_ending_for_a_foreign_lane_settles_nothing():
+     # A subagent result re-injection ends on its own conversation id; it must
+     # not answer an ACP session's prompt or put frames on its stream.
+     frames: list[dict] = []
+-    scheduler, _hub, sessions, teardown = build_acp(_StubLoop(), frames.append)
++    scheduler, _hub, sessions, teardown = build_acp(AcpLoops.single(_StubLoop()), frames.append)
+     try:
+         sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
+         future = sessions.begin_turn(SID)
+@@ -392,3 +402,35 @@ async def test_turn_ending_for_a_foreign_lane_settles_nothing():
+         assert not future.done()
+     finally:
+         await teardown()
++
++
++async def test_a_settled_turn_brings_the_engine_registry_back_under_its_cap():
++    """The registry is told a turn is over only here.
++
++    The engine cap is applied when an engine is built, and a build that finds
++    its only victim mid-turn goes over it deliberately rather than close an
++    engine a turn is running on. Nothing else on the connection knows when that
++    turn ends, so without a reclaim on settle the extra engine stays resident
++    past the configured ceiling for the life of the connection.
++    """
++    frames: list[dict] = []
++    other = "acp:other"
++    loops = AcpLoops(lambda _conversation: _StubLoop(), max_loops=1)
++    scheduler, _hub, sessions, teardown = build_acp(loops, frames.append)
++    try:
++        sessions.add(AcpSession(session_id=other, chat_id="other"))
++        held = sessions.begin_turn(other)
++        # Resident and mid-turn, so the engine the real turn below builds is not
++        # allowed to evict it and the registry goes over its cap of one.
++        await loops.get(other)
++
++        sessions.add(AcpSession(session_id=SID, chat_id=SRC.chat_id))
++        future = sessions.begin_turn(SID)
++        handle = scheduler.submit(_request())
++        sessions.bind_handle(SID, handle)
++        assert await asyncio.wait_for(future, timeout=5) == "end_turn"
++
++        assert loops.resident() == (other,)
++        sessions.settle_future(held, "cancelled")
++    finally:
++        await teardown()
+diff --git a/tests/test_ag1_backend_dispatch.py b/tests/test_ag1_backend_dispatch.py
+index 926e797..434d124 100644
+--- a/tests/test_ag1_backend_dispatch.py
++++ b/tests/test_ag1_backend_dispatch.py
+@@ -342,6 +342,189 @@ class TestDetachedStore:
+         assert agent._store_dropped == 0
+ 
+ 
++# ---------------------------------------------------------------------------
++# One process, several loops, one backend
++# ---------------------------------------------------------------------------
++
++
++class TestSharedInflightSet:
++    def test_each_loop_gets_its_own_set_by_default(self, tmp_path: Path) -> None:
++        first = _make_loop(tmp_path)
++        second = _make_loop(tmp_path)
++        assert first._store_inflight is not second._store_inflight
++
++    async def test_a_shared_set_caps_the_process_not_each_loop(
++        self,
++        tmp_path: Path,
++        tight_store_budget: None,
++        monkeypatch: pytest.MonkeyPatch,
++    ) -> None:
++        """N loops against ONE backend must not multiply the cap by N.
++
++        With a cap of 1 and a gate nothing can pass, the first loop's write
++        starts and the second loop's is refused -- the whole point of handing
++        both loops the same set. Per-loop sets would let both through and put
++        2N writes on a service the cap exists to protect.
++        """
++        monkeypatch.setattr(loop_main, "_STORE_MAX_INFLIGHT", 1)
++        shared: set = set()
++        b = _FakeBackend()
++        b.gate = asyncio.Event()
++        first = AgentLoop(
++            provider=_StubProvider(),
++            workspace=tmp_path,
++            model="stub",
++            backend=b,
++            store_inflight=shared,
++        )
++        second = AgentLoop(
++            provider=_StubProvider(),
++            workspace=tmp_path,
++            model="stub",
++            backend=b,
++            store_inflight=shared,
++        )
++        assert first._store_inflight is second._store_inflight
++
++        await first._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
++        await second._dispatch_backend_store("s1", [{"role": "user", "content": "x"}])
++
++        assert [c["session_id"] for c in b.store_calls] == ["s0"]
++        assert second._store_dropped == 1
++
++        b.gate.set()
++        await first.drain_backend_stores()
++        assert b.completed == ["s0"]
++
++    async def test_a_given_up_write_is_reported_once_across_every_loop(
++        self,
++        tmp_path: Path,
++        monkeypatch: pytest.MonkeyPatch,
++    ) -> None:
++        """Found end to end: three engines sharing the set each drained it and
++        each warned about the same lost turn, so one loss read as three.
++
++        The count is per loop and the set is shared, so whoever gives up on a
++        task claims it. The task stays in the set -- it is still running and
++        still holds a slot against the backpressure cap, which is the other
++        reader of that set.
++        """
++        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
++        shared: set = set()
++        b = _FakeBackend()
++        b.gate = asyncio.Event()
++        loops = [
++            AgentLoop(
++                provider=_StubProvider(),
++                workspace=tmp_path,
++                model="stub",
++                backend=b,
++                store_inflight=shared,
++            )
++            for _ in range(3)
++        ]
++
++        await loops[0]._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
++        assert len(shared) == 1
++
++        await loops[0].drain_backend_stores(timeout=0.05)
++        assert loops[0]._store_dropped == 0, "the count is cleared by its own report"
++        assert len(shared) == 1, "a claimed write still counts against the cap"
++        assert loops[1]._store_inflight_count() == 1
++
++        # The other two find the write claimed, so they report nothing.
++        for other in loops[1:]:
++            await other.drain_backend_stores(timeout=0.05)
++            assert other._store_dropped == 0
++
++        b.gate.set()
++
++    async def test_concurrent_drains_report_a_lost_write_once(
++        self,
++        tmp_path: Path,
++        monkeypatch: pytest.MonkeyPatch,
++    ) -> None:
++        """Teardown closes every engine at once, which is the case that broke.
++
++        ``AcpLoops.aclose`` gathers the drains, so all of them snapshot the
++        shared set before any of them has given up on anything. A claim taken
++        after the wait is therefore taken by all of them at once, and each one
++        warns about the same lost turn -- three engines reported one loss as
++        three end to end.
++        """
++        from loguru import logger
++
++        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
++        shared: set = set()
++        b = _FakeBackend()
++        b.gate = asyncio.Event()
++        loops = [
++            AgentLoop(
++                provider=_StubProvider(),
++                workspace=tmp_path,
++                model="stub",
++                backend=b,
++                store_inflight=shared,
++            )
++            for _ in range(3)
++        ]
++
++        await loops[0]._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
++        assert len(shared) == 1
++
++        seen: list[str] = []
++        sink = logger.add(lambda m: seen.append(m.record["message"]), level="WARNING")
++        try:
++            await asyncio.gather(*(one.drain_backend_stores(timeout=0.05) for one in loops))
++        finally:
++            logger.remove(sink)
++
++        losses = [line for line in seen if "were not indexed" in line]
++        assert losses == ["1 turn(s) were not indexed: the memory service never caught up"]
++        # The read back the claim must not break: the write is still running, so
++        # it still counts against the cap every loop shares.
++        assert loops[1]._store_inflight_count() == 1
++
++        b.gate.set()
++
++    async def test_a_claimed_write_still_holds_its_slot_against_the_cap(
++        self,
++        tmp_path: Path,
++        tight_store_budget: None,
++        monkeypatch: pytest.MonkeyPatch,
++    ) -> None:
++        """A drain is not only teardown -- a boundary flush drains a live process.
++
++        The cap is counted off the same shared set the drain claims from, so
++        claiming by dropping the task would take a running write out of the
++        count and let the next turn past a cap that is still full.
++        """
++        monkeypatch.setattr(loop_main, "_STORE_MAX_INFLIGHT", 1)
++        monkeypatch.setattr(loop_main, "_STORE_DRAIN_BUDGET_S", 0.05)
++        shared: set = set()
++        b = _FakeBackend()
++        b.gate = asyncio.Event()
++        first, second = (
++            AgentLoop(
++                provider=_StubProvider(),
++                workspace=tmp_path,
++                model="stub",
++                backend=b,
++                store_inflight=shared,
++            )
++            for _ in range(2)
++        )
++
++        await first._dispatch_backend_store("s0", [{"role": "user", "content": "x"}])
++        await first.drain_backend_stores(timeout=0.05)
++
++        await second._dispatch_backend_store("s1", [{"role": "user", "content": "x"}])
++        assert [c["session_id"] for c in b.store_calls] == ["s0"]
++        assert second._store_dropped == 1
++
++        b.gate.set()
++
++
+ # ---------------------------------------------------------------------------
+ # Legacy compatibility — pre-AG-1 callsites still pass
+ # ---------------------------------------------------------------------------
+diff --git a/tests/test_runtime_checkpoint_bug2_deep.py b/tests/test_runtime_checkpoint_bug2_deep.py
+index c4d8cbe..a28fd5e 100644
+--- a/tests/test_runtime_checkpoint_bug2_deep.py
++++ b/tests/test_runtime_checkpoint_bug2_deep.py
+@@ -188,10 +188,16 @@ class _NoopProvider(LLMProvider):
+         return "stub"
+ 
+ 
+-def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
++def _agent_with_checkpoint(
++    workspace: Path,
++    file_workspace: Path | None = None,
++    pending_recovery: dict | None = None,
++) -> AgentLoop:
+     return AgentLoop(
+         provider=_NoopProvider(),
+         workspace=workspace,
++        file_workspace=file_workspace,
++        pending_recovery=pending_recovery,
+         model="stub",
+         max_iterations=2,
+         restrict_to_workspace=True,
+@@ -223,6 +229,55 @@ def test_d3_interleaved_sessions_keep_recovery_isolated(workspace):
+     assert "b.py" not in text_a
+ 
+ 
++def test_d3_a_shared_map_carries_recovery_across_a_rebuilt_engine(workspace):
++    """A surface that rebuilds a session's engine must not lose its stash.
++
++    The writer of a recovery record is the interrupted turn and the reader is
++    that session's next turn, so on a surface where an idle engine is evicted
++    between the two (ACP's engine cap) the two ends sit on different instances.
++    Per instance the second is rebuilt empty and injects nothing, while the
++    partial edits and the shadow commit are still on disk.
++    """
++    from raven.agent.loop import TurnOutcome
++
++    shared: dict = {}
++    first = _agent_with_checkpoint(workspace, pending_recovery=shared)
++    first._stash_recovery(
++        "acp:s",
++        TurnOutcome(status="interrupted", checkpoint_id="abc1234", edited_files=["partial.py"]),
++    )
++
++    second = _agent_with_checkpoint(workspace, pending_recovery=shared)
++    messages = [{"role": "user", "content": "carry on"}]
++    second._inject_recovery_block("acp:s", messages)
++    text = messages[-1]["content"]
++    assert "partial.py" in text and "abc1234" in text
++
++    # Consumed once, not once per engine: the rebuild must not resurrect it.
++    again = [{"role": "user", "content": "and again"}]
++    _agent_with_checkpoint(workspace, pending_recovery=shared)._inject_recovery_block("acp:s", again)
++    assert again[-1]["content"] == "and again"
++
++
++def test_d3_an_unshared_map_is_still_private_to_its_engine(workspace):
++    """The default is unchanged: no dict passed, no sharing.
++
++    Every surface but ACP holds one loop for the life of the process, where a
++    process-wide map would be the same thing by another name -- but two loops
++    built in one test, or two gateway processes, must not see each other's.
++    """
++    from raven.agent.loop import TurnOutcome
++
++    first = _agent_with_checkpoint(workspace)
++    second = _agent_with_checkpoint(workspace)
++    assert first._pending_recovery is not second._pending_recovery
++
++    first._stash_recovery("s", TurnOutcome(status="interrupted", checkpoint_id="x", edited_files=["a.py"]))
++    messages = [{"role": "user", "content": "hi"}]
++    second._inject_recovery_block("s", messages)
++    assert messages[-1]["content"] == "hi"
++
++
+ def test_d3_repeated_stash_latest_wins(workspace):
+     """If a session is interrupted twice before consumption, the latter stash
+     must replace the former — recovery prompt should reflect *current* state,
+@@ -262,6 +317,29 @@ async def test_d3_concurrent_commits_serialize_or_degrade(workspace):
+     assert any(cid is not None for cid in ids), f"at least one concurrent commit should land; got {r1!r}, {r2!r}"
+ 
+ 
++async def test_d3_one_sessions_edits_stay_out_of_another_sessions_snapshot(workspace):
++    """Two engines on one workspace, each rooted in its own file subtree.
++
++    The snapshot has to follow the tree the engine's tools can write, not the
++    shared workspace: ``add -A`` stages a whole work-tree, so one shadow under
++    the shared root has both engines racing the same repository -- the test
++    above accepts one of them degrading to ``(None, [])`` -- and, when git does
++    serialize them, puts one session's edits in the other's ``edited_files``,
++    which is the list the next turn's recovery prompt reads out.
++    """
++    roots = [workspace / "acp_workspaces" / name for name in ("a", "b")]
++    for root in roots:
++        root.mkdir(parents=True)
++    agents = [_agent_with_checkpoint(workspace, file_workspace=root) for root in roots]
++    for root, text in zip(roots, ("first\n", "second\n")):
++        (root / "report.md").write_text(text, encoding="utf-8")
++
++    results = [await agent._checkpoint.commit_turn("turn") for agent in agents]
++
++    assert all(cid is not None for cid, _changed in results), f"neither snapshot lost the repo; got {results!r}"
++    assert [changed for _cid, changed in results] == [["report.md"], ["report.md"]]
++
++
+ # =============================================================================
+ # D2 bonus — loop wraps degrade
+ # =============================================================================

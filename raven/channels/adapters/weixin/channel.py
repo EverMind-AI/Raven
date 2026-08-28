@@ -43,35 +43,6 @@ _DEDUP_CAP = 1000
 _PAUSE_TICK_S = 30
 
 
-def _https_redirect_target(host: str) -> str:
-    """The https base a ``scaned_but_redirect`` response may move polling to.
-
-    Returns ``""`` for anything unusable, which leaves the caller on the base
-    it already had.
-
-    A bare host is completed to https. A host naming ``http://`` is refused:
-    taking it verbatim let the upstream downgrade this channel to plaintext,
-    and the exchange this poll carries is the one a bot token comes out of.
-    Refused rather than silently upgraded -- coercing it to https would hide a
-    misconfigured or hostile upstream instead of reporting it.
-
-    The host itself is not pinned to the configured origin. That is a wider
-    question about whether a response may move polling off-host at all, and it
-    is not settled here.
-    """
-    host = (host or "").strip()
-    if not host:
-        return ""
-    # A scheme is case-insensitive (RFC 3986): matching only the lowercase
-    # spelling would take ``HTTP://host`` down the bare-host branch and build
-    # ``https://HTTP://host``.
-    lowered = host.lower()
-    if lowered.startswith("http://"):
-        logger.warning("weixin: refusing a plaintext redirect_host ({}); staying on the current base", host)
-        return ""
-    return host if lowered.startswith("https://") else f"https://{host}"
-
-
 class WeixinChannel(ChannelBase):
     """Personal WeChat channel using the iLink HTTP long-poll API."""
 
@@ -255,8 +226,10 @@ class WeixinChannel(ChannelBase):
                     return True
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
-                        poll_base = redirected
+                    if host:
+                        redirected = host if host.startswith(("http://", "https://")) else f"https://{host}"
+                        if redirected != poll_base:
+                            poll_base = redirected
                 elif status == "expired":
                     refreshes += 1
                     if refreshes > p.MAX_QR_REFRESH_COUNT:
@@ -382,8 +355,10 @@ class WeixinChannel(ChannelBase):
                     return
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
-                        poll_base = redirected
+                    if host:
+                        redirected = host if host.startswith(("http://", "https://")) else f"https://{host}"
+                        if redirected != poll_base:
+                            poll_base = redirected
                     self._rebind = {**self._rebind, "phase": "scanned"}
                 elif status == "expired":
                     refreshes = int(self._rebind.get("refreshes") or 0) + 1

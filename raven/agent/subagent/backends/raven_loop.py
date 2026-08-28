@@ -153,6 +153,7 @@ class RavenLoopBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        mode: str | None = None,
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,

@@ -18,6 +18,7 @@ from raven.agent.harness_text import (
     fetch_gate_notice,
     is_harness_authored,
     is_harness_echo,
+    sufficiency_notice,
 )
 from raven.agent.hook.base import AgentHookContext
 
@@ -182,6 +183,29 @@ async def test_notice_is_appended_once_per_firing_not_once_per_iteration():
     await hook.before_iteration(ctx)
     await hook.before_iteration(ctx)
     await hook.before_iteration(ctx)
+    joined = "\n".join(str(m.get("content")) for m in msgs)
+    assert joined.count(FETCH_GATE_PREFIX) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_pause_notice_defers_off_a_body_carrying_the_release_note():
+    """The one stacking the phase order allows: sufficiency writes its release in
+    after_iteration onto the newest tool result, and this gate's NEXT
+    before_iteration would hang the pause on the same body - "stop opening pages,
+    write" followed by "open a page". The notice defers (``notice_at`` does not
+    advance) and lands on the next tool result that can carry it; the tool
+    withdrawal itself is not deferred."""
+    hook = FetchGateObserver(FetchGate(k=2))
+    msgs = [_search_msg(), _search_msg()]
+    msgs[-1]["content"] = f"{msgs[-1]['content']}\n\n{sufficiency_notice()}"
+    ctx = _ctx(msgs)
+    decision = await hook.before_iteration(ctx)
+    assert decision.modified_tools is not None
+    assert FETCH_GATE_PREFIX not in str(msgs[-1]["content"])
+
+    msgs.append(_search_msg())
+    await hook.before_iteration(ctx)
+    assert FETCH_GATE_PREFIX in str(msgs[-1]["content"])
     joined = "\n".join(str(m.get("content")) for m in msgs)
     assert joined.count(FETCH_GATE_PREFIX) == 1
 

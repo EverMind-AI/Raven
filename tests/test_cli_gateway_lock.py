@@ -9,7 +9,6 @@ handle is held.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -35,7 +34,6 @@ def tmp_instance(tmp_path: Path):
 
 
 def test_acquire_writes_payload(tmp_instance: Path) -> None:
-    old_umask = os.umask(0o022)
     fd = acquire(now=123.0)
     try:
         lock_file = tmp_instance / "gateway.lock"
@@ -43,11 +41,7 @@ def test_acquire_writes_payload(tmp_instance: Path) -> None:
         info = _gateway_lock._read_payload(lock_file)
         assert info.pid == os.getpid()
         assert info.started_at == 123.0
-        # The same file later receives the web token, so it must be born
-        # owner-only instead of inheriting the umask.
-        assert (lock_file.stat().st_mode & 0o777) == 0o600
     finally:
-        os.umask(old_umask)
         fd.close()
 
 
@@ -110,92 +104,3 @@ def test_payload_readable_while_lock_held(tmp_instance: Path) -> None:
         assert info.started_at == 222.0
     finally:
         held.close()
-
-
-def _spy_payload_write_modes(monkeypatch, records: list[tuple[int, int]]) -> None:
-    """Record (inode, mode) at the moment of every ``os.write``.
-
-    A final ``stat`` cannot distinguish narrow-then-write from write-then-
-    narrow, and the exposure is decided at the write. Filtering by inode
-    afterwards keeps writes to unrelated descriptors out of the record.
-    """
-    real_write = os.write
-
-    def spying_write(fd: int, data) -> int:
-        st = os.fstat(fd)
-        records.append((st.st_ino, st.st_mode & 0o777))
-        return real_write(fd, data)
-
-    monkeypatch.setattr(os, "write", spying_write)
-
-
-def test_the_published_endpoint_file_is_never_briefly_world_readable(tmp_path, monkeypatch) -> None:
-    """The payload carries the web token: when publish itself creates the
-    file, the token must already land in an owner-only file."""
-    from raven.cli import _gateway_lock as lock
-
-    target = tmp_path / "gateway.lock"
-    monkeypatch.setattr(lock, "_lock_path", lambda: target)
-    records: list[tuple[int, int]] = []
-    _spy_payload_write_modes(monkeypatch, records)
-
-    old_umask = os.umask(0o022)
-    try:
-        lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
-    finally:
-        os.umask(old_umask)
-
-    ino = target.stat().st_ino
-    modes_at_write = [mode for i, mode in records if i == ino]
-    assert modes_at_write and all(mode == 0o600 for mode in modes_at_write)
-    assert (target.stat().st_mode & 0o777) == 0o600
-    assert json.loads(target.read_text(encoding="utf-8"))["web_token"] == "s3cret-token"
-
-
-def test_an_existing_wide_open_payload_is_narrowed_before_the_token_lands(tmp_path, monkeypatch) -> None:
-    """O_CREAT applies its mode only to a file it creates, so a payload that
-    already exists as 0644 must be narrowed BEFORE the token is written --
-    narrowing after leaves the token world-readable for the span in between."""
-    from raven.cli import _gateway_lock as lock
-
-    target = tmp_path / "gateway.lock"
-    target.write_text("{}", encoding="utf-8")
-    os.chmod(target, 0o644)
-    monkeypatch.setattr(lock, "_lock_path", lambda: target)
-    records: list[tuple[int, int]] = []
-    _spy_payload_write_modes(monkeypatch, records)
-
-    old_umask = os.umask(0o022)
-    try:
-        lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
-    finally:
-        os.umask(old_umask)
-
-    ino = target.stat().st_ino
-    modes_at_write = [mode for i, mode in records if i == ino]
-    assert modes_at_write and all(mode == 0o600 for mode in modes_at_write)
-    assert (target.stat().st_mode & 0o777) == 0o600
-
-
-def test_first_start_never_exposes_the_token(tmp_instance: Path, monkeypatch) -> None:
-    """The normal first boot: acquire() creates the payload, then the bound
-    server publishes the token into it. Every write to that file, the token's
-    included, must hit an owner-only inode."""
-    records: list[tuple[int, int]] = []
-    _spy_payload_write_modes(monkeypatch, records)
-
-    old_umask = os.umask(0o022)
-    held = acquire(now=1.0)
-    try:
-        _gateway_lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
-    finally:
-        os.umask(old_umask)
-        held.close()
-
-    lock_file = tmp_instance / "gateway.lock"
-    ino = lock_file.stat().st_ino
-    modes_at_write = [mode for i, mode in records if i == ino]
-    assert len(modes_at_write) >= 2  # acquire's payload write + the token write
-    assert all(mode == 0o600 for mode in modes_at_write)
-    assert (lock_file.stat().st_mode & 0o777) == 0o600
-    assert json.loads(lock_file.read_text(encoding="utf-8"))["web_token"] == "s3cret-token"

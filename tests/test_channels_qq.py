@@ -16,19 +16,6 @@ import pytest
 
 pytest.importorskip("botpy")
 
-
-@pytest.fixture
-def resolves_public(monkeypatch):
-    """Every hostname resolves to one ordinary public address.
-
-    Opt-in, not autouse: the media fetch path validates its target before each
-    hop, so a test about the transport would otherwise depend on live DNS (and
-    on names like ``dt.example``, which is reserved and never resolves) -- but
-    a test about the guard REFUSING something must keep the real answer.
-    """
-    monkeypatch.setattr("socket.getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 0))])
-
-
 from raven.channels.adapters.qq import channel as qq_channel
 from raven.channels.adapters.qq import parsing as qp
 from raven.channels.adapters.qq.channel import QQChannel, _Fetched
@@ -177,17 +164,10 @@ def test_on_message_does_not_download_for_a_denied_sender():
 
 
 class _Resp:
-    """Enough of an httpx response for the download path.
+    """Enough of an httpx response for the download path."""
 
-    ``status_code`` and ``headers`` are read by the guarded fetch, which walks
-    a redirect chain one checked hop at a time -- a stand-in without them is a
-    stand-in for a client nobody uses.
-    """
-
-    def __init__(self, content=b"bytes", error=None, status_code=200, headers=None):
+    def __init__(self, content=b"bytes", error=None):
         self.content = content
-        self.status_code = status_code
-        self.headers = headers or {}
         self._error = error
 
     def raise_for_status(self):
@@ -202,14 +182,9 @@ class _Http:
         self.resp = resp or _Resp()
         self.error = error
         self.urls: list[str] = []
-        self.kwargs: list[dict] = []
 
-    async def get(self, url, **kwargs):
-        # ``follow_redirects`` is passed explicitly by the guarded fetch: the
-        # chain is walked one checked hop at a time, so the client must not
-        # walk it. Accepted here because a real client accepts it.
+    async def get(self, url):
         self.urls.append(url)
-        self.kwargs.append(kwargs)
         if self.error:
             raise self.error
         return self.resp
@@ -222,7 +197,7 @@ def _with_media(monkeypatch, saver=None):
     )
 
 
-def test_download_attachment_adds_the_missing_scheme(resolves_public, monkeypatch):
+def test_download_attachment_adds_the_missing_scheme(monkeypatch):
     """QQ hands back scheme-relative urls, which httpx rejects outright."""
     _with_media(monkeypatch)
     ch = _channel()
@@ -234,7 +209,7 @@ def test_download_attachment_adds_the_missing_scheme(resolves_public, monkeypatc
     assert out.path == "/media/a.png"
 
 
-def test_download_attachment_reuses_one_client(resolves_public, monkeypatch):
+def test_download_attachment_reuses_one_client(monkeypatch):
     """A client per attachment is a TLS handshake per image; the house pattern
     holds one on the channel."""
     _with_media(monkeypatch)
@@ -247,7 +222,7 @@ def test_download_attachment_reuses_one_client(resolves_public, monkeypatch):
     assert len(ch._http.urls) == 2
 
 
-def test_download_attachment_gives_up_on_a_non_2xx(resolves_public, monkeypatch):
+def test_download_attachment_gives_up_on_a_non_2xx(monkeypatch):
     _with_media(monkeypatch)
     ch = _channel()
     ch._http = _Http(resp=_Resp(error=httpx.HTTPError("404")))
@@ -264,7 +239,7 @@ def test_download_attachment_without_a_url_is_skipped(monkeypatch):
     assert ch._http.urls == []
 
 
-def test_a_write_failure_degrades_like_a_fetch_failure(resolves_public, monkeypatch):
+def test_a_write_failure_degrades_like_a_fetch_failure(monkeypatch):
     """An OSError from the media dir used to escape this helper and be caught by
     `_on_message`, dropping the whole message, text included."""
 

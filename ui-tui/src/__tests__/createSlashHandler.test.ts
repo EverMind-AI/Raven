@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createSlashHandler } from '../app/createSlashHandler.js'
+import { directKey, enterDirect, getDirectTranscript, resetDirectChat } from '../app/directChatStore.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 
@@ -13,6 +14,36 @@ describe('createSlashHandler', () => {
   beforeEach(() => {
     resetOverlayState()
     resetUiState()
+    resetDirectChat()
+  })
+
+  it('delivers a slow reply to the chat it was typed in, not the one on screen', async () => {
+    // The dispatcher captures the direct-chat target once, beside `sid`. An
+    // RPC-backed command answers long after it was typed, and the user is free
+    // to walk to another instance meanwhile -- routing on the live store then
+    // files an answer that names h1 under h2, and leaves h1 on a bare echo.
+    patchUiState({ sid: 'sid-abc' })
+
+    let settle: (r: unknown) => void = () => {}
+    const rpc = vi.fn(() => new Promise(res => (settle = res)))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    enterDirect('Researcher', 'h1')
+    expect(createSlashHandler(ctx)('/mode deep')).toBe(true)
+
+    enterDirect('Researcher', 'h2')
+    settle({ availableModes: [{ id: 'deep' }], mode: 'deep' })
+
+    await vi.waitFor(() => {
+      expect(getDirectTranscript(directKey('Researcher', 'h1')).length).toBeGreaterThan(0)
+    })
+    expect(
+      getDirectTranscript(directKey('Researcher', 'h1'))
+        .map(m => m.text)
+        .join('\n')
+    ).toContain('Researcher/h1 is now on deep')
+    expect(getDirectTranscript(directKey('Researcher', 'h2'))).toEqual([])
+    expect(ctx.transcript.sys).not.toHaveBeenCalled()
   })
 
   it('opens the resume picker locally', () => {

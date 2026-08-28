@@ -12,6 +12,7 @@ from raven.agent.flow.fetch_floor import FetchFloorObserver
 from raven.agent.flow.final_shape import ShapedAnswer, shape_final_answer
 from raven.agent.flow.finalize import ForcedFinalizeGate
 from raven.agent.flow.spin_breaker import SpinEntryBreaker
+from raven.agent.flow.sufficiency import SufficiencyGate
 from raven.agent.flow.verify import DraftReviewerGate
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "ForcedFinalizeGate",
     "ShapedAnswer",
     "SpinEntryBreaker",
+    "SufficiencyGate",
     "build_dr_flow",
     "closing_tag_bar",
     "shape_final_answer",
