@@ -16,4 +16,12 @@ SPEC = ChannelSpec(
     display_name="WeCom",
     factory=_make,
     capabilities=Capabilities(),
+    # Cargo declaration (config-with-cargo): the fields only this adapter
+    # consumes. Socket fields (enabled / allow_from / workspace) stay with the
+    # host. Defaults stay in the central model until the storage handover.
+    config_schema={
+        "bot_id": {"type": "string", "required": True},
+        "secret": {"type": "string", "required": True},
+        "welcome_message": {"type": "string"},
+    },
 )

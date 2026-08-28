@@ -32,6 +32,7 @@ Nothing here writes, signals, or starts anything.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,21 +110,25 @@ def _read_toml(root: Path) -> dict:
         return {}
 
 
-def discover() -> list[RootState]:
+def discover(
+    *,
+    recorded_root: Path | None,
+    fallback_roots: Sequence[Path | None],
+) -> list[RootState]:
     """Candidate roots, best first.
 
     Order is the preference order, not a ranking of health: a recorded root wins
     even when it is in a worse state than another candidate, because switching
     roots behind the user's back would silently change which memories raven has.
 
-    Only roots raven creates for itself are scanned, plus the one the config
-    records. An EverOS the user runs is never discovered: finding one means
-    offering it, and offering it means asking for a decision the user did not
-    come to make. Pointing raven at such a server is an explicit turn in the
-    wizard where the person who knows the address types it.
+    The caller owns the candidate list: the wizard reads the config record and
+    the host defaults and passes them in, so this module imports nothing from
+    the host -- it describes roots, it does not choose where to look. An EverOS
+    the user runs is never among the candidates: finding one means offering it,
+    and offering it means asking for a decision the user did not come to make.
+    Pointing raven at such a server is an explicit turn in the wizard where the
+    person who knows the address types it.
     """
-    from raven.config.update_everos import _recorded_slice, applicable_legacy_root, default_everos_root
-
     states: list[RootState] = []
     seen: set[Path] = set()
 
@@ -133,11 +138,10 @@ def discover() -> list[RootState]:
         seen.add(root)
         return state
 
-    recorded = _recorded_slice().get("root")
-    if recorded:
-        add(Path(str(recorded)).expanduser())
+    if recorded_root is not None:
+        add(recorded_root)
 
-    for root in (default_everos_root(), applicable_legacy_root()):
+    for root in fallback_roots:
         if root is not None and root not in seen:
             add(root)
 
