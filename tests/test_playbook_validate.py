@@ -91,21 +91,22 @@ def test_instance_members_must_form_a_chain():
     assert validate_graph_nodes(ok, set(), stateful_agents=_STATEFUL) == []
 
 
-def test_a_continuation_node_may_now_declare_its_own_skills():
-    """The old rule 9 is gone with the mechanism that justified it.
+def test_a_continuation_node_cannot_reconfigure_the_shared_session():
+    for field in ("skills", "mcps"):
+        late = [
+            _node("a", instance="w", skills=["s1"]),
+            _node("b", instance="w", depends_on=["a"], **{field: ["later"]}),
+        ]
+        errors = validate_graph_nodes(late, set(), stateful_agents=_STATEFUL)
+        assert any("continuing instance 'w'" in error and "opened by node 'a'" in error for error in errors)
 
-    It refused ``skills`` on any member after the first, because a resumed
-    raven-loop session keeps the system prompt -- and its skill menu -- from the
-    turn that opened it. The engine no longer puts the list there: it folds it
-    into the step's own prompt, a user message appended on every node. So a
-    continuation node's list now takes effect, and refusing it would reject a
-    graph that works.
-    """
-    late = [
-        _node("a", instance="w", skills=["s1"]),
-        _node("b", instance="w", skills=["s2"], depends_on=["a"]),
+
+def test_only_the_opening_node_may_configure_a_shared_session():
+    nodes = [
+        _node("a", instance="w", skills=[], mcps=[]),
+        _node("b", instance="w", depends_on=["a"]),
     ]
-    assert validate_graph_nodes(late, set(), stateful_agents=_STATEFUL) == []
+    assert validate_graph_nodes(nodes, set(), stateful_agents=_STATEFUL) == []
 
 
 def test_instance_needs_a_stateful_agent():
