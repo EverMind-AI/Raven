@@ -35,7 +35,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp.asker import attribute, current_ask, question_lock
+from raven.agent.acp import autofill
+from raven.agent.acp.asker import attribute, current_ask, current_autofill, question_lock
 
 UPDATE_METHOD = "session/update"
 
@@ -106,6 +107,10 @@ class AskUserResponder:
         # whichever turn first opened the connection -- which the pool then keeps
         # for the life of the process.
         self._asker, self._conversation_id = current_ask()
+        # Read here rather than at question time for the reason above: an
+        # autofill left over from the first turn would answer this turn's
+        # question out of a conversation that is not this one.
+        self._autofill = current_autofill()
         self._cancelled = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -164,6 +169,22 @@ class AskUserResponder:
             # No reachable user (a CRON or other background turn), or a run that
             # ended while this frame was in flight.
             return ""
+        auto = self._autofill
+        known = ""
+        if auto is not None:
+            question_obj = autofill.Question(key="", prompt=question, options=list(choices), required=True)
+            resolution = (await auto.resolve([question_obj], agent=self._agent, instance=self._instance))[0]
+            if resolution.status == "answer":
+                if self._cancelled:
+                    # Re-checked because `resolve` awaited a model call, and the
+                    # run can have ended during it. The lock path below re-checks
+                    # after its own wait for exactly this; skipping the lock must
+                    # not also skip the check.
+                    return ""
+                # Answered without a round trip, so the lock is never taken and
+                # no other session's question waits behind this one.
+                return resolution.answer
+            known = resolution.known
         lock = question_lock(conversation_id)
         try:
             async with asyncio.timeout(LOCK_WAIT_SECONDS):
@@ -181,7 +202,11 @@ class AskUserResponder:
                 # Re-checked under the lock: waiting for it is where a run is
                 # most likely to have ended underneath this question.
                 return ""
-            answer = await asker.ask(attribute(self._agent, self._instance, question), choices or None, conversation_id)
+            answer = await asker.ask(
+                autofill.annotate(attribute(self._agent, self._instance, question), known),
+                choices or None,
+                conversation_id,
+            )
         finally:
             lock.release()
         # `None` is `ask_direct`'s structurally-unavailable, `""` the broker's

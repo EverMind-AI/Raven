@@ -21,7 +21,8 @@ into the sink.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from raven.agent.acp.asker import start_ask_turn
+from raven.agent.acp.asker import AskViaTool, start_ask_turn
+from raven.agent.acp.resolver import Autofill
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
@@ -132,20 +133,6 @@ def make_dag_progress_sink(emitter: SubscriptionEmitter) -> Callable[[str, str, 
     return _sink
 
 
-class _AskViaTool:
-    """Adapts `AskUserTool.ask_direct` to the `Asker` protocol.
-
-    Bound per turn but resolved per question, which is what lets a transport
-    bind its broker after the tool was registered.
-    """
-
-    def __init__(self, tool: AskUserTool) -> None:
-        self._tool = tool
-
-    async def ask(self, prompt: str, choices: list[str] | None, conversation_id: str) -> str | None:
-        return await self._tool.ask_direct(prompt, choices, conversation_id)
-
-
 class RpcTurnRunner(AgentTurnRunner):
     """Runs a TUI turn through the agent loop's native run_turn (stream=True), so
     token/reasoning/tool/Text all flow through the hub to the RpcOutlet (one
@@ -192,8 +179,17 @@ class RpcTurnRunner(AgentTurnRunner):
         # CRON or otherwise background turn has no reader, and an ACP sub-agent's
         # question there must decline rather than wait on nobody.
         ask_tool = tools.get("ask_user") if tools is not None else None
+        interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)
         start_ask_turn(
-            _AskViaTool(ask_tool) if req.origin is Origin.USER and isinstance(ask_tool, AskUserTool) else None,
+            AskViaTool(ask_tool) if interactive else None,
+            Autofill(
+                self._loop,
+                emit=emit,
+                conversation_id=cid,
+                config=self._loop.subagent_questions_config,
+            )
+            if interactive
+            else None,
             conversation_id=cid,
         )
         # A CRON turn is not a user turn: it runs non-streaming (one reply, not a

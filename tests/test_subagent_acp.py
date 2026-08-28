@@ -3146,7 +3146,7 @@ async def test_a_dispatched_acp_run_answers_its_agents_question(tmp_path: Path) 
     seen: list[str] = []
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             seen.append(prompt)
             return "redis"
 
@@ -3264,7 +3264,7 @@ async def test_a_question_outliving_its_run_is_taken_down_with_it(tmp_path: Path
     asked: list[str] = []
 
     class Parks:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             try:
                 await asyncio.sleep(3600)
@@ -3284,7 +3284,7 @@ async def test_a_question_outliving_its_run_is_taken_down_with_it(tmp_path: Path
     assert len(asked) == 1 and asked[0].startswith("a(t1): "), asked
 
     class Answers:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "x"
 
     start_ask_turn(Answers(), conversation_id="tui:c1")
@@ -3317,7 +3317,7 @@ async def test_a_second_run_on_a_pooled_connection_asks_its_own_turns_user(tmp_p
         def __init__(self) -> None:
             self.seen: list[tuple[str, str]] = []
 
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             self.seen.append((prompt, conversation_id))
             return "redis"
 

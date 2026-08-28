@@ -32,6 +32,8 @@ from typing import NamedTuple
 
 import pytest
 
+from raven.agent.loop import AgentLoop
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ENTRYPOINTS: dict[str, str] = {
@@ -168,3 +170,27 @@ def test_the_shared_core_is_not_eroding(kwargs_by_entrypoint: dict[str, set[str]
     shared = set.intersection(*kwargs_by_entrypoint.values())
 
     assert len(shared) >= 25, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
+
+
+class _StubProvider:
+    """Construction-only stand-in; no turn is ever run against it here."""
+
+    def get_default_model(self) -> str:
+        return "fake/default"
+
+    async def chat_with_retry(self, **kwargs):  # pragma: no cover - never invoked
+        raise NotImplementedError
+
+
+def _build_loop(tmp_path: Path) -> AgentLoop:
+    """A minimal ``AgentLoop``, built only to inspect its post-construction attributes."""
+    return AgentLoop(provider=_StubProvider(), workspace=tmp_path, model="fake/default")
+
+
+def test_loop_holds_subagent_questions_and_memory_config(tmp_path: Path) -> None:
+    loop = _build_loop(tmp_path)
+    assert loop.subagent_questions_config.autofill_enabled is True
+    # memory_config was a pass-through parameter with no attribute behind it;
+    # the resolver needs user_id and memory_top_k from it.
+    assert loop.memory_config.user_id == "default"
+    assert loop.memory_config.memory_top_k == 5

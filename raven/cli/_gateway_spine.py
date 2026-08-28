@@ -11,7 +11,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
+from raven.agent.acp.asker import AskViaTool, start_ask_turn
+from raven.agent.acp.resolver import Autofill
 from raven.agent.spine_runner import AgentTurnRunner
+from raven.agent.tools.ask_user import AskUserTool
 from raven.channels.outlet import ChannelOutletAdapter
 from raven.spine import OriginPools, Scheduler
 from raven.spine.delivery import DeliveryHub
@@ -65,7 +68,29 @@ class GatewayTurnRunner(AgentTurnRunner):
         # reply back to the originating channel (the lifecycle event carries only
         # conversation_id). Keyed by the lane's conversation id; the sink pops it
         # on TurnEnded/TurnFailed so the daemon does not accumulate.
-        self._sources[_cid(req)] = req.source
+        cid = _cid(req)
+        self._sources[cid] = req.source
+        # The same per-turn rebinding and origin gate RpcTurnRunner applies: a
+        # channel user can answer (gateway_commands wires a QuestionBroker onto
+        # this tool, which renders clarify.request as an outbound message and
+        # routes the reply back), while a CRON or otherwise background turn has
+        # no reader and must decline rather than wait on nobody. Without this the
+        # gateway's sub-agents saw no asker and no autofill at all.
+        tools = getattr(self._loop, "tools", None)
+        ask_tool = tools.get("ask_user") if tools is not None else None
+        interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)
+        start_ask_turn(
+            AskViaTool(ask_tool) if interactive else None,
+            Autofill(
+                self._loop,
+                emit=emit,
+                conversation_id=cid,
+                config=self._loop.subagent_questions_config,
+            )
+            if interactive
+            else None,
+            conversation_id=cid,
+        )
         if req.origin not in _READBACK_ORIGINS:
             return await self._loop.run_turn(req, emit, drain, stream=False)
         text_sink: dict[str, str] = {}

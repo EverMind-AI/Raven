@@ -13,8 +13,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp import elicitation
-from raven.agent.acp.asker import attribute, current_ask, question_lock
+from raven.agent.acp import autofill, elicitation
+from raven.agent.acp.asker import attribute, current_ask, current_autofill, question_lock
 
 LOCK_WAIT_SECONDS = 600.0
 """How long a queued form waits for its conversation before declining.
@@ -39,6 +39,15 @@ def _retracted() -> bool:
     """
     task = asyncio.current_task()
     return task is not None and task.cancelling() > 0
+
+
+def _question(ask: elicitation.Ask, field: elicitation.Field) -> str:
+    """One field's question in the sub-agent's own words, unattributed.
+
+    Shared by the user's prompt and the resolver's, so the two are never asked
+    slightly different things about the same field.
+    """
+    return ask.message if field.prompt == ask.message else f"{ask.message} - {field.prompt}"
 
 
 def _off_enum(value: Any, options: list[str]) -> bool:
@@ -68,6 +77,10 @@ class Elicitor:
         # Read there, every later turn's question would go to the first turn's
         # user, or be declined forever if that turn had no user at all.
         self._asker, self._conversation_id = current_ask()
+        # Read here rather than at question time for the reason above: an
+        # autofill left over from the first turn would answer this turn's
+        # questions out of a conversation that is not this one.
+        self._autofill = current_autofill()
         self._cancelled = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -127,6 +140,35 @@ class Elicitor:
             # Cancelled before the first question was put -- a late
             # `elicitation/create`, or a run that ended while this form queued.
             return elicitation.cancel()
+
+        resolutions = await self._resolve(fields, ask)
+        content: dict[str, Any] = {}
+        pending: list[tuple[elicitation.Field, autofill.Resolution]] = []
+        for field, resolution in zip(fields, resolutions, strict=True):
+            if resolution.status == "answer":
+                ok, value = elicitation.coerce(field, resolution.answer)
+                if ok:
+                    content[field.name] = value
+                    continue
+                # An answer the schema cannot hold is no answer. Asked rather
+                # than retried: `_one`'s retry budget exists for a user who
+                # mistyped, and spending it on the resolver would leave a
+                # genuinely confused user with fewer attempts than they have now.
+                logger.debug("question autofill: {!r} does not fit {}; asking", resolution.answer, field.name)
+                resolution = autofill.Resolution(status="defer")
+            pending.append((field, resolution))
+        if not pending:
+            if self._cancelled or _retracted():
+                # The same check the per-field loop makes after every answer,
+                # for the same reason: `_resolve` awaits a model call, and a run
+                # that ended underneath it has no one left to accept content
+                # for. Skipping the lock must not also skip this.
+                return elicitation.cancel()
+            # Answered in full, so the lock is never taken at all: a form nobody
+            # has to see cannot park another agent's question behind it for
+            # LOCK_WAIT_SECONDS.
+            return elicitation.accept(content)
+
         # Held for the whole form, so one agent's multi-field form is never
         # interleaved with another's.
         lock = question_lock(conversation_id)
@@ -142,9 +184,13 @@ class Elicitor:
             )
             return elicitation.decline()
         try:
-            content: dict[str, Any] = {}
-            for field in fields:
-                status, value = await self._one(asker, conversation_id, ask, field)
+            # What the user is being taken through, so a frontend can show the
+            # rest of the form rather than one question at a time.
+            batch = [{"question": f.prompt} for f, _ in pending]
+            for index, (field, resolution) in enumerate(pending):
+                status, value = await self._one(
+                    asker, conversation_id, ask, field, resolution.known, index, len(pending), batch
+                )
                 if self._cancelled or _retracted():
                     # Checked after each answer rather than only before the
                     # first: the run can end mid-form, and both the next
@@ -184,8 +230,36 @@ class Elicitor:
         finally:
             lock.release()
 
+    async def _resolve(self, fields: list[elicitation.Field], ask: elicitation.Ask) -> list[autofill.Resolution]:
+        """What raven can answer of this form, or a defer for every field.
+
+        The whole form in one call rather than one call per field: the questions
+        of a form are usually about one decision, and a resolver shown only the
+        field in front of it cannot see the rest of that decision.
+        """
+        if self._autofill is None:
+            return autofill.defer_all(fields)
+        questions = [
+            autofill.Question(
+                key=field.name,
+                prompt=_question(ask, field),
+                options=list(field.options),
+                required=field.required,
+            )
+            for field in fields
+        ]
+        return await self._autofill.resolve(questions, agent=self._agent, instance=self._instance)
+
     async def _one(
-        self, asker: Any, conversation_id: str, ask: elicitation.Ask, field: elicitation.Field
+        self,
+        asker: Any,
+        conversation_id: str,
+        ask: elicitation.Ask,
+        field: elicitation.Field,
+        known: str,
+        index: int,
+        total: int,
+        batch: list[dict[str, str]],
     ) -> tuple[str, Any]:
         """One field's value. Status is `ok`, `skip`, `invalid`, or `unavailable`.
 
@@ -194,12 +268,14 @@ class Elicitor:
         an optional field, `invalid` is an answer that never fit its schema,
         and `unavailable` means the round trip could not happen at all.
         """
-        prompt = self._prefix(ask.message if field.prompt == ask.message else f"{ask.message} - {field.prompt}")
+        prompt = autofill.annotate(self._prefix(_question(ask, field)), known)
         # A paired field accepts an off-enum answer, because that is what its
         # free-text sibling is for; the enum check would reject it.
         probe = replace(field, options=[]) if field.custom_name else field
         for _ in range(elicitation.MAX_FIELD_RETRIES + 1):
-            answer = await asker.ask(prompt, field.options or None, conversation_id)
+            answer = await asker.ask(
+                prompt, field.options or None, conversation_id, index=index, total=total, batch=batch
+            )
             if answer is None:
                 # `ask_direct`'s "structurally unavailable": no broker, or no
                 # conversation. Nothing was put to anybody.

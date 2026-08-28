@@ -10,10 +10,13 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from uuid import uuid4
 
 from loguru import logger
 
 from raven.agent import workdir
+from raven.agent.acp import resolver as autofill_resolver
+from raven.agent.acp.asker import current_autofill
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.failure_streak import (
     failure_class,
@@ -162,6 +165,7 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
         SubagentDagConfig,
+        SubagentQuestionsConfig,
     )
     from raven.config.schema import (
         AskUserToolConfig,
@@ -471,6 +475,7 @@ class AgentLoop:
         media_config: Any = None,
         deep_research_config: Any = None,
         subagent_dag_config: "SubagentDagConfig | None" = None,
+        subagent_questions_config: "SubagentQuestionsConfig | None" = None,
         disabled_tools: list[str] | None = None,
         tool_search_config: Any = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
@@ -556,12 +561,18 @@ class AgentLoop:
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        from raven.config.raven import SubagentDagConfig
+        from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
         self.media_config = media_config or MediaGenConfig()
         self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.subagent_dag_config = subagent_dag_config or SubagentDagConfig()
+        self.subagent_questions_config = subagent_questions_config or SubagentQuestionsConfig()
+        # Stored, not only forwarded to the context engine: the autofill resolver
+        # runs outside the assembler and needs the same user_id the recall in
+        # `# Memory` uses, or it would read a different store than the one the
+        # turn's own memory came from.
+        self.memory_config = memory_config or MemoryConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.cron_service = cron_service
@@ -695,7 +706,7 @@ class AgentLoop:
             # The factory uses these to assemble the unified engine's
             # SkillForgeRouter + EverOS recall lane.
             backend=backend,
-            memory_config=memory_config,
+            memory_config=self.memory_config,
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
@@ -3122,6 +3133,49 @@ class AgentLoop:
             await on_token_delta(fallback)
         return fallback
 
+    def _flush_autofill(self, messages: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+        """Write what raven answered for the user into the turn, as a tool call.
+
+        A live row only reaches the screen; a reloaded transcript is rebuilt
+        from the persisted ``tool_calls`` and their results, so without this the
+        account of what raven decided is gone by the next session.
+
+        Not written where the decision was made. A sub-agent's question arrives
+        while its spawn tool is still executing -- after the assistant message
+        carrying ``tool_calls`` is in the list and before its ``tool`` results
+        are -- and a message spliced into that window breaks the pairing
+        documented at the ``add_assistant_message`` call site below, which Chat
+        Completions rejects with a 400. Here the loop owns the list on its own
+        task with every result already in, which is why ``drain`` merges its
+        injected messages at the same point.
+
+        Only host-minted fields go into the arguments. The sub-agent's own
+        wording would arrive here unfenced -- ``add_tool_result`` wraps the
+        summary below, nothing wraps an assistant message's ``tool_calls`` --
+        and that message is read by the next model call and by the next
+        autofill's snapshot. The summary names every question regardless.
+        """
+        for row in rows:
+            call_id = f"autofill-{uuid4().hex[:8]}"
+            self.context.add_assistant_message(
+                messages,
+                None,
+                [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": autofill_resolver.TOOL_NAME,
+                            "arguments": json.dumps(
+                                {"agent": row.get("agent", ""), "instance": row.get("instance", "")},
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                ],
+            )
+            self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
+
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
@@ -3222,6 +3276,23 @@ class AgentLoop:
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
+
+            # Same seam and the same reason as the drain above: only the loop's
+            # own task may touch ``messages``, and only here is every tool
+            # result already in. Reading the turn's autofill is safe at this
+            # point -- unlike at question time, where the ACP connection pool
+            # carries the wrong turn's ContextVars -- because ``_run_agent_loop``
+            # runs below the ``start_ask_turn`` binding in ``RpcTurnRunner.run``.
+            auto = current_autofill()
+            if auto is not None:
+                # Flush before publishing, so a sub-agent asking a second time
+                # this turn sees what raven already answered for the first.
+                self._flush_autofill(messages, auto.pending_rows())
+                # Every iteration, not once: the overflow and image-demotion
+                # recoveries below rebind ``messages`` to a fresh list, so the
+                # object published last time can stop being the one the turn is
+                # building, and a snapshot of it would go quietly stale.
+                auto.set_snapshot(messages)
 
             tool_defs = self.tools.get_definitions()
 
@@ -3681,6 +3752,15 @@ class AgentLoop:
                 _stamp_reasoning_ms(messages, response)
                 final_content = clean
                 break
+
+        # A row recorded while a tool ran rides the next iteration's flush,
+        # because the model always has to be shown the results. The exits that
+        # skip that next pass -- max iterations, a blocked call -- lose the
+        # write-back. The row was already rendered live and the answer already
+        # went to the sub-agent, so this is worth a line, not a repair.
+        leftover = current_autofill()
+        if leftover is not None and (lost := leftover.pending_rows()):
+            logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
         if final_content is None and iteration >= self.max_iterations:
             logger.warning("Max iterations ({}) reached; synthesizing final answer", self.max_iterations)

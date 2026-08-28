@@ -590,6 +590,24 @@ async def test_round_trip_through_the_real_broker():
 
 
 @pytest.mark.asyncio
+async def test_ask_direct_forwards_the_batch_to_the_broker():
+    tool, broker = _tool({"Which reviewer?": "chandler"})
+    batch = [{"question": "Which branch?"}, {"question": "Which reviewer?"}]
+    await tool.ask_direct("Which reviewer?", None, "tui:c1", index=1, total=2, batch=batch)
+    call = broker.calls[0]
+    assert (call["index"], call["total"], call["batch"]) == (1, 2, batch)
+
+
+@pytest.mark.asyncio
+async def test_ask_direct_still_defaults_to_a_lone_question():
+    tool, broker = _tool({"Which branch?": "feat/x"})
+    await tool.ask_direct("Which branch?", None, "tui:c1")
+    call = broker.calls[0]
+    assert (call["index"], call["total"], call["batch"]) == (0, 1, None)
+    assert not call.get("default")
+
+
+@pytest.mark.asyncio
 async def test_registry_dispatch_and_the_real_clarify_respond_route():
     """The production entry point is the registry, not ``execute`` directly, and
     the answer arrives over the real ``clarify.respond`` handler. Neither layer

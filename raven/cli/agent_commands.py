@@ -318,6 +318,7 @@ def register(app: typer.Typer) -> None:
             context_config=ec_config.context,
             runtime_config=ec_config.runtime,
             subagent_dag_config=ec_config.subagent_dag,
+            subagent_questions_config=ec_config.subagent_questions,
             # ``-m "..."`` is a one-shot — no next turn for recovery
             # injection, so the ``"interactive"`` policy skips the
             # checkpoint here.

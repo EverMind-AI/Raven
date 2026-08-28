@@ -9,6 +9,7 @@ Driven against a real AgentLoop with only the LLM provider + sandbox edges faked
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 import pytest
@@ -591,6 +592,132 @@ async def test_inject_message_merged_before_next_iteration(tmp_path):
     assert any(m.get("role") == "user" and "also check the logs" in str(m.get("content", "")) for m in second), (
         f"injected message not merged into the second iteration: {second}"
     )
+
+
+async def test_autofill_rows_are_written_in_as_a_tool_call(tmp_path):
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    messages: list[dict] = []
+    loop._flush_autofill(
+        messages,
+        [
+            {
+                "agent": "raven-code",
+                "instance": "a1b2",
+                "summary": "Which branch? -> feat/x (answered for you)",
+            }
+        ],
+    )
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["tool_calls"][0]["function"]["name"] == "answer_for_user"
+    assert messages[1]["role"] == "tool"
+    # The pairing the Chat Completions transport rejects when it is broken.
+    assert messages[1]["tool_call_id"] == messages[0]["tool_calls"][0]["id"]
+    assert "feat/x" in messages[1]["content"]
+    # Host-minted fields only. The sub-agent's own wording would arrive here
+    # unfenced -- nothing wraps an assistant message's arguments, while the
+    # summary above went through `add_tool_result` and is wrapped.
+    arguments = json.loads(messages[0]["tool_calls"][0]["function"]["arguments"])
+    assert arguments == {"agent": "raven-code", "instance": "a1b2"}
+
+
+async def test_no_rows_writes_nothing(tmp_path):
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    messages: list[dict] = []
+    loop._flush_autofill(messages, [])
+    assert messages == []
+
+
+class _RecordingAutofill:
+    """Stands in for the turn's Autofill.
+
+    ``set_snapshot`` keeps a copy rather than the live reference the real one
+    stores, so a test can tell what the list held at publish time.
+    """
+
+    def __init__(self) -> None:
+        self._rows: list[dict] = []
+        self.snapshots: list[list[dict]] = []
+
+    def record(self, row: dict) -> None:
+        self._rows.append(row)
+
+    def pending_rows(self) -> list[dict]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def set_snapshot(self, messages: list[dict]) -> None:
+        self.snapshots.append(list(messages))
+
+
+async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_path):
+    # The seam: a sub-agent's question is answered while its spawn tool is still
+    # running, which is why the row can only be written at the next iteration's
+    # top -- splicing it in mid-batch would orphan the running tool_call.
+    from raven.agent.acp.asker import start_ask_turn
+
+    auto = _RecordingAutofill()
+
+    class _AskingTool(_FakeTool):
+        """A spawn stand-in: its sub-agent asks while the tool is still running."""
+
+        async def execute(self, **kwargs) -> str:
+            auto.record(
+                {
+                    "agent": "raven-code",
+                    "instance": "a1b2",
+                    "summary": "Which branch? -> feat/x (answered for you)",
+                }
+            )
+            return "spawned"
+
+    class _RecordingStreamToolProvider:
+        def __init__(self, scripts):
+            self._scripts = scripts
+            self._i = 0
+            self.calls: list[list[dict]] = []
+
+        async def chat_stream(self, **kwargs):
+            self.calls.append(list(kwargs.get("messages") or []))
+            script = self._scripts[min(self._i, len(self._scripts) - 1)]
+            self._i += 1
+            for chunk in script:
+                yield chunk
+
+        def get_default_model(self) -> str:
+            return "fake/model"
+
+    provider = _RecordingStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_AskingTool())
+    start_ask_turn(None, auto, conversation_id="tui:c1")
+
+    await loop.run_turn(_req("start"), _EmitCollector(), _drain, stream=True)
+
+    def _row(messages: list[dict]) -> dict | None:
+        return next((m for m in messages if m.get("role") == "tool" and m.get("name") == "answer_for_user"), None)
+
+    assert _row(provider.calls[0]) is None  # nothing had been answered yet
+    row = _row(provider.calls[1])
+    assert row is not None, f"autofill row not written into the second iteration: {provider.calls[1]}"
+    assert "feat/x" in row["content"]
+    # Published on every iteration, not once, and after the flush -- so the
+    # second publish carries what the first turn's questions were answered with.
+    assert len(auto.snapshots) == 2
+    assert _row(auto.snapshots[0]) is None
+    assert _row(auto.snapshots[1]) is not None
 
 
 async def test_run_slash_emits_text_not_streamed(tmp_path):

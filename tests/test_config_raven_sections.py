@@ -447,3 +447,18 @@ class TestStrictness:
     def test_unknown_field_in_memory_rejected(self) -> None:
         with pytest.raises(ValidationError):
             MemoryConfig.model_validate({"backend": "x", "typo": 1})
+
+
+def test_subagent_questions_defaults_on():
+    cfg = RavenConfig()
+    assert cfg.subagent_questions.autofill_enabled is True
+    assert cfg.subagent_questions.autofill_timeout_seconds == 20.0
+
+
+def test_subagent_questions_reads_camel_case(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"subagentQuestions": {"autofillEnabled": False}}), encoding="utf-8")
+    cfg = load_raven_config(path)
+    assert cfg.subagent_questions.autofill_enabled is False
+    # The other field keeps its default rather than being reset by a partial block.
+    assert cfg.subagent_questions.autofill_timeout_seconds == 20.0

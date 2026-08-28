@@ -273,3 +273,29 @@ def _no_real_browser(monkeypatch):
 
     for name in ("open", "open_new", "open_new_tab"):
         monkeypatch.setattr(webbrowser, name, _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _unbind_the_acp_turn() -> Iterator[None]:
+    """Put the ACP turn's ContextVars back where the test found them.
+
+    ``start_ask_turn`` binds an asker and an autofill for one turn. Called from
+    a *sync* test the write lands in the context every later test in the same
+    xdist worker inherits, so a neighbouring file asserting the unbound default
+    reads the previous file's asker instead. Here rather than in the one file
+    that noticed, because the next file to bind one from a sync test would
+    reintroduce the leak.
+
+    Restored through the tokens rather than by writing the defaults back: a
+    token also carries "this var was never set", which no assignment can
+    express.
+    """
+    from raven.agent.acp import asker
+
+    turn_token = asker._TURN.set(asker._TURN.get())
+    autofill_token = asker._AUTOFILL.set(asker._AUTOFILL.get())
+    try:
+        yield
+    finally:
+        asker._TURN.reset(turn_token)
+        asker._AUTOFILL.reset(autofill_token)

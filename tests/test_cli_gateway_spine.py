@@ -2,7 +2,11 @@ import asyncio
 
 import pytest
 
+from raven.agent.acp.asker import AskViaTool, current_ask, current_autofill
+from raven.agent.acp.resolver import Autofill
+from raven.agent.tools.ask_user import AskUserTool
 from raven.cli._gateway_spine import build_gateway
+from raven.config.raven import SubagentQuestionsConfig
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -274,6 +278,57 @@ async def test_gateway_sink_no_error_reply_on_cancel():
         await teardown()
     assert ch.sent == []  # no "Sorry" on a cancel
     assert agent.notify_count >= 1  # but the wake signal still fires
+
+
+# --- the turn's route to a human: asker + question autofill, on the USER origin only ---
+
+
+class _AskingAgent(_ReplyAgent):
+    """A loop carrying a real ask_user tool, recording what its turn bound.
+
+    Read inside run_turn: start_ask_turn writes ContextVars on the lane task, so
+    a read from the test's own context would see nothing however it is wired.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([Text(content="hi")])
+        self.tools = {"ask_user": AskUserTool()}
+        self.subagent_questions_config = SubagentQuestionsConfig()
+        self.bound: dict = {}
+
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        self.bound = {"ask": current_ask(), "autofill": current_autofill()}
+        return await super().run_turn(req, emit, drain, **kwargs)
+
+
+async def test_gateway_user_turn_binds_the_asker_and_the_autofill():
+    # A channel user can answer: gateway_commands wires a QuestionBroker onto the
+    # ask_user tool, so an ACP sub-agent's question goes out as a channel message
+    # and its reply routes back. Unbound, that question is declined instead.
+    agent = _AskingAgent()
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(agent, {"telegram": _FakeChannel("telegram")})
+    user_req = TurnRequest(origin=Origin.USER, source=_src("telegram", "u1"), text="hi", conversation="telegram:u1")
+    try:
+        await scheduler.submit(user_req).result()
+    finally:
+        await teardown()
+    assert isinstance(agent.bound["ask"][0], AskViaTool)
+    assert agent.bound["ask"][1] == "telegram:u1"
+    assert isinstance(agent.bound["autofill"], Autofill)
+
+
+async def test_gateway_background_turn_binds_neither():
+    # A cron turn has no reader, so its sub-agents' questions must decline rather
+    # than wait on nobody -- and nothing may be answered on the user's behalf when
+    # the user is not there. Bound to None, not merely left unset.
+    agent = _AskingAgent()
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(agent, {"telegram": _FakeChannel("telegram")})
+    try:
+        await scheduler.submit(_req(channel="telegram")).result()
+    finally:
+        await teardown()
+    assert agent.bound["ask"] == (None, "cron:1")
+    assert agent.bound["autofill"] is None
 
 
 async def test_build_gateway_teardown_leaves_no_pending_tasks():

@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from raven.agent.acp import autofill
+
 _FIXTURE = Path(__file__).parent / "fixtures" / "acp_elicitation_askuser.json"
 
 
@@ -158,7 +160,7 @@ async def test_a_form_is_asked_field_by_field_and_assembled() -> None:
     asked: list[str] = []
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             return "redis" if choices else "42"
 
@@ -188,7 +190,7 @@ async def test_the_prompt_names_the_agent_that_asked() -> None:
     seen: list[str] = []
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             seen.append(prompt)
             return "x"
 
@@ -226,7 +228,7 @@ async def test_a_skipped_optional_field_is_omitted_and_a_required_one_declines()
     from raven.agent.acp.elicitor import Elicitor
 
     class Silent:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return ""
 
     start_ask_turn(Silent(), conversation_id="tui:c1")
@@ -259,7 +261,7 @@ async def test_a_bad_answer_is_re_asked_then_declines() -> None:
     tries = 0
 
     class Wrong:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             nonlocal tries
             tries += 1
             return "not-a-number"
@@ -288,7 +290,7 @@ async def test_an_unavailable_round_trip_declines_rather_than_accepting_nothing(
     from raven.agent.acp.elicitor import Elicitor
 
     class NoPath:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return None
 
     start_ask_turn(NoPath(), conversation_id="tui:c1")
@@ -315,7 +317,7 @@ async def test_a_cancelled_turn_answers_cancel_not_decline() -> None:
     from raven.agent.acp.elicitor import Elicitor
 
     class Cancels:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             raise asyncio.CancelledError
 
     start_ask_turn(Cancels(), conversation_id="tui:c1")
@@ -347,7 +349,7 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
     parked = asyncio.Event()
 
     class Parks:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             parked.set()
             # Answered rather than parked, so a form that went on after the
@@ -380,7 +382,7 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
     # a cancelled one that kept it would park every later question there until
     # `LOCK_WAIT_SECONDS`.
     class Answers:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "x"
 
     start_ask_turn(Answers(), conversation_id="tui:c-cancel")
@@ -406,7 +408,7 @@ async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() ->
     parked = asyncio.Event()
 
     class Parks:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             parked.set()
             # Answered rather than parked, so a form that went on after the
@@ -468,7 +470,7 @@ async def test_two_forms_on_one_conversation_are_serialised() -> None:
     inflight = peak = 0
 
     class Slow:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             nonlocal inflight, peak
             asked.append(prompt)
             inflight += 1
@@ -509,7 +511,7 @@ def test_a_conversation_lock_does_not_outlive_the_loop_that_contended_it() -> No
     from raven.agent.acp.elicitor import Elicitor
 
     class Slow:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             await asyncio.sleep(0.01)
             return "x"
 
@@ -545,7 +547,7 @@ async def test_a_form_kept_waiting_for_the_conversation_declines(monkeypatch) ->
     from raven.agent.acp.elicitor import Elicitor
 
     class Parked:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             await asyncio.sleep(0.2)
             return "x"
 
@@ -586,7 +588,7 @@ async def test_a_valid_multi_select_answer_lands_on_the_field_not_the_custom_box
     from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "a, b"
 
     start_ask_turn(Tool(), conversation_id="tui:c1")
@@ -606,7 +608,7 @@ async def test_an_off_enum_multi_select_item_still_routes_to_the_custom_box() ->
     from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "a, made-up"
 
     start_ask_turn(Tool(), conversation_id="tui:c1")
@@ -628,7 +630,7 @@ async def test_a_required_paired_field_declines_rather_than_dropping_its_key() -
     from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "sqlite"
 
     start_ask_turn(Tool(), conversation_id="tui:c1")
@@ -676,7 +678,7 @@ async def test_a_paired_question_is_asked_once_and_answered_either_way() -> None
     asked: list[str] = []
 
     class PicksEnum:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             return "redis"
 
@@ -688,7 +690,7 @@ async def test_a_paired_question_is_asked_once_and_answered_either_way() -> None
     assert len(asked) == 1
 
     class TypesOther:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             return "sqlite"
 
     start_ask_turn(TypesOther(), conversation_id="tui:c1")
@@ -727,7 +729,7 @@ async def test_a_required_custom_box_is_asked_rather_than_folded_away() -> None:
     asked: list[str] = []
 
     class Tool:
-        async def ask(self, prompt, choices, conversation_id):
+        async def ask(self, prompt, choices, conversation_id, **_):
             asked.append(prompt)
             return "redis" if choices else "an in-house store"
 
@@ -763,3 +765,206 @@ def test_raven_advertises_form_elicitation_and_never_url() -> None:
 
     assert CLIENT_CAPABILITIES["elicitation"] == {"form": {}}
     assert "url" not in CLIENT_CAPABILITIES["elicitation"]
+
+
+# ---- question autofill ------------------------------------------------------
+
+
+class _RecordingAsker:
+    """The `Asker` half of the round trip, without a broker."""
+
+    def __init__(self, answers: dict | None = None) -> None:
+        self.asked: list[tuple[str, list[str] | None]] = []
+        self.kwargs: list[dict] = []
+        self._answers = answers or {}
+
+    async def ask(self, prompt, choices, conversation_id, *, index=0, total=1, batch=None):
+        self.asked.append((prompt, choices))
+        self.kwargs.append({"index": index, "total": total, "batch": batch})
+        for key, value in self._answers.items():
+            if key is not None and key in prompt:
+                return value
+        return self._answers.get(None, "")
+
+
+class _StubAutofill:
+    """Whatever the resolver would have decided, without a model.
+
+    Keyed by field name; `""` is the single-question route's key.
+    """
+
+    def __init__(self, decisions: dict[str, tuple[str, str]]) -> None:
+        self._decisions = decisions
+        self.calls: list[list] = []
+
+    async def resolve(self, questions, *, agent, instance):
+        self.calls.append(questions)
+        out = []
+        for question in questions:
+            status, payload = self._decisions.get(question.key, ("defer", ""))
+            if status == "answer":
+                out.append(autofill.Resolution(status="answer", answer=payload))
+            elif status == "partial":
+                out.append(autofill.Resolution(status="partial", known=payload))
+            else:
+                out.append(autofill.Resolution(status="defer"))
+        return out
+
+
+def _form(fields: list[str], types: dict[str, str] | None = None) -> dict:
+    types = types or {}
+    properties = {name: {"type": types.get(name, "string"), "description": f"Which {name}?"} for name in fields}
+    return {
+        "sessionId": "s",
+        "mode": "form",
+        "message": "m",
+        "requestedSchema": {"type": "object", "properties": properties},
+    }
+
+
+async def _elicit_with(asker, autofill_obj, *, fields: list[str], types: dict[str, str] | None = None) -> dict:
+    """One form, through a real `Elicitor`, with the turn bound as a turn binds it.
+
+    Bound before the `Elicitor` is constructed because that is where both the
+    asker and the autofill are read; bound after, the elicitor would have
+    neither.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp.elicitor import Elicitor
+
+    start_ask_turn(asker, autofill_obj, conversation_id="tui:c1")
+    return await Elicitor("raven-code", "a1b2").elicit(_form(fields, types))
+
+
+async def test_a_fully_answered_form_never_reaches_the_asker() -> None:
+    asker = _RecordingAsker()
+    stub_autofill = _StubAutofill({"branch": ("answer", "feat/x")})
+    result = await _elicit_with(asker, stub_autofill, fields=["branch"])
+    assert result == {"action": "accept", "content": {"branch": "feat/x"}}
+    assert asker.asked == []
+
+
+async def test_a_fully_answered_form_never_takes_the_conversation_lock() -> None:
+    import asyncio
+
+    from raven.agent.acp.asker import question_lock
+
+    lock = question_lock("tui:c1")
+    await lock.acquire()
+    try:
+        stub_autofill = _StubAutofill({"branch": ("answer", "feat/x")})
+        # Held by someone else for the whole call: a form that needs nobody must
+        # still complete rather than wait out LOCK_WAIT_SECONDS.
+        result = await asyncio.wait_for(_elicit_with(_RecordingAsker(), stub_autofill, fields=["branch"]), timeout=1.0)
+    finally:
+        lock.release()
+    assert result["action"] == "accept"
+
+
+async def test_only_the_deferred_fields_are_asked() -> None:
+    asker = _RecordingAsker(answers={"Which reviewer?": "chandler"})
+    stub_autofill = _StubAutofill({"branch": ("answer", "feat/x"), "reviewer": ("defer", "")})
+    result = await _elicit_with(asker, stub_autofill, fields=["branch", "reviewer"])
+    assert [p for p, _ in asker.asked] == ["raven-code(a1b2): m - Which reviewer?"]
+    assert result["content"] == {"branch": "feat/x", "reviewer": "chandler"}
+
+
+async def test_the_leftovers_are_asked_as_one_batch() -> None:
+    asker = _RecordingAsker(answers={"Which reviewer?": "chandler", "Which milestone?": "m1"})
+    stub_autofill = _StubAutofill(
+        {"branch": ("answer", "feat/x"), "reviewer": ("defer", ""), "milestone": ("defer", "")}
+    )
+    await _elicit_with(asker, stub_autofill, fields=["branch", "reviewer", "milestone"])
+    # Two of three, positioned among themselves: what the user is taken through
+    # is the leftovers, not the form the sub-agent sent.
+    assert [kw["total"] for kw in asker.kwargs] == [2, 2]
+    assert [kw["index"] for kw in asker.kwargs] == [0, 1]
+    assert asker.kwargs[0]["batch"] == [
+        {"question": "Which reviewer?"},
+        {"question": "Which milestone?"},
+    ]
+
+
+async def test_a_partial_carries_its_note_and_leaves_the_question_intact() -> None:
+    asker = _RecordingAsker(answers={None: "feat/x"})
+    stub_autofill = _StubAutofill({"branch": ("partial", "you said feat/x earlier")})
+    await _elicit_with(asker, stub_autofill, fields=["branch"])
+    prompt = asker.asked[0][0]
+    assert prompt.startswith("raven-code(a1b2): m - Which branch?")
+    assert "you said feat/x earlier" in prompt
+
+
+async def test_an_answer_that_does_not_fit_the_schema_asks_the_user_once() -> None:
+    asker = _RecordingAsker(answers={None: "7"})
+    stub_autofill = _StubAutofill({"count": ("answer", "not-a-number")})
+    result = await _elicit_with(asker, stub_autofill, fields=["count"], types={"count": "integer"})
+    # Downgraded to a question, not retried against the resolver: the field's
+    # retry budget belongs to the user's answers.
+    assert len(asker.asked) == 1
+    assert len(stub_autofill.calls) == 1
+    assert result["content"] == {"count": 7}
+
+
+async def test_a_fully_answered_form_does_not_accept_for_a_run_that_ended() -> None:
+    """A form answered in full still has to notice its run is gone.
+
+    `_resolve` awaits a model call, and `cancel` can land during it. Before this
+    path existed the first `_one` was that await and the check after it caught
+    this; skipping the questions must not also skip the check.
+
+    The swallow below is what makes the flag load-bearing rather than the raised
+    cancellation: `cancel` marks the run *and* cancels the waiting task, and a
+    cancellation absorbed downstream -- which is what `QuestionBroker` does to
+    the one on the asking side -- leaves only the flag and the request count.
+    """
+    import asyncio
+    import contextlib
+
+    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp.elicitor import Elicitor
+
+    held: dict = {}
+
+    class _CancellingAutofill:
+        async def resolve(self, questions, *, agent, instance):
+            held["elicitor"].cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.sleep(0)
+            return [autofill.Resolution(status="answer", answer="feat/x") for _ in questions]
+
+    asker = _RecordingAsker()
+    start_ask_turn(asker, _CancellingAutofill(), conversation_id="tui:c1")
+    held["elicitor"] = Elicitor("raven-code", "a1b2")
+    result = await held["elicitor"].elicit(_form(["branch"]))
+
+    assert result == {"action": "cancel"}
+    assert asker.asked == []
+
+
+async def test_with_no_autofill_bound_every_field_is_asked() -> None:
+    asker = _RecordingAsker(answers={None: "x"})
+    result = await _elicit_with(asker, None, fields=["branch", "reviewer"])
+    assert len(asker.asked) == 2
+    assert result["action"] == "accept"
+
+
+async def test_the_autofill_is_read_at_construction_not_when_the_form_lands() -> None:
+    """The autofill must be read at construction, in the run's own context.
+
+    A form arrives on the connection's read loop, whose ContextVars are a copy
+    of whichever turn first opened the connection, and the pool keeps that
+    connection for the life of the process. The rebinding below stands for that
+    drift: an elicitor reading at resolve time would see the newest turn's
+    autofill -- here, none -- and ask a field raven could have filled.
+    """
+    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp.elicitor import Elicitor
+
+    asker = _RecordingAsker(answers={None: "asked the user"})
+    start_ask_turn(asker, _StubAutofill({"branch": ("answer", "feat/x")}), conversation_id="tui:c1")
+    elicitor = Elicitor("raven-code", "a1b2")
+    start_ask_turn(asker, None, conversation_id="tui:c1")
+    result = await elicitor.elicit(_form(["branch"]))
+
+    assert result == {"action": "accept", "content": {"branch": "feat/x"}}
+    assert asker.asked == []

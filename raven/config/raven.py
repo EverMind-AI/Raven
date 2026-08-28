@@ -1475,6 +1475,24 @@ class SubagentDagConfig(_Base):
     wide graph may suspend many times, each waiting out its own timeout."""
 
 
+class SubagentQuestionsConfig(_Base):
+    """Answering a sub-agent's question from the turn's own context.
+
+    A sub-agent holds only its task string, so it asks for things the user has
+    already said this turn. Every field here bounds what raven may answer on the
+    user's behalf, and what it costs to try.
+    """
+
+    autofill_enabled: bool = True
+    """On by default. Off restores the previous behaviour exactly: every question a
+    sub-agent asks goes straight to the user."""
+
+    autofill_timeout_seconds: float = 20.0
+    """Wall clock for one resolver call, covering the whole form. Past it every
+    question in that form goes to the user -- the same direction as every other
+    failure here."""
+
+
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1490,6 +1508,7 @@ class RavenConfig(_Base):
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
+    subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)

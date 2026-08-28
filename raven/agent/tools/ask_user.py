@@ -213,7 +213,15 @@ class AskUserTool(Tool):
         self._cid.set(conversation_id)
 
     async def ask_direct(
-        self, prompt: str, choices: list[str] | None, conversation_id: str, timeout_s: float | None = None
+        self,
+        prompt: str,
+        choices: list[str] | None,
+        conversation_id: str,
+        timeout_s: float | None = None,
+        *,
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, str]] | None = None,
     ) -> str | None:
         """One host-side question outside a model tool call.
 
@@ -231,7 +239,13 @@ class AskUserTool(Tool):
         if not self._broker or not conversation_id:
             return None
         return await self._broker.await_question(
-            conversation_id, prompt=prompt, choices=_normalize_options(choices), timeout_s=timeout_s
+            conversation_id,
+            prompt=prompt,
+            choices=_normalize_options(choices),
+            timeout_s=timeout_s,
+            index=index,
+            total=total,
+            batch=batch,
         )
 
     @property
