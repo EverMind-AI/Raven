@@ -24,7 +24,9 @@ file wins, and the load path says so once per shadowed name.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -114,11 +116,16 @@ class PlaybookStore:
         """
         out: dict[str, bytes] = {}
         for name in self.list_ids():
-            try:
-                out[name] = hashlib.blake2b(self.path_for(name).read_bytes(), digest_size=16).digest()
-            except OSError:
-                continue
+            if (digest := self.fingerprint(name)) is not None:
+                out[name] = digest
         return out
+
+    def fingerprint(self, name: str) -> bytes | None:
+        """Content digest for one resolved playbook, or ``None`` when unreadable."""
+        try:
+            return hashlib.blake2b(self.path_for(name).read_bytes(), digest_size=16).digest()
+        except OSError:
+            return None
 
     @staticmethod
     def _layer_ids(root: Path) -> set[str]:
@@ -158,7 +165,26 @@ class PlaybookStore:
         _require_valid_structure(spec)
         path = self._root / spec.name / "playbook.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_render(spec, notes or []), encoding="utf-8")
+        rendered = _render(spec, notes or [])
+        fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        tmp = Path(raw_tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(tmp, 0o644)
+            if overwrite:
+                os.replace(tmp, path)
+            else:
+                try:
+                    os.link(tmp, path)
+                except FileExistsError as exc:
+                    raise PlaybookExistsError(
+                        f"playbook {spec.name!r} already exists at {path}; revise it instead of regenerating"
+                    ) from exc
+        finally:
+            tmp.unlink(missing_ok=True)
         return path
 
     def load(self, name: str) -> PlaybookSpec:

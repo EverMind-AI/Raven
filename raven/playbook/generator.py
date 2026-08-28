@@ -249,8 +249,8 @@ class PlaybookGenerator:
                 # is indexable. Without this the schema hands the model a
                 # direct write to the index, and stop words ("help me"),
                 # entries below the length rule, and duplicate case variants
-                # reach it unfiltered -- each one costing a gate call on every
-                # message that contains it, for as long as the playbook exists.
+                # reach it unfiltered, crowding more specific playbooks out of
+                # the model-facing top-K descriptions.
                 try:
                     spec = spec.model_copy(update={"triggers": guard_triggers(spec.triggers, what=spec.name)})
                 except TriggerGuardError as exc:

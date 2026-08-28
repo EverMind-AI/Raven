@@ -45,6 +45,8 @@ class LoadPlaybookTool(Tool):
         #: loop before the description is read; empty is fine and yields a stable
         #: alphabetical selection.
         self._turn_message = ""
+        self._turn_view: tuple[list[tuple[str, str]], list[str]] | None = None
+        self._view_revision = -1
 
     @property
     def name(self) -> str:
@@ -59,17 +61,34 @@ class LoadPlaybookTool(Tool):
         rank against nothing.
         """
         self._turn_message = message or ""
+        self._turn_view = None
+
+    def _library_view(self) -> tuple[list[tuple[str, str]], list[str]]:
+        if self._turn_view is None or self._view_revision != self._runtime.revision:
+            self._turn_view = self._runtime.library_view(self._turn_message)
+            # library_view() reconciles the directory and may advance the
+            # generation itself, so record it after the read.
+            self._view_revision = self._runtime.revision
+        return self._turn_view
+
+    def to_schema(self) -> dict[str, Any]:
+        """Render one coherent, fresh Playbook view for this LLM iteration."""
+        # ToolRegistry calls to_schema() before every LLM call. Clearing here
+        # makes edits from other writers visible between iterations, while the
+        # lazy cache still gives description and parameters the same snapshot.
+        self._turn_view = None
+        return super().to_schema()
 
     @property
     def description(self) -> str:
-        listing = self._runtime.listing(self._turn_message)
+        listing, names = self._library_view()
         if not listing:
             return "Load a stored playbook. No playbooks are installed."
         lines = "\n".join(f"- {pid}: {detail}" for pid, detail in listing)
         # The full name list only when it is longer than what is described, so the
         # common small-library case does not print everything twice.
         described = {pid for pid, _ in listing}
-        rest = [n for n in self._runtime.names() if n not in described]
+        rest = [n for n in names if n not in described]
         more = f"\nAlso installed (ask by name for details): {', '.join(rest)}." if rest else ""
         return (
             "Use one of the user's stored playbooks -- a saved multi-step procedure with its own "
@@ -103,7 +122,7 @@ class LoadPlaybookTool(Tool):
                     # state now, and `"enum": null` is not a JSON Schema -- it
                     # also makes every call raise, because `Tool._validate` tests
                     # `val not in schema["enum"]` on the key being present.
-                    **({"enum": names} if (names := self._runtime.names()) else {}),
+                    **({"enum": names} if (names := self._library_view()[1]) else {}),
                 },
                 "params": {
                     "type": "object",
