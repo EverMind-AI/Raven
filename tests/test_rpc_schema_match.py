@@ -383,6 +383,57 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     assert oas_normal == pyd_normal, f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
 
 
+def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, Any]) -> None:
+    """The exact `turn.started` payload `announce_dag_exception` puts on the wire
+    must validate against the published contract AND the Pydantic model.
+
+    `turn.started` was declared on both sides and wired into neither union, so
+    the sweep above never reached it. It drifted the moment the judge landed:
+    `raven/agent/subagent/manager.py` began marking a suspended node
+    `status="exception"` with a `node_id`, the schema still said
+    `enum: [ok, error]` with `additionalProperties: false`, and the Pydantic
+    payload had no `delegated` field at all under `extra="forbid"`. Nothing
+    validates an outbound event, so it reached clients anyway -- but any
+    consumer that DOES validate rejects the whole event, not the unknown field,
+    and loses the boundary that advances the turn counter.
+
+    Built from the marker the manager actually writes, so the day a fourth
+    status or a fifth field is added there, this fails here rather than in a
+    client nobody is watching.
+    """
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+
+    # The shape `announce_dag_exception` builds, verbatim.
+    mark = {"kind": "dag", "label": "run-7", "status": "exception", "run_id": "run-7", "node_id": "n2"}
+    event = {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**mark, "content": "..."}}}
+
+    inline = {**schema["components"]["schemas"]["TurnStartedEvent"], "components": schema["components"]}
+    jsonschema.validate(event, inline)
+    TypeAdapter(TurnEvent).validate_python(event)
+
+    # And a direct chat's turn, which tags the payload with its addressee. The
+    # shape is the one `raven/rpc/methods/turn.py` puts in `direct_targets`:
+    # `agent` and `handle`. This event declared its own `target` inline instead
+    # of pointing at `DirectTarget` like every other event does, and the copy
+    # said `instance` -- a key the runtime has never sent -- under
+    # `additionalProperties: false`. So every tagged boundary was invalid to a
+    # validating consumer, for a field it does not even control.
+    tagged = {
+        "type": "turn.started",
+        "payload": {"turn_id": "t1", "target": {"agent": "raven-code", "handle": "h1"}},
+    }
+    jsonschema.validate(tagged, inline)
+    TypeAdapter(TurnEvent).validate_python(tagged)
+
+    # The plain boundary, which most turns are: no delegation, no addressee.
+    plain = {"type": "turn.started", "payload": {"turn_id": "t1"}}
+    jsonschema.validate(plain, inline)
+    TypeAdapter(TurnEvent).validate_python(plain)
+
+
 def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:
     """Every variant's payload must declare the same fields on both sides.
 

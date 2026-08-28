@@ -32,6 +32,7 @@ export type DagSnapshotNodeStatus =
  */
 export type TurnEvent =
   | MessageStartEvent
+  | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
   | TokenDeltaEvent
@@ -877,17 +878,18 @@ export interface TurnStartedEvent {
     delegated?: {
       kind: 'spawn' | 'dag';
       label: string;
-      status: 'ok' | 'error';
+      status: 'ok' | 'error' | 'exception';
+      /**
+       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
+       */
+      node_id?: string;
       run_id?: string;
       /**
        * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
        */
       content?: string;
     };
-    target?: {
-      instance: string;
-      handle: string;
-    };
+    target?: DirectTarget;
   };
 }
 export interface MessageStartEvent {
