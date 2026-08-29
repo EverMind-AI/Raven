@@ -362,7 +362,7 @@ class AskUserTool(Tool):
 
         This hook is where the registry expects the adjustment, so the schema
         stays honest about what the model should send while a near miss still
-        reaches the user. Runs before ``super()`` so the base cast can coerce
+        reaches the user. Runs before the registry's schema cast so it can coerce
         the leaves this exposes -- a non-string ``question``, options that are
         not strings -- exactly as it does for a well-formed call.
         """
@@ -375,7 +375,7 @@ class AskUserTool(Tool):
                     entry["options"] = _normalize_options(entry["options"])
                 entries.append(entry)
             params["questions"] = entries
-        return super().cast_params(params)
+        return params
 
     def display_call(self, args: dict[str, Any]) -> str | None:
         """Show the question itself, not the raw arguments blob. A batch keeps

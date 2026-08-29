@@ -438,9 +438,6 @@ forbidden_modules = [
     "raven.token_wise", "raven.trajectory", "raven.utils",
 ]
 ignore_imports = [
-    "raven.contracts.llm_provider -> raven.providers.rates",
-    "raven.contracts.llm_provider -> raven.providers.prompt_cache",
-    "raven.contracts.llm_provider -> raven.providers.truncation",
     "raven.tracing.config -> raven.config.loader",
     "raven.tracing.semconv -> raven.providers.registry",
     "raven.tracing.usage -> raven.token_wise.pricing",

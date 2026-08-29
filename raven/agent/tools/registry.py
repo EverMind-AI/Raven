@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
+from raven.agent.tools.params import cast_params, validate_params
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
@@ -584,10 +585,10 @@ class ToolRegistry:
 
         try:
             # Attempt to cast parameters to match schema types
-            params = tool.cast_params(params)
+            params = cast_params(tool.parameters, tool.cast_params(params))
 
             # Validate parameters
-            errors = tool.validate_params(params)
+            errors = validate_params(tool.parameters, params) + tool.validate_params(params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
