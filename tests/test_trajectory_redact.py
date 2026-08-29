@@ -77,7 +77,7 @@ def test_original_bundle_untouched(tmp_path):
 
 
 def test_json_escaped_secret_cleared(tmp_path):
-    secret = 'to"ken\\值-abc123456'
+    secret = 'to"ken\\é-abc123456'
     once = json.dumps(secret, ensure_ascii=False)[1:-1]
     twice = json.dumps(once, ensure_ascii=False)[1:-1]
     ascii_form = json.dumps(secret, ensure_ascii=True)[1:-1]

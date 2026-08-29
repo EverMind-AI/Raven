@@ -47,7 +47,7 @@ def test_topo_order_and_parse() -> None:
     assert validate_and_order(spec) == ["a", "b"]
 
 
-@pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "研究员", "claude_code", "a"])
+@pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "Исследователь", "claude_code", "a"])
 def test_subagent_name_takes_any_name_the_config_layer_accepts(name: str) -> None:
     # A sub-agent name is a roster key, never a path: `spawn` dispatches to
     # "General Audit" happily, so a DAG node naming the same agent must not be

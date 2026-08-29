@@ -3553,12 +3553,12 @@ def test_mint_handle_falls_back_when_the_seed_carries_no_usable_characters() -> 
 
 
 def test_mint_handle_falls_back_to_the_agent_name_for_a_non_ascii_seed() -> None:
-    handle = instances_mod.mint_handle("重构认证", fallback="claude_code")
+    handle = instances_mod.mint_handle("рефакторинг", fallback="claude_code")
     assert re.fullmatch(r"claude-code-[0-9a-f]{6}", handle)
 
 
 def test_mint_handle_falls_back_to_agent_when_the_fallback_is_also_non_ascii() -> None:
-    handle = instances_mod.mint_handle("重构认证", fallback="重构认证")
+    handle = instances_mod.mint_handle("рефакторинг", fallback="рефакторинг")
     assert handle.startswith("agent-")
 
 

@@ -164,7 +164,7 @@ class _Node:
 
 GPU = {
     "id": "conn_gpu",
-    "display_name": "GPU机器",
+    "display_name": "GPU box A",
     "kind": "gpu",
     "device": "2 x A800-80GB",
     "memory": "463 GB",
@@ -250,7 +250,7 @@ def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
     told = _machines.with_facts(nodes, verdict(GPU, CPU))
 
     for node in told:
-        assert "GPU机器" in node.prompt_template and "CPU box" in node.prompt_template
+        assert "GPU box A" in node.prompt_template and "CPU box" in node.prompt_template
 
 
 def test_two_rows_behind_one_id_strand_the_graph(monkeypatch, registry):
