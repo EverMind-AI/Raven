@@ -4106,7 +4106,7 @@ def test_the_wizard_never_reads_a_spec_auth_flag_itself() -> None:
         for i, line in enumerate(path.read_text().splitlines(), 1)
         if re.search(r"\.is_(oauth|local)\b|\.requires_api_base\b", line) and not line.lstrip().startswith("#")
     ]
-    assert not offenders, "ask credential_kind() instead:\n" + "\n".join(offenders)
+    assert not offenders, "ask auth_shape() instead:\n" + "\n".join(offenders)
 
 
 @pytest.mark.parametrize(
@@ -4123,18 +4123,18 @@ def test_the_wizard_never_reads_a_spec_auth_flag_itself() -> None:
     ],
 )
 def test_credential_kind_covers_every_shape(provider: str, expected: str) -> None:
-    from raven.providers.registry import credential_kind
+    from raven.providers.registry import auth_shape
 
-    assert credential_kind(provider) == expected
+    assert auth_shape(provider) == expected
 
 
 def test_every_registered_provider_has_exactly_one_credential_kind() -> None:
     """Sweep, so a provider added later cannot fall through the classification."""
-    from raven.providers.registry import CRED_ENDPOINT, CRED_KEY, CRED_LOCAL, CRED_OAUTH, PROVIDERS, credential_kind
+    from raven.providers.registry import PROVIDERS, SHAPE_ENDPOINT, SHAPE_KEY, SHAPE_LOCAL, SHAPE_OAUTH, auth_shape
 
-    known = {CRED_OAUTH, CRED_LOCAL, CRED_ENDPOINT, CRED_KEY}
+    known = {SHAPE_OAUTH, SHAPE_LOCAL, SHAPE_ENDPOINT, SHAPE_KEY}
     for spec in PROVIDERS:
-        assert credential_kind(spec.name) in known, spec.name
+        assert auth_shape(spec.name) in known, spec.name
 
 
 def test_the_picker_result_goes_through_the_same_gate_as_the_flag(monkeypatch, tmp_path) -> None:
@@ -4435,13 +4435,13 @@ def test_a_provider_whose_endpoint_only_the_user_knows_is_asked_for_it() -> None
     "api_base is required" on the first call. Picking it from the curated list
     could not produce a working provider.
     """
-    from raven.providers.registry import CRED_ENDPOINT, PROVIDERS, credential_kind
+    from raven.providers.registry import PROVIDERS, SHAPE_ENDPOINT, auth_shape
 
-    assert credential_kind("azure_openai") == CRED_ENDPOINT
+    assert auth_shape("azure_openai") == SHAPE_ENDPOINT
     for spec in PROVIDERS:
-        expected = CRED_ENDPOINT if spec.requires_api_base else None
+        expected = SHAPE_ENDPOINT if spec.requires_api_base else None
         if expected is not None:
-            assert credential_kind(spec.name) == expected, spec.name
+            assert auth_shape(spec.name) == expected, spec.name
 
 
 def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> None:
@@ -4453,14 +4453,14 @@ def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> N
     the shared answer now; this reads it back off the payload rather than
     re-deriving it.
     """
-    from raven.providers.registry import CRED_ENDPOINT, CRED_LOCAL, PROVIDERS, credential_kind
+    from raven.providers.registry import PROVIDERS, SHAPE_ENDPOINT, SHAPE_LOCAL, auth_shape
     from raven.rpc.methods.model import _build_provider_entry
 
     for spec in PROVIDERS:
         entry = _build_provider_entry(spec.name, current_provider=None)
-        kind = credential_kind(spec.name)
+        kind = auth_shape(spec.name)
         assert entry["auth_type"] == kind, spec.name
-        expected_needs_base = kind == CRED_LOCAL or (kind == CRED_ENDPOINT and not spec.usable_default_api_base)
+        expected_needs_base = kind == SHAPE_LOCAL or (kind == SHAPE_ENDPOINT and not spec.usable_default_api_base)
         assert entry["needs_api_base"] is expected_needs_base, spec.name
 
 

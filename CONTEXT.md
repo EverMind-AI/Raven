@@ -480,7 +480,17 @@ A Provider may declare several and is usable when any one is satisfied.
 `providers/auth.py::credential_status` answers "is this Provider usable", and is the
 only place that may: seven surfaces once decided it independently and disagreed with
 each other on the two configurations that made the rewrite necessary.
-_Avoid_: "credential kind" for the whole shape — that names only the material.
+_Avoid_: "credential kind" for the whole shape -- that names only the material.
+
+**Auth Shape**:
+Which of four ways setting up a Provider goes: a sign-in, an address, a key with an
+address, or a key alone (`providers/registry.py::auth_shape`). What the onboarding
+wizard and the model picker branch on, and coarser than an **Auth Method**: a shape
+says what the user is asked for, a method says what satisfies the connection and
+whether it is satisfied.
+_Avoid_: deriving it a second time from `is_oauth` / `is_local` / `requires_api_base`
+-- that list is already read in two places, which is one more than the Auth Method
+entry above says this family may have.
 
 **Model Row**:
 One model as a person reads it: a Model Ref plus a label and a description, tagged with

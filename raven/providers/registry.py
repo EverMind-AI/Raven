@@ -598,33 +598,39 @@ def normalize_provider_name(name: str | None) -> str:
     return (name or "").strip().lower().replace("-", "_")
 
 
-CRED_OAUTH = "oauth"  # a token file, written by `raven provider login`
-CRED_LOCAL = "local"  # reached by address; there is no key
-CRED_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
-CRED_KEY = "key"  # a key alone, including vendors Raven carry no spec for
+SHAPE_OAUTH = "oauth"  # a token file, written by `raven provider login`
+SHAPE_LOCAL = "local"  # reached by address; there is no key
+SHAPE_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
+SHAPE_KEY = "key"  # a key alone, including vendors Raven carry no spec for
 
 
-def credential_kind(provider: str | None) -> str:
-    """Which of the four credential shapes this provider uses.
+def auth_shape(provider: str | None) -> str:
+    """Which of the four setup shapes this provider takes.
 
     Every decision about how a provider is set up follows from this: whether to
     ask for a key, an address, both, or neither. It lives here because it is a
     fact about the provider, and because the wizard and the model picker both
     need it and must not answer it separately.
 
+    Coarser than an Auth Method, and not the same question: a method says what
+    material satisfies a connection and whether it is satisfied
+    (``providers/auth.py::credential_status``), while a shape says what the
+    wizard asks for. The two derive from the same four spec predicates today,
+    in the same order, in two places.
+
     Derived rather than stored: a spec is optional metadata, and a vendor Raven
     holds no spec for is reached with a key like most others.
     """
     spec = find_by_name(provider) if provider else None
     if spec is None:
-        return CRED_KEY
+        return SHAPE_KEY
     if spec.is_oauth:
-        return CRED_OAUTH
+        return SHAPE_OAUTH
     if spec.is_local:
-        return CRED_LOCAL
+        return SHAPE_LOCAL
     if spec.requires_api_base:
-        return CRED_ENDPOINT
-    return CRED_KEY
+        return SHAPE_ENDPOINT
+    return SHAPE_KEY
 
 
 def endpoints_unsupported_reason(provider_name: str | None) -> str | None:

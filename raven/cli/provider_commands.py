@@ -635,10 +635,10 @@ def _register_config_commands(app: typer.Typer) -> None:
 
         from raven.config.update_providers import serves_default_model
         from raven.providers.registry import (
-            CRED_ENDPOINT,
-            CRED_LOCAL,
-            CRED_OAUTH,
-            credential_kind,
+            SHAPE_ENDPOINT,
+            SHAPE_LOCAL,
+            SHAPE_OAUTH,
+            auth_shape,
         )
 
         # Asked before the confirmation, because it is the part worth confirming:
@@ -668,12 +668,12 @@ def _register_config_commands(app: typer.Typer) -> None:
             # give -- naming the wrong one sends the user to a command that
             # refuses them or a flag that does nothing.
             dashed = name.replace("_", "-")
-            kind = credential_kind(name)
-            if kind == CRED_OAUTH:
+            kind = auth_shape(name)
+            if kind == SHAPE_OAUTH:
                 back = f"raven provider login {dashed}"
-            elif kind == CRED_LOCAL:
+            elif kind == SHAPE_LOCAL:
                 back = f"raven provider set {dashed} --api-base <URL>"
-            elif kind == CRED_ENDPOINT:
+            elif kind == SHAPE_ENDPOINT:
                 back = f"raven provider set {dashed} --api-key <KEY> --api-base <URL>"
             else:
                 back = f"raven provider set {dashed} --api-key <KEY>"

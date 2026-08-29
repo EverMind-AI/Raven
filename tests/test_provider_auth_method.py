@@ -14,7 +14,7 @@ A provider the second accepted and the first rejected was configured according
 to the CLI and invisible to the router -- Gemini holding only ``api_key_list``
 read as ready in ``provider list`` and refused to start.
 
-(``registry.credential_kind`` is deliberately absent: it answers what shape a
+(``registry.auth_shape`` is deliberately absent: it answers what shape a
 provider's credentials take, not whether they are present. It is a fourth
 implementation of a different question.)
 
