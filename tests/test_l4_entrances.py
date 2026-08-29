@@ -5,7 +5,7 @@ L4 = the entrance layer: whoever calls the kernel. Three runnable clauses:
    any surface package, ever.
 2. A NEW entrance needs nothing but inward imports: a ~25-line surface builds
    a Scheduler, submits a TurnRequest, and receives deliverables -- without
-   touching or knowing cli/gateway/rpc.
+   touching or knowing cli/rpc/acp.
 3. Every turn produces EXACTLY one terminal event (the L0 handover: consumers
    key their per-turn release on it; zero would leak the slot, two would test
    release idempotence in anger).
@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 INNER_DIRS = [
     "spine",
     "contracts",
+    "tracing",
     "agent",
     "memory_engine",
     "context_engine",
