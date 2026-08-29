@@ -949,7 +949,8 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 
 **Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
-the shelves and engines the contract lists as sources, `config` and
+the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
+member, seated inner here as well so every package appears in one roster), `config` and
 `utils` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root

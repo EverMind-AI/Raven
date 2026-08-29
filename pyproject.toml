@@ -394,7 +394,7 @@ exclude_type_checking_imports = true
 name = "inner layers know no surface"
 type = "forbidden"
 source_modules = [
-    "raven.spine", "raven.contracts", "raven.agent", "raven.memory_engine",
+    "raven.spine", "raven.contracts", "raven.tracing", "raven.agent", "raven.memory_engine",
     "raven.context_engine", "raven.providers", "raven.session", "raven.sandbox",
     "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
     "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
