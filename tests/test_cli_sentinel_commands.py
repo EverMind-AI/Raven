@@ -36,10 +36,10 @@ def runner() -> CliRunner:
 def fake_sentinel_dir(tmp_path: Path, monkeypatch) -> Path:
     sentinel_dir = tmp_path / "sentinel"
     sentinel_dir.mkdir(parents=True)
-    monkeypatch.setattr(
-        "raven.config.paths.get_sentinel_dir",
-        lambda: sentinel_dir,
-    )
+    # Both seams: the CLI module binds the name at import, the stack builders
+    # read it from raven.config.paths at call time.
+    monkeypatch.setattr("raven.config.paths.get_sentinel_dir", lambda: sentinel_dir)
+    monkeypatch.setattr("raven.cli.sentinel_commands.get_sentinel_dir", lambda: sentinel_dir)
     return sentinel_dir
 
 
