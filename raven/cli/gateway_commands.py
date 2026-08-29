@@ -386,13 +386,8 @@ def register(app: typer.Typer) -> None:
         agent = runtime.loop
         backend = runtime.backend
 
-        # Sentinel's ProactiveSpawn wraps the AgentLoop's SubagentManager; wire it
-        # now that agent is constructed.
-        attach_sentinel_spawn(sentinel_runner, agent)
-        # Wire DecisionRouter / ActionExecutor / DecisionConsumer
-        # (ActionExecutor needs agent.tools + agent.subagents, so this also
-        # has to happen post-AgentLoop construction).
-        attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
+        # Sentinel attach and the wake hook are generation wiring: they bind to
+        # the live agent object, so they happen in _bind_generation below.
 
         # ChannelManager must be built before make_on_cron_job — the
         # closure captures channels.enabled_channels for trigger-time
@@ -421,7 +416,6 @@ def register(app: typer.Typer) -> None:
                 is_busy=lambda: agent.is_processing,
                 min_interval_s=hb_cfg.event_wake_min_interval_s,
             )
-            agent.on_turn_complete.append(wake.on_turn_complete)
 
         def _pick_heartbeat_target() -> tuple[str, str]:
             """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -500,7 +494,19 @@ def register(app: typer.Typer) -> None:
                     _logger.exception(
                         "memory backend start failed; continuing with legacy memory path",
                     )
-            try:
+            async def _bind_generation():
+                nonlocal gw_teardown, web_teardown, web_server, question_broker, page_mount, heartbeat
+
+                # Generation wiring: everything here binds to the live agent
+                # object and is torn down and re-run at a generation swap.
+                # Sentinel's ProactiveSpawn wraps the AgentLoop's
+                # SubagentManager; the decision consumer needs agent.tools +
+                # agent.subagents, so both attach post-construction.
+                attach_sentinel_spawn(sentinel_runner, agent)
+                attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
+                if wake is not None:
+                    agent.on_turn_complete.append(wake.on_turn_complete)
+
                 # Spine assembly for the gateway's host sources (cron submits
                 # through it, replies route to channels via a per-channel outlet).
                 # Built here, inside the running loop, not in the sync command
@@ -564,21 +570,30 @@ def register(app: typer.Typer) -> None:
                 from raven.web_rpc.server import WebSocketRpcServer
                 from raven.web_rpc.spine import build_web
 
-                web_host = web_cfg.host if web_cfg.enabled else "127.0.0.1"
-                web_port = web_cfg.port if web_cfg.enabled else await pick_port(web_cfg.port)
-                # Never unauthenticated: the server only checks a token when
-                # one is set, and this port can drive the agent. Minting one
-                # when none is configured costs a legitimate client nothing --
-                # publish_web_endpoint below is where local clients read it.
-                web_token = web_cfg.auth_token or secrets.token_urlsafe(24)
+                # The socket (host, port, token) is process-lifetime: a
+                # generation swap rebuilds the spine and dispatcher behind it,
+                # but clients keep their endpoint.
+                if web_server is None:
+                    web_host = web_cfg.host if web_cfg.enabled else "127.0.0.1"
+                    web_port = web_cfg.port if web_cfg.enabled else await pick_port(web_cfg.port)
+                    # Never unauthenticated: the server only checks a token when
+                    # one is set, and this port can drive the agent. Minting one
+                    # when none is configured costs a legitimate client nothing --
+                    # publish_web_endpoint below is where local clients read it.
+                    web_token = web_cfg.auth_token or secrets.token_urlsafe(24)
+                    web_server = WebSocketRpcServer(
+                        host=web_host,
+                        port=web_port,
+                        auth_token=web_token,
+                        deliverables=deliverables,
+                    )
+                    # Published beside the lock rather than in config: a client
+                    # finds the gateway the same way `doctor` does, and the
+                    # credential dies with the process instead of outliving it
+                    # in a settings file.
+                    publish_web_endpoint(web_host, web_port, web_token or "")
 
                 web_readback_texts: dict[str, str] = {}
-                web_server = WebSocketRpcServer(
-                    host=web_host,
-                    port=web_port,
-                    auth_token=web_token,
-                    deliverables=deliverables,
-                )
                 web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
                 # One map, two readers: `turn.send` records a direct chat's
                 # addressee here and the outlet reads it back to tag that
@@ -608,10 +623,6 @@ def register(app: typer.Typer) -> None:
                     raven_config=ec_config,
                 )
                 web_server.bind(web_dispatcher)
-                # Published beside the lock rather than in config: a client finds
-                # the gateway the same way `doctor` does, and the credential dies
-                # with the process instead of outliving it in a settings file.
-                publish_web_endpoint(web_host, web_port, web_token or "")
 
                 # Fan run_subagent_dag progress (dag_run_started / _node_updated
                 # / _run_completed) to the turn's conversation on the web
@@ -859,6 +870,102 @@ def register(app: typer.Typer) -> None:
                 for _ch in channels.channels.values():
                     _ch.intake.set_submit(_inbound_dispatch)
 
+            pending_swap: list = []
+
+            async def _unbind_generation():
+                # The generation slice of the shutdown path, in the same
+                # order; the process-lifetime transports (channels, cron,
+                # sentinel, web socket, health) stay up through a swap.
+                nonlocal page_mount
+                if heartbeat is not None:
+                    heartbeat.stop()
+                if question_broker is not None:
+                    question_broker.cancel_all()
+                # Cancel sub-agents before the spines tear down, same reason
+                # as the shutdown path: a result re-injection into a spine
+                # already gone would record as a failure rather than a stop.
+                # dispose() cancels again, which is an idempotent no-op.
+                await agent.subagents.cancel_all()
+                if page_mount is not None:
+                    await page_mount.teardown()
+                    page_mount = None
+                if web_teardown is not None:
+                    await web_teardown()
+                if gw_teardown is not None:
+                    await gw_teardown()
+                await runtime.dispose()
+
+            async def _prepare_swap():
+                # BUILD N+1 comes first, while generation N keeps serving: a
+                # config that fails to load or assemble aborts the swap and
+                # leaves N untouched. Only a fully built candidate stops the
+                # loop (at its turn boundary).
+                try:
+                    new_config = load_runtime_config(None, None)
+                    new_ec = load_raven_config()
+                    new_provider = make_resolving_provider(new_config)
+                    new_router, new_provider = build_model_routing(new_config, new_provider)
+                    nxt = build_runtime(
+                        new_config,
+                        new_ec,
+                        provider=new_provider,
+                        session_manager=session_manager,
+                        provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+                        router=new_router,
+                        workdir_resolver=workdir_resolver,
+                        deliverables=deliverables,
+                        policy=TurnPolicy(
+                            max_iterations=new_config.agents.defaults.max_tool_iterations,
+                            empty_recovery=limits_from_defaults(new_config.agents.defaults),
+                            interactive=False,
+                            now_fn=parse_fake_now(fake_now),
+                            response_modifier=sentinel_response_modifier,
+                        ),
+                        host=HostWiring(
+                            cron_service=cron,
+                            channels_config=new_config.channels,
+                            on_user_inbound=on_user_inbound,
+                        ),
+                    )
+                except Exception:
+                    _logger.exception(
+                        "generation swap aborted: rebuild from config failed; the running generation keeps serving",
+                    )
+                    return
+                pending_swap.append((new_config, new_ec, new_provider, new_router, nxt))
+                agent.stop()
+
+            def _on_sighup() -> None:
+                asyncio.create_task(_prepare_swap())
+
+            async def _serve_generations():
+                # One iteration per generation: agent.run() returning with a
+                # built candidate pending is a swap; returning without one is
+                # shutdown. DISPOSE of N happens only after N+1 is in hand.
+                nonlocal config, ec_config, provider, router, runtime, agent, backend
+                while True:
+                    await agent.run()
+                    if not pending_swap:
+                        return
+                    swap = pending_swap.pop()
+                    pending_swap.clear()
+                    await _unbind_generation()
+                    config, ec_config, provider, router, runtime = swap[0], swap[1], swap[2], swap[3], swap[4]
+                    agent = runtime.loop
+                    backend = runtime.backend
+                    if backend is not None:
+                        try:
+                            await backend.start()
+                        except Exception:
+                            _logger.exception(
+                                "memory backend start failed; continuing with legacy memory path",
+                            )
+                    await _bind_generation()
+                    await heartbeat.start()
+                    _logger.info("generation swap complete; rebuilt runtime is serving")
+
+            try:
+                await _bind_generation()
                 await cron.start()
                 await heartbeat.start()
                 if sentinel_runner is not None:
@@ -872,8 +979,17 @@ def register(app: typer.Typer) -> None:
                         port,
                         exc,
                     )
+                # SIGHUP = rebuild from config and swap at the next turn
+                # boundary. Unavailable on platforms without signal-handler
+                # support in the event loop; the gateway serves fine without.
+                import signal as _signal
+
+                try:
+                    asyncio.get_running_loop().add_signal_handler(_signal.SIGHUP, _on_sighup)
+                except (AttributeError, NotImplementedError, RuntimeError):
+                    pass
                 coros = [
-                    agent.run(),
+                    _serve_generations(),
                     channels.start_all(),
                     _delayed_discover_trigger_drain(),
                 ]

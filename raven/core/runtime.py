@@ -32,6 +32,25 @@ class RavenRuntime:
     strategies: Any
     deliverables: Any
 
+    async def dispose(self) -> None:
+        """Retire this generation: quiesce the loop, then its stores.
+
+        Ordering is load-bearing and mirrors the gateway's shutdown path:
+        sub-agents are cancelled before the MCP servers close (a live
+        sub-agent turn may still be using an MCP tool), the loop stops
+        before the backend drains (stopping is what ends the writers), and
+        the backend stops last so in-flight store/feedback calls spawned
+        during loop teardown can complete. Used at generation swap; process
+        shutdown keeps its own sequence in the gateway, where the
+        process-lifetime transports are interleaved.
+        """
+        await self.loop.subagents.cancel_all()
+        await self.loop.close_mcp()
+        self.loop.stop()
+        if self.backend is not None:
+            await self.loop.drain_backend_stores()
+            await self.backend.stop()
+
 
 def build_runtime(
     config: Any,
