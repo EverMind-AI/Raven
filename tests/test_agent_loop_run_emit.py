@@ -17,8 +17,8 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
+from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.tool import Tool, ToolResult
-from raven.providers.base import ChatDelta, LLMResponse, ToolCallRequest
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut

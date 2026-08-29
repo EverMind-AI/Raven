@@ -46,7 +46,7 @@ from raven.playbook.types import NodeSpec, PlaybookSpec
 from raven.playbook.validate import validate_graph_nodes
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
 

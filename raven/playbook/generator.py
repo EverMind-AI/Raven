@@ -47,9 +47,9 @@ from raven.playbook.types import PlaybookSpec, slugify
 from raven.playbook.validate import check_assets, unusable_mcp_servers, validate_structure
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.skill_forge import SkillForgeRouter
     from raven.playbook.agent_profiles import PlaybookAgentProfile
-    from raven.providers.base import LLMProvider
 
 _MAX_REPAIR_ROUNDS = 3
 _SKILL_CANDIDATES_K = 12

@@ -26,7 +26,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from raven.providers.base import ChatDelta, GenerationSettings, LLMResponse
+from raven.contracts.llm_provider import ChatDelta, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.transport_failure import flag_transport_failure
 
@@ -250,7 +250,7 @@ class _BlipThenAnswer:
         yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2903})
 
     def classify_error(self, exc: Any = None, content: Any = None) -> Any:
-        from raven.providers.base import ErrorClassification
+        from raven.contracts.llm_provider import ErrorClassification
 
         return ErrorClassification(category="network", retryable=True)
 

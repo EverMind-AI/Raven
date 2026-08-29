@@ -42,8 +42,8 @@ from raven.session.manager import SessionManager
 
 if TYPE_CHECKING:
     from raven.config.raven import BehaviorsExtractConfig
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 
 _EXTRACT_TOOL_NAME = "emit_behavior_events"

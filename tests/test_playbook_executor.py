@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from raven.config.schema import MCPServerConfig
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse
 from raven.playbook import (
     MAX_GAP_ROUNDS,
     NodeSpec,
@@ -23,7 +24,6 @@ from raven.playbook import (
     Triggers,
 )
 from raven.playbook.agent_profiles import PlaybookAgentProfile
-from raven.providers.base import ErrorClassification, LLMResponse
 
 COMPOSE_PROFILES = {
     "research-raven": PlaybookAgentProfile(

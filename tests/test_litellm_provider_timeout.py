@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import ChatDelta, GenerationSettings
+from raven.contracts.llm_provider import ChatDelta, GenerationSettings
 from raven.providers.litellm_provider import LiteLLMProvider
 
 

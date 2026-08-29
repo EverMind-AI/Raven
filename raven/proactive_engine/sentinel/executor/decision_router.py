@@ -31,8 +31,8 @@ from loguru import logger
 from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
-    from raven.providers.base import LLMProvider
 
 
 # Deterministic regex — recognized as command-grade input. Matches:

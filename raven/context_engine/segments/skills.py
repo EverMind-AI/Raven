@@ -42,11 +42,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.skill_forge import SkillForgeRouter
     from raven.memory_engine.skill_forge.gate import LLMGateFilter
     from raven.memory_engine.skill_forge.rewriter import QueryRewriter
     from raven.memory_engine.skill_forge.types import RouterHit
-    from raven.providers.base import LLMProvider
     from raven.skill_hub import SkillHubClient
 
 log = logging.getLogger(__name__)

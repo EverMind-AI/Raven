@@ -42,8 +42,8 @@ from raven.context_engine.curator import (
     _trace_messages,
 )
 from raven.contracts.context import AssemblyContext, Segment
+from raven.contracts.llm_provider import LLMProvider
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.providers.tool_calls import openai_tool_call
 from raven.tracing import semconv, trace

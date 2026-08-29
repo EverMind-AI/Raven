@@ -5,6 +5,7 @@ import json
 import pytest
 
 import raven.playbook.generator as generator_mod
+from raven.contracts.llm_provider import ErrorClassification
 from raven.playbook import (
     PlaybookGenerationError,
     PlaybookGenerator,
@@ -14,7 +15,6 @@ from raven.playbook import (
 )
 from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.prompt import emit_tool
-from raven.providers.base import ErrorClassification
 
 ROSTER_DESCRIPTIONS = {
     "research-raven": "deep retrieval and fact-checking",

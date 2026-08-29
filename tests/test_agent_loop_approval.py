@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from raven.agent.loop import AgentLoop
 from raven.agent.tools.shell import ExecTool
-from raven.providers.base import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

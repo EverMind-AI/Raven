@@ -431,8 +431,8 @@ def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
 from types import SimpleNamespace
 
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
+from raven.contracts.llm_provider import GenerationSettings
 from raven.core.provider_stack import build_model_routing
-from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
 from raven.routing.knn_router import KNNModelRouter
 from raven.routing.router import ModelRouter

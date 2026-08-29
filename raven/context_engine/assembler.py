@@ -37,7 +37,7 @@ from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
     from raven.contracts.context import TurnContext
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 _SEG_SEP = "\n\n---\n\n"

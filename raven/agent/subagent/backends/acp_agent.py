@@ -58,7 +58,7 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 # Text-bearing update kinds, and the ones whose text is the answer rather than
 # commentary. Only `usage_update` was observed on a live server; the rest follow

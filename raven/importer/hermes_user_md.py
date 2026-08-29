@@ -32,8 +32,8 @@ from loguru import logger
 from raven.memory_engine.consolidate.consolidator import parse_user_md_sections
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 FALLBACK_HEADING = "## Notes"
 

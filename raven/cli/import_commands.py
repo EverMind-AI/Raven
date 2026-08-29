@@ -29,8 +29,8 @@ from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.importer.hermes_user_md import ImportedSections
-    from raven.providers.base import LLMProvider
 
 console = Console()
 

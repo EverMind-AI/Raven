@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Modules that only type against the provider shapes (`LLMProvider`,
+  `LLMResponse`, `ToolCallRequest`, ...) import them from the paper,
+  `raven.contracts.llm_provider`; `raven.providers.base` is imported by the
+  adapters and fakes that subclass its machinery.
 - `settings.everos_set` is the RPC method's name; `settings.everosSet` stays
   registered and declared (marked deprecated in the OpenRPC document) until
   the TUI reads the new one. The `-32012` error class is `NotSupportedError`;

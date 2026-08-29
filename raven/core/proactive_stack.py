@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from raven.agent.loop import AgentLoop
     from raven.config.raven import SentinelConfig
     from raven.config.schema import Config
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
     from raven.session.manager import SessionManager
 
 

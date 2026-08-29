@@ -119,7 +119,7 @@ def test_compliant_executor_passes():
 
 
 def test_factory_response_shape_is_compliant():
-    from raven.providers.base import LLMResponse
+    from raven.contracts.llm_provider import LLMResponse
 
     resp = LLMResponse(content="x")
     assert check_provider_response(resp) == []

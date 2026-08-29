@@ -700,7 +700,7 @@ def test_a_lazy_provider_answers_with_its_inner_s_wire_id() -> None:
     providers/truncation.py) -- both signals miss and the cut call is
     dispatched.
     """
-    from raven.providers.base import GenerationSettings
+    from raven.contracts.llm_provider import GenerationSettings
     from raven.providers.lazy import LazyProvider
     from raven.providers.litellm_provider import LiteLLMProvider
 

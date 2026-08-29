@@ -10,7 +10,7 @@ import pytest
 
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 
 
 def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
@@ -951,7 +951,7 @@ class _StreamingProvider:
         return LLMResponse(content="whole", finish_reason="stop")
 
     async def chat_stream(self, **kwargs):
-        from raven.providers.base import ChatDelta
+        from raven.contracts.llm_provider import ChatDelta
 
         self.stream_kwargs.append(kwargs)
         for piece in self.pieces:
@@ -1005,7 +1005,7 @@ async def test_raven_loop_streams_under_the_providers_own_generation_budget(tmp_
     spawns -- visible as a reply truncated where a spawn's is not.
     """
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
-    from raven.providers.base import GenerationSettings
+    from raven.contracts.llm_provider import GenerationSettings
 
     provider = _StreamingProvider(["ok"])
     provider.generation = GenerationSettings(temperature=0.1, max_tokens=32000)

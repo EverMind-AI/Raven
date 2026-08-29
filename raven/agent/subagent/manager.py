@@ -40,7 +40,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.schema import ExecToolConfig
-from raven.providers.base import LLMProvider
+from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted

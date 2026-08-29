@@ -26,7 +26,7 @@ from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.openai_steps import OpenAIStepReader
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 class OpenAIApiBackend:

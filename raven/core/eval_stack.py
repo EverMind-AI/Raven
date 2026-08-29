@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 from raven.eval_engine import EvalEngine, EvalEngineConfig
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 

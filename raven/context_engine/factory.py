@@ -45,7 +45,7 @@ from raven.context_engine.segments import (
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.context import ContextEngine
-from raven.providers.base import LLMProvider
+from raven.contracts.llm_provider import LLMProvider
 
 if TYPE_CHECKING:
     from raven.agent.subagent.backends import AgentMeta

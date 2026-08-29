@@ -231,7 +231,7 @@ def _loop_with_handoff(tmp_path, monkeypatch):
     whose sandbox/MCP bring-up is stubbed out, mirroring the harness
     ``tests/test_agent_loop_run_emit.py`` uses for its ``deliver_text`` tests."""
     from raven.agent.loop import AgentLoop
-    from raven.providers.base import LLMResponse
+    from raven.contracts.llm_provider import LLMResponse
 
     class _RecordingProvider:
         def __init__(self) -> None:

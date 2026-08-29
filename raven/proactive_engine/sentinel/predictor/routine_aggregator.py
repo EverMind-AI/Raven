@@ -28,8 +28,8 @@ from loguru import logger
 from raven.proactive_engine.sentinel.types import Routine
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
-    from raven.providers.base import LLMProvider
 
 
 _AGGREGATE_TOOL_SCHEMA: dict[str, Any] = {

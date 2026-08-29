@@ -24,7 +24,7 @@ from raven.providers.binding import active_binding
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 log = logging.getLogger(__name__)
 

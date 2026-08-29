@@ -19,7 +19,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop, LoopOutcome
 from raven.agent.tools.message import MessageTool
-from raven.providers.base import ChatDelta
+from raven.contracts.llm_provider import ChatDelta
 from raven.spine import ChatType, Origin, Source, TurnRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

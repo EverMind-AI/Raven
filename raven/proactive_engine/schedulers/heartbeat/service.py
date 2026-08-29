@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 from loguru import logger
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
-    from raven.providers.base import LLMProvider
 
 _HEARTBEAT_TOOL = [
     {

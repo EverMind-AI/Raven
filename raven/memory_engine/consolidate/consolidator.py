@@ -19,7 +19,7 @@ from raven.utils.paths import ensure_dir
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
     from raven.session.manager import Session, SessionManager
 
 

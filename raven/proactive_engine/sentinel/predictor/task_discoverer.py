@@ -39,6 +39,7 @@ from raven.proactive_engine.sentinel.types import (
 )
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
@@ -49,7 +50,6 @@ if TYPE_CHECKING:
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
     from raven.proactive_engine.sentinel.predictor.routine_validator import RoutineValidator
     from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
-    from raven.providers.base import LLMProvider
 
 
 # History lookback for the discovery prompt — long enough to capture

@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum, auto
 
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
 # the reasoning in ``content`` as <think>…</think> rather than in the structured

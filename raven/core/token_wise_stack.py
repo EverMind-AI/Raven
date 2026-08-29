@@ -24,7 +24,7 @@ from raven.token_wise.usage_tracker import UsageTracker
 
 if TYPE_CHECKING:
     from raven.config.raven import TokenWiseConfig
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 def caching_probe(default: "LLMProvider") -> Callable[[str], bool]:

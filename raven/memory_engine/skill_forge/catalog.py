@@ -27,8 +27,8 @@ from raven.skill_hub.policy import is_blocked, normalize_blocklist
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.skill_local.watcher import SkillFileWatcher
-    from raven.providers.base import LLMProvider
 
 
 class LocalSkillCatalog:

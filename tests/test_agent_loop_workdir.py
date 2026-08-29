@@ -9,7 +9,7 @@ import pytest
 from raven.agent import workdir as workdir_mod
 from raven.agent.loop import AgentLoop
 from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

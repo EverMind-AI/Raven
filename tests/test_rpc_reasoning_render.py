@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import ChatDelta
+from raven.contracts.llm_provider import ChatDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
