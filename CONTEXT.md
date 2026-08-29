@@ -373,9 +373,10 @@ Foresight is the stored memory artifact.
 ### Channels & Front-ends
 
 **Channel**:
-A platform adapter (a `BaseChannel` subclass: telegram, matrix, discord, …) that
-connects an external chat platform to the Runtime; managed by the ChannelManager
-in gateway mode.
+A platform adapter (`channels/base.py:ChannelBase` -- inherited for the plumbing,
+and satisfying the `Channel` paper: telegram, matrix, discord, ...) that connects
+an external chat platform to the Runtime; managed by the ChannelManager in
+gateway mode.
 _Avoid_: calling the TUI a channel — `channel="tui"` on a message is a routing tag, not a Channel
 
 **TUI**:
@@ -684,6 +685,15 @@ SkillForge's three sources at RRF weight 0.9). The name refers to the external p
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
+**Memory Engine face** (`memory_engine/__init__.py`):
+The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
+`MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,
+sources, router, gate and rewriter, the store pipeline. Names resolve lazily, so
+importing the face costs nothing until one is used, and `tests/test_memory_engine_face.py`
+keeps every consumer on it -- the modules underneath are the engine's to rearrange.
+_Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submodule)
+from outside the engine.
+
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
@@ -832,12 +842,14 @@ _Avoid_: conflating with the Proactive Engine's Predictor — Foresight is the s
 memory artifact; the Predictor is the live proactive stage.
 
 **Consolidator** (`memory_engine/consolidate/`):
-The Memory Engine component (`MemoryConsolidator`) that performs Consolidation —
+The Memory Engine component (`MemoryConsolidator`) that performs Consolidation --
 under session-token pressure it annotates evicted message chunks into Episodes,
-refreshes hot Profile sections, and (opt-in) emits Foresight. The agent loop skips
-it when the Curator Context Engine is active.
-_Avoid_: conflating with the Curator — the Curator builds the context window
-losslessly; the Consolidator is the legacy lossy path that writes long-term memory.
+refreshes hot Profile sections, and (opt-in) emits Foresight. The single context
+engine declares `owns_compaction`, so a turn does not call it for token pressure;
+`/new` still archives an unconsolidated session through it.
+_Avoid_: conflating with the Curator -- the Curator builds the context window
+losslessly and archives history itself; the Consolidator is what writes long-term
+memory.
 
 ### Knowledge
 
@@ -984,7 +996,9 @@ builds a loop by hand against a recorded run (fake provider, replaced registry) 
 directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it.
 
 **Paper** (`contracts/`):
-A declared shape the layers hold each other to; papers export declared members only and
+A declared shape the layers hold each other to -- the turn contract, the seven shapes
+a shelf implements, the asking capabilities a tool types against (`contracts/asking.py`).
+Papers export declared members only and
 import no machinery -- the stdlib, pydantic, the other papers and the spine, nothing else
 (`TYPE_CHECKING` blocks exempt). Two promise tiers, stamped per module via `__tier__`:
 `contract` (frozen for every loop) and `factory_loop` (versioned with the factory loop).
