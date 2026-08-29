@@ -95,10 +95,8 @@ def test_minimal_token_strategy_subclass():
 # ---------------------------------------------------------------------------
 
 
-def test_token_budget_is_a_frozen_shape():
+def test_token_budget_is_a_plain_shape():
     import dataclasses
-
-    import pytest
 
     b = TokenBudget(
         context_length=100_000,
@@ -107,9 +105,15 @@ def test_token_budget_is_a_frozen_shape():
         reserved_system=2_000,
         available_history=86_000,
     )
+    assert dataclasses.is_dataclass(b)
+    assert [f.name for f in dataclasses.fields(b)] == [
+        "context_length",
+        "reserved_output",
+        "reserved_tools",
+        "reserved_system",
+        "available_history",
+    ]
     assert b.available_history == 86_000
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        b.available_history = 1  # type: ignore[misc]
 
 
 def test_assembled_context_defaults():
