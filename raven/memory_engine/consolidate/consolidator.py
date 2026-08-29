@@ -693,23 +693,26 @@ class MemoryStore:
     def write_long_term(self, content: str) -> None:
         self.memory_file.write_text(content, encoding="utf-8")
 
-    def _safe_write_long_term(self, new_content: str, expected_prev: str) -> bool:
-        """Compare-and-set write under the lock. Used by consolidate() to avoid
-        clobbering a concurrent writer's update during the LLM call.
+    def _safe_write_long_term(self, expected_prev: str, build: Callable[[str], str]) -> bool:
+        """Compare-and-set write under the lock: ``build`` receives what is on
+        disk and returns the new user.md, which is written only if the file
+        still matches ``expected_prev``.
 
-        Returns True if the write happened; False if MEMORY.md changed under
-        us (we lose the race; caller should log + move on).
+        The build runs inside the lock because every caller derives the new
+        file from the old one, and a build over a stale read is the write this
+        guard exists to refuse.
+
+        Returns True if the read-modify-write went through; False if another
+        writer moved the file under us -- the caller lost the race, and says so
+        in its own words.
         """
         with self.locked():
             current = self.read_long_term()
             if current != expected_prev:
-                logger.info(
-                    "MemoryStore: consolidate skipped write — concurrent "
-                    "modification detected (lost race with another writer); "
-                    "next consolidation will fold our turn back in"
-                )
                 return False
-            self.write_long_term(new_content)
+            new_content = build(current)
+            if new_content != current:
+                self.write_long_term(new_content)
             return True
 
     def append_history(self, entry: str) -> None:
@@ -1545,23 +1548,20 @@ section_body: full new content for that H2, every bullet ending with
         new_body: str,
         expected_prev: str,
     ) -> bool:
-        """CAS write: splice ``new_body`` under ``heading`` in user.md only
-        if file still matches ``expected_prev`` (no concurrent writer).
+        """Splice ``new_body`` under ``heading`` in user.md, unless another
+        writer moved the file between our read and our write.
         Returns True on write."""
-        with self.locked():
-            current = self.read_long_term()
-            if current != expected_prev:
-                logger.info("refresh_section: concurrent modification detected; skipping write (will retry next round)")
-                return False
-            new_content = _splice_h2_section(current, heading, new_body)
+
+        def _build(current: str) -> str:
             # Keep auto-managed ## Foresight at the bottom of user.md
-            # regardless of where refresh_section's splice landed the new
-            # section. Idempotent — no-op when Foresight is absent or
-            # already last.
-            new_content = _ensure_foresight_at_end(new_content)
-            if new_content != current:
-                self.write_long_term(new_content)
-            return True
+            # regardless of where the splice landed the new section.
+            # Idempotent -- no-op when Foresight is absent or already last.
+            return _ensure_foresight_at_end(_splice_h2_section(current, heading, new_body))
+
+        wrote = self._safe_write_long_term(expected_prev, _build)
+        if not wrote:
+            logger.info("refresh_section: concurrent modification detected; skipping write (will retry next round)")
+        return wrote
 
     @trace.instrument("memory.profile_refresh", extract=semconv.memory_profile_refresh)
     async def maybe_refresh_hot_tags(

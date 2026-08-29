@@ -1,6 +1,6 @@
-"""Unit tests for MemoryStore.locked() + _safe_write_long_term — the
-cross-process MEMORY.md locking primitive shared by Personalizer +
-MemoryConsolidator + SentinelMemoryWriter.
+"""Unit tests for MemoryStore.locked() + _safe_write_long_term -- the
+cross-process user.md lock, and the one compare-and-set write built on it,
+shared by Personalizer + MemoryConsolidator + SentinelMemoryWriter.
 """
 
 from __future__ import annotations
@@ -34,19 +34,43 @@ def test_lock_path_is_sibling(tmp_path: Path) -> None:
 def test_safe_write_returns_true_when_unchanged(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     store.write_long_term("v1\n")
-    ok = store._safe_write_long_term("v2\n", expected_prev="v1\n")
+    ok = store._safe_write_long_term("v1\n", lambda _current: "v2\n")
     assert ok is True
     assert store.read_long_term() == "v2\n"
 
 
+def test_safe_write_builds_from_what_is_on_disk(tmp_path: Path) -> None:
+    """The build runs under the lock, over the file's own text -- so a caller
+    that appends gets the current content, not the copy it read earlier."""
+    store = MemoryStore(tmp_path)
+    store.write_long_term("v1\n")
+    seen: list[str] = []
+
+    def _build(current: str) -> str:
+        seen.append(current)
+        return current + "appended\n"
+
+    assert store._safe_write_long_term("v1\n", _build) is True
+    assert seen == ["v1\n"]
+    assert store.read_long_term() == "v1\nappended\n"
+
+
+def test_safe_write_leaves_the_file_alone_when_the_build_changes_nothing(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.write_long_term("v1\n")
+    before = store.memory_file.stat().st_mtime_ns
+    assert store._safe_write_long_term("v1\n", lambda current: current) is True
+    assert store.memory_file.stat().st_mtime_ns == before
+
+
 def test_safe_write_skips_when_concurrent_modification(tmp_path: Path) -> None:
-    """If another writer changed MEMORY.md between our read and write, the
+    """If another writer changed user.md between our read and write, the
     cas-style _safe_write_long_term refuses to clobber and returns False."""
     store = MemoryStore(tmp_path)
     store.write_long_term("original\n")
     # Simulate another writer: directly mutate the file before we attempt write.
     store.memory_file.write_text("changed-by-other\n", encoding="utf-8")
-    ok = store._safe_write_long_term("our-update\n", expected_prev="original\n")
+    ok = store._safe_write_long_term("original\n", lambda _current: "our-update\n")
     assert ok is False
     # The other writer's content is preserved; ours is dropped.
     assert store.read_long_term() == "changed-by-other\n"
@@ -57,7 +81,7 @@ def test_safe_write_skips_when_concurrent_modification(tmp_path: Path) -> None:
 
 
 def _worker_acquire_and_hold(lock_dir: str, hold_secs: float, ready: Value, done: Value) -> None:
-    """Helper run in subprocess: grab the same fcntl lock and hold it."""
+    """Helper run in subprocess: grab the same file lock and hold it."""
     store = MemoryStore(Path(lock_dir))
     with store.locked():
         ready.value = 1  # signal main: we have the lock
@@ -65,7 +89,7 @@ def _worker_acquire_and_hold(lock_dir: str, hold_secs: float, ready: Value, done
         done.value = 1
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl POSIX-only")
+@pytest.mark.skipif(sys.platform == "win32", reason="spawn harness is run on POSIX CI only")
 def test_lock_serializes_across_processes(tmp_path: Path) -> None:
     """Two processes locking the same MemoryStore must serialize:
     process B can only acquire after process A releases.
@@ -97,7 +121,7 @@ def test_lock_serializes_across_processes(tmp_path: Path) -> None:
         # Worker held for 0.3s; we should have waited at least most of that.
         assert elapsed >= 0.15, (
             f"main process didn't wait for worker to release "
-            f"(elapsed={elapsed:.3f}s); fcntl lock not enforced cross-process"
+            f"(elapsed={elapsed:.3f}s); file lock not enforced cross-process"
         )
 
     p.join(timeout=5)
